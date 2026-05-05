@@ -20,16 +20,20 @@ final class MapEditorStoreTests: XCTestCase {
 
         XCTAssertEqual(store.selectedMapTool, .pencil)
         XCTAssertEqual(store.stagedMapBlockdataValues[1], 0x0022)
+        XCTAssertEqual(store.mapEditorSession.stagedMapBlockdataValues[1], 0x0022)
+        XCTAssertEqual(store.mapEditOperations, store.mapEditorSession.mapEditOperations)
         XCTAssertEqual(store.mapEditOperations.count, 1)
         XCTAssertTrue(store.undoneMapEditOperations.isEmpty)
 
         store.undoLastMapEdit()
         XCTAssertEqual(store.stagedMapBlockdataValues[1], 0x0002)
+        XCTAssertEqual(store.stagedMapBlockdataValues, store.mapEditorSession.stagedMapBlockdataValues)
         XCTAssertTrue(store.mapEditOperations.isEmpty)
         XCTAssertEqual(store.undoneMapEditOperations.count, 1)
 
         store.redoMapEdit()
         XCTAssertEqual(store.stagedMapBlockdataValues[1], 0x0022)
+        XCTAssertEqual(store.mapEditOperations, store.mapEditorSession.mapEditOperations)
         XCTAssertEqual(store.mapEditOperations.count, 1)
         XCTAssertTrue(store.undoneMapEditOperations.isEmpty)
     }
@@ -84,8 +88,34 @@ final class MapEditorStoreTests: XCTestCase {
         store.previewSelectedMapMutationPlan()
 
         XCTAssertEqual(store.stagedMapEvents.first?.properties.first { $0.key == "script" }?.value, "Route1_EventScript_New")
+        XCTAssertEqual(store.stagedMapEvents, store.mapEditorSession.stagedMapEvents)
         let jsonPreview = try XCTUnwrap(store.latestMapEditPlan?.changes.first { $0.path == "data/maps/Route1/map.json" }?.textPreview)
         XCTAssertTrue(jsonPreview.contains(#""script": "Route1_EventScript_New""#))
+    }
+
+    @MainActor
+    func testStoreMapEditingFacadeUsesSessionAsSingleOwner() throws {
+        let store = try makeLoadedStore()
+
+        store.selectBrush(rawValue: 0x0088)
+        store.paintMapCell(x: 0, y: 0)
+        store.selectMapEvent(id: "object-0")
+        store.updateSelectedMapEventProperty(key: "elevation", value: "4")
+
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+        XCTAssertEqual(store.selectedBrushRawValue, store.mapEditorSession.selectedBrushRawValue)
+        XCTAssertEqual(store.selectedMapCell, store.mapEditorSession.selectedMapCell)
+        XCTAssertEqual(store.selectedMapEventID, store.mapEditorSession.selectedMapEventID)
+        XCTAssertEqual(store.stagedMapBlockdataValues, store.mapEditorSession.stagedMapBlockdataValues)
+        XCTAssertEqual(store.stagedMapEvents, store.mapEditorSession.stagedMapEvents)
+        XCTAssertEqual(store.mapEditOperations, store.mapEditorSession.mapEditOperations)
+
+        store.discardMapEdits()
+
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+        XCTAssertEqual(store.stagedMapBlockdataValues, [1, 2, 3, 4])
+        XCTAssertEqual(store.stagedMapEvents, store.mapEditorSession.stagedMapEvents)
+        XCTAssertTrue(store.mapEditOperations.isEmpty)
     }
 
     @MainActor

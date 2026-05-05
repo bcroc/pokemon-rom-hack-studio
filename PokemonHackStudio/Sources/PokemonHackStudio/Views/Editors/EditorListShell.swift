@@ -37,8 +37,11 @@ struct FactGrid: View {
                 GridRow {
                     Text(fact.label)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Text(fact.value)
                         .fontWeight(.medium)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
                 }
             }
         }

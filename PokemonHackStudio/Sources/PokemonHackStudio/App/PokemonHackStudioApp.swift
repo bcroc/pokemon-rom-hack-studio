@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 
 @main
 struct PokemonHackStudioApp: App {
     @StateObject private var store = WorkbenchStore()
+    @FocusedBinding(\.editorShellShowsSourceInspector) private var showsSourceInspector
 
     var body: some Scene {
         WindowGroup {
@@ -10,69 +12,208 @@ struct PokemonHackStudioApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
-            CommandMenu("Workbench") {
-                Button("Build Target") {}
+            CommandMenu("Project") {
+                Button("Open Project...") {
+                    openProjectPanel()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+
+                Button("Refresh Project Indexes") {
+                    store.refreshProjectIndexes()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Build Target") {
+                    selectModule(.build)
+                }
                     .keyboardShortcut("b", modifiers: [.command, .shift])
-                Button("Run Target") {}
-                    .keyboardShortcut("r", modifiers: [.command])
-                Button("Validate Sources") {}
+
+                Button("Run Target") {
+                    selectModule(.build)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+
+                Button("Validate Sources") {
+                    selectModule(.issues)
+                }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
             }
 
-            CommandMenu("Map Editor") {
-                Button("Select Tool") {
-                    store.mapEditorSession.selectedMapTool = .select
+            CommandMenu("View") {
+                Button((showsSourceInspector ?? true) ? "Hide Source Inspector" : "Show Source Inspector") {
+                    showsSourceInspector?.toggle()
                 }
-                .keyboardShortcut("v", modifiers: [])
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(showsSourceInspector == nil)
+            }
+
+            CommandMenu("Navigate") {
+                Button("Previous Module") {
+                    selectAdjacentModule(offset: -1)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+
+                Button("Next Module") {
+                    selectAdjacentModule(offset: 1)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+
+                Divider()
+
+                Button("Project") {
+                    selectModule(.dashboard)
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Maps") {
+                    selectModule(.maps)
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Data") {
+                    selectModule(.pokemon)
+                }
+                .keyboardShortcut("3", modifiers: .command)
+
+                Button("Scripts/Text") {
+                    selectModule(.scripts)
+                }
+                .keyboardShortcut("4", modifiers: .command)
+
+                Button("Graphics") {
+                    selectModule(.graphics)
+                }
+                .keyboardShortcut("5", modifiers: .command)
+
+                Button("Build/Patch/Playtest") {
+                    selectModule(.build)
+                }
+                .keyboardShortcut("6", modifiers: .command)
+
+                Button("Diagnostics") {
+                    selectModule(.issues)
+                }
+                .keyboardShortcut("7", modifiers: .command)
+            }
+
+            CommandMenu("Map") {
+                Button("Select Tool") {
+                    dispatchMapCommand(.selectTool(.select))
+                }
+                .disabled(!canUseMapCommands)
 
                 Button("Pan Tool") {
-                    store.mapEditorSession.selectedMapTool = .hand
+                    dispatchMapCommand(.selectTool(.hand))
                 }
-                .keyboardShortcut("h", modifiers: [])
+                .disabled(!canUseMapCommands)
 
                 Button("Eyedropper Tool") {
-                    store.mapEditorSession.selectedMapTool = .eyedropper
+                    dispatchMapCommand(.selectTool(.eyedropper))
                 }
-                .keyboardShortcut("i", modifiers: [])
+                .disabled(!canUseMapCommands)
 
                 Button("Pencil Tool") {
-                    store.mapEditorSession.selectedMapTool = .pencil
+                    dispatchMapCommand(.selectTool(.pencil))
                 }
-                .keyboardShortcut("b", modifiers: [])
+                .disabled(!canUseMapCommands)
 
                 Button("Rectangle Fill Tool") {
-                    store.mapEditorSession.selectedMapTool = .rectangleFill
+                    dispatchMapCommand(.selectTool(.rectangleFill))
                 }
-                .keyboardShortcut("f", modifiers: [])
+                .disabled(!canUseMapCommands)
+
+                Divider()
+
+                Button("Duplicate Selected Event") {
+                    dispatchMapCommand(.duplicateSelectedMapEvent)
+                }
+                .disabled(!canUseMapCommands || store.mapEditorSession.selectedMapEventID == nil)
+
+                Button("Delete Selected Event") {
+                    dispatchMapCommand(.deleteSelectedMapEvent)
+                }
+                .disabled(!canUseMapCommands || store.mapEditorSession.selectedMapEventID == nil)
 
                 Divider()
 
                 Button("Undo Map Edit") {
-                    store.mapEditorSession.undoLastMapEdit()
+                    dispatchMapCommand(.undo)
                 }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!store.mapEditorSession.hasUndo)
+                .disabled(!canUseMapCommands || !store.mapEditorSession.hasUndo)
 
                 Button("Redo Map Edit") {
-                    store.mapEditorSession.redoMapEdit()
+                    dispatchMapCommand(.redo)
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!store.mapEditorSession.hasRedo)
+                .disabled(!canUseMapCommands || !store.mapEditorSession.hasRedo)
 
                 Divider()
 
+                Button("Reload Selected Map") {
+                    store.loadSelectedMapVisualDocument()
+                }
+                .disabled(!canUseMapCommands || store.selectedMapID.isEmpty)
+
                 Button("Preview Map Changes") {
-                    _ = store.mapEditorSession.previewSelectedMapMutationPlan()
+                    store.previewSelectedMapMutationPlan()
                 }
                 .keyboardShortcut("p", modifiers: [.command, .option])
-                .disabled(!store.mapEditorSession.canPreviewSelectedMapMutationPlan)
+                .disabled(!canUseMapCommands || !store.mapEditorSession.canPreviewSelectedMapMutationPlan)
 
                 Button("Discard Map Changes") {
                     store.discardMapEdits()
                 }
                 .keyboardShortcut(.delete, modifiers: [.command, .option])
-                .disabled(!store.mapEditorSession.canDiscardMapEdits)
+                .disabled(!canUseMapCommands || !store.mapEditorSession.canDiscardMapEdits)
             }
         }
+    }
+}
+
+private extension PokemonHackStudioApp {
+    var orderedModules: [WorkbenchModule] {
+        WorkbenchModuleGroup.allCases.flatMap(\.modules)
+    }
+
+    var canUseMapCommands: Bool {
+        store.selection == .maps
+    }
+
+    func selectModule(_ module: WorkbenchModule) {
+        store.selection = module
+        if module == .maps {
+            store.loadSelectedMapCatalogIfNeeded()
+            store.loadSelectedMapVisualDocumentIfNeeded()
+        }
+    }
+
+    func selectAdjacentModule(offset: Int) {
+        guard let index = orderedModules.firstIndex(of: store.selection), !orderedModules.isEmpty else {
+            return
+        }
+
+        let nextIndex = (index + offset + orderedModules.count) % orderedModules.count
+        selectModule(orderedModules[nextIndex])
+    }
+
+    func dispatchMapCommand(_ command: MapEditorCommand) {
+        guard canUseMapCommands else { return }
+        _ = store.mapEditorSession.dispatch(command)
+    }
+
+    func openProjectPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Pokemon Project"
+        panel.prompt = "Open"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        store.openProject(at: url)
     }
 }

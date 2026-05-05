@@ -44,6 +44,48 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(sprite.paletteTag, "OBJ_EVENT_PAL_TAG_NPC_1")
     }
 
+    func testVisualLoaderUsesFieldmapMetatileLimitsForSecondaryBase() throws {
+        let root = try makeVisualProject()
+        try writeFieldmap(primaryMetatiles: 640, totalMetatiles: 1024, to: root)
+        try writeWords([0x0000, 0x0280, 0x0281, 0x0282], to: root.appendingPathComponent("data/layouts/Route1/map.bin"))
+        try writeWords([0x0000, 0x0000, 0x0000, 0x0000], to: root.appendingPathComponent("data/layouts/Route1/border.bin"))
+        try writeWords(
+            [
+                0x0001, 0x0002, 0x0003, 0xf804, 0x0005, 0x0006, 0x0007, 0x0008,
+                0x0009, 0x000a, 0x000b, 0x000c, 0x000d, 0x000e, 0x000f, 0x0010,
+                0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017, 0x0018
+            ],
+            to: root.appendingPathComponent("data/tilesets/secondary/route/metatiles.bin")
+        )
+        try writeDWords(
+            [0x12345678, 0x12345679, 0x1234567a],
+            to: root.appendingPathComponent("data/tilesets/secondary/route/metatile_attributes.bin")
+        )
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        XCTAssertEqual(document.metatileLimits.primary, 640)
+        XCTAssertEqual(document.metatileLimits.total, 1024)
+        XCTAssertEqual(document.blockdata.metatileIDs, [0, 0x280, 0x281, 0x282])
+        XCTAssertTrue(document.metatiles.contains { $0.id == 0x280 && $0.localID == 0 && $0.tilesetSymbol == "gTileset_Route" })
+        XCTAssertTrue(document.metatiles.contains { $0.id == 0x282 && $0.localID == 2 && $0.tilesetSymbol == "gTileset_Route" })
+        XCTAssertEqual(document.metatiles.filter { $0.id == 0x280 }.count, 1)
+        XCTAssertFalse(document.diagnostics.contains { $0.code == "MAP_VISUAL_METATILE_DEFINITION_MISSING" })
+    }
+
+    func testVisualLoaderReportsUsedMetatilesMissingDefinitions() throws {
+        let root = try makeVisualProject()
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        let diagnostic = try XCTUnwrap(document.diagnostics.first {
+            $0.code == "MAP_VISUAL_METATILE_DEFINITION_MISSING" && $0.message.contains("data/layouts/Route1/map.bin")
+        })
+        XCTAssertEqual(diagnostic.severity, .warning)
+        XCTAssertTrue(diagnostic.message.contains("data/layouts/Route1/map.bin"))
+        XCTAssertTrue(diagnostic.message.contains("0x204"))
+    }
+
     func testVisualSceneBuildsBorderViewportAndDirectionalConnections() throws {
         let root = try makeVisualProject()
         try addSceneConnectionFixtures(to: root)
@@ -192,6 +234,171 @@ final class MapVisualTests: XCTestCase {
         XCTAssertTrue(json.contains(#""script": "Route1_EventScript_New""#))
     }
 
+    func testScriptIndexResolvesMapLocalSharedMissingAndDuplicateLabels() throws {
+        let root = try makeVisualProject()
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tmsgbox Route1_Text
+            \tend
+
+            DuplicateScript::
+            \tend
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+        try write(
+            """
+            Shared_EventScript::
+            \treturn
+
+            DuplicateScript::
+            \treturn
+            """,
+            to: root.appendingPathComponent("data/maps/SharedTown/scripts.inc")
+        )
+
+        let index = MapScriptIndexLoader.load(root: root, mapName: "Route1", sharedMapName: "SharedTown")
+        let local = index.resolution(for: "Route1_EventScript_NPC")
+        let shared = index.resolution(for: "Shared_EventScript")
+        let missing = index.resolution(for: "Route1_EventScript_Missing")
+        let duplicate = index.resolution(for: "DuplicateScript")
+
+        XCTAssertEqual(local.state, .resolved)
+        XCTAssertEqual(local.span?.sourceRole, .mapLocal)
+        XCTAssertEqual(local.span?.body.trimmingCharacters(in: .whitespacesAndNewlines), "msgbox Route1_Text\n\tend")
+        XCTAssertEqual(shared.state, .resolved)
+        XCTAssertEqual(shared.span?.sourceRole, .shared)
+        XCTAssertEqual(missing.state, .missingLabel)
+        XCTAssertEqual(duplicate.state, .duplicateLabel)
+        XCTAssertTrue(index.diagnostics.contains { $0.code == "MAP_SCRIPT_LABEL_DUPLICATE" })
+    }
+
+    func testMutationPlannerReplacesOnlyScriptBodyAndKeepsNeighborLabels() throws {
+        let root = try makeVisualProject()
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tmsgbox Route1_Text
+            \tend
+
+            Route1_EventScript_Other::
+            \treturn
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(
+                    action: .updateScriptBody,
+                    scriptLabel: "Route1_EventScript_NPC",
+                    scriptBody: "\tmsgbox Route1_Text_Updated\n\tend",
+                    scriptSourcePath: "data/maps/Route1/scripts.inc"
+                )
+            ]
+        )
+
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics.map(\.code))")
+        XCTAssertEqual(plan.changes.map(\.path), ["data/maps/Route1/scripts.inc"])
+        let script = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(script.contains("Route1_EventScript_NPC::\n\tmsgbox Route1_Text_Updated\n\tend"))
+        XCTAssertTrue(script.contains("Route1_EventScript_Other::\n\treturn"))
+        XCTAssertFalse(script.contains("msgbox Route1_Text\n\tend"))
+    }
+
+    func testMutationPlannerStagesCombinedMapJSONAndScriptBodyChanges() throws {
+        let root = try makeVisualProject()
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tmsgbox Route1_Text
+            \tend
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(action: .moveEvent, x: 4, y: 5, eventKind: .object, eventIndex: 0),
+                MapEditOperation(
+                    action: .updateScriptBody,
+                    scriptLabel: "Route1_EventScript_NPC",
+                    scriptBody: "\tmsgbox Route1_Text_Updated\n\tend",
+                    scriptSourcePath: "data/maps/Route1/scripts.inc"
+                )
+            ]
+        )
+
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), ["data/maps/Route1/map.json", "data/maps/Route1/scripts.inc"])
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/map.json" }?.textPreview?.contains(#""x": 4"#) ?? false)
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview?.contains("Route1_Text_Updated") ?? false)
+        XCTAssertTrue(plan.isApplyable, "\(plan.diagnostics.map(\.code))")
+    }
+
+    func testMutationPlannerCreatesScriptLabelThenUpdatesEventScriptField() throws {
+        let root = try makeVisualProject()
+        try write("", to: root.appendingPathComponent("data/maps/Route1/scripts.inc"))
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(
+                    action: .createMapScriptLabel,
+                    scriptLabel: "Route1_EventScript_New",
+                    scriptBody: "\tend",
+                    scriptSourcePath: "data/maps/Route1/scripts.inc"
+                ),
+                MapEditOperation(
+                    action: .updateEventField,
+                    eventKind: .object,
+                    eventIndex: 0,
+                    fieldKey: "script",
+                    fieldValue: "Route1_EventScript_New"
+                )
+            ]
+        )
+
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), ["data/maps/Route1/map.json", "data/maps/Route1/scripts.inc"])
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview?.contains("Route1_EventScript_New::\n\tend") ?? false)
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/map.json" }?.textPreview?.contains(#""script": "Route1_EventScript_New""#) ?? false)
+        XCTAssertTrue(plan.isApplyable, "\(plan.diagnostics.map(\.code))")
+    }
+
+    func testMutationPlannerCanUpdateBodyForNewlyCreatedScriptLabel() throws {
+        let root = try makeVisualProject()
+        try write("", to: root.appendingPathComponent("data/maps/Route1/scripts.inc"))
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(
+                    action: .createMapScriptLabel,
+                    scriptLabel: "Route1_EventScript_New",
+                    scriptBody: "\tend",
+                    scriptSourcePath: "data/maps/Route1/scripts.inc"
+                ),
+                MapEditOperation(
+                    action: .updateScriptBody,
+                    scriptLabel: "Route1_EventScript_New",
+                    scriptBody: "\tmsgbox Route1_Text\n\tend",
+                    scriptSourcePath: "data/maps/Route1/scripts.inc"
+                )
+            ]
+        )
+
+        let script = try XCTUnwrap(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview)
+        XCTAssertTrue(script.contains("Route1_EventScript_New::\n\tmsgbox Route1_Text\n\tend"))
+        XCTAssertEqual(script.components(separatedBy: "Route1_EventScript_New::").count, 2)
+        XCTAssertTrue(plan.isApplyable, "\(plan.diagnostics.map(\.code))")
+    }
+
     func testMutationPlannerReportsBoundsDiagnostics() throws {
         let root = try makeVisualProject()
         let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
@@ -299,6 +506,10 @@ final class MapVisualTests: XCTestCase {
         let outsideFile = outsideRoot.appendingPathComponent("out.bin")
         try write("outside", to: outsideFile)
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("linked"), withDestinationURL: outsideRoot)
+        let scriptPlan = manualPlan(
+            root: root,
+            changes: [fileChange(path: "data/maps/Route1/scripts.inc")]
+        )
         let plan = manualPlan(
             root: root,
             changes: [
@@ -311,6 +522,7 @@ final class MapVisualTests: XCTestCase {
             ]
         )
 
+        XCTAssertTrue(scriptPlan.validateApplyability().isApplyable)
         let applyability = plan.validateApplyability()
         let result = try MapMutationApplier.apply(plan: plan)
         let codes = Set(applyability.diagnostics.map(\.code))
@@ -692,6 +904,16 @@ final class MapVisualTests: XCTestCase {
             const u16 gObjectEventPic_Boy1[] = INCGFX_U16("graphics/object_events/pics/people/boy_1.png", ".4bpp");
             """,
             to: root.appendingPathComponent("src/data/object_events/object_event_graphics.h")
+        )
+    }
+
+    private func writeFieldmap(primaryMetatiles: Int, totalMetatiles: Int, to root: URL) throws {
+        try write(
+            """
+            #define NUM_METATILES_IN_PRIMARY \(primaryMetatiles)
+            #define NUM_METATILES_TOTAL \(totalMetatiles)
+            """,
+            to: root.appendingPathComponent("include/fieldmap.h")
         )
     }
 

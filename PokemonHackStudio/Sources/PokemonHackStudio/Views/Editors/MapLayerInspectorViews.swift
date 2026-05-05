@@ -4,6 +4,7 @@ import SwiftUI
 struct MapLayerInspectorView: View {
     let document: MapVisualDocument
     @ObservedObject var session: MapEditorSession
+    let layoutMode: MapEditorLayoutMode
     let viewport: MapCanvasViewport
     let onSelectViewportCenter: (CGFloat, CGFloat) -> Void
 
@@ -35,14 +36,7 @@ struct MapLayerInspectorView: View {
     private var layerViewPresets: some View {
         EditorSection(title: "Layer Views") {
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Layer View", selection: presetBinding) {
-                    ForEach(MapLayerPreset.allCases) { preset in
-                        Label(preset.title, systemImage: preset.systemImage)
-                            .tag(preset)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .help("Switch between the game composite and individual background layers")
+                layerPresetPicker
 
                 MapBackgroundLayerPreviewStrip(
                     document: document,
@@ -50,11 +44,35 @@ struct MapLayerInspectorView: View {
                     borderRawValues: session.stagedMapBorderValues,
                     events: session.stagedMapEvents,
                     overlays: session.mapOverlaySettings,
+                    layoutMode: layoutMode,
                     viewport: viewport
                 ) { layer in
                     session.toggleLayerSolo(MapEditorLayer.layer(for: layer))
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var layerPresetPicker: some View {
+        if layoutMode.isCompact {
+            Picker("Layer View", selection: presetBinding) {
+                ForEach(MapLayerPreset.allCases) { preset in
+                    Label(preset.title, systemImage: preset.systemImage)
+                        .tag(preset)
+                }
+            }
+            .pickerStyle(.menu)
+            .help("Switch between the game composite and individual background layers")
+        } else {
+            Picker("Layer View", selection: presetBinding) {
+                ForEach(MapLayerPreset.allCases) { preset in
+                    Label(preset.title, systemImage: preset.systemImage)
+                        .tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("Switch between the game composite and individual background layers")
         }
     }
 
@@ -132,36 +150,64 @@ struct MapBackgroundLayerPreviewStrip: View {
     let borderRawValues: [UInt16]
     let events: [MapEventDescriptor]
     let overlays: MapOverlaySettings
+    let layoutMode: MapEditorLayoutMode
     let viewport: MapCanvasViewport
     let onSelectLayer: (MetatileRenderLayer) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(MetatileRenderLayer.allCases) { layer in
-                Button {
-                    onSelectLayer(layer)
-                } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(layer.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        MapOverviewView(
-                            document: document,
-                            rawValues: rawValues,
-                            borderRawValues: borderRawValues,
-                            events: events,
-                            overlays: overlays.previewingOnly(renderLayer: layer),
-                            viewport: viewport,
-                            onSelectViewportCenter: { _, _ in }
-                        )
-                        .frame(height: 54)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                    }
+        if layoutMode.isCompact {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(MetatileRenderLayer.allCases) { layer in
+                    previewButton(for: layer, isCompact: true)
                 }
-                .buttonStyle(.plain)
-                .help("Solo \(layer.displayName) background layer")
+            }
+        } else {
+            HStack(spacing: 8) {
+                ForEach(MetatileRenderLayer.allCases) { layer in
+                    previewButton(for: layer, isCompact: false)
+                }
             }
         }
+    }
+
+    private func previewButton(for layer: MetatileRenderLayer, isCompact: Bool) -> some View {
+        Button {
+            onSelectLayer(layer)
+        } label: {
+            if isCompact {
+                HStack(spacing: 8) {
+                    Text(layer.displayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 54, alignment: .leading)
+                    layerPreview(layer)
+                        .frame(height: 46)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(layer.displayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    layerPreview(layer)
+                        .frame(height: 54)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Solo \(layer.displayName) background layer")
+    }
+
+    private func layerPreview(_ layer: MetatileRenderLayer) -> some View {
+        MapOverviewView(
+            document: document,
+            rawValues: rawValues,
+            borderRawValues: borderRawValues,
+            events: events,
+            overlays: overlays.previewingOnly(renderLayer: layer),
+            viewport: viewport,
+            onSelectViewportCenter: { _, _ in }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 }
 
@@ -201,6 +247,8 @@ struct MapSelectionLayerDetails: View {
                                 .font(.caption.monospaced())
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.8)
                         }
                     }
                 }

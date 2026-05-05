@@ -8,6 +8,7 @@ struct MapVisualCanvas: NSViewRepresentable {
     let borderRawValues: [UInt16]
     let events: [MapEventDescriptor]
     let selectedTool: MapEditorTool
+    let eventTemplate: MapEventTemplateKind
     let brushRawValue: UInt16?
     let overlays: MapOverlaySettings
     let zoom: CGFloat
@@ -26,6 +27,7 @@ struct MapVisualCanvas: NSViewRepresentable {
     let onDeleteEvent: () -> Void
     let onHoverStatus: (MapCanvasHoverStatus?) -> Void
     let onViewportChange: (MapCanvasViewport) -> Void
+    let onZoom: (CGFloat) -> Void
     let onCommand: (MapEditorCommand) -> Void
 
     func makeNSView(context: Context) -> MapCanvasNSView {
@@ -47,12 +49,21 @@ private enum DragState {
     case panning(lastPoint: NSPoint)
 }
 
+private enum KeyCode {
+    static let delete: UInt16 = 51
+    static let leftArrow: UInt16 = 123
+    static let rightArrow: UInt16 = 124
+    static let downArrow: UInt16 = 125
+    static let upArrow: UInt16 = 126
+}
+
 final class MapCanvasNSView: NSView {
     private var document: MapVisualDocument?
     private var rawValues: [UInt16] = []
     private var borderRawValues: [UInt16] = []
     private var events: [MapEventDescriptor] = []
     private var selectedTool: MapEditorTool = .select
+    private var eventTemplate: MapEventTemplateKind = .object
     private var brushRawValue: UInt16?
     private var overlays = MapOverlaySettings()
     private var zoom: CGFloat = 2
@@ -80,6 +91,7 @@ final class MapCanvasNSView: NSView {
     private var onDeleteEvent: () -> Void = {}
     private var onHoverStatus: (MapCanvasHoverStatus?) -> Void = { _ in }
     private var onViewportChange: (MapCanvasViewport) -> Void = { _ in }
+    private var onZoom: (CGFloat) -> Void = { _ in }
     private var onCommand: (MapEditorCommand) -> Void = { _ in }
 
     override var isFlipped: Bool { true }
@@ -125,6 +137,7 @@ final class MapCanvasNSView: NSView {
         borderRawValues = canvas.borderRawValues
         events = canvas.events
         selectedTool = canvas.selectedTool
+        eventTemplate = canvas.eventTemplate
         brushRawValue = canvas.brushRawValue
         overlays = canvas.overlays
         zoom = canvas.zoom
@@ -143,6 +156,7 @@ final class MapCanvasNSView: NSView {
         onDeleteEvent = canvas.onDeleteEvent
         onHoverStatus = canvas.onHoverStatus
         onViewportChange = canvas.onViewportChange
+        onZoom = canvas.onZoom
         onCommand = canvas.onCommand
         if needsRenderer {
             renderer = MetatileSwatchRenderer(document: canvas.document)
@@ -249,7 +263,7 @@ final class MapCanvasNSView: NSView {
             }
         case .addEvent:
             guard hit.target == .layout else { return }
-            commit(.addObjectEvent(x: coordinate.x, y: coordinate.y))
+            commit(.addMapEvent(template: eventTemplate, x: coordinate.x, y: coordinate.y))
         case .delete:
             if let eventID = hit.eventID {
                 commit(.selectMapEvent(id: eventID))
@@ -354,11 +368,40 @@ final class MapCanvasNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 51 {
+        switch event.keyCode {
+        case KeyCode.delete:
             commit(.deleteSelectedMapEvent)
-        } else {
+        case KeyCode.leftArrow:
+            scrollViewport(byContentDelta: CGSize(width: -keyboardPanStep(for: event), height: 0))
+        case KeyCode.rightArrow:
+            scrollViewport(byContentDelta: CGSize(width: keyboardPanStep(for: event), height: 0))
+        case KeyCode.upArrow:
+            scrollViewport(byContentDelta: CGSize(width: 0, height: -keyboardPanStep(for: event)))
+        case KeyCode.downArrow:
+            scrollViewport(byContentDelta: CGSize(width: 0, height: keyboardPanStep(for: event)))
+        default:
             super.keyDown(with: event)
         }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let verticalDelta = event.scrollingDeltaY
+        guard verticalDelta.isFinite,
+              abs(verticalDelta) > 0,
+              abs(verticalDelta) >= abs(event.scrollingDeltaX)
+        else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        window?.makeFirstResponder(self)
+        let clampedDelta = min(max(verticalDelta, -24), 24)
+        requestZoom(by: CGFloat(pow(1.02, Double(clampedDelta))))
+    }
+
+    override func magnify(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        requestZoom(by: 1 + event.magnification)
     }
 
     override func viewDidMoveToWindow() {
@@ -524,7 +567,7 @@ final class MapCanvasNSView: NSView {
             onSelectEvent(eventID)
         case .moveSelectedMapEvent(let x, let y):
             onMoveEvent(x, y)
-        case .addObjectEvent(let x, let y):
+        case .addObjectEvent(let x, let y), .addMapEvent(_, let x, let y):
             onAddEvent(x, y)
         case .duplicateSelectedMapEvent:
             onDuplicateEvent()
@@ -536,11 +579,15 @@ final class MapCanvasNSView: NSView {
     }
 
     private func pan(by delta: CGSize) {
+        scrollViewport(byContentDelta: CGSize(width: -delta.width, height: -delta.height))
+    }
+
+    private func scrollViewport(byContentDelta delta: CGSize) {
         guard let scrollView = enclosingScrollView else { return }
         let clipView = scrollView.contentView
         var origin = clipView.bounds.origin
-        origin.x -= delta.width
-        origin.y -= delta.height
+        origin.x += delta.width
+        origin.y += delta.height
         let maxX = max(bounds.width - clipView.bounds.width, 0)
         let maxY = max(bounds.height - clipView.bounds.height, 0)
         origin.x = min(max(origin.x, 0), maxX)
@@ -548,6 +595,23 @@ final class MapCanvasNSView: NSView {
         clipView.scroll(to: origin)
         scrollView.reflectScrolledClipView(clipView)
         reportViewportIfNeeded()
+    }
+
+    private func keyboardPanStep(for event: NSEvent) -> CGFloat {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.option) {
+            return tileSize * 12
+        }
+        if flags.contains(.shift) {
+            return tileSize * 6
+        }
+        return tileSize * 3
+    }
+
+    private func requestZoom(by factor: CGFloat) {
+        let clampedFactor = min(max(factor, 0.25), 4)
+        guard clampedFactor.isFinite, abs(clampedFactor - 1) > 0.001 else { return }
+        onZoom(clampedFactor)
     }
 
     private var accessibilityCanvasLabel: String {

@@ -1,6 +1,25 @@
 import PokemonHackCore
 import SwiftUI
 
+enum MapEditorLayoutMode: Equatable {
+    static let compactBreakpoint: CGFloat = 1180
+
+    case wide
+    case compact
+
+    init(width: CGFloat) {
+        self = width < Self.compactBreakpoint ? .compact : .wide
+    }
+
+    var isCompact: Bool {
+        self == .compact
+    }
+
+    var isWide: Bool {
+        self == .wide
+    }
+}
+
 struct MapEditorView: View {
     @ObservedObject var store: WorkbenchStore
     @ObservedObject private var session: MapEditorSession
@@ -10,12 +29,19 @@ struct MapEditorView: View {
     @State private var zoom = 2.0
     @State private var showPalette = true
     @State private var showApplyConfirmation = false
+    @State private var showCompactMapBrowser = false
+    @State private var showCompactInspector = false
+    @State private var showCompactPalette = false
     @State private var metatileFilter = ""
     @State private var hoverStatus: MapCanvasHoverStatus?
     @State private var fitMapToView = false
     @State private var canvasViewportSize: CGSize = .zero
     @State private var viewportSnapshot = MapCanvasViewport.zero
     @State private var viewportRequest: MapCanvasViewportRequest?
+    @State private var eventSearchText = ""
+    @State private var scriptDraftKey = ""
+    @State private var scriptDraftText = ""
+    @State private var selectedWorkbenchTab: MapWorkbenchTab = .map
 
     init(store: WorkbenchStore, records: [WorkbenchRecord], catalog: MapCatalogViewState?) {
         self.store = store
@@ -26,7 +52,9 @@ struct MapEditorView: View {
 
     var body: some View {
         if let catalog {
-            visualEditor(catalog)
+            GeometryReader { proxy in
+                visualEditor(catalog, layoutMode: MapEditorLayoutMode(width: proxy.size.width))
+            }
         } else {
             fixtureList
         }
@@ -50,16 +78,14 @@ struct MapEditorView: View {
         }
     }
 
-    private func visualEditor(_ catalog: MapCatalogViewState) -> some View {
-        HSplitView {
-            mapList(catalog)
-                .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
-
-            editorCanvas
-                .frame(minWidth: 620, idealWidth: 900, maxWidth: .infinity, maxHeight: .infinity)
-
-            inspector
-                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+    private func visualEditor(_ catalog: MapCatalogViewState, layoutMode: MapEditorLayoutMode) -> some View {
+        Group {
+            switch layoutMode {
+            case .wide:
+                wideVisualEditor(catalog)
+            case .compact:
+                compactVisualEditor(catalog)
+            }
         }
         .navigationTitle("Maps")
         .onAppear {
@@ -83,6 +109,24 @@ struct MapEditorView: View {
         }
     }
 
+    private func wideVisualEditor(_ catalog: MapCatalogViewState) -> some View {
+        HSplitView {
+            mapList(catalog)
+                .frame(minWidth: 170, idealWidth: 240, maxWidth: 320)
+
+            editorCanvas(layoutMode: .wide, catalog: catalog)
+                .frame(minWidth: 360, idealWidth: 840, maxWidth: .infinity, maxHeight: .infinity)
+
+            inspector(layoutMode: .wide)
+                .frame(minWidth: 260, idealWidth: 340, maxWidth: 430)
+        }
+    }
+
+    private func compactVisualEditor(_ catalog: MapCatalogViewState) -> some View {
+        editorCanvas(layoutMode: .compact, catalog: catalog)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func mapList(_ catalog: MapCatalogViewState) -> some View {
         List(selection: mapSelection) {
             ForEach(catalog.groups) { group in
@@ -95,6 +139,7 @@ struct MapEditorView: View {
             }
         }
         .listStyle(.sidebar)
+        .accessibilityLabel("Map browser")
     }
 
     private var mapSelection: Binding<String> {
@@ -105,12 +150,13 @@ struct MapEditorView: View {
         }
     }
 
-    private var editorCanvas: some View {
+    private func editorCanvas(layoutMode: MapEditorLayoutMode, catalog: MapCatalogViewState) -> some View {
         VStack(spacing: 0) {
-            editorToolbar
+            editorToolbar(layoutMode: layoutMode, catalog: catalog)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.bar)
+                .accessibilityLabel("Map editor toolbar")
 
             if session.isDirty {
                 dirtyBanner
@@ -128,6 +174,7 @@ struct MapEditorView: View {
                                 borderRawValues: session.stagedMapBorderValues,
                                 events: session.stagedMapEvents,
                                 selectedTool: session.selectedMapTool,
+                                eventTemplate: session.selectedEventTemplate,
                                 brushRawValue: session.selectedBrushRawValue,
                                 overlays: session.mapOverlaySettings,
                                 zoom: zoom,
@@ -150,12 +197,16 @@ struct MapEditorView: View {
                                         viewportSnapshot = viewport
                                     }
                                 },
+                                onZoom: { factor in
+                                    applyCanvasZoom(factor: factor)
+                                },
                                 onCommand: { _ = session.dispatch($0) }
                             )
                             .frame(
                                 width: CGFloat(document.scene.viewport.width) * 16 * zoom,
                                 height: CGFloat(document.scene.viewport.height) * 16 * zoom
                             )
+                            .accessibilityLabel("Map canvas")
                         }
                         .background(Color(nsColor: .textBackgroundColor))
                         .overlay(alignment: .bottomLeading) {
@@ -172,7 +223,7 @@ struct MapEditorView: View {
                         }
                     }
 
-                    if showPalette {
+                    if showPalette && !layoutMode.isCompact {
                         Divider()
                         MetatilePaletteView(
                             document: document,
@@ -197,37 +248,74 @@ struct MapEditorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .accessibilityLabel("Map editor canvas area")
     }
 
-    private var editorToolbar: some View {
+    private func editorToolbar(layoutMode: MapEditorLayoutMode, catalog: MapCatalogViewState) -> some View {
         HStack(spacing: 8) {
-            Picker("Tool", selection: $session.selectedMapTool) {
-                ForEach(MapEditorTool.allCases) { tool in
-                    Label(tool.title, systemImage: tool.systemImage)
-                        .tag(tool)
+            if layoutMode.isCompact {
+                compactMapBrowserButton(catalog)
+                compactToolMenu
+            } else {
+                toolPicker
+            }
+
+            Divider()
+
+            if layoutMode.isCompact {
+                Button("Undo", systemImage: "arrow.uturn.backward") {
+                    session.undoLastMapEdit()
                 }
+                .labelStyle(.iconOnly)
+                .help("Undo last staged map edit")
+                .disabled(session.mapEditOperations.isEmpty)
+
+                Button("Redo", systemImage: "arrow.uturn.forward") {
+                    session.redoMapEdit()
+                }
+                .labelStyle(.iconOnly)
+                .help("Redo staged map edit")
+                .disabled(session.undoneMapEditOperations.isEmpty)
+            } else {
+                Button("Undo", systemImage: "arrow.uturn.backward") {
+                    session.undoLastMapEdit()
+                }
+                .help("Undo last staged map edit")
+                .disabled(session.mapEditOperations.isEmpty)
+
+                Button("Redo", systemImage: "arrow.uturn.forward") {
+                    session.redoMapEdit()
+                }
+                .help("Redo staged map edit")
+                .disabled(session.undoneMapEditOperations.isEmpty)
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 520)
 
             Divider()
 
-            Button("Undo", systemImage: "arrow.uturn.backward") {
-                session.undoLastMapEdit()
-            }
-            .help("Undo last staged map edit")
-            .disabled(session.mapEditOperations.isEmpty)
+            if layoutMode.isCompact {
+                Button("Palette", systemImage: "square.grid.3x3") {
+                    showCompactPalette.toggle()
+                }
+                .labelStyle(.iconOnly)
+                .help("Open metatile palette")
+                .popover(isPresented: $showCompactPalette, arrowEdge: .bottom) {
+                    compactPalettePopover
+                }
 
-            Button("Redo", systemImage: "arrow.uturn.forward") {
-                session.redoMapEdit()
-            }
-            .help("Redo staged map edit")
-            .disabled(session.undoneMapEditOperations.isEmpty)
-
-            Divider()
-
-            Button(showPalette ? "Hide Palette" : "Show Palette", systemImage: "square.grid.3x3") {
-                showPalette.toggle()
+                Button("Inspector", systemImage: "sidebar.right") {
+                    showCompactInspector.toggle()
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Open map workbench inspector")
+                .help("Open map inspector")
+                .popover(isPresented: $showCompactInspector, arrowEdge: .bottom) {
+                    inspector(layoutMode: .compact)
+                        .frame(width: 430, height: 680)
+                }
+            } else {
+                Button(showPalette ? "Hide Palette" : "Show Palette", systemImage: "square.grid.3x3") {
+                    showPalette.toggle()
+                }
             }
 
             Divider()
@@ -249,10 +337,18 @@ struct MapEditorView: View {
             .labelStyle(.iconOnly)
             .help("Zoom in")
 
-            Button("Fit", systemImage: fitMapToView ? "arrow.up.left.and.down.right.magnifyingglass" : "arrow.up.left.and.down.right") {
-                fitSelectedMapToView()
+            if layoutMode.isCompact {
+                Button("Fit", systemImage: fitMapToView ? "arrow.up.left.and.down.right.magnifyingglass" : "arrow.up.left.and.down.right") {
+                    fitSelectedMapToView()
+                }
+                .labelStyle(.iconOnly)
+                .help("Fit the whole map in the viewport")
+            } else {
+                Button("Fit", systemImage: fitMapToView ? "arrow.up.left.and.down.right.magnifyingglass" : "arrow.up.left.and.down.right") {
+                    fitSelectedMapToView()
+                }
+                .help("Fit the whole map in the viewport")
             }
-            .help("Fit the whole map in the viewport")
 
             Button("Reset View", systemImage: "arrow.counterclockwise") {
                 resetView()
@@ -263,7 +359,7 @@ struct MapEditorView: View {
             Slider(value: zoomBinding, in: MapViewportGeometry.minimumManualZoom...MapViewportGeometry.maximumZoom) {
                 Text("Zoom")
             }
-            .frame(width: 110)
+            .frame(width: layoutMode.isCompact ? 74 : 110)
 
             Text("\(Int((zoom * 100).rounded()))%")
                 .font(.caption.monospacedDigit())
@@ -272,17 +368,84 @@ struct MapEditorView: View {
 
             Spacer()
 
-            if let hoverStatus {
+            if let hoverStatus, !layoutMode.isCompact {
                 Text(hoverStatus.statusText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
-            Text(store.mapVisualStatus.label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if !layoutMode.isCompact {
+                Text(store.mapVisualStatus.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var toolPicker: some View {
+        Picker("Tool", selection: $session.selectedMapTool) {
+            ForEach(MapEditorTool.allCases) { tool in
+                Label(tool.title, systemImage: tool.systemImage)
+                    .tag(tool)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 500)
+    }
+
+    private var compactToolMenu: some View {
+        Menu {
+            ForEach(MapEditorTool.allCases) { tool in
+                Button {
+                    session.selectedMapTool = tool
+                } label: {
+                    Label(tool.title, systemImage: tool.systemImage)
+                }
+            }
+        } label: {
+            Label(session.selectedMapTool.title, systemImage: session.selectedMapTool.systemImage)
                 .lineLimit(1)
+        }
+        .frame(maxWidth: 150)
+        .help("Select map editor tool")
+    }
+
+    private func compactMapBrowserButton(_ catalog: MapCatalogViewState) -> some View {
+        Button {
+            showCompactMapBrowser.toggle()
+        } label: {
+            Label(selectedMapName(in: catalog), systemImage: "list.bullet")
+                .lineLimit(1)
+        }
+        .frame(maxWidth: 170)
+        .help("Browse maps")
+        .popover(isPresented: $showCompactMapBrowser, arrowEdge: .bottom) {
+            mapList(catalog)
+                .frame(width: 330, height: 620)
+                .onChange(of: store.selectedMapID) { _ in
+                    showCompactMapBrowser = false
+                }
+        }
+    }
+
+    private var compactPalettePopover: some View {
+        Group {
+            if let document = session.selectedMapVisualDocument {
+                MetatilePaletteView(
+                    document: document,
+                    selectedRawValue: session.selectedBrushRawValue,
+                    filterText: $metatileFilter,
+                    maxVisibleMetatiles: 512
+                ) { rawValue in
+                    session.selectBrush(rawValue: rawValue)
+                }
+                .frame(width: 760)
+            } else {
+                ContentUnavailableView("No Palette", systemImage: "square.grid.3x3", description: Text(store.mapVisualStatus.label))
+                    .frame(width: 360, height: 180)
+            }
         }
     }
 
@@ -290,8 +453,7 @@ struct MapEditorView: View {
         Binding {
             zoom
         } set: { value in
-            fitMapToView = false
-            zoom = clampedZoom(value)
+            applyZoom(value)
         }
     }
 
@@ -300,16 +462,15 @@ struct MapEditorView: View {
     }
 
     private func zoomIn() {
-        setZoom(zoom * 1.25)
+        applyZoom(zoom * 1.25)
     }
 
     private func zoomOut() {
-        setZoom(zoom / 1.25)
+        applyZoom(zoom / 1.25)
     }
 
     private func setZoom(_ nextZoom: Double) {
-        fitMapToView = false
-        zoom = clampedZoom(nextZoom)
+        applyZoom(nextZoom)
     }
 
     private func resetView() {
@@ -341,8 +502,42 @@ struct MapEditorView: View {
         )
     }
 
+    private func applyCanvasZoom(factor: CGFloat) {
+        applyZoom(zoom * Double(factor))
+    }
+
+    private func applyZoom(_ nextZoom: Double) {
+        let clamped = clampedZoom(nextZoom)
+        guard clamped != zoom else {
+            fitMapToView = false
+            return
+        }
+
+        fitMapToView = false
+        let center = currentViewportCenter()
+        zoom = clamped
+        if let center {
+            viewportRequest = MapCanvasViewportRequest(centerX: center.x, centerY: center.y)
+        }
+    }
+
     private func clampedZoom(_ value: Double) -> Double {
         min(max(value, MapViewportGeometry.minimumManualZoom), MapViewportGeometry.maximumZoom)
+    }
+
+    private func currentViewportCenter() -> CGPoint? {
+        if !viewportSnapshot.isEmpty {
+            return CGPoint(
+                x: viewportSnapshot.originX + viewportSnapshot.width / 2,
+                y: viewportSnapshot.originY + viewportSnapshot.height / 2
+            )
+        }
+
+        guard let document = session.selectedMapVisualDocument else { return nil }
+        return CGPoint(
+            x: CGFloat(document.scene.viewport.minX) + CGFloat(document.scene.viewport.width) / 2,
+            y: CGFloat(document.scene.viewport.minY) + CGFloat(document.scene.viewport.height) / 2
+        )
     }
 
     private var canvasStatusHUD: some View {
@@ -447,22 +642,28 @@ struct MapEditorView: View {
         return "Brush \(String(format: "%03X", Int(rawValue & 0x03ff)))"
     }
 
-    private var inspector: some View {
+    private func inspector(layoutMode: MapEditorLayoutMode) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 if let document = session.selectedMapVisualDocument {
-                    MapLayerInspectorView(
+                    MapWorkbenchPanels(
                         document: document,
                         session: session,
-                        viewport: viewportSnapshot
-                    ) { centerX, centerY in
-                        viewportRequest = MapCanvasViewportRequest(centerX: centerX, centerY: centerY)
+                        layoutMode: layoutMode,
+                        viewport: viewportSnapshot,
+                        selectedTab: $selectedWorkbenchTab,
+                        eventSearchText: $eventSearchText,
+                        scriptDraftKey: $scriptDraftKey,
+                        scriptDraftText: $scriptDraftText,
+                        onSelectViewportCenter: { centerX, centerY in
+                            viewportRequest = MapCanvasViewportRequest(centerX: centerX, centerY: centerY)
+                        },
+                        onCenterEvent: { event in
+                            centerOnEvent(event)
+                        }
+                    ) {
+                        mutationInspector
                     }
-                    mapSummary(document)
-                    sceneDiagnostics(document)
-                    selectionInspector(document)
-                    eventInspector
-                    mutationInspector
                 } else {
                     ContentUnavailableView("No Map", systemImage: "sidebar.right", description: Text(store.mapVisualStatus.label))
                 }
@@ -470,6 +671,7 @@ struct MapEditorView: View {
             .padding(16)
         }
         .background(Color(nsColor: .controlBackgroundColor))
+        .accessibilityLabel("Map workbench inspector")
     }
 
     private func mapSummary(_ document: MapVisualDocument) -> some View {
@@ -574,65 +776,40 @@ struct MapEditorView: View {
     }
 
     private var mutationInspector: some View {
-        EditorSection(title: "Mutation Plan") {
-            VStack(alignment: .leading, spacing: 10) {
-                FactGrid(
-                    facts: [
-                        Fact(label: "Staged Ops", value: "\(session.mapEditOperations.count)"),
-                        Fact(label: "Plan Changes", value: "\(session.latestMapEditPlan?.changes.count ?? 0)")
-                    ]
-                )
-
-                HStack {
-                    Button("Preview", systemImage: "doc.text.magnifyingglass") {
-                        _ = session.previewSelectedMapMutationPlan()
-                    }
-                    .disabled(!session.canPreviewSelectedMapMutationPlan)
-                    .help(session.previewBlockedReason ?? "Preview staged source changes")
-
-                    Button("Apply", systemImage: "square.and.arrow.down") {
-                        if !session.isLatestMapEditPlanCurrent {
-                            _ = session.previewSelectedMapMutationPlan()
-                        }
-                        showApplyConfirmation = true
-                    }
-                    .disabled(!session.canApplySelectedMapMutationPlan)
-                    .help(session.applyBlockedReason ?? "Apply staged source changes with backups")
+        MutationPlanPanel(
+            context: MutationPlanPanelContext.map(session: session) ?? emptyMutationContext,
+            onPreview: {
+                _ = session.previewSelectedMapMutationPlan()
+            },
+            onApply: {
+                if !session.isLatestMapEditPlanCurrent {
+                    _ = session.previewSelectedMapMutationPlan()
                 }
-
-                if let plan = session.latestMapEditPlan {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(plan.changes) { change in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label(change.path, systemImage: "doc")
-                                    .font(.caption.weight(.semibold))
-                                    .textSelection(.enabled)
-                                Text("\(change.summary) · \(change.originalByteCount) → \(change.newByteCount) bytes")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        ForEach(plan.diagnostics.prefix(5)) { diagnostic in
-                            Label(diagnostic.message, systemImage: diagnostic.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
-                        }
-                        if !plan.isApplyable {
-                            Label("Apply is blocked until diagnostics are resolved.", systemImage: "lock.trianglebadge.exclamationmark")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                }
-
-                if let result = session.latestMapApplyResult {
-                    Label("Backed up to \(result.backupRootPath)", systemImage: "checkmark.seal")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
+                showApplyConfirmation = true
+            },
+            onDiscard: {
+                store.discardMapEdits()
             }
-        }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel("Map mutation review")
+    }
+
+    private var emptyMutationContext: MutationPlanPanelContext {
+        MutationPlanPanelContext(
+            title: "Map Mutation Plan",
+            summary: "No staged map edits.",
+            status: .valid,
+            operationCount: session.mapEditOperations.count,
+            changes: [],
+            appliedChanges: [],
+            diagnostics: [],
+            canPreview: session.canPreviewSelectedMapMutationPlan,
+            canApply: session.canApplySelectedMapMutationPlan,
+            canDiscard: session.canDiscardMapEdits,
+            previewBlockedReason: session.previewBlockedReason,
+            applyBlockedReason: session.applyBlockedReason
+        )
     }
 
     private var selectedEvent: MapEventDescriptor? {
@@ -648,9 +825,19 @@ struct MapEditorView: View {
         }
     }
 
+    private func centerOnEvent(_ event: MapEventDescriptor) {
+        session.selectMapEvent(id: event.id)
+        guard let x = event.x, let y = event.y else { return }
+        viewportRequest = MapCanvasViewportRequest(centerX: CGFloat(x), centerY: CGFloat(y))
+    }
+
     private func maps(in group: MapGroupViewState, catalog: MapCatalogViewState) -> [MapSummaryViewState] {
         let byID = Dictionary(uniqueKeysWithValues: catalog.maps.map { ($0.id, $0) })
         return group.mapIDs.compactMap { byID[$0] }
+    }
+
+    private func selectedMapName(in catalog: MapCatalogViewState) -> String {
+        catalog.maps.first { $0.id == store.selectedMapID }?.name ?? "Maps"
     }
 
     private func reconcileSelection(in catalog: MapCatalogViewState) {

@@ -1,30 +1,69 @@
 import Foundation
 import PokemonHackCore
 
-enum WorkbenchModule: String, CaseIterable, Identifiable {
-    case dashboard = "Dashboard"
+enum WorkbenchModuleGroup: String, CaseIterable, Identifiable {
+    case project = "Project"
     case maps = "Maps"
+    case data = "Data"
+    case scriptsText = "Scripts/Text"
+    case graphics = "Graphics"
+    case buildPatchPlaytest = "Build/Patch/Playtest"
+    case diagnostics = "Diagnostics"
+
+    var id: String { rawValue }
+
+    var modules: [WorkbenchModule] {
+        WorkbenchModule.allCases.filter { $0.group == self }
+    }
+}
+
+enum WorkbenchModule: String, CaseIterable, Identifiable {
+    case dashboard = "Project"
+    case maps = "Maps"
+    case pokemon = "Pokemon"
     case trainers = "Trainers"
     case items = "Items"
-    case pokemon = "Pokemon"
     case encounters = "Encounters"
     case scripts = "Scripts"
     case text = "Text"
-    case build = "Build"
-    case issues = "Issues"
+    case graphics = "Graphics"
+    case build = "Build/Patch/Playtest"
+    case issues = "Diagnostics"
 
     var id: String { rawValue }
+
+    var title: String { rawValue }
+
+    var group: WorkbenchModuleGroup {
+        switch self {
+        case .dashboard:
+            .project
+        case .maps:
+            .maps
+        case .pokemon, .trainers, .items, .encounters:
+            .data
+        case .scripts, .text:
+            .scriptsText
+        case .graphics:
+            .graphics
+        case .build:
+            .buildPatchPlaytest
+        case .issues:
+            .diagnostics
+        }
+    }
 
     var systemImage: String {
         switch self {
         case .dashboard: "square.grid.2x2"
         case .maps: "map"
+        case .pokemon: "sparkles"
         case .trainers: "person.2"
         case .items: "shippingbox"
-        case .pokemon: "sparkles"
         case .encounters: "leaf"
         case .scripts: "curlybraces"
         case .text: "text.quote"
+        case .graphics: "photo.on.rectangle"
         case .build: "hammer"
         case .issues: "exclamationmark.triangle"
         }
@@ -32,15 +71,16 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .dashboard: "Project health"
+        case .dashboard: "Source index and project health"
         case .maps: "Layouts, events, warps"
+        case .pokemon: "Species tables"
         case .trainers: "Parties and AI flags"
         case .items: "Prices and field effects"
-        case .pokemon: "Species tables"
         case .encounters: "Wild slots"
         case .scripts: "Event scripts"
         case .text: "Message tables"
-        case .build: "Targets and artifacts"
+        case .graphics: "Tilesets, palettes, assets"
+        case .build: "Builds, patches, playtests"
         case .issues: "Validation queue"
         }
     }

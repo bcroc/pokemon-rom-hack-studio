@@ -1,0 +1,588 @@
+import PokemonHackCore
+import SwiftUI
+
+struct MapEventsPaneView: View {
+    let document: MapVisualDocument
+    @ObservedObject var session: MapEditorSession
+    @Binding var eventSearchText: String
+    @Binding var scriptDraftKey: String
+    @Binding var scriptDraftText: String
+    let onCenterEvent: (MapEventDescriptor) -> Void
+
+    @State private var selectedKindFilter: MapEventKind?
+
+    var body: some View {
+        EditorSection(title: "Events") {
+            VStack(alignment: .leading, spacing: 12) {
+                eventToolbar
+                kindTabs
+                eventBrowser
+                selectedEventEditor
+            }
+        }
+    }
+
+    private var eventToolbar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                TextField("Search events", text: $eventSearchText)
+                    .textFieldStyle(.roundedBorder)
+
+                Menu {
+                    ForEach(MapEventTemplateKind.allCases) { template in
+                        Button {
+                            session.selectEventTemplate(template)
+                            let coordinate = insertionCoordinate
+                            session.addMapEvent(template: template, atX: coordinate.x, y: coordinate.y)
+                        } label: {
+                            Label(template.title, systemImage: template.systemImage)
+                        }
+                    }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .help("Add event at the selected map coordinate")
+            }
+
+            Picker("New event", selection: $session.selectedEventTemplate) {
+                ForEach(MapEventTemplateKind.allCases) { template in
+                    Label(template.title, systemImage: template.systemImage)
+                        .tag(template)
+                }
+            }
+            .pickerStyle(.menu)
+            .help("Choose the event type used by the canvas add-event tool")
+        }
+    }
+
+    private var kindTabs: some View {
+        HStack(spacing: 6) {
+            kindTab(title: "All", count: session.stagedMapEvents.count, kind: nil)
+            ForEach(MapEventKind.allCases.filter { $0 != .connection }, id: \.rawValue) { kind in
+                kindTab(title: kind.title, count: eventCount(for: kind), kind: kind)
+            }
+        }
+    }
+
+    private func kindTab(title: String, count: Int, kind: MapEventKind?) -> some View {
+        Button {
+            selectedKindFilter = kind
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                    .lineLimit(1)
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption.weight(selectedKindFilter == kind ? .semibold : .regular))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(selectedKindFilter == kind ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(count == 0 && kind != nil)
+    }
+
+    private var eventBrowser: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("\(filteredEvents.count) shown")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Previous", systemImage: "chevron.up") {
+                    selectAdjacentEvent(offset: -1)
+                }
+                .labelStyle(.iconOnly)
+                .help("Select previous filtered event")
+                .disabled(filteredEvents.isEmpty)
+                Button("Next", systemImage: "chevron.down") {
+                    selectAdjacentEvent(offset: 1)
+                }
+                .labelStyle(.iconOnly)
+                .help("Select next filtered event")
+                .disabled(filteredEvents.isEmpty)
+            }
+
+            if filteredEvents.isEmpty {
+                Text("No matching events.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(groupedFilteredEvents) { group in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(group.kind.title) (\(group.events.count))")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            ForEach(group.events) { event in
+                                eventRow(event)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func eventRow(_ event: MapEventDescriptor) -> some View {
+        Button {
+            session.selectMapEvent(id: event.id)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: event.templateKind?.systemImage ?? event.kind.systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(eventTitle(event))
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(eventSubtitle(event))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if session.selectedMapEventID == event.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.tint)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background(session.selectedMapEventID == event.id ? Color.accentColor.opacity(0.14) : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Center on Canvas", systemImage: "scope") {
+                onCenterEvent(event)
+            }
+            Button("Duplicate", systemImage: "plus.square.on.square") {
+                session.selectMapEvent(id: event.id)
+                session.duplicateSelectedMapEvent()
+            }
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                session.selectMapEvent(id: event.id)
+                session.deleteSelectedMapEvent()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var selectedEventEditor: some View {
+        if let event = selectedEvent {
+            Divider()
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Label(event.templateKind?.title ?? event.kind.title, systemImage: event.templateKind?.systemImage ?? event.kind.systemImage)
+                        .font(.headline)
+                    Text("#\(event.index)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Center", systemImage: "scope") {
+                        onCenterEvent(event)
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Center selected event on canvas")
+                    Button("Duplicate", systemImage: "plus.square.on.square") {
+                        session.duplicateSelectedMapEvent()
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Duplicate selected event")
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        session.deleteSelectedMapEvent()
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Delete selected event")
+                }
+
+                typedFields(for: event)
+                customFields(for: event)
+                scriptEditor(for: event)
+            }
+        } else {
+            Text("Select an event to edit its fields.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func typedFields(for event: MapEventDescriptor) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Fields")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            numericField("X", key: "x", range: -512...512)
+            numericField("Y", key: "y", range: -512...512)
+            numericField("Elevation", key: "elevation", range: 0...15)
+
+            switch event.templateKind ?? .object {
+            case .object:
+                textField("Graphics", key: "graphics_id")
+                textField("Movement", key: "movement_type")
+                numericField("Move X", key: "movement_range_x", range: 0...255)
+                numericField("Move Y", key: "movement_range_y", range: 0...255)
+                textField("Trainer Type", key: "trainer_type")
+                textField("Trainer Sight", key: "trainer_sight_or_berry_tree_id")
+                textField("Flag", key: "flag")
+                textField("Script", key: "script")
+            case .warp:
+                textField("Destination", key: "dest_map")
+                numericField("Warp ID", key: "dest_warp_id", range: 0...255)
+            case .coordTrigger:
+                textField("Type", key: "type")
+                textField("Variable", key: "var")
+                textField("Value", key: "var_value")
+                textField("Script", key: "script")
+            case .bgSign:
+                textField("Type", key: "type")
+                textField("Facing", key: "player_facing_dir")
+                textField("Script", key: "script")
+            case .bgHiddenItem:
+                textField("Type", key: "type")
+                textField("Item", key: "item")
+                textField("Flag", key: "flag")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func customFields(for event: MapEventDescriptor) -> some View {
+        let keys = Set(primaryKeys(for: event))
+        let custom = event.properties.filter { !keys.contains($0.key) }
+        if !custom.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Custom")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(custom) { property in
+                    textField(property.key, key: property.key)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scriptEditor(for event: MapEventDescriptor) -> some View {
+        if canEditScript(for: event) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Inline Script")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if let scriptLabel = event.scriptLabel,
+                   let scriptIndex = document.scriptIndex {
+                    if let stagedScript = stagedScriptBody(for: scriptLabel) {
+                        stagedScriptBodyEditor(stagedScript)
+                    } else {
+                        let resolution = scriptIndex.resolution(for: scriptLabel)
+                        scriptResolutionView(resolution: resolution, event: event)
+                    }
+                } else {
+                    newScriptButton(for: event, title: "Create Script")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scriptResolutionView(resolution: MapScriptResolution, event: MapEventDescriptor) -> some View {
+        switch resolution.state {
+        case .resolved:
+            if let span = resolution.span {
+                scriptBodyEditor(span: span)
+            }
+        case .missingLabel:
+            VStack(alignment: .leading, spacing: 8) {
+                diagnosticRows(resolution.diagnostics)
+                newScriptButton(for: event, title: "Create Missing Label")
+            }
+        case .duplicateLabel, .generatedPath, .externalLabel:
+            diagnosticRows(resolution.diagnostics)
+        case .noScript:
+            newScriptButton(for: event, title: "Create Script")
+        }
+    }
+
+    private func scriptBodyEditor(span: MapScriptLabelSpan) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SourceLocationView(
+                source: SourceLocation(path: span.sourcePath, symbol: span.label, line: span.labelLine)
+            )
+
+            if span.sourceRole == .shared {
+                Label("Shared script source. Preview before applying.", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            TextEditor(text: $scriptDraftText)
+                .font(.system(.caption, design: .monospaced))
+                .frame(minHeight: 140)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor))
+                )
+                .onAppear {
+                    syncScriptDraft(span: span)
+                }
+                .onChange(of: span.id) { _, _ in
+                    syncScriptDraft(span: span)
+                }
+
+            HStack {
+                Button("Stage Script", systemImage: "square.and.pencil") {
+                    session.updateScriptBody(label: span.label, sourcePath: span.sourcePath, body: scriptDraftText)
+                }
+                .disabled(scriptDraftText == (session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body))
+                Spacer()
+                Text("\(scriptDraftText.split(separator: "\n", omittingEmptySubsequences: false).count) lines")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func stagedScriptBodyEditor(_ stagedScript: StagedMapScriptBody) -> some View {
+        let role = document.scriptIndex?.source(path: stagedScript.sourcePath)?.role ?? .mapLocal
+        let span = MapScriptLabelSpan(
+            label: stagedScript.label,
+            sourcePath: stagedScript.sourcePath,
+            sourceRole: role,
+            labelLine: 1,
+            bodyStartLine: 2,
+            bodyEndLine: 2,
+            body: stagedScript.body
+        )
+        return scriptBodyEditor(span: span)
+    }
+
+    private func newScriptButton(for event: MapEventDescriptor, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let sourcePath = session.editableScriptSourcePath {
+                Button(title, systemImage: "plus.rectangle.on.folder") {
+                    let label = generatedScriptLabel(for: event)
+                    let body = "\tend"
+                    session.createScriptLabel(label: label, sourcePath: sourcePath, body: body)
+                    session.updateSelectedMapEventProperty(key: "script", value: label)
+                    scriptDraftKey = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
+                    scriptDraftText = body
+                }
+                .help("Create a map script label in \(sourcePath)")
+            } else {
+                Text("No editable scripts.inc source is loaded for this map.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func diagnosticRows(_ diagnostics: [Diagnostic]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(diagnostics.prefix(3)) { diagnostic in
+                Label(diagnostic.message, systemImage: diagnostic.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+            }
+        }
+    }
+
+    private func textField(_ title: String, key: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            TextField(key, text: propertyBinding(for: key))
+                .font(.caption)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func numericField(_ title: String, key: String, range: ClosedRange<Int>) -> some View {
+        Stepper(value: integerBinding(for: key, range: range), in: range) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 96, alignment: .leading)
+                Text("\(integerBinding(for: key, range: range).wrappedValue)")
+                    .font(.caption.monospacedDigit())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var selectedEvent: MapEventDescriptor? {
+        session.selectedMapEvent
+    }
+
+    private var filteredEvents: [MapEventDescriptor] {
+        let query = eventSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return session.stagedMapEvents.filter { event in
+            if let selectedKindFilter, event.kind != selectedKindFilter {
+                return false
+            }
+            guard !query.isEmpty else { return true }
+            let haystack = ([event.kind.rawValue, "\(event.index)", event.templateKind?.title ?? ""] + event.properties.flatMap { [$0.key, $0.value] })
+                .joined(separator: " ")
+            return haystack.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var groupedFilteredEvents: [MapEventGroup] {
+        MapEventKind.allCases.compactMap { kind in
+            let events = filteredEvents.filter { $0.kind == kind }
+            guard !events.isEmpty else { return nil }
+            return MapEventGroup(kind: kind, events: events)
+        }
+    }
+
+    private func eventCount(for kind: MapEventKind) -> Int {
+        session.stagedMapEvents.filter { $0.kind == kind }.count
+    }
+
+    private func selectAdjacentEvent(offset: Int) {
+        let events = filteredEvents
+        guard !events.isEmpty else { return }
+        let currentIndex = session.selectedMapEventID.flatMap { id in events.firstIndex { $0.id == id } } ?? (offset > 0 ? -1 : 0)
+        let nextIndex = (currentIndex + offset + events.count) % events.count
+        session.selectMapEvent(id: events[nextIndex].id)
+    }
+
+    private var insertionCoordinate: (x: Int, y: Int) {
+        if let selectedMapCell = session.selectedMapCell {
+            return (selectedMapCell.x, selectedMapCell.y)
+        }
+        if let selectedEvent = session.selectedMapEvent, let x = selectedEvent.x, let y = selectedEvent.y {
+            return (x, y)
+        }
+        return (0, 0)
+    }
+
+    private func eventTitle(_ event: MapEventDescriptor) -> String {
+        "\(event.templateKind?.title ?? event.kind.title) #\(event.index)"
+    }
+
+    private func eventSubtitle(_ event: MapEventDescriptor) -> String {
+        var parts: [String] = []
+        if let x = event.x, let y = event.y {
+            parts.append("(\(x), \(y))")
+        }
+        if let script = event.propertyValue("script") {
+            parts.append(script)
+        } else if let destination = event.propertyValue("dest_map") {
+            parts.append(destination)
+        } else if let item = event.propertyValue("item") {
+            parts.append(item)
+        }
+        return parts.isEmpty ? "No core fields" : parts.joined(separator: " ")
+    }
+
+    private func propertyBinding(for key: String) -> Binding<String> {
+        Binding {
+            selectedEvent?.propertyValue(key) ?? ""
+        } set: { value in
+            session.updateSelectedMapEventProperty(key: key, value: value)
+        }
+    }
+
+    private func integerBinding(for key: String, range: ClosedRange<Int>) -> Binding<Int> {
+        Binding {
+            let value = selectedEvent?.propertyValue(key).flatMap(Int.init) ?? 0
+            return min(max(value, range.lowerBound), range.upperBound)
+        } set: { value in
+            session.updateSelectedMapEventProperty(key: key, value: "\(value)")
+        }
+    }
+
+    private func syncScriptDraft(span: MapScriptLabelSpan) {
+        let key = StagedMapScriptBody.key(label: span.label, sourcePath: span.sourcePath)
+        guard scriptDraftKey != key else { return }
+        scriptDraftKey = key
+        scriptDraftText = session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body
+    }
+
+    private func stagedScriptBody(for label: String) -> StagedMapScriptBody? {
+        session.stagedMapScriptBodies.values.first { $0.label == label }
+    }
+
+    private func generatedScriptLabel(for event: MapEventDescriptor) -> String {
+        let suffix = (event.templateKind?.rawValue ?? event.kind.rawValue)
+            .replacingOccurrences(of: #"[^A-Za-z0-9_]"#, with: "_", options: .regularExpression)
+        return "\(document.mapName)_EventScript_\(suffix)_\(event.index)"
+    }
+
+    private func primaryKeys(for event: MapEventDescriptor) -> [String] {
+        switch event.templateKind ?? .object {
+        case .object:
+            return ["local_id", "type", "graphics_id", "x", "y", "elevation", "movement_type", "movement_range_x", "movement_range_y", "trainer_type", "trainer_sight_or_berry_tree_id", "script", "flag"]
+        case .warp:
+            return ["x", "y", "elevation", "dest_map", "dest_warp_id"]
+        case .coordTrigger:
+            return ["type", "x", "y", "elevation", "var", "var_value", "script"]
+        case .bgSign:
+            return ["type", "x", "y", "elevation", "player_facing_dir", "script"]
+        case .bgHiddenItem:
+            return ["type", "x", "y", "elevation", "item", "flag"]
+        }
+    }
+
+    private func canEditScript(for event: MapEventDescriptor) -> Bool {
+        if event.propertyValue("script") != nil {
+            return true
+        }
+
+        switch event.templateKind {
+        case .object, .coordTrigger, .bgSign:
+            return true
+        case .warp, .bgHiddenItem, nil:
+            return false
+        }
+    }
+}
+
+private struct MapEventGroup: Identifiable {
+    var id: String { kind.rawValue }
+
+    let kind: MapEventKind
+    let events: [MapEventDescriptor]
+}
+
+private extension MapEventKind {
+    var title: String {
+        switch self {
+        case .object: "Objects"
+        case .warp: "Warps"
+        case .coord: "Coords"
+        case .bg: "BG"
+        case .connection: "Connections"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .object: "person.crop.square"
+        case .warp: "arrow.triangle.branch"
+        case .coord: "scope"
+        case .bg: "signpost.right"
+        case .connection: "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
+private extension MapEventTemplateKind {
+    var systemImage: String {
+        switch self {
+        case .object: "person.crop.square"
+        case .warp: "arrow.triangle.branch"
+        case .coordTrigger: "scope"
+        case .bgSign: "signpost.right"
+        case .bgHiddenItem: "shippingbox"
+        }
+    }
+}

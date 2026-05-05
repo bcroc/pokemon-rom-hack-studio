@@ -134,6 +134,99 @@ final class MapEditorSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testAddEventTemplatesUseSubtypeDefaults() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        XCTAssertTrue(session.addMapEvent(template: .warp, atX: 0, y: 1))
+        XCTAssertTrue(session.addMapEvent(template: .coordTrigger, atX: 1, y: 0))
+        XCTAssertTrue(session.addMapEvent(template: .bgSign, atX: 0, y: 0))
+        XCTAssertTrue(session.addMapEvent(template: .bgHiddenItem, atX: 1, y: 1))
+
+        let warp = try XCTUnwrap(session.stagedMapEvents.first { $0.kind == .warp })
+        let coord = try XCTUnwrap(session.stagedMapEvents.first { $0.kind == .coord })
+        let signs = session.stagedMapEvents.filter { $0.kind == .bg }
+        let sign = try XCTUnwrap(signs.first { $0.propertyValue("type") == "sign" })
+        let hiddenItem = try XCTUnwrap(signs.first { $0.propertyValue("type") == "hidden_item" })
+
+        XCTAssertEqual(warp.propertyValue("dest_map"), "MAP_ROUTE1")
+        XCTAssertEqual(warp.propertyValue("dest_warp_id"), "0")
+        XCTAssertEqual(coord.propertyValue("var"), "VAR_TEMP_1")
+        XCTAssertEqual(coord.propertyValue("script"), "0x0")
+        XCTAssertEqual(sign.propertyValue("player_facing_dir"), "BG_EVENT_PLAYER_FACING_ANY")
+        XCTAssertEqual(hiddenItem.propertyValue("item"), "ITEM_POTION")
+        XCTAssertEqual(hiddenItem.propertyValue("flag"), "FLAG_NONE")
+        XCTAssertEqual(session.mapEditOperations.suffix(4).map(\.action), [.addEvent, .addEvent, .addEvent, .addEvent])
+    }
+
+    @MainActor
+    func testScriptBodyEditsParticipateInUndoRedoAndPreview() throws {
+        let source = MapScriptSource(
+            path: "data/maps/Route1/scripts.inc",
+            role: .mapLocal,
+            exists: true,
+            text: "Route1_EventScript_NPC::\n\tend\n"
+        )
+        let scriptIndex = MapScriptIndex(
+            rootPath: "/tmp/PokemonHackStudioTests",
+            mapName: "Route1",
+            sources: [source],
+            labels: MapScriptIndexLoader.parseLabels(source: source)
+        )
+        let session = MapEditorSession(document: makeDocument(scriptIndex: scriptIndex))
+
+        XCTAssertTrue(session.updateScriptBody(
+            label: "Route1_EventScript_NPC",
+            sourcePath: "data/maps/Route1/scripts.inc",
+            body: "\tmsgbox Route1_Text\n\tend"
+        ))
+        XCTAssertEqual(session.stagedScriptBody(label: "Route1_EventScript_NPC", sourcePath: "data/maps/Route1/scripts.inc"), "\tmsgbox Route1_Text\n\tend")
+        XCTAssertEqual(session.mapEditOperations.map(\.action), [.updateScriptBody])
+
+        session.undoLastMapEdit()
+        XCTAssertNil(session.stagedScriptBody(label: "Route1_EventScript_NPC", sourcePath: "data/maps/Route1/scripts.inc"))
+        XCTAssertFalse(session.isDirty)
+
+        session.redoMapEdit()
+        XCTAssertEqual(session.stagedScriptBody(label: "Route1_EventScript_NPC", sourcePath: "data/maps/Route1/scripts.inc"), "\tmsgbox Route1_Text\n\tend")
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        XCTAssertEqual(plan.changes.map(\.path), ["data/maps/Route1/scripts.inc"])
+    }
+
+    @MainActor
+    func testNewScriptLabelBodyCanBeRestagedBeforePreview() throws {
+        let source = MapScriptSource(
+            path: "data/maps/Route1/scripts.inc",
+            role: .mapLocal,
+            exists: true,
+            text: ""
+        )
+        let scriptIndex = MapScriptIndex(
+            rootPath: "/tmp/PokemonHackStudioTests",
+            mapName: "Route1",
+            sources: [source],
+            labels: []
+        )
+        let session = MapEditorSession(document: makeDocument(scriptIndex: scriptIndex))
+
+        XCTAssertTrue(session.createScriptLabel(
+            label: "Route1_EventScript_New",
+            sourcePath: "data/maps/Route1/scripts.inc",
+            body: "\tend"
+        ))
+        XCTAssertTrue(session.updateScriptBody(
+            label: "Route1_EventScript_New",
+            sourcePath: "data/maps/Route1/scripts.inc",
+            body: "\tmsgbox Route1_Text\n\tend"
+        ))
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        let script = try XCTUnwrap(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview)
+        XCTAssertTrue(script.contains("Route1_EventScript_New::\n\tmsgbox Route1_Text\n\tend"))
+        XCTAssertEqual(script.components(separatedBy: "Route1_EventScript_New::").count, 2)
+        XCTAssertTrue(plan.diagnostics.isEmpty, "\(plan.diagnostics.map(\.code))")
+    }
+
+    @MainActor
     func testPreviewGatingHelpers() throws {
         let session = MapEditorSession(document: makeDocument())
 
@@ -313,7 +406,8 @@ final class MapEditorSessionTests: XCTestCase {
     private func makeDocument(
         mapID: String = "MAP_ROUTE1",
         mapName: String = "Route1",
-        blockdata: [UInt16] = [1, 2, 3, 4]
+        blockdata: [UInt16] = [1, 2, 3, 4],
+        scriptIndex: MapScriptIndex? = nil
     ) -> MapVisualDocument {
         let layout = LayoutSlot(
             slotIndex: 0,
@@ -370,6 +464,7 @@ final class MapEditorSessionTests: XCTestCase {
             secondaryTileset: nil,
             metatiles: [],
             events: [event],
+            scriptIndex: scriptIndex,
             mapJSONText: mapJSONText(mapID: mapID, mapName: mapName)
         )
     }

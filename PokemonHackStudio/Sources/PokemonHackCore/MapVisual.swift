@@ -13,8 +13,10 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
     public let border: EditableLayoutBlockdata?
     public let primaryTileset: TilesetAsset?
     public let secondaryTileset: TilesetAsset?
+    public let metatileLimits: MapMetatileLimits
     public let metatiles: [MetatileDefinition]
     public let events: [MapEventDescriptor]
+    public let scriptIndex: MapScriptIndex?
     public let scene: MapVisualScene
     public let diagnostics: [Diagnostic]
     fileprivate let mapJSONText: String
@@ -32,8 +34,10 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         border: EditableLayoutBlockdata?,
         primaryTileset: TilesetAsset?,
         secondaryTileset: TilesetAsset?,
+        metatileLimits: MapMetatileLimits = MapMetatileLimits(),
         metatiles: [MetatileDefinition],
         events: [MapEventDescriptor],
+        scriptIndex: MapScriptIndex? = nil,
         scene: MapVisualScene? = nil,
         diagnostics: [Diagnostic] = [],
         mapJSONText: String
@@ -50,11 +54,31 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         self.border = border
         self.primaryTileset = primaryTileset
         self.secondaryTileset = secondaryTileset
+        self.metatileLimits = metatileLimits
         self.metatiles = metatiles
         self.events = events
+        self.scriptIndex = scriptIndex
         self.scene = scene ?? MapVisualScene(layoutWidth: blockdata.width, layoutHeight: blockdata.height)
         self.diagnostics = diagnostics
         self.mapJSONText = mapJSONText
+    }
+}
+
+public struct MapMetatileLimits: Codable, Equatable {
+    public static let defaultPrimary = 512
+    public static let defaultTotal = 1024
+
+    public let primary: Int
+    public let total: Int
+
+    public var secondary: Int {
+        max(total - primary, 0)
+    }
+
+    public init(primary: Int = Self.defaultPrimary, total: Int = Self.defaultTotal) {
+        let resolvedPrimary = max(primary, 1)
+        self.primary = resolvedPrimary
+        self.total = max(total, resolvedPrimary)
     }
 }
 
@@ -501,6 +525,92 @@ public enum MapEventKind: String, Codable, Equatable, CaseIterable {
     case connection
 }
 
+public enum MapEventTemplateKind: String, Codable, Equatable, CaseIterable, Identifiable {
+    case object
+    case warp
+    case coordTrigger
+    case bgSign
+    case bgHiddenItem
+
+    public var id: String { rawValue }
+
+    public var eventKind: MapEventKind {
+        switch self {
+        case .object: .object
+        case .warp: .warp
+        case .coordTrigger: .coord
+        case .bgSign, .bgHiddenItem: .bg
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .object: "Object"
+        case .warp: "Warp"
+        case .coordTrigger: "Trigger"
+        case .bgSign: "Sign"
+        case .bgHiddenItem: "Hidden Item"
+        }
+    }
+
+    public func templateProperties(x: Int, y: Int, mapID: String? = nil) -> [MapEventProperty] {
+        switch self {
+        case .object:
+            [
+                MapEventProperty(key: "local_id", value: "0"),
+                MapEventProperty(key: "type", value: "object"),
+                MapEventProperty(key: "graphics_id", value: "OBJ_EVENT_GFX_BOY_1"),
+                MapEventProperty(key: "x", value: "\(x)"),
+                MapEventProperty(key: "y", value: "\(y)"),
+                MapEventProperty(key: "elevation", value: "3"),
+                MapEventProperty(key: "movement_type", value: "MOVEMENT_TYPE_FACE_DOWN"),
+                MapEventProperty(key: "movement_range_x", value: "0"),
+                MapEventProperty(key: "movement_range_y", value: "0"),
+                MapEventProperty(key: "trainer_type", value: "TRAINER_TYPE_NONE"),
+                MapEventProperty(key: "trainer_sight_or_berry_tree_id", value: "0"),
+                MapEventProperty(key: "script", value: "0x0"),
+                MapEventProperty(key: "flag", value: "0")
+            ]
+        case .warp:
+            [
+                MapEventProperty(key: "x", value: "\(x)"),
+                MapEventProperty(key: "y", value: "\(y)"),
+                MapEventProperty(key: "elevation", value: "0"),
+                MapEventProperty(key: "dest_map", value: mapID ?? "MAP_NONE"),
+                MapEventProperty(key: "dest_warp_id", value: "0")
+            ]
+        case .coordTrigger:
+            [
+                MapEventProperty(key: "type", value: "trigger"),
+                MapEventProperty(key: "x", value: "\(x)"),
+                MapEventProperty(key: "y", value: "\(y)"),
+                MapEventProperty(key: "elevation", value: "0"),
+                MapEventProperty(key: "var", value: "VAR_TEMP_1"),
+                MapEventProperty(key: "var_value", value: "0"),
+                MapEventProperty(key: "script", value: "0x0")
+            ]
+        case .bgSign:
+            [
+                MapEventProperty(key: "type", value: "sign"),
+                MapEventProperty(key: "x", value: "\(x)"),
+                MapEventProperty(key: "y", value: "\(y)"),
+                MapEventProperty(key: "elevation", value: "0"),
+                MapEventProperty(key: "player_facing_dir", value: "BG_EVENT_PLAYER_FACING_ANY"),
+                MapEventProperty(key: "script", value: "0x0")
+            ]
+        case .bgHiddenItem:
+            [
+                MapEventProperty(key: "type", value: "hidden_item"),
+                MapEventProperty(key: "x", value: "\(x)"),
+                MapEventProperty(key: "y", value: "\(y)"),
+                MapEventProperty(key: "elevation", value: "3"),
+                MapEventProperty(key: "item", value: "ITEM_POTION"),
+                MapEventProperty(key: "flag", value: "FLAG_NONE")
+            ]
+        }
+    }
+}
+
 public struct MapEventProperty: Codable, Equatable, Identifiable {
     public var id: String { key }
 
@@ -615,6 +725,34 @@ public struct MapEventDescriptor: Codable, Equatable, Identifiable {
         self.elevation = elevation
         self.properties = properties
         self.sprite = sprite
+    }
+
+    public func propertyValue(_ key: String) -> String? {
+        properties.first { $0.key == key }?.value
+    }
+
+    public var scriptLabel: String? {
+        MapScriptIndex.normalizedScriptLabel(propertyValue("script"))
+    }
+
+    public var templateKind: MapEventTemplateKind? {
+        switch kind {
+        case .object:
+            return .object
+        case .warp:
+            return .warp
+        case .coord:
+            return .coordTrigger
+        case .bg:
+            switch propertyValue("type") {
+            case "hidden_item":
+                return .bgHiddenItem
+            default:
+                return .bgSign
+            }
+        case .connection:
+            return nil
+        }
     }
 }
 
@@ -850,11 +988,27 @@ public enum MapBlockTarget: String, Codable, Equatable {
 public enum MapEditAction: String, Codable, Equatable {
     case paintMetatile
     case fillMetatile
+    case updateBlockCollision
+    case updateBlockElevation
+    case updateBlockAttributes
+    case shiftMap
+    case resizeMap
+    case pasteBlockPattern
     case moveEvent
     case updateEventField
     case addEvent
     case duplicateEvent
     case deleteEvent
+    case updateMapHeaderField
+    case updateConnectionField
+    case addConnection
+    case duplicateConnection
+    case deleteConnection
+    case updateWildEncounterField
+    case updateMetatileTile
+    case updateMetatileAttribute
+    case updateScriptBody
+    case createMapScriptLabel
 }
 
 public struct MapEditOperation: Codable, Equatable, Identifiable {
@@ -866,11 +1020,30 @@ public struct MapEditOperation: Codable, Equatable, Identifiable {
     public let width: Int?
     public let height: Int?
     public let rawValue: UInt16?
+    public let rawValues: [UInt16]?
+    public let defaultRawValue: UInt16?
+    public let newWidth: Int?
+    public let newHeight: Int?
+    public let deltaX: Int?
+    public let deltaY: Int?
+    public let collision: Int?
+    public let elevation: Int?
     public let eventKind: MapEventKind?
     public let eventIndex: Int?
     public let fieldKey: String?
     public let fieldValue: String?
     public let templateProperties: [MapEventProperty]
+    public let sourcePath: String?
+    public let jsonPath: [String]?
+    public let tilesetSymbol: String?
+    public let metatileID: Int?
+    public let tileEntryIndex: Int?
+    public let behavior: Int?
+    public let layerType: Int?
+    public let rawAttributeValue: UInt32?
+    public let scriptLabel: String?
+    public let scriptBody: String?
+    public let scriptSourcePath: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -881,11 +1054,30 @@ public struct MapEditOperation: Codable, Equatable, Identifiable {
         width: Int? = nil,
         height: Int? = nil,
         rawValue: UInt16? = nil,
+        rawValues: [UInt16]? = nil,
+        defaultRawValue: UInt16? = nil,
+        newWidth: Int? = nil,
+        newHeight: Int? = nil,
+        deltaX: Int? = nil,
+        deltaY: Int? = nil,
+        collision: Int? = nil,
+        elevation: Int? = nil,
         eventKind: MapEventKind? = nil,
         eventIndex: Int? = nil,
         fieldKey: String? = nil,
         fieldValue: String? = nil,
-        templateProperties: [MapEventProperty] = []
+        templateProperties: [MapEventProperty] = [],
+        sourcePath: String? = nil,
+        jsonPath: [String]? = nil,
+        tilesetSymbol: String? = nil,
+        metatileID: Int? = nil,
+        tileEntryIndex: Int? = nil,
+        behavior: Int? = nil,
+        layerType: Int? = nil,
+        rawAttributeValue: UInt32? = nil,
+        scriptLabel: String? = nil,
+        scriptBody: String? = nil,
+        scriptSourcePath: String? = nil
     ) {
         self.id = id
         self.action = action
@@ -895,11 +1087,30 @@ public struct MapEditOperation: Codable, Equatable, Identifiable {
         self.width = width
         self.height = height
         self.rawValue = rawValue
+        self.rawValues = rawValues
+        self.defaultRawValue = defaultRawValue
+        self.newWidth = newWidth
+        self.newHeight = newHeight
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.collision = collision
+        self.elevation = elevation
         self.eventKind = eventKind
         self.eventIndex = eventIndex
         self.fieldKey = fieldKey
         self.fieldValue = fieldValue
         self.templateProperties = templateProperties
+        self.sourcePath = sourcePath
+        self.jsonPath = jsonPath
+        self.tilesetSymbol = tilesetSymbol
+        self.metatileID = metatileID
+        self.tileEntryIndex = tileEntryIndex
+        self.behavior = behavior
+        self.layerType = layerType
+        self.rawAttributeValue = rawAttributeValue
+        self.scriptLabel = scriptLabel
+        self.scriptBody = scriptBody
+        self.scriptSourcePath = scriptSourcePath
     }
 }
 
@@ -911,6 +1122,8 @@ public struct MapEditDraft: Codable, Equatable, Identifiable {
     public let border: EditableLayoutBlockdata?
     public let mapJSONText: String
     public let events: [MapEventDescriptor]
+    public let scriptFiles: [MapScriptFileDraft]
+    public let sourceFiles: [MapEditSourceFileDraft]
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -919,6 +1132,8 @@ public struct MapEditDraft: Codable, Equatable, Identifiable {
         border: EditableLayoutBlockdata?,
         mapJSONText: String,
         events: [MapEventDescriptor],
+        scriptFiles: [MapScriptFileDraft] = [],
+        sourceFiles: [MapEditSourceFileDraft] = [],
         diagnostics: [Diagnostic]
     ) {
         self.documentID = documentID
@@ -926,7 +1141,47 @@ public struct MapEditDraft: Codable, Equatable, Identifiable {
         self.border = border
         self.mapJSONText = mapJSONText
         self.events = events
+        self.scriptFiles = scriptFiles
+        self.sourceFiles = sourceFiles
         self.diagnostics = diagnostics
+    }
+}
+
+public struct MapScriptFileDraft: Codable, Equatable, Identifiable {
+    public var id: String { path }
+
+    public let path: String
+    public let originalText: String
+    public let text: String
+
+    public init(path: String, originalText: String, text: String) {
+        self.path = path
+        self.originalText = originalText
+        self.text = text
+    }
+}
+
+public struct MapEditSourceFileDraft: Codable, Equatable, Identifiable {
+    public var id: String { path }
+
+    public let path: String
+    public var summary: String
+    public let originalData: Data
+    public var data: Data
+    public var textPreview: String?
+
+    public init(
+        path: String,
+        summary: String,
+        originalData: Data,
+        data: Data,
+        textPreview: String? = nil
+    ) {
+        self.path = path
+        self.summary = summary
+        self.originalData = originalData
+        self.data = data
+        self.textPreview = textPreview
     }
 }
 
@@ -1047,11 +1302,18 @@ public struct MapApplyResult: Codable, Equatable, Identifiable {
 
 public struct TilesetIndex: Codable, Equatable {
     public let rootPath: String
+    public let metatileLimits: MapMetatileLimits
     public let assets: [TilesetAsset]
     public let diagnostics: [Diagnostic]
 
-    public init(rootPath: String, assets: [TilesetAsset], diagnostics: [Diagnostic] = []) {
+    public init(
+        rootPath: String,
+        metatileLimits: MapMetatileLimits = MapMetatileLimits(),
+        assets: [TilesetAsset],
+        diagnostics: [Diagnostic] = []
+    ) {
         self.rootPath = rootPath
+        self.metatileLimits = metatileLimits
         self.assets = assets
         self.diagnostics = diagnostics
     }
@@ -1072,6 +1334,7 @@ public enum TilesetIndexLoader {
         let headersText = try readText(root: root, path: headersPath)
         let graphicsText = try readText(root: root, path: graphicsPath) + "\n" + ((try? readText(root: root, path: "src/graphics.c")) ?? "")
         let metatilesText = try readText(root: root, path: metatilesPath)
+        let metatileLimits = loadMetatileLimits(root: root)
 
         let headers = parseHeaders(headersText)
         let graphics = parseGraphics(graphicsText, root: root, fileManager: fileManager)
@@ -1111,7 +1374,7 @@ public enum TilesetIndexLoader {
             assets.append(asset)
         }
 
-        return TilesetIndex(rootPath: root.path, assets: assets, diagnostics: diagnostics)
+        return TilesetIndex(rootPath: root.path, metatileLimits: metatileLimits, assets: assets, diagnostics: diagnostics)
     }
 
     private static func readText(root: URL, path: String) throws -> String {
@@ -1134,6 +1397,29 @@ public enum TilesetIndexLoader {
             return 0
         }
         return data.count / 16
+    }
+
+    private static func loadMetatileLimits(root: URL) -> MapMetatileLimits {
+        guard let text = try? readText(root: root, path: "include/fieldmap.h") else {
+            return MapMetatileLimits()
+        }
+        return MapMetatileLimits(
+            primary: defineValue("NUM_METATILES_IN_PRIMARY", in: text) ?? MapMetatileLimits.defaultPrimary,
+            total: defineValue("NUM_METATILES_TOTAL", in: text) ?? MapMetatileLimits.defaultTotal
+        )
+    }
+
+    private static func defineValue(_ name: String, in text: String) -> Int? {
+        guard let match = regexMatches(#"(?m)^\s*#define\s+\#(name)\s+((?:0x)?[0-9A-Fa-f]+)"#, in: text).first,
+              match.count > 1
+        else {
+            return nil
+        }
+        let value = match[1]
+        if value.hasPrefix("0x") || value.hasPrefix("0X") {
+            return Int(value.dropFirst(2), radix: 16)
+        }
+        return Int(value)
     }
 
     private static func parseHeaders(_ text: String) -> [TilesetHeader] {
@@ -1242,7 +1528,13 @@ public enum ProjectMapVisualLoader {
         let secondary = tilesets.asset(symbol: layout.secondaryTileset)
         diagnostics.append(contentsOf: primary?.diagnostics ?? [])
         diagnostics.append(contentsOf: secondary?.diagnostics ?? [])
-        let metatiles = loadMetatileDefinitions(root: root, primary: primary, secondary: secondary, diagnostics: &diagnostics)
+        let metatiles = loadMetatileDefinitions(
+            root: root,
+            primary: primary,
+            secondary: secondary,
+            limits: tilesets.metatileLimits,
+            diagnostics: &diagnostics
+        )
         let scene = buildScene(
             root: root,
             map: map,
@@ -1251,6 +1543,13 @@ public enum ProjectMapVisualLoader {
             fileManager: fileManager
         )
         diagnostics.append(contentsOf: scene.diagnostics)
+        appendMissingMetatileDiagnostics(
+            blockdata: blockdata,
+            border: border,
+            scene: scene,
+            metatiles: metatiles,
+            diagnostics: &diagnostics
+        )
 
         let mapJSONData = try Data(contentsOf: root.appendingPathComponent(map.sourcePath))
         let mapJSONText = String(decoding: mapJSONData, as: UTF8.self)
@@ -1264,6 +1563,13 @@ public enum ProjectMapVisualLoader {
                 diagnostics: &diagnostics
             )
         } ?? []
+        let scriptIndex = MapScriptIndexLoader.load(
+            root: root,
+            mapName: map.name,
+            sharedMapName: sharedScriptMapName(for: map, in: catalog),
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: scriptIndex.diagnostics)
 
         return MapVisualDocument(
             id: "\(projectIndex.root.path):\(map.id)",
@@ -1278,8 +1584,10 @@ public enum ProjectMapVisualLoader {
             border: border,
             primaryTileset: primary,
             secondaryTileset: secondary,
+            metatileLimits: tilesets.metatileLimits,
             metatiles: metatiles,
             events: events,
+            scriptIndex: scriptIndex,
             scene: scene,
             diagnostics: diagnostics,
             mapJSONText: mapJSONText
@@ -1493,6 +1801,11 @@ public enum ProjectMapVisualLoader {
         return catalog.maps.first { $0.id == mapID || $0.name == mapID }
     }
 
+    private static func sharedScriptMapName(for map: MapDescriptor, in catalog: ProjectMapCatalog) -> String? {
+        guard let sharedScriptsMap = map.sharedScriptsMap else { return nil }
+        return resolveOptionalMap(mapID: sharedScriptsMap, in: catalog)?.name ?? sharedScriptsMap
+    }
+
     private static func sceneConnectionOrigin(
         direction: MapSceneConnectionDirection,
         offset: Int,
@@ -1595,14 +1908,31 @@ public enum ProjectMapVisualLoader {
         root: URL,
         primary: TilesetAsset?,
         secondary: TilesetAsset?,
+        limits: MapMetatileLimits,
         diagnostics: inout [Diagnostic]
     ) -> [MetatileDefinition] {
         var definitions: [MetatileDefinition] = []
         if let primary {
-            definitions.append(contentsOf: definitionsForTileset(primary, root: root, baseID: 0, diagnostics: &diagnostics))
+            definitions.append(
+                contentsOf: definitionsForTileset(
+                    primary,
+                    root: root,
+                    baseID: 0,
+                    maxCount: limits.primary,
+                    diagnostics: &diagnostics
+                )
+            )
         }
         if let secondary {
-            definitions.append(contentsOf: definitionsForTileset(secondary, root: root, baseID: 0x200, diagnostics: &diagnostics))
+            definitions.append(
+                contentsOf: definitionsForTileset(
+                    secondary,
+                    root: root,
+                    baseID: limits.primary,
+                    maxCount: limits.secondary,
+                    diagnostics: &diagnostics
+                )
+            )
         }
         return definitions
     }
@@ -1611,6 +1941,7 @@ public enum ProjectMapVisualLoader {
         _ asset: TilesetAsset,
         root: URL,
         baseID: Int,
+        maxCount: Int,
         diagnostics: inout [Diagnostic]
     ) -> [MetatileDefinition] {
         guard let path = asset.metatilesPath, let data = try? Data(contentsOf: root.appendingPathComponent(path)) else {
@@ -1618,7 +1949,7 @@ public enum ProjectMapVisualLoader {
         }
         let attributeValues = readAttributes(asset: asset, root: root)
         let bytes = [UInt8](data)
-        let count = bytes.count / 16
+        let count = min(bytes.count / 16, max(maxCount, 0))
         return (0..<count).map { localID in
             let start = localID * 16
             let entries = (0..<8).map { entryIndex -> MetatileTileEntry in
@@ -1664,6 +1995,55 @@ public enum ProjectMapVisualLoader {
             }
             return UInt32(bytes[offset]) | (UInt32(bytes[offset + 1]) << 8)
         }
+    }
+
+    private static func appendMissingMetatileDiagnostics(
+        blockdata: EditableLayoutBlockdata,
+        border: EditableLayoutBlockdata?,
+        scene: MapVisualScene,
+        metatiles: [MetatileDefinition],
+        diagnostics: inout [Diagnostic]
+    ) {
+        let definedIDs = Set(metatiles.map(\.id))
+        var missingBySource: [String: Set<Int>] = [:]
+
+        collectMissingMetatiles(in: blockdata.rawValues, sourcePath: blockdata.filepath, definedIDs: definedIDs, missingBySource: &missingBySource)
+        if let border {
+            collectMissingMetatiles(in: border.rawValues, sourcePath: border.filepath, definedIDs: definedIDs, missingBySource: &missingBySource)
+        }
+        for placement in scene.placements {
+            collectMissingMetatiles(
+                in: placement.rawValues,
+                sourcePath: placement.sourcePath ?? "map scene",
+                definedIDs: definedIDs,
+                missingBySource: &missingBySource
+            )
+        }
+
+        diagnostics.append(
+            contentsOf: missingBySource.keys.sorted().map { sourcePath in
+                let ids = (missingBySource[sourcePath] ?? []).sorted()
+                let sample = ids.prefix(12).map { String(format: "0x%03X", $0) }.joined(separator: ", ")
+                let suffix = ids.count > 12 ? ", ..." : ""
+                return Diagnostic(
+                    severity: .warning,
+                    code: "MAP_VISUAL_METATILE_DEFINITION_MISSING",
+                    message: "\(sourcePath) uses \(ids.count) metatile ID(s) not present in the loaded tilesets: \(sample)\(suffix).",
+                    span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                )
+            }
+        )
+    }
+
+    private static func collectMissingMetatiles(
+        in rawValues: [UInt16],
+        sourcePath: String,
+        definedIDs: Set<Int>,
+        missingBySource: inout [String: Set<Int>]
+    ) {
+        let missing = Set(rawValues.map { Int($0 & 0x03ff) }.filter { !definedIDs.contains($0) })
+        guard !missing.isEmpty else { return }
+        missingBySource[sourcePath, default: []].formUnion(missing)
     }
 
     private static func extractEvents(
@@ -1732,23 +2112,45 @@ public enum MapMutationPlanner {
     fileprivate static func reduceDraft(document: MapVisualDocument, operations: [MapEditOperation]) -> MapEditDraft {
         var diagnostics = document.diagnostics
         var layoutValues = document.blockdata.rawValues
+        var layoutWidth = document.blockdata.width
+        var layoutHeight = document.blockdata.height
         var borderValues = document.border?.rawValues
         var jsonParser = OrderedJSONParser(text: document.mapJSONText)
         var jsonRoot = try? jsonParser.parse()
         var didChangeJSON = false
+        var sourceFileDrafts: [String: MapEditSourceFileDraft] = [:]
+        let originalScriptTexts = Dictionary(uniqueKeysWithValues: (document.scriptIndex?.sources ?? []).map { ($0.path, $0.text) })
+        var scriptTexts = originalScriptTexts
 
         for operation in operations {
             switch operation.action {
             case .paintMetatile:
-                applyPaint(operation, document: document, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+                applyPaint(operation, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
             case .fillMetatile:
-                applyFill(operation, document: document, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
-            case .moveEvent, .updateEventField, .addEvent, .duplicateEvent, .deleteEvent:
+                applyFill(operation, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+            case .updateBlockCollision, .updateBlockElevation, .updateBlockAttributes:
+                applyBlockAttributeOperation(operation, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+            case .shiftMap:
+                applyShift(operation, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, diagnostics: &diagnostics)
+            case .resizeMap:
+                _ = applyResize(operation, document: document, layoutWidth: &layoutWidth, layoutHeight: &layoutHeight, layoutValues: &layoutValues, sourceFiles: &sourceFileDrafts, diagnostics: &diagnostics)
+            case .pasteBlockPattern:
+                applyPasteBlockPattern(operation, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+            case .moveEvent, .updateEventField, .addEvent, .duplicateEvent, .deleteEvent,
+                 .updateMapHeaderField, .updateConnectionField, .addConnection, .duplicateConnection, .deleteConnection:
                 if jsonRoot == nil {
                     diagnostics.append(jsonDiagnostic("MAP_JSON_PARSE_FAILED", document: document))
                 } else {
-                    didChangeJSON = applyEventOperation(operation, root: &jsonRoot!, diagnostics: &diagnostics, document: document) || didChangeJSON
+                    didChangeJSON = applyMapJSONOperation(operation, root: &jsonRoot!, diagnostics: &diagnostics, document: document) || didChangeJSON
                 }
+            case .updateWildEncounterField:
+                applyWildEncounterOperation(operation, document: document, sourceFiles: &sourceFileDrafts, diagnostics: &diagnostics)
+            case .updateMetatileTile:
+                applyMetatileTileOperation(operation, document: document, sourceFiles: &sourceFileDrafts, diagnostics: &diagnostics)
+            case .updateMetatileAttribute:
+                applyMetatileAttributeOperation(operation, document: document, sourceFiles: &sourceFileDrafts, diagnostics: &diagnostics)
+            case .updateScriptBody, .createMapScriptLabel:
+                applyScriptOperation(operation, document: document, scriptTexts: &scriptTexts, diagnostics: &diagnostics)
             }
         }
 
@@ -1761,13 +2163,19 @@ public enum MapMutationPlanner {
             draftJSONText = document.mapJSONText
             draftEvents = document.events
         }
+        let scriptFiles = scriptTexts.keys.sorted().compactMap { path -> MapScriptFileDraft? in
+            guard let originalText = originalScriptTexts[path], let text = scriptTexts[path], originalText != text else {
+                return nil
+            }
+            return MapScriptFileDraft(path: path, originalText: originalText, text: text)
+        }
 
         return MapEditDraft(
             documentID: document.id,
             blockdata: EditableLayoutBlockdata(
                 filepath: document.blockdata.filepath,
-                width: document.blockdata.width,
-                height: document.blockdata.height,
+                width: layoutWidth,
+                height: layoutHeight,
                 rawValues: layoutValues
             ),
             border: document.border.map {
@@ -1780,6 +2188,11 @@ public enum MapMutationPlanner {
             },
             mapJSONText: draftJSONText,
             events: draftEvents,
+            scriptFiles: scriptFiles,
+            sourceFiles: sourceFileDrafts.keys.sorted().compactMap { path in
+                guard let draft = sourceFileDrafts[path], draft.data != draft.originalData else { return nil }
+                return draft
+            },
             diagnostics: diagnostics
         )
     }
@@ -1833,6 +2246,33 @@ public enum MapMutationPlanner {
             )
         }
 
+        for sourceFile in draft.sourceFiles where sourceFile.data != sourceFile.originalData {
+            changes.append(
+                MapEditFileChange(
+                    path: sourceFile.path,
+                    summary: sourceFile.summary,
+                    originalByteCount: sourceFile.originalData.count,
+                    newByteCount: sourceFile.data.count,
+                    newData: sourceFile.data,
+                    textPreview: sourceFile.textPreview
+                )
+            )
+        }
+
+        for scriptFile in draft.scriptFiles {
+            let data = Data(scriptFile.text.utf8)
+            changes.append(
+                MapEditFileChange(
+                    path: scriptFile.path,
+                    summary: "Update map script source",
+                    originalByteCount: Data(scriptFile.originalText.utf8).count,
+                    newByteCount: data.count,
+                    newData: data,
+                    textPreview: scriptFile.text
+                )
+            )
+        }
+
         let plannedChanges = changes.map {
             PlannedChange(path: $0.path, summary: $0.summary, span: SourceSpan(relativePath: $0.path, startLine: 1))
         }
@@ -1859,6 +2299,8 @@ public enum MapMutationPlanner {
     private static func applyPaint(
         _ operation: MapEditOperation,
         document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
         layoutValues: inout [UInt16],
         borderValues: inout [UInt16]?,
         diagnostics: inout [Diagnostic]
@@ -1867,12 +2309,14 @@ public enum MapMutationPlanner {
             diagnostics.append(operationDiagnostic("MAP_EDIT_INCOMPLETE", "Paint operation is missing x, y, or rawValue."))
             return
         }
-        setBlockValue(target: operation.target ?? .layout, x: x, y: y, rawValue: rawValue, document: document, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+        setBlockValue(target: operation.target ?? .layout, x: x, y: y, rawValue: rawValue, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
     }
 
     private static func applyFill(
         _ operation: MapEditOperation,
         document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
         layoutValues: inout [UInt16],
         borderValues: inout [UInt16]?,
         diagnostics: inout [Diagnostic]
@@ -1881,9 +2325,167 @@ public enum MapMutationPlanner {
             diagnostics.append(operationDiagnostic("MAP_EDIT_INCOMPLETE", "Fill operation is missing rectangle or rawValue."))
             return
         }
+        guard width > 0, height > 0 else {
+            diagnostics.append(operationDiagnostic("MAP_EDIT_INVALID_RECT", "Fill operation requires positive width and height."))
+            return
+        }
         for fillY in y..<(y + height) {
             for fillX in x..<(x + width) {
-                setBlockValue(target: operation.target ?? .layout, x: fillX, y: fillY, rawValue: rawValue, document: document, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+                setBlockValue(target: operation.target ?? .layout, x: fillX, y: fillY, rawValue: rawValue, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
+            }
+        }
+    }
+
+    private static func applyBlockAttributeOperation(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
+        layoutValues: inout [UInt16],
+        borderValues: inout [UInt16]?,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let x = operation.x, let y = operation.y else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_ATTRIBUTE_INCOMPLETE", "Block attribute operation is missing x or y."))
+            return
+        }
+
+        let collision: Int?
+        let elevation: Int?
+        switch operation.action {
+        case .updateBlockCollision:
+            collision = operation.collision ?? operation.rawValue.map(Int.init)
+            elevation = nil
+        case .updateBlockElevation:
+            collision = nil
+            elevation = operation.elevation ?? operation.rawValue.map(Int.init)
+        default:
+            collision = operation.collision
+            elevation = operation.elevation
+        }
+
+        guard collision != nil || elevation != nil else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_ATTRIBUTE_INCOMPLETE", "Block attribute operation is missing collision or elevation."))
+            return
+        }
+        if let collision, !(0...3).contains(collision) {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_COLLISION_INVALID", "Collision value \(collision) is outside 0...3."))
+            return
+        }
+        if let elevation, !(0...15).contains(elevation) {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_ELEVATION_INVALID", "Elevation value \(elevation) is outside 0...15."))
+            return
+        }
+        mutateBlockValue(target: operation.target ?? .layout, x: x, y: y, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics) { rawValue in
+            var value = rawValue
+            if let collision {
+                value = (value & 0xf3ff) | (UInt16(collision) << 10)
+            }
+            if let elevation {
+                value = (value & 0x0fff) | (UInt16(elevation) << 12)
+            }
+            return value
+        }
+    }
+
+    private static func applyShift(
+        _ operation: MapEditOperation,
+        layoutWidth: Int,
+        layoutHeight: Int,
+        layoutValues: inout [UInt16],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let deltaX = operation.deltaX, let deltaY = operation.deltaY else {
+            diagnostics.append(operationDiagnostic("MAP_SHIFT_INCOMPLETE", "Map shift operation is missing deltaX or deltaY."))
+            return
+        }
+        guard layoutValues.count == layoutWidth * layoutHeight else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCKDATA_SIZE_MISMATCH", "Map shift requires complete layout blockdata."))
+            return
+        }
+        let fill = operation.defaultRawValue ?? 0
+        let original = layoutValues
+        var shifted = Array(repeating: fill, count: original.count)
+        for y in 0..<layoutHeight {
+            for x in 0..<layoutWidth {
+                let sourceX = x - deltaX
+                let sourceY = y - deltaY
+                guard sourceX >= 0, sourceY >= 0, sourceX < layoutWidth, sourceY < layoutHeight else { continue }
+                shifted[y * layoutWidth + x] = original[sourceY * layoutWidth + sourceX]
+            }
+        }
+        layoutValues = shifted
+    }
+
+    private static func applyResize(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        layoutWidth: inout Int,
+        layoutHeight: inout Int,
+        layoutValues: inout [UInt16],
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) -> Bool {
+        guard let newWidth = operation.newWidth ?? operation.width,
+              let newHeight = operation.newHeight ?? operation.height
+        else {
+            diagnostics.append(operationDiagnostic("MAP_RESIZE_INCOMPLETE", "Map resize operation is missing new width or height."))
+            return false
+        }
+        guard newWidth > 0, newHeight > 0 else {
+            diagnostics.append(operationDiagnostic("MAP_RESIZE_INVALID_SIZE", "Map resize requires positive width and height."))
+            return false
+        }
+        guard layoutValues.count == layoutWidth * layoutHeight else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCKDATA_SIZE_MISMATCH", "Map resize requires complete layout blockdata."))
+            return false
+        }
+
+        let fill = operation.defaultRawValue ?? 0
+        let originalWidth = layoutWidth
+        let originalHeight = layoutHeight
+        let originalValues = layoutValues
+        var resized = Array(repeating: fill, count: newWidth * newHeight)
+        let copyWidth = min(originalWidth, newWidth)
+        let copyHeight = min(originalHeight, newHeight)
+        for y in 0..<copyHeight {
+            for x in 0..<copyWidth {
+                resized[y * newWidth + x] = originalValues[y * originalWidth + x]
+            }
+        }
+
+        layoutWidth = newWidth
+        layoutHeight = newHeight
+        layoutValues = resized
+        updateLayoutDimensionsSource(document: document, width: newWidth, height: newHeight, sourceFiles: &sourceFiles, diagnostics: &diagnostics)
+        return true
+    }
+
+    private static func applyPasteBlockPattern(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
+        layoutValues: inout [UInt16],
+        borderValues: inout [UInt16]?,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let x = operation.x, let y = operation.y, let width = operation.width, let height = operation.height else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_PATTERN_INCOMPLETE", "Block pattern operation is missing x, y, width, or height."))
+            return
+        }
+        guard width > 0, height > 0 else {
+            diagnostics.append(operationDiagnostic("MAP_EDIT_INVALID_RECT", "Block pattern operation requires positive width and height."))
+            return
+        }
+        guard let rawValues = operation.rawValues, rawValues.count >= width * height else {
+            diagnostics.append(operationDiagnostic("MAP_BLOCK_PATTERN_INCOMPLETE", "Block pattern operation is missing enough rawValues for the rectangle."))
+            return
+        }
+        for row in 0..<height {
+            for column in 0..<width {
+                let value = rawValues[row * width + column]
+                setBlockValue(target: operation.target ?? .layout, x: x + column, y: y + row, rawValue: value, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics)
             }
         }
     }
@@ -1894,16 +2496,33 @@ public enum MapMutationPlanner {
         y: Int,
         rawValue: UInt16,
         document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
         layoutValues: inout [UInt16],
         borderValues: inout [UInt16]?,
         diagnostics: inout [Diagnostic]
+    ) {
+        mutateBlockValue(target: target, x: x, y: y, document: document, layoutWidth: layoutWidth, layoutHeight: layoutHeight, layoutValues: &layoutValues, borderValues: &borderValues, diagnostics: &diagnostics) { _ in rawValue }
+    }
+
+    private static func mutateBlockValue(
+        target: MapBlockTarget,
+        x: Int,
+        y: Int,
+        document: MapVisualDocument,
+        layoutWidth: Int,
+        layoutHeight: Int,
+        layoutValues: inout [UInt16],
+        borderValues: inout [UInt16]?,
+        diagnostics: inout [Diagnostic],
+        mutate: (UInt16) -> UInt16
     ) {
         let width: Int
         let height: Int
         switch target {
         case .layout:
-            width = document.blockdata.width
-            height = document.blockdata.height
+            width = layoutWidth
+            height = layoutHeight
             guard x >= 0, y >= 0, x < width, y < height else {
                 diagnostics.append(boundsDiagnostic(target: target, x: x, y: y, width: width, height: height))
                 return
@@ -1913,7 +2532,7 @@ public enum MapMutationPlanner {
                 diagnostics.append(boundsDiagnostic(target: target, x: x, y: y, width: width, height: height))
                 return
             }
-            layoutValues[index] = rawValue
+            layoutValues[index] = mutate(layoutValues[index])
         case .border:
             guard let border = document.border else {
                 diagnostics.append(operationDiagnostic("MAP_BORDER_MISSING", "Border paint requested but this layout has no border data."))
@@ -1930,8 +2549,152 @@ public enum MapMutationPlanner {
                 diagnostics.append(boundsDiagnostic(target: target, x: x, y: y, width: width, height: height))
                 return
             }
-            borderValues?[index] = rawValue
+            let currentValue = borderValues?[index] ?? 0
+            borderValues?[index] = mutate(currentValue)
         }
+    }
+
+    private static func applyMapJSONOperation(
+        _ operation: MapEditOperation,
+        root: inout OrderedJSONValue,
+        diagnostics: inout [Diagnostic],
+        document: MapVisualDocument
+    ) -> Bool {
+        switch operation.action {
+        case .updateMapHeaderField:
+            return applyMapHeaderOperation(operation, root: &root, diagnostics: &diagnostics)
+        case .updateConnectionField:
+            return applyConnectionFieldOperation(operation, root: &root, diagnostics: &diagnostics, document: document)
+        case .addConnection:
+            addObject(in: &root, arrayKey: "connections", properties: operation.templateProperties)
+            return true
+        case .duplicateConnection:
+            guard let index = operation.eventIndex else {
+                diagnostics.append(operationDiagnostic("MAP_CONNECTION_OPERATION_INCOMPLETE", "Duplicate connection operation is missing index."))
+                return false
+            }
+            if !duplicateObject(in: &root, arrayKey: "connections", index: index, operation: operation) {
+                diagnostics.append(connectionIndexDiagnostic(index: index, document: document))
+                return false
+            }
+            return true
+        case .deleteConnection:
+            guard let index = operation.eventIndex else {
+                diagnostics.append(operationDiagnostic("MAP_CONNECTION_OPERATION_INCOMPLETE", "Delete connection operation is missing index."))
+                return false
+            }
+            if !deleteObject(in: &root, arrayKey: "connections", index: index) {
+                diagnostics.append(connectionIndexDiagnostic(index: index, document: document))
+                return false
+            }
+            return true
+        default:
+            return applyEventOperation(operation, root: &root, diagnostics: &diagnostics, document: document)
+        }
+    }
+
+    private static func applyMapHeaderOperation(
+        _ operation: MapEditOperation,
+        root: inout OrderedJSONValue,
+        diagnostics: inout [Diagnostic]
+    ) -> Bool {
+        let updates = fieldUpdates(from: operation)
+        guard !updates.isEmpty else {
+            diagnostics.append(operationDiagnostic("MAP_HEADER_OPERATION_INCOMPLETE", "Map header operation is missing field updates."))
+            return false
+        }
+        guard case .object(var pairs) = root else {
+            diagnostics.append(operationDiagnostic("MAP_JSON_ROOT_INVALID", "Map JSON root must be an object."))
+            return false
+        }
+        for update in updates {
+            pairs.set(key: update.0, value: update.1)
+        }
+        root = .object(pairs)
+        return true
+    }
+
+    private static func applyConnectionFieldOperation(
+        _ operation: MapEditOperation,
+        root: inout OrderedJSONValue,
+        diagnostics: inout [Diagnostic],
+        document: MapVisualDocument
+    ) -> Bool {
+        guard let index = operation.eventIndex else {
+            diagnostics.append(operationDiagnostic("MAP_CONNECTION_OPERATION_INCOMPLETE", "Connection field operation is missing index."))
+            return false
+        }
+        let updates = fieldUpdates(from: operation)
+        guard !updates.isEmpty else {
+            diagnostics.append(operationDiagnostic("MAP_CONNECTION_OPERATION_INCOMPLETE", "Connection field operation is missing field updates."))
+            return false
+        }
+        if !updateObject(in: &root, arrayKey: "connections", index: index, updates: updates) {
+            diagnostics.append(connectionIndexDiagnostic(index: index, document: document))
+            return false
+        }
+        return true
+    }
+
+    private static func applyWildEncounterOperation(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) {
+        let updates = fieldUpdates(from: operation)
+        guard !updates.isEmpty else {
+            diagnostics.append(operationDiagnostic("WILD_ENCOUNTER_OPERATION_INCOMPLETE", "Wild encounter metadata operation is missing field updates."))
+            return
+        }
+        guard let path = operation.sourcePath?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+            diagnostics.append(operationDiagnostic("WILD_ENCOUNTER_SOURCE_MISSING", "Wild encounter metadata operation is missing a source path."))
+            return
+        }
+        guard (path as NSString).pathExtension.lowercased() == "json" else {
+            diagnostics.append(sourceDiagnostic("WILD_ENCOUNTER_SOURCE_UNSUPPORTED", "Wild encounter metadata edits must target the source JSON, not generated encounter output.", path: path))
+            return
+        }
+        var sourceDiagnostics: [Diagnostic] = []
+        mutateOrderedJSONSource(
+            path: path,
+            summary: "Update wild encounter metadata",
+            document: document,
+            sourceFiles: &sourceFiles,
+            diagnostics: &diagnostics
+        ) { root in
+            guard updateObject(at: operation.jsonPath ?? [], in: &root, updates: updates) else {
+                sourceDiagnostics.append(sourceDiagnostic("WILD_ENCOUNTER_JSON_PATH_INVALID", "Wild encounter JSON path could not be resolved: \((operation.jsonPath ?? []).joined(separator: "."))", path: path))
+                return false
+            }
+            return true
+        }
+        diagnostics.append(contentsOf: sourceDiagnostics)
+    }
+
+    private static func updateLayoutDimensionsSource(
+        document: MapVisualDocument,
+        width: Int,
+        height: Int,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) {
+        let path = document.layout.sourcePath
+        var sourceDiagnostics: [Diagnostic] = []
+        mutateOrderedJSONSource(
+            path: path,
+            summary: "Update layout metadata",
+            document: document,
+            sourceFiles: &sourceFiles,
+            diagnostics: &diagnostics
+        ) { root in
+            guard updateLayoutObject(in: &root, layout: document.layout, updates: [("width", .number(String(width))), ("height", .number(String(height)))]) else {
+                sourceDiagnostics.append(sourceDiagnostic("LAYOUT_JSON_LAYOUT_NOT_FOUND", "Layout \(document.layout.layoutID ?? document.layout.name ?? "unknown") was not found in \(path).", path: path))
+                return false
+            }
+            return true
+        }
+        diagnostics.append(contentsOf: sourceDiagnostics)
     }
 
     private static func applyEventOperation(
@@ -1989,9 +2752,538 @@ public enum MapMutationPlanner {
         case .addEvent:
             addObject(in: &root, arrayKey: arrayKey, properties: operation.templateProperties)
             return true
-        case .paintMetatile, .fillMetatile:
+        case .paintMetatile, .fillMetatile,
+             .updateBlockCollision, .updateBlockElevation, .updateBlockAttributes,
+             .shiftMap, .resizeMap, .pasteBlockPattern,
+             .updateMapHeaderField, .updateConnectionField, .addConnection, .duplicateConnection, .deleteConnection,
+             .updateWildEncounterField, .updateMetatileTile, .updateMetatileAttribute,
+             .updateScriptBody, .createMapScriptLabel:
             return false
         }
+    }
+
+    private static func applyScriptOperation(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        scriptTexts: inout [String: String],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let scriptIndex = document.scriptIndex else {
+            diagnostics.append(operationDiagnostic("MAP_SCRIPT_INDEX_MISSING", "No script index is loaded for \(document.mapName)."))
+            return
+        }
+
+        switch operation.action {
+        case .updateScriptBody:
+            guard let label = MapScriptIndex.normalizedScriptLabel(operation.scriptLabel),
+                  let body = operation.scriptBody
+            else {
+                diagnostics.append(operationDiagnostic("MAP_SCRIPT_OPERATION_INCOMPLETE", "Script body update is missing a label or body."))
+                return
+            }
+            guard let span = resolvedScriptSpan(
+                label: label,
+                sourcePath: operation.scriptSourcePath,
+                scriptIndex: scriptIndex,
+                scriptTexts: scriptTexts,
+                diagnostics: &diagnostics
+            ) else {
+                return
+            }
+            guard validateEditableScriptSource(span.sourcePath, diagnostics: &diagnostics) else { return }
+            warnIfSharedScript(span, diagnostics: &diagnostics)
+            guard let text = scriptTexts[span.sourcePath] else {
+                diagnostics.append(scriptDiagnostic("MAP_SCRIPT_SOURCE_MISSING", "Script source is not loaded: \(span.sourcePath).", path: span.sourcePath))
+                return
+            }
+            scriptTexts[span.sourcePath] = replaceScriptBody(in: text, span: span, body: body)
+
+        case .createMapScriptLabel:
+            guard let label = MapScriptIndex.normalizedScriptLabel(operation.scriptLabel) else {
+                diagnostics.append(operationDiagnostic("MAP_SCRIPT_OPERATION_INCOMPLETE", "Script label creation is missing a valid label."))
+                return
+            }
+            if !scriptIndex.labels.filter({ $0.label == label }).isEmpty {
+                diagnostics.append(scriptDiagnostic("MAP_SCRIPT_LABEL_EXISTS", "Script label \(label) already exists.", path: operation.scriptSourcePath ?? document.mapSourcePath))
+                return
+            }
+            guard let source = targetScriptSource(operation.scriptSourcePath, scriptIndex: scriptIndex) else {
+                diagnostics.append(operationDiagnostic("MAP_SCRIPT_SOURCE_MISSING", "No editable map script source is available for \(document.mapName)."))
+                return
+            }
+            guard validateEditableScriptSource(source.path, diagnostics: &diagnostics) else { return }
+            if source.role == .shared {
+                diagnostics.append(scriptDiagnostic("MAP_SCRIPT_SHARED_SOURCE_EDIT", "This script change edits shared map script source \(source.path).", path: source.path, severity: .warning))
+            }
+            guard let text = scriptTexts[source.path] else {
+                diagnostics.append(scriptDiagnostic("MAP_SCRIPT_SOURCE_MISSING", "Script source is not loaded: \(source.path).", path: source.path))
+                return
+            }
+            scriptTexts[source.path] = appendScriptLabel(label: label, body: operation.scriptBody ?? "\tend", to: text)
+
+        default:
+            return
+        }
+    }
+
+    private static func resolvedScriptSpan(
+        label: String,
+        sourcePath: String?,
+        scriptIndex: MapScriptIndex,
+        scriptTexts: [String: String],
+        diagnostics: inout [Diagnostic]
+    ) -> MapScriptLabelSpan? {
+        let matches = scriptTexts.flatMap { path, text -> [MapScriptLabelSpan] in
+            guard sourcePath == nil || sourcePath == path else { return [] }
+            guard let source = scriptIndex.source(path: path) else { return [] }
+            return MapScriptIndexLoader.parseLabels(
+                source: MapScriptSource(path: path, role: source.role, exists: source.exists, text: text)
+            )
+        }
+        .filter { $0.label == label }
+
+        if matches.count == 1 {
+            return matches[0]
+        }
+        if matches.count > 1 {
+            diagnostics.append(operationDiagnostic("MAP_SCRIPT_LABEL_DUPLICATE", "Script label \(label) appears multiple times in editable map script sources."))
+            return nil
+        }
+
+        let resolution = scriptIndex.resolution(for: label)
+        diagnostics.append(contentsOf: resolution.diagnostics)
+        if resolution.state == .resolved, sourcePath != nil {
+            diagnostics.append(scriptDiagnostic("MAP_SCRIPT_LABEL_MISSING", "Script label \(label) is not present in \(sourcePath ?? "the requested source").", path: sourcePath ?? "data/maps"))
+        }
+        return sourcePath == nil ? resolution.span : nil
+    }
+
+    private static func targetScriptSource(_ path: String?, scriptIndex: MapScriptIndex) -> MapScriptSource? {
+        if let path {
+            return scriptIndex.source(path: path).flatMap { $0.exists ? $0 : nil }
+        }
+        return scriptIndex.sources.first { $0.exists && $0.role == .mapLocal }
+            ?? scriptIndex.sources.first { $0.exists && $0.role == .shared }
+    }
+
+    private static func validateEditableScriptSource(_ path: String, diagnostics: inout [Diagnostic]) -> Bool {
+        guard MapScriptIndex.isEditableScriptPath(path) else {
+            diagnostics.append(scriptDiagnostic("MAP_SCRIPT_SOURCE_GENERATED", "Script edits can only write data/maps/*/scripts.inc sources.", path: path))
+            return false
+        }
+        return true
+    }
+
+    private static func warnIfSharedScript(_ span: MapScriptLabelSpan, diagnostics: inout [Diagnostic]) {
+        guard span.sourceRole == .shared else { return }
+        diagnostics.append(
+            scriptDiagnostic(
+                "MAP_SCRIPT_SHARED_SOURCE_EDIT",
+                "This script change edits shared map script source \(span.sourcePath).",
+                path: span.sourcePath,
+                severity: .warning
+            )
+        )
+    }
+
+    private static func replaceScriptBody(in text: String, span: MapScriptLabelSpan, body: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        let startIndex = min(max(span.bodyStartLine - 1, 0), lines.count)
+        let endIndex = min(max(span.bodyEndLine, startIndex), lines.count)
+        lines.replaceSubrange(startIndex..<endIndex, with: normalizedScriptBodyLines(body))
+        return lines.joined(separator: "\n")
+    }
+
+    private static func appendScriptLabel(label: String, body: String, to text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        let insertionIndex = lines.last == "" ? max(lines.count - 1, 0) : lines.count
+        let prefix = insertionIndex > 0 && lines[insertionIndex - 1].isEmpty ? [] : [""]
+        let insertion = prefix + ["\(label)::"] + normalizedScriptBodyLines(body)
+        lines.insert(contentsOf: insertion, at: insertionIndex)
+        return lines.joined(separator: "\n")
+    }
+
+    private static func normalizedScriptBodyLines(_ body: String) -> [String] {
+        let normalized = body.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        var lines = normalized.components(separatedBy: "\n")
+        if normalized.hasSuffix("\n"), !lines.isEmpty {
+            lines.removeLast()
+        }
+        return lines
+    }
+
+    private struct ResolvedMetatileTarget {
+        let definition: MetatileDefinition
+        let asset: TilesetAsset
+    }
+
+    private static func applyMetatileTileOperation(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let rawValue = operation.rawValue else {
+            diagnostics.append(operationDiagnostic("METATILE_TILE_OPERATION_INCOMPLETE", "Metatile tile operation is missing rawValue."))
+            return
+        }
+        guard let tileEntryIndex = operation.tileEntryIndex, (0..<8).contains(tileEntryIndex) else {
+            diagnostics.append(operationDiagnostic("METATILE_TILE_INDEX_INVALID", "Metatile tile entry index must be in 0...7."))
+            return
+        }
+        guard let target = resolvedMetatileTarget(operation: operation, document: document, diagnostics: &diagnostics) else { return }
+        guard let path = target.asset.metatilesPath else {
+            diagnostics.append(operationDiagnostic("METATILE_DATA_PATH_MISSING", "Tileset \(target.asset.symbol) has no editable metatiles path."))
+            return
+        }
+
+        var sourceDiagnostics: [Diagnostic] = []
+        mutateBinarySource(path: path, summary: "Update metatile tile data", document: document, sourceFiles: &sourceFiles, diagnostics: &diagnostics) { data in
+            let wordOffset = target.definition.localID * 8 + tileEntryIndex
+            let byteOffset = wordOffset * 2
+            guard byteOffset + 2 <= data.count else {
+                sourceDiagnostics.append(sourceDiagnostic("METATILE_TILE_INDEX_INVALID", "Metatile \(target.definition.id) tile entry \(tileEntryIndex) is outside \(path).", path: path))
+                return false
+            }
+            writeUInt16(rawValue, to: &data, offset: byteOffset)
+            return true
+        }
+        diagnostics.append(contentsOf: sourceDiagnostics)
+    }
+
+    private static func applyMetatileAttributeOperation(
+        _ operation: MapEditOperation,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let target = resolvedMetatileTarget(operation: operation, document: document, diagnostics: &diagnostics) else { return }
+        guard let path = target.asset.metatileAttributesPath else {
+            diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_PATH_MISSING", "Tileset \(target.asset.symbol) has no editable metatile attributes path."))
+            return
+        }
+        let wordSize = max(target.asset.metatileAttributeWordSize, 2)
+
+        var sourceDiagnostics: [Diagnostic] = []
+        mutateBinarySource(path: path, summary: "Update metatile attributes", document: document, sourceFiles: &sourceFiles, diagnostics: &diagnostics) { data in
+            let byteOffset = target.definition.localID * wordSize
+            guard byteOffset + wordSize <= data.count else {
+                sourceDiagnostics.append(sourceDiagnostic("METATILE_ATTRIBUTE_INDEX_INVALID", "Metatile \(target.definition.id) attribute is outside \(path).", path: path))
+                return false
+            }
+            let currentValue = wordSize == 4 ? readUInt32(from: data, offset: byteOffset) : UInt32(readUInt16(from: data, offset: byteOffset))
+            guard let updatedValue = updatedMetatileAttributeValue(from: currentValue, wordSize: wordSize, operation: operation, diagnostics: &sourceDiagnostics) else {
+                return false
+            }
+            if wordSize == 4 {
+                writeUInt32(updatedValue, to: &data, offset: byteOffset)
+            } else {
+                writeUInt16(UInt16(updatedValue & 0x0000ffff), to: &data, offset: byteOffset)
+            }
+            return true
+        }
+        diagnostics.append(contentsOf: sourceDiagnostics)
+    }
+
+    private static func resolvedMetatileTarget(
+        operation: MapEditOperation,
+        document: MapVisualDocument,
+        diagnostics: inout [Diagnostic]
+    ) -> ResolvedMetatileTarget? {
+        guard let metatileID = operation.metatileID ?? operation.rawValue.map(Int.init) else {
+            diagnostics.append(operationDiagnostic("METATILE_ID_MISSING", "Metatile operation is missing a metatile ID."))
+            return nil
+        }
+        guard let definition = document.metatiles.first(where: { metatile in
+            metatile.id == metatileID && (operation.tilesetSymbol == nil || metatile.tilesetSymbol == operation.tilesetSymbol)
+        }) else {
+            diagnostics.append(operationDiagnostic("METATILE_ID_INVALID", "Metatile \(metatileID) is not present in the loaded map tilesets."))
+            return nil
+        }
+        let symbol = operation.tilesetSymbol ?? definition.tilesetSymbol
+        let asset = [document.primaryTileset, document.secondaryTileset].compactMap { $0 }.first { $0.symbol == symbol }
+        guard let asset else {
+            diagnostics.append(operationDiagnostic("TILESET_ASSET_MISSING", "Tileset \(symbol) is not loaded for \(document.mapName)."))
+            return nil
+        }
+        return ResolvedMetatileTarget(definition: definition, asset: asset)
+    }
+
+    private static func updatedMetatileAttributeValue(
+        from currentValue: UInt32,
+        wordSize: Int,
+        operation: MapEditOperation,
+        diagnostics: inout [Diagnostic]
+    ) -> UInt32? {
+        var value = operation.rawAttributeValue ?? operation.rawValue.map(UInt32.init) ?? currentValue
+        var didRequestUpdate = operation.rawAttributeValue != nil || operation.rawValue != nil
+
+        if let key = operation.fieldKey, let fieldValue = operation.fieldValue {
+            switch normalizedFieldKey(key) {
+            case "rawvalue", "rawattributevalue":
+                guard let parsed = integerValue(fieldValue), parsed >= 0 else {
+                    diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_VALUE_INVALID", "Metatile raw attribute value must be an integer."))
+                    return nil
+                }
+                value = UInt32(parsed)
+                didRequestUpdate = true
+            case "behavior":
+                guard let behavior = integerValue(fieldValue) else {
+                    diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_BEHAVIOR_INVALID", "Metatile behavior must be an integer."))
+                    return nil
+                }
+                guard (0...0x01ff).contains(behavior) else {
+                    diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_BEHAVIOR_INVALID", "Metatile behavior \(behavior) is outside 0...511."))
+                    return nil
+                }
+                value = (value & ~UInt32(0x01ff)) | UInt32(behavior)
+                didRequestUpdate = true
+            case "layertype":
+                guard let layerType = integerValue(fieldValue) else {
+                    diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_LAYER_INVALID", "Metatile layer type must be an integer."))
+                    return nil
+                }
+                guard let updated = updatedLayerTypeValue(value, wordSize: wordSize, layerType: layerType, diagnostics: &diagnostics) else { return nil }
+                value = updated
+                didRequestUpdate = true
+            default:
+                diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_FIELD_UNSUPPORTED", "Metatile attribute field \(key) is not supported."))
+                return nil
+            }
+        }
+
+        if let behavior = operation.behavior {
+            guard (0...0x01ff).contains(behavior) else {
+                diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_BEHAVIOR_INVALID", "Metatile behavior \(behavior) is outside 0...511."))
+                return nil
+            }
+            value = (value & ~UInt32(0x01ff)) | UInt32(behavior)
+            didRequestUpdate = true
+        }
+        if let layerType = operation.layerType {
+            guard let updated = updatedLayerTypeValue(value, wordSize: wordSize, layerType: layerType, diagnostics: &diagnostics) else { return nil }
+            value = updated
+            didRequestUpdate = true
+        }
+
+        guard didRequestUpdate else {
+            diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_OPERATION_INCOMPLETE", "Metatile attribute operation is missing a supported field update."))
+            return nil
+        }
+        if wordSize == 2, value > UInt16.max {
+            diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_VALUE_INVALID", "Two-byte metatile attributes cannot exceed 0xffff."))
+            return nil
+        }
+        return value
+    }
+
+    private static func updatedLayerTypeValue(
+        _ value: UInt32,
+        wordSize: Int,
+        layerType: Int,
+        diagnostics: inout [Diagnostic]
+    ) -> UInt32? {
+        if wordSize == 4 {
+            guard (0...3).contains(layerType) else {
+                diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_LAYER_INVALID", "Four-byte metatile layer type \(layerType) is outside 0...3."))
+                return nil
+            }
+            return (value & ~(UInt32(0x03) << 29)) | (UInt32(layerType) << 29)
+        }
+        guard (0...15).contains(layerType) else {
+            diagnostics.append(operationDiagnostic("METATILE_ATTRIBUTE_LAYER_INVALID", "Two-byte metatile layer type \(layerType) is outside 0...15."))
+            return nil
+        }
+        return (value & ~(UInt32(0x0f) << 12)) | (UInt32(layerType) << 12)
+    }
+
+    private static func fieldUpdates(from operation: MapEditOperation) -> [(String, OrderedJSONValue)] {
+        var updates = operation.templateProperties.map { ($0.key, scalarValue(from: $0.value)) }
+        if let key = operation.fieldKey, let value = operation.fieldValue {
+            updates.append((key, scalarValue(from: value)))
+        }
+        return updates
+    }
+
+    private static func mutateOrderedJSONSource(
+        path: String,
+        summary: String,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic],
+        mutate: (inout OrderedJSONValue) -> Bool
+    ) {
+        guard var draft = sourceFileDraft(path: path, summary: summary, document: document, sourceFiles: &sourceFiles, diagnostics: &diagnostics) else { return }
+        guard let text = String(data: draft.data, encoding: .utf8) else {
+            diagnostics.append(sourceDiagnostic("SOURCE_TEXT_DECODE_FAILED", "Could not decode \(path) as UTF-8.", path: path))
+            return
+        }
+        var parser = OrderedJSONParser(text: text)
+        guard var root = try? parser.parse() else {
+            diagnostics.append(sourceDiagnostic("SOURCE_JSON_PARSE_FAILED", "Could not parse \(path).", path: path))
+            return
+        }
+        guard mutate(&root) else { return }
+        let rendered = root.renderPretty() + "\n"
+        draft.data = Data(rendered.utf8)
+        draft.textPreview = rendered
+        sourceFiles[draft.path] = draft
+    }
+
+    private static func mutateBinarySource(
+        path: String,
+        summary: String,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic],
+        mutate: (inout Data) -> Bool
+    ) {
+        guard var draft = sourceFileDraft(path: path, summary: summary, document: document, sourceFiles: &sourceFiles, diagnostics: &diagnostics) else { return }
+        guard mutate(&draft.data) else { return }
+        sourceFiles[draft.path] = draft
+    }
+
+    private static func sourceFileDraft(
+        path: String,
+        summary: String,
+        document: MapVisualDocument,
+        sourceFiles: inout [String: MapEditSourceFileDraft],
+        diagnostics: inout [Diagnostic]
+    ) -> MapEditSourceFileDraft? {
+        guard let normalizedPath = normalizedProjectRelativePath(path) else {
+            diagnostics.append(sourceDiagnostic("MAP_SOURCE_PATH_INVALID", "Source path must be project-relative and cannot escape the project root: \(path).", path: path))
+            return nil
+        }
+        if let draft = sourceFiles[normalizedPath] {
+            return draft
+        }
+        let root = URL(fileURLWithPath: document.rootPath).standardizedFileURL
+        let url = root.appendingPathComponent(normalizedPath).standardizedFileURL
+        guard let data = try? Data(contentsOf: url) else {
+            diagnostics.append(sourceDiagnostic("MAP_SOURCE_FILE_MISSING", "Source file does not exist or could not be read: \(normalizedPath).", path: normalizedPath))
+            return nil
+        }
+        let draft = MapEditSourceFileDraft(path: normalizedPath, summary: summary, originalData: data, data: data)
+        sourceFiles[normalizedPath] = draft
+        return draft
+    }
+
+    private static func normalizedProjectRelativePath(_ path: String) -> String? {
+        let normalized = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty, !(normalized as NSString).isAbsolutePath else { return nil }
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !components.contains("..") else { return nil }
+        return components.joined(separator: "/")
+    }
+
+    private static func updateObject(
+        at path: [String],
+        in root: inout OrderedJSONValue,
+        updates: [(String, OrderedJSONValue)]
+    ) -> Bool {
+        guard let first = path.first else {
+            guard case .object(var pairs) = root else { return false }
+            for update in updates {
+                pairs.set(key: update.0, value: update.1)
+            }
+            root = .object(pairs)
+            return true
+        }
+        let remainder = Array(path.dropFirst())
+        switch root {
+        case .object(var pairs):
+            guard let index = pairs.firstIndex(where: { $0.key == first }) else { return false }
+            var child = pairs[index].value
+            guard updateObject(at: remainder, in: &child, updates: updates) else { return false }
+            pairs[index].value = child
+            root = .object(pairs)
+            return true
+        case .array(var values):
+            guard let index = Int(first), values.indices.contains(index) else { return false }
+            var child = values[index]
+            guard updateObject(at: remainder, in: &child, updates: updates) else { return false }
+            values[index] = child
+            root = .array(values)
+            return true
+        case .string, .number, .bool, .null:
+            return false
+        }
+    }
+
+    private static func updateLayoutObject(
+        in root: inout OrderedJSONValue,
+        layout: LayoutSlot,
+        updates: [(String, OrderedJSONValue)]
+    ) -> Bool {
+        guard case .object(var pairs) = root,
+              let layoutsIndex = pairs.firstIndex(where: { $0.key == "layouts" }),
+              case .array(var values) = pairs[layoutsIndex].value
+        else {
+            return false
+        }
+
+        if let layoutID = layout.layoutID,
+           let matchIndex = values.firstIndex(where: { value in
+               guard case .object(let pairs) = value else { return false }
+               return pairs.first(where: { $0.key == "id" })?.value.displayValue == layoutID
+           }),
+           case .object(var layoutPairs) = values[matchIndex] {
+            for update in updates {
+                layoutPairs.set(key: update.0, value: update.1)
+            }
+            values[matchIndex] = .object(layoutPairs)
+            pairs[layoutsIndex].value = .array(values)
+            root = .object(pairs)
+            return true
+        }
+
+        guard values.indices.contains(layout.slotIndex), case .object(var layoutPairs) = values[layout.slotIndex] else {
+            return false
+        }
+        for update in updates {
+            layoutPairs.set(key: update.0, value: update.1)
+        }
+        values[layout.slotIndex] = .object(layoutPairs)
+        pairs[layoutsIndex].value = .array(values)
+        root = .object(pairs)
+        return true
+    }
+
+    private static func normalizedFieldKey(_ key: String) -> String {
+        key.filter { $0 != "_" && $0 != "-" }.lowercased()
+    }
+
+    private static func integerValue(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            return Int(trimmed.dropFirst(2), radix: 16)
+        }
+        return Int(trimmed)
+    }
+
+    private static func readUInt16(from data: Data, offset: Int) -> UInt16 {
+        UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private static func readUInt32(from data: Data, offset: Int) -> UInt32 {
+        UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
+    }
+
+    private static func writeUInt16(_ value: UInt16, to data: inout Data, offset: Int) {
+        data[offset] = UInt8(value & 0x00ff)
+        data[offset + 1] = UInt8((value >> 8) & 0x00ff)
+    }
+
+    private static func writeUInt32(_ value: UInt32, to data: inout Data, offset: Int) {
+        data[offset] = UInt8(value & 0x000000ff)
+        data[offset + 1] = UInt8((value >> 8) & 0x000000ff)
+        data[offset + 2] = UInt8((value >> 16) & 0x000000ff)
+        data[offset + 3] = UInt8((value >> 24) & 0x000000ff)
     }
 
     private static func jsonKey(for kind: MapEventKind) -> String? {
@@ -2131,12 +3423,34 @@ public enum MapMutationPlanner {
         )
     }
 
+    private static func connectionIndexDiagnostic(index: Int, document: MapVisualDocument) -> Diagnostic {
+        Diagnostic(
+            severity: .error,
+            code: "MAP_CONNECTION_INDEX_INVALID",
+            message: "Connection index \(index) does not exist in \(document.mapSourcePath).",
+            span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+        )
+    }
+
     private static func jsonDiagnostic(_ code: String, document: MapVisualDocument) -> Diagnostic {
         Diagnostic(severity: .error, code: code, message: "Could not parse \(document.mapSourcePath).", span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1))
     }
 
     private static func operationDiagnostic(_ code: String, _ message: String) -> Diagnostic {
         Diagnostic(severity: .error, code: code, message: message)
+    }
+
+    private static func sourceDiagnostic(_ code: String, _ message: String, path: String) -> Diagnostic {
+        Diagnostic(severity: .error, code: code, message: message, span: SourceSpan(relativePath: path, startLine: 1))
+    }
+
+    private static func scriptDiagnostic(
+        _ code: String,
+        _ message: String,
+        path: String,
+        severity: DiagnosticSeverity = .error
+    ) -> Diagnostic {
+        Diagnostic(severity: severity, code: code, message: message, span: SourceSpan(relativePath: path, startLine: 1))
     }
 
     private static func backupTimestamp() -> String {
@@ -2330,10 +3644,13 @@ private enum MapEditApplySafety {
     private static func generatedPathDiagnostics(path: String, components: [String]) -> [Diagnostic] {
         let pathExtension = (path as NSString).pathExtension.lowercased()
         guard pathExtension == "inc" else { return [] }
+        if MapScriptIndex.isEditableScriptPath(path) {
+            return []
+        }
         return [
             pathDiagnostic(
                 code: "MAP_APPLY_PATH_GENERATED",
-                message: "Map edit plans cannot write generated .inc files: \(path).",
+                message: "Map edit plans cannot write generated .inc files except editable map-local scripts.inc sources: \(path).",
                 path: path
             )
         ]

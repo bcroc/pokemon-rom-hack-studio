@@ -1,0 +1,1010 @@
+import PokemonHackCore
+import SwiftUI
+
+enum MapWorkbenchTab: String, CaseIterable, Identifiable {
+    case map
+    case collision
+    case events
+    case header
+    case connections
+    case wild
+    case scripts
+    case tilesets
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .map: "Map"
+        case .collision: "Collision"
+        case .events: "Events"
+        case .header: "Header"
+        case .connections: "Connections"
+        case .wild: "Wild"
+        case .scripts: "Scripts"
+        case .tilesets: "Tilesets"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .map: "map"
+        case .collision: "figure.walk.diamond"
+        case .events: "point.3.connected.trianglepath.dotted"
+        case .header: "doc.text"
+        case .connections: "arrow.triangle.branch"
+        case .wild: "leaf"
+        case .scripts: "curlybraces"
+        case .tilesets: "square.grid.3x3"
+        }
+    }
+
+    var accessibilityLabel: String {
+        "\(title) editor tab"
+    }
+}
+
+struct MapWorkbenchPanels<MutationReview: View>: View {
+    let document: MapVisualDocument
+    @ObservedObject var session: MapEditorSession
+    let layoutMode: MapEditorLayoutMode
+    let viewport: MapCanvasViewport
+    @Binding var selectedTab: MapWorkbenchTab
+    @Binding var eventSearchText: String
+    @Binding var scriptDraftKey: String
+    @Binding var scriptDraftText: String
+    let onSelectViewportCenter: (CGFloat, CGFloat) -> Void
+    let onCenterEvent: (MapEventDescriptor) -> Void
+    let mutationReview: () -> MutationReview
+    @State private var wildSourcePath = "src/data/wild_encounters.json"
+    @State private var wildJSONPath = ""
+    @State private var wildFieldKey = "encounter_rate"
+    @State private var wildFieldValue = "20"
+    @State private var metatileTileIndex = 0
+    @State private var metatileTileRawValue = ""
+    @State private var metatileAttributeKey = "behavior"
+    @State private var metatileAttributeValue = ""
+
+    init(
+        document: MapVisualDocument,
+        session: MapEditorSession,
+        layoutMode: MapEditorLayoutMode,
+        viewport: MapCanvasViewport,
+        selectedTab: Binding<MapWorkbenchTab>,
+        eventSearchText: Binding<String>,
+        scriptDraftKey: Binding<String>,
+        scriptDraftText: Binding<String>,
+        onSelectViewportCenter: @escaping (CGFloat, CGFloat) -> Void,
+        onCenterEvent: @escaping (MapEventDescriptor) -> Void,
+        @ViewBuilder mutationReview: @escaping () -> MutationReview
+    ) {
+        self.document = document
+        self.session = session
+        self.layoutMode = layoutMode
+        self.viewport = viewport
+        _selectedTab = selectedTab
+        _eventSearchText = eventSearchText
+        _scriptDraftKey = scriptDraftKey
+        _scriptDraftText = scriptDraftText
+        self.onSelectViewportCenter = onSelectViewportCenter
+        self.onCenterEvent = onCenterEvent
+        self.mutationReview = mutationReview
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            tabSelector
+            selectedPanel
+            mutationReview()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Map workbench inspector")
+    }
+
+    @ViewBuilder
+    private var tabSelector: some View {
+        if layoutMode.isCompact {
+            Picker("Panel", selection: $selectedTab) {
+                ForEach(MapWorkbenchTab.allCases) { tab in
+                    Label(tab.title, systemImage: tab.systemImage)
+                        .tag(tab)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityLabel("Map workbench panel selector")
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(MapWorkbenchTab.allCases) { tab in
+                        MapWorkbenchTabButton(
+                            tab: tab,
+                            isSelected: selectedTab == tab
+                        ) {
+                            selectedTab = tab
+                        }
+                    }
+                }
+                .padding(.bottom, 1)
+            }
+            .accessibilityLabel("Map workbench tab bar")
+        }
+    }
+
+    @ViewBuilder
+    private var selectedPanel: some View {
+        switch selectedTab {
+        case .map:
+            mapPanel
+        case .collision:
+            collisionPanel
+        case .events:
+            eventsPanel
+        case .header:
+            headerPanel
+        case .connections:
+            connectionsPanel
+        case .wild:
+            wildPanel
+        case .scripts:
+            scriptsPanel
+        case .tilesets:
+            tilesetsPanel
+        }
+    }
+
+    private var mapPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            MapLayerInspectorView(
+                document: document,
+                session: session,
+                layoutMode: layoutMode,
+                viewport: viewport,
+                onSelectViewportCenter: onSelectViewportCenter
+            )
+            .accessibilityLabel("Map overview, layer views, and overlays")
+
+            mapSummary
+            selectionSummary
+            mapAuthoring
+            sceneDiagnostics
+        }
+    }
+
+    private var collisionPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Collision View") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle(isOn: visibilityBinding(for: .collision)) {
+                        Label("Collision", systemImage: MapEditorLayer.collision.systemImage)
+                    }
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel("Show collision overlay")
+
+                    Toggle(isOn: visibilityBinding(for: .grid)) {
+                        Label("Grid", systemImage: MapEditorLayer.grid.systemImage)
+                    }
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel("Show grid overlay")
+
+                    HStack(spacing: 8) {
+                        Slider(value: opacityBinding(for: .collision), in: 0...1)
+                            .accessibilityLabel("Collision opacity")
+                        Text("\(Int((session.mapOverlaySettings.state(for: .collision).opacity * 100).rounded()))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 42, alignment: .trailing)
+                    }
+
+                    HStack {
+                        Button("Solo Collision", systemImage: "scope") {
+                            session.toggleLayerSolo(.collision)
+                        }
+                        .accessibilityLabel("Solo collision layer")
+
+                        Button("Reset Layers", systemImage: "arrow.counterclockwise") {
+                            session.resetLayerSettings()
+                        }
+                        .accessibilityLabel("Reset map layers")
+                    }
+                }
+            }
+
+            selectedCollisionTile
+
+            EditorSection(title: "Collision Authoring") {
+                if session.selectedMapCell == nil {
+                    Text("Select a map tile before staging collision or elevation changes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Stepper("Collision \(selectedBehaviorText)", value: collisionBinding, in: 0...3)
+                        Stepper("Elevation \(selectedElevationText)", value: elevationBinding, in: 0...15)
+                        Label("Collision and elevation edits are staged as map block attribute operations.", systemImage: "doc.text.magnifyingglass")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var eventsPanel: some View {
+        MapEventsPaneView(
+            document: document,
+            session: session,
+            eventSearchText: $eventSearchText,
+            scriptDraftKey: $scriptDraftKey,
+            scriptDraftText: $scriptDraftText,
+            onCenterEvent: onCenterEvent
+        )
+        .accessibilityLabel("Map events editor")
+    }
+
+    private var headerPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Header") {
+                VStack(alignment: .leading, spacing: 10) {
+                    FactGrid(facts: headerFacts)
+                    SourceLocationView(
+                        source: SourceLocation(path: document.mapSourcePath, symbol: document.mapID, line: 1)
+                    )
+                }
+            }
+
+            EditorSection(title: "Header Authoring") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HeaderFieldDraftRow(title: "Music", key: "music", value: document.mapMetadata.music ?? "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                    HeaderFieldDraftRow(title: "Location", key: "region_map_section", value: document.mapMetadata.regionMapSection ?? "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                    HeaderFieldDraftRow(title: "Weather", key: "weather", value: document.mapMetadata.weather ?? "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                    HeaderFieldDraftRow(title: "Map Type", key: "map_type", value: document.mapMetadata.mapType ?? "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                    HeaderFieldDraftRow(title: "Battle Scene", key: "battle_scene", value: "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                    HeaderFieldDraftRow(title: "Floor", key: "floor_number", value: document.mapMetadata.floorNumber.map(String.init) ?? "") { key, value in
+                        session.updateMapHeaderField(key: key, value: value)
+                    }
+                }
+            }
+        }
+    }
+
+    private var connectionsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Connections") {
+                if document.scene.connections.isEmpty {
+                    Text("No connections are indexed for this map.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(document.scene.connections) { connection in
+                            connectionRow(connection)
+                        }
+                    }
+                }
+            }
+
+            sceneDiagnostics
+
+            EditorSection(title: "Connection Authoring") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Button("Add North Connection", systemImage: "plus") {
+                        session.addConnection(properties: [
+                            MapEventProperty(key: "direction", value: "up"),
+                            MapEventProperty(key: "offset", value: "0"),
+                            MapEventProperty(key: "map", value: document.mapID)
+                        ])
+                    }
+                    .help("Stage a source-backed connection template that can be edited in the mutation preview.")
+
+                    Label("Use each row to adjust offsets, duplicate/mirror, or delete existing connection JSON entries.", systemImage: "ruler")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var wildPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Wild Encounters") {
+                FactGrid(
+                    facts: [
+                        Fact(label: "Map", value: document.mapID),
+                        Fact(label: "State", value: "Not indexed in the visual document"),
+                        Fact(label: "Source", value: "Encounter tables")
+                    ]
+                )
+            }
+
+            EditorSection(title: "Encounter Authoring") {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Source") {
+                        TextField("src/data/wild_encounters.json", text: $wildSourcePath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("JSON Path") {
+                        TextField("groups.0.encounters.0", text: $wildJSONPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Field") {
+                        TextField("encounter_rate", text: $wildFieldKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Value") {
+                        TextField("20", text: $wildFieldValue)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Button("Stage Encounter Field", systemImage: "leaf") {
+                        session.updateWildEncounterField(
+                            sourcePath: wildSourcePath,
+                            jsonPath: wildJSONPathComponents,
+                            key: wildFieldKey,
+                            value: wildFieldValue
+                        )
+                    }
+                    .disabled(wildSourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || wildFieldKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var scriptsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Scripts") {
+                if let scriptIndex = document.scriptIndex {
+                    VStack(alignment: .leading, spacing: 10) {
+                        FactGrid(
+                            facts: [
+                                Fact(label: "Sources", value: "\(scriptIndex.sources.count)"),
+                                Fact(label: "Labels", value: "\(scriptIndex.labels.count)"),
+                                Fact(label: "Diagnostics", value: "\(scriptIndex.diagnostics.count)")
+                            ]
+                        )
+
+                        scriptSourceList(scriptIndex)
+                    }
+                } else {
+                    Text("No map script index is loaded.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            selectedScriptResolution
+            stagedScripts
+            scriptDiagnostics
+        }
+    }
+
+    private var tilesetsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Tilesets") {
+                VStack(alignment: .leading, spacing: 12) {
+                    tilesetFacts(title: "Primary", tileset: document.primaryTileset)
+                    tilesetFacts(title: "Secondary", tileset: document.secondaryTileset)
+                    FactGrid(
+                        facts: [
+                            Fact(label: "Metatiles", value: "\(document.metatiles.count)"),
+                            Fact(label: "Brush", value: selectedBrushText)
+                        ]
+                    )
+                }
+            }
+
+            selectedTilesetTile
+
+            EditorSection(title: "Tileset Authoring") {
+                if let selectedMetatileID {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Attribute", selection: $metatileAttributeKey) {
+                            Text("Behavior").tag("behavior")
+                            Text("Layer Type").tag("layer_type")
+                            Text("Raw Value").tag("raw_value")
+                        }
+                        .pickerStyle(.segmented)
+                        TextField("Attribute value", text: $metatileAttributeValue)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Stage Attribute", systemImage: "slider.horizontal.3") {
+                            session.updateMetatileAttribute(
+                                metatileID: selectedMetatileID,
+                                tilesetSymbol: selectedMetatileTilesetSymbol,
+                                key: metatileAttributeKey,
+                                value: metatileAttributeValue
+                            )
+                        }
+                        .disabled(metatileAttributeValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Divider()
+
+                        Stepper("Tile Entry \(metatileTileIndex)", value: $metatileTileIndex, in: 0...7)
+                        TextField("Raw tile word", text: $metatileTileRawValue)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Stage Tile Word", systemImage: "square.grid.3x3") {
+                            if let rawValue = UInt16(metatileTileRawValue.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                                session.updateMetatileTile(
+                                    metatileID: selectedMetatileID,
+                                    tilesetSymbol: selectedMetatileTilesetSymbol,
+                                    tileEntryIndex: metatileTileIndex,
+                                    rawValue: rawValue
+                                )
+                            }
+                        }
+                        .disabled(UInt16(metatileTileRawValue.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
+                    }
+                } else {
+                    Text("Select a metatile on the canvas before staging tileset edits.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var mapAuthoring: some View {
+        EditorSection(title: "Canvas Authoring") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Button("Shift Left", systemImage: "arrow.left") {
+                        session.shiftMap(deltaX: -1, deltaY: 0, fillRawValue: session.selectedBrushRawValue ?? 0)
+                    }
+                    Button("Shift Right", systemImage: "arrow.right") {
+                        session.shiftMap(deltaX: 1, deltaY: 0, fillRawValue: session.selectedBrushRawValue ?? 0)
+                    }
+                }
+                HStack {
+                    Button("Shift Up", systemImage: "arrow.up") {
+                        session.shiftMap(deltaX: 0, deltaY: -1, fillRawValue: session.selectedBrushRawValue ?? 0)
+                    }
+                    Button("Shift Down", systemImage: "arrow.down") {
+                        session.shiftMap(deltaX: 0, deltaY: 1, fillRawValue: session.selectedBrushRawValue ?? 0)
+                    }
+                }
+
+                if let selectedMapCell = session.selectedMapCell {
+                    Button("Copy 2x2 From Selection", systemImage: "square.on.square") {
+                        stageTwoByTwoPrefab(from: selectedMapCell)
+                    }
+                    .disabled(!canCopyTwoByTwo(from: selectedMapCell))
+                }
+
+                Label("Shift and prefab operations stay preview-first and flow through the mutation panel.", systemImage: "doc.text.magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var mapSummary: some View {
+        EditorSection(title: document.mapName) {
+            FactGrid(
+                facts: [
+                    Fact(label: "Map ID", value: document.mapID),
+                    Fact(label: "Layout", value: document.layout.name ?? "Unknown"),
+                    Fact(label: "Size", value: "\(document.blockdata.width)x\(document.blockdata.height)"),
+                    Fact(label: "Primary", value: document.primaryTileset?.symbol ?? "Missing"),
+                    Fact(label: "Secondary", value: document.secondaryTileset?.symbol ?? "Missing"),
+                    Fact(label: "Events", value: "\(document.events.count)"),
+                    Fact(label: "Scene", value: "\(document.scene.viewport.width)x\(document.scene.viewport.height)"),
+                    Fact(label: "Connections", value: "\(document.scene.connections.filter(\.isResolved).count)/\(document.scene.connections.count)")
+                ]
+            )
+        }
+    }
+
+    private var sceneDiagnostics: some View {
+        EditorSection(title: "Scene Diagnostics") {
+            VStack(alignment: .leading, spacing: 8) {
+                if document.diagnostics.isEmpty && document.scene.diagnostics.isEmpty {
+                    Label("No scene diagnostics.", systemImage: "checkmark.seal")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach((document.diagnostics + document.scene.diagnostics).prefix(6)) { diagnostic in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Label(diagnostic.code, systemImage: diagnostic.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
+                                .font(.caption.weight(.semibold))
+                            Text(diagnostic.message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var selectionSummary: some View {
+        EditorSection(title: "Selection") {
+            if let cell = session.selectedMapCell {
+                VStack(alignment: .leading, spacing: 8) {
+                    FactGrid(facts: [Fact(label: "Cell", value: "\(cell.x), \(cell.y)")])
+                    MapSelectionLayerDetails(document: document, rawValue: cell.rawValue)
+                }
+            } else if let event = session.selectedMapEvent {
+                FactGrid(
+                    facts: [
+                        Fact(label: "Event", value: "\(event.kind.rawValue) #\(event.index)"),
+                        Fact(label: "Position", value: eventPositionText(event))
+                    ]
+                )
+            } else {
+                Text("No map cell or event is selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            SourceLocationView(
+                source: SourceLocation(path: document.blockdata.filepath, symbol: document.layout.id, line: 1)
+            )
+        }
+    }
+
+    private var selectedCollisionTile: some View {
+        EditorSection(title: "Selected Tile") {
+            if let cell = session.selectedMapCell {
+                VStack(alignment: .leading, spacing: 8) {
+                    FactGrid(
+                        facts: [
+                            Fact(label: "Cell", value: "\(cell.x), \(cell.y)"),
+                            Fact(label: "Target", value: session.selectedMapBlockTarget.rawValue.capitalized)
+                        ]
+                    )
+                    MapSelectionLayerDetails(document: document, rawValue: cell.rawValue)
+                }
+            } else {
+                Text("No tile is selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var selectedTilesetTile: some View {
+        EditorSection(title: "Selected Metatile") {
+            if let cell = session.selectedMapCell {
+                MapSelectionLayerDetails(document: document, rawValue: cell.rawValue)
+            } else {
+                Text("No metatile is selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var selectedScriptResolution: some View {
+        EditorSection(title: "Selected Script") {
+            if let event = session.selectedMapEvent {
+                VStack(alignment: .leading, spacing: 10) {
+                    FactGrid(
+                        facts: [
+                            Fact(label: "Event", value: "\(event.kind.rawValue) #\(event.index)"),
+                            Fact(label: "Script", value: event.propertyValue("script") ?? "None")
+                        ]
+                    )
+
+                    if let scriptIndex = document.scriptIndex {
+                        scriptResolutionRows(scriptIndex.resolution(for: event.scriptLabel))
+                    }
+
+                    Button("Edit In Events", systemImage: MapWorkbenchTab.events.systemImage) {
+                        selectedTab = .events
+                    }
+                    .accessibilityLabel("Edit selected event script in Events tab")
+                }
+            } else {
+                Text("No event script is selected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stagedScripts: some View {
+        if !session.stagedMapScriptBodies.isEmpty {
+            EditorSection(title: "Staged Scripts") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(session.stagedMapScriptBodies.values).sorted(by: { $0.id < $1.id })) { script in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Label(script.label, systemImage: script.isNew ? "plus.rectangle.on.folder" : "square.and.pencil")
+                                .font(.caption.weight(.semibold))
+                            Text(script.sourcePath)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var scriptDiagnostics: some View {
+        if let scriptIndex = document.scriptIndex, !scriptIndex.diagnostics.isEmpty {
+            EditorSection(title: "Script Diagnostics") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(scriptIndex.diagnostics.prefix(5)) { diagnostic in
+                        Label(diagnostic.message, systemImage: diagnostic.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+                    }
+                }
+            }
+        }
+    }
+
+    private var headerFacts: [Fact] {
+        let metadata = document.mapMetadata
+        return [
+            Fact(label: "Map ID", value: metadata.mapID),
+            Fact(label: "Name", value: metadata.mapName),
+            Fact(label: "Music", value: metadata.music ?? "Unspecified"),
+            Fact(label: "Type", value: metadata.mapType ?? "Unspecified"),
+            Fact(label: "Weather", value: metadata.weather ?? "Unspecified"),
+            Fact(label: "Region", value: metadata.regionMapSection ?? "Unspecified"),
+            Fact(label: "Floor", value: metadata.floorNumber.map(String.init) ?? "Unspecified")
+        ]
+    }
+
+    private var metadataPresentationSummary: String {
+        let parts = [
+            document.mapMetadata.music,
+            document.mapMetadata.weather,
+            document.mapMetadata.regionMapSection
+        ]
+        .compactMap { $0 }
+        return parts.isEmpty ? "Unspecified" : parts.joined(separator: " / ")
+    }
+
+    private var connectionDirectionSummary: String {
+        let directions = Set(document.scene.connections.compactMap { $0.direction?.rawValue }).sorted()
+        return directions.isEmpty ? "No resolved directions" : directions.joined(separator: ", ")
+    }
+
+    private var selectedBrushText: String {
+        guard let rawValue = session.selectedBrushRawValue else { return "None" }
+        return String(format: "0x%04X", rawValue)
+    }
+
+    private var selectedBehaviorText: String {
+        guard let cell = session.selectedMapCell else { return "No tile selected" }
+        let attributes = MapBlockAttributes(rawValue: cell.rawValue)
+        return "\(attributes.collision)"
+    }
+
+    private var selectedElevationText: String {
+        guard let cell = session.selectedMapCell else { return "No tile selected" }
+        let attributes = MapBlockAttributes(rawValue: cell.rawValue)
+        return "\(attributes.elevation)"
+    }
+
+    private var selectedMetatileText: String {
+        guard let cell = session.selectedMapCell else { return "No metatile selected" }
+        return String(format: "%03X", cell.metatileID)
+    }
+
+    private var selectedMetatileID: Int? {
+        session.selectedMapCell?.metatileID
+    }
+
+    private var selectedMetatileTilesetSymbol: String? {
+        guard let selectedMetatileID else { return nil }
+        return document.metatiles.first { $0.id == selectedMetatileID }?.tilesetSymbol
+    }
+
+    private var selectedAttributeText: String {
+        guard let cell = session.selectedMapCell else { return "No metatile selected" }
+        let attributes = MapBlockAttributes(rawValue: cell.rawValue)
+        return "collision \(attributes.collision), elevation \(attributes.elevation)"
+    }
+
+    private var wildJSONPathComponents: [String] {
+        wildJSONPath
+            .split(separator: ".")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var collisionBinding: Binding<Int> {
+        Binding {
+            guard let cell = session.selectedMapCell else { return 0 }
+            return MapBlockAttributes(rawValue: cell.rawValue).collision
+        } set: { value in
+            session.updateSelectedBlockCollision(value)
+        }
+    }
+
+    private var elevationBinding: Binding<Int> {
+        Binding {
+            guard let cell = session.selectedMapCell else { return 0 }
+            return MapBlockAttributes(rawValue: cell.rawValue).elevation
+        } set: { value in
+            session.updateSelectedBlockElevation(value)
+        }
+    }
+
+    private func visibilityBinding(for layer: MapEditorLayer) -> Binding<Bool> {
+        Binding {
+            session.mapOverlaySettings.state(for: layer).isVisible
+        } set: { isVisible in
+            session.setLayerVisible(layer, isVisible: isVisible)
+        }
+    }
+
+    private func opacityBinding(for layer: MapEditorLayer) -> Binding<Double> {
+        Binding {
+            session.mapOverlaySettings.state(for: layer).opacity
+        } set: { opacity in
+            session.setLayerOpacity(layer, opacity: opacity)
+        }
+    }
+
+    private func connectionRow(_ connection: MapSceneConnection) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: connection.isResolved ? "arrow.triangle.branch" : "exclamationmark.triangle")
+                .foregroundStyle(connection.isResolved ? Color.secondary : Color.orange)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(connectionTitle(connection))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(connectionSubtitle(connection))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                if let diagnostic = connection.diagnostic {
+                    Text(diagnostic.message)
+                        .font(.caption2)
+                        .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            Button("Center", systemImage: "scope") {
+                centerConnection(connection)
+            }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Center connection \(connection.index)")
+            .disabled(connection.placementID == nil)
+
+            Button("Offset -1", systemImage: "minus") {
+                session.updateConnectionField(index: connection.index, key: "offset", value: "\(connection.offset - 1)")
+            }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Decrease connection offset \(connection.index)")
+
+            Button("Offset +1", systemImage: "plus") {
+                session.updateConnectionField(index: connection.index, key: "offset", value: "\(connection.offset + 1)")
+            }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Increase connection offset \(connection.index)")
+
+            Button("Duplicate", systemImage: "plus.square.on.square") {
+                session.duplicateConnection(index: connection.index)
+            }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Duplicate connection \(connection.index)")
+
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                session.deleteConnection(index: connection.index)
+            }
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("Delete connection \(connection.index)")
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func scriptSourceList(_ scriptIndex: MapScriptIndex) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(scriptIndex.sources) { source in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: source.exists ? "doc.text" : "doc.badge.exclamationmark")
+                        .foregroundStyle(source.exists ? Color.secondary : Color.orange)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(source.path)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                        Text(source.role.title)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func scriptResolutionRows(_ resolution: MapScriptResolution) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            FactGrid(
+                facts: [
+                    Fact(label: "State", value: resolution.state.rawValue),
+                    Fact(label: "Label", value: resolution.label.isEmpty ? "None" : resolution.label)
+                ]
+            )
+
+            if let span = resolution.span {
+                SourceLocationView(
+                    source: SourceLocation(path: span.sourcePath, symbol: span.label, line: span.labelLine)
+                )
+            }
+
+            ForEach(resolution.diagnostics.prefix(3)) { diagnostic in
+                Label(diagnostic.message, systemImage: diagnostic.severity == .error ? "xmark.octagon" : "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tilesetFacts(title: String, tileset: TilesetAsset?) -> some View {
+        if let tileset {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                FactGrid(
+                    facts: [
+                        Fact(label: "Symbol", value: tileset.symbol),
+                        Fact(label: "Metatiles", value: "\(tileset.metatileCount)"),
+                        Fact(label: "Image", value: tileset.tileImagePath ?? "Missing"),
+                        Fact(label: "Attributes", value: tileset.metatileAttributesPath ?? "Missing")
+                    ]
+                )
+            }
+        } else {
+            FactGrid(facts: [Fact(label: title, value: "Missing")])
+        }
+    }
+
+    private func connectionTitle(_ connection: MapSceneConnection) -> String {
+        let direction = connection.direction?.rawValue.capitalized ?? "Unknown"
+        return "\(direction) #\(connection.index)"
+    }
+
+    private func connectionSubtitle(_ connection: MapSceneConnection) -> String {
+        let target = connection.targetMapName ?? connection.targetMapID ?? "Unresolved"
+        return "\(target), offset \(connection.offset)"
+    }
+
+    private func eventPositionText(_ event: MapEventDescriptor) -> String {
+        guard let x = event.x, let y = event.y else { return "No position" }
+        return "\(x), \(y)"
+    }
+
+    private func centerConnection(_ connection: MapSceneConnection) {
+        guard let placementID = connection.placementID,
+              let placement = document.scene.placements.first(where: { $0.id == placementID })
+        else {
+            return
+        }
+        let centerX = CGFloat(placement.originX) + CGFloat(placement.width) / 2
+        let centerY = CGFloat(placement.originY) + CGFloat(placement.height) / 2
+        onSelectViewportCenter(centerX, centerY)
+    }
+
+    private func canCopyTwoByTwo(from cell: MapCellSelection) -> Bool {
+        cell.x + 1 < document.blockdata.width && cell.y + 1 < document.blockdata.height
+    }
+
+    private func stageTwoByTwoPrefab(from cell: MapCellSelection) {
+        guard canCopyTwoByTwo(from: cell) else { return }
+        let width = document.blockdata.width
+        let values = [
+            session.stagedMapBlockdataValues[cell.y * width + cell.x],
+            session.stagedMapBlockdataValues[cell.y * width + cell.x + 1],
+            session.stagedMapBlockdataValues[(cell.y + 1) * width + cell.x],
+            session.stagedMapBlockdataValues[(cell.y + 1) * width + cell.x + 1]
+        ]
+        session.pasteBlockPattern(
+            x: max(0, min(cell.x + 2, document.blockdata.width - 2)),
+            y: cell.y,
+            width: 2,
+            height: 2,
+            rawValues: values
+        )
+    }
+}
+
+private struct MapWorkbenchTabButton: View {
+    let tab: MapWorkbenchTab
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: tab.systemImage)
+                Text(tab.title)
+                    .lineLimit(1)
+            }
+            .font(.caption.weight(isSelected ? .semibold : .regular))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.16) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(tab.accessibilityLabel)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+    }
+}
+
+private struct PlannedArea: Identifiable {
+    var id: String { title }
+
+    let title: String
+    let detail: String
+    let systemImage: String
+}
+
+private struct PlannedAreaList: View {
+    let items: [PlannedArea]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: item.systemImage)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title)
+                            .font(.caption.weight(.semibold))
+                        Text(item.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct HeaderFieldDraftRow: View {
+    let title: String
+    let key: String
+    let onStage: (String, String) -> Void
+    @State private var value: String
+
+    init(title: String, key: String, value: String, onStage: @escaping (String, String) -> Void) {
+        self.title = title
+        self.key = key
+        self.onStage = onStage
+        _value = State(initialValue: value)
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                TextField(title, text: $value)
+                    .textFieldStyle(.roundedBorder)
+                Button("Stage", systemImage: "plus.rectangle.on.folder") {
+                    onStage(key, value)
+                }
+                .labelStyle(.iconOnly)
+                .help("Stage \(title) in the map header mutation plan")
+            }
+        }
+    }
+}

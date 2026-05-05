@@ -46,12 +46,28 @@ enum MapEditorCommand: Equatable {
     case paintMapCell(x: Int, y: Int, target: MapBlockTarget)
     case fillMapFromSelection(toX: Int, y: Int, target: MapBlockTarget)
     case fillMapRectangle(x: Int, y: Int, width: Int, height: Int, target: MapBlockTarget, rawValue: UInt16?)
+    case updateSelectedBlockCollision(Int)
+    case updateSelectedBlockElevation(Int)
+    case shiftMap(deltaX: Int, deltaY: Int, fillRawValue: UInt16)
+    case pasteBlockPattern(x: Int, y: Int, width: Int, height: Int, target: MapBlockTarget, rawValues: [UInt16])
     case selectMapEvent(id: String?)
     case moveSelectedMapEvent(x: Int, y: Int)
     case updateSelectedMapEventProperty(key: String, value: String)
     case addObjectEvent(x: Int, y: Int)
+    case selectEventTemplate(MapEventTemplateKind)
+    case addMapEvent(template: MapEventTemplateKind, x: Int, y: Int)
     case duplicateSelectedMapEvent
     case deleteSelectedMapEvent
+    case updateMapHeaderField(key: String, value: String)
+    case updateConnectionField(index: Int, key: String, value: String)
+    case addConnection(properties: [MapEventProperty])
+    case duplicateConnection(index: Int)
+    case deleteConnection(index: Int)
+    case updateWildEncounterField(sourcePath: String, jsonPath: [String], key: String, value: String)
+    case updateMetatileAttribute(metatileID: Int, tilesetSymbol: String?, key: String, value: String)
+    case updateMetatileTile(metatileID: Int, tilesetSymbol: String?, tileEntryIndex: Int, rawValue: UInt16)
+    case updateScriptBody(label: String, sourcePath: String, body: String)
+    case createMapScriptLabel(label: String, sourcePath: String, body: String)
     case undo
     case redo
     case discardChanges
@@ -72,9 +88,23 @@ struct MapEditorHistoryEntry: Equatable, Identifiable {
     }
 }
 
+struct StagedMapScriptBody: Equatable, Identifiable {
+    var id: String { Self.key(label: label, sourcePath: sourcePath) }
+
+    let label: String
+    let sourcePath: String
+    let body: String
+    let isNew: Bool
+
+    static func key(label: String, sourcePath: String) -> String {
+        "\(sourcePath):\(label)"
+    }
+}
+
 @MainActor
 final class MapEditorSession: ObservableObject {
     @Published var selectedMapTool: MapEditorTool = .select
+    @Published var selectedEventTemplate: MapEventTemplateKind = .object
     @Published var mapOverlaySettings = MapOverlaySettings()
     @Published private(set) var selectedMapVisualDocument: MapVisualDocument?
     @Published private(set) var selectedBrushRawValue: UInt16?
@@ -84,6 +114,7 @@ final class MapEditorSession: ObservableObject {
     @Published private(set) var stagedMapBlockdataValues: [UInt16] = []
     @Published private(set) var stagedMapBorderValues: [UInt16] = []
     @Published private(set) var stagedMapEvents: [MapEventDescriptor] = []
+    @Published private(set) var stagedMapScriptBodies: [String: StagedMapScriptBody] = [:]
     @Published private(set) var undoStack: [MapEditorHistoryEntry] = []
     @Published private(set) var redoStack: [MapEditorHistoryEntry] = []
     @Published private(set) var latestMapEditPlan: MapEditPlan?
@@ -181,6 +212,7 @@ final class MapEditorSession: ObservableObject {
         stagedMapBlockdataValues = document.blockdata.rawValues
         stagedMapBorderValues = document.border?.rawValues ?? []
         stagedMapEvents = Self.normalizedEvents(document.events)
+        stagedMapScriptBodies = [:]
         undoStack = []
         redoStack = []
         latestMapEditPlan = nil
@@ -208,6 +240,7 @@ final class MapEditorSession: ObservableObject {
         selectedMapCell = nil
         selectedMapBlockTarget = .layout
         selectedMapEventID = nil
+        stagedMapScriptBodies = [:]
         stagedMapBlockdataValues = []
         stagedMapBorderValues = []
         stagedMapEvents = []
@@ -230,6 +263,7 @@ final class MapEditorSession: ObservableObject {
         stagedMapBlockdataValues = document.blockdata.rawValues
         stagedMapBorderValues = document.border?.rawValues ?? []
         stagedMapEvents = Self.normalizedEvents(document.events)
+        stagedMapScriptBodies = [:]
         undoStack = []
         redoStack = []
         latestMapEditPlan = nil
@@ -365,6 +399,169 @@ final class MapEditorSession: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func updateSelectedBlockCollision(_ collision: Int) -> Bool {
+        guard let selectedMapCell else { return false }
+        guard updateBlockAttributes(x: selectedMapCell.x, y: selectedMapCell.y, target: selectedMapBlockTarget, collision: collision, elevation: nil) else {
+            return false
+        }
+        appendHistory(
+            command: .updateSelectedBlockCollision(collision),
+            operations: [
+                MapEditOperation(
+                    action: .updateBlockCollision,
+                    target: selectedMapBlockTarget,
+                    x: selectedMapCell.x,
+                    y: selectedMapCell.y,
+                    collision: collision
+                )
+            ]
+        )
+        return true
+    }
+
+    @discardableResult
+    func updateSelectedBlockElevation(_ elevation: Int) -> Bool {
+        guard let selectedMapCell else { return false }
+        guard updateBlockAttributes(x: selectedMapCell.x, y: selectedMapCell.y, target: selectedMapBlockTarget, collision: nil, elevation: elevation) else {
+            return false
+        }
+        appendHistory(
+            command: .updateSelectedBlockElevation(elevation),
+            operations: [
+                MapEditOperation(
+                    action: .updateBlockElevation,
+                    target: selectedMapBlockTarget,
+                    x: selectedMapCell.x,
+                    y: selectedMapCell.y,
+                    elevation: elevation
+                )
+            ]
+        )
+        return true
+    }
+
+    @discardableResult
+    func shiftMap(deltaX: Int, deltaY: Int, fillRawValue: UInt16 = 0) -> Bool {
+        guard shiftStagedLayout(deltaX: deltaX, deltaY: deltaY, fillRawValue: fillRawValue) else { return false }
+        appendHistory(
+            command: .shiftMap(deltaX: deltaX, deltaY: deltaY, fillRawValue: fillRawValue),
+            operations: [MapEditOperation(action: .shiftMap, defaultRawValue: fillRawValue, deltaX: deltaX, deltaY: deltaY)]
+        )
+        return true
+    }
+
+    @discardableResult
+    func pasteBlockPattern(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        target: MapBlockTarget = .layout,
+        rawValues: [UInt16]
+    ) -> Bool {
+        guard pasteStagedBlockPattern(x: x, y: y, width: width, height: height, target: target, rawValues: rawValues) else {
+            return false
+        }
+        appendHistory(
+            command: .pasteBlockPattern(x: x, y: y, width: width, height: height, target: target, rawValues: rawValues),
+            operations: [
+                MapEditOperation(
+                    action: .pasteBlockPattern,
+                    target: target,
+                    x: x,
+                    y: y,
+                    width: width,
+                    height: height,
+                    rawValues: rawValues
+                )
+            ]
+        )
+        return true
+    }
+
+    @discardableResult
+    func updateMapHeaderField(key: String, value: String) -> Bool {
+        stageSourceOnlyOperation(
+            command: .updateMapHeaderField(key: key, value: value),
+            operation: MapEditOperation(action: .updateMapHeaderField, fieldKey: key, fieldValue: value)
+        )
+    }
+
+    @discardableResult
+    func updateConnectionField(index: Int, key: String, value: String) -> Bool {
+        stageSourceOnlyOperation(
+            command: .updateConnectionField(index: index, key: key, value: value),
+            operation: MapEditOperation(action: .updateConnectionField, eventIndex: index, fieldKey: key, fieldValue: value)
+        )
+    }
+
+    @discardableResult
+    func addConnection(properties: [MapEventProperty]) -> Bool {
+        stageSourceOnlyOperation(
+            command: .addConnection(properties: properties),
+            operation: MapEditOperation(action: .addConnection, templateProperties: properties)
+        )
+    }
+
+    @discardableResult
+    func duplicateConnection(index: Int) -> Bool {
+        stageSourceOnlyOperation(
+            command: .duplicateConnection(index: index),
+            operation: MapEditOperation(action: .duplicateConnection, eventIndex: index)
+        )
+    }
+
+    @discardableResult
+    func deleteConnection(index: Int) -> Bool {
+        stageSourceOnlyOperation(
+            command: .deleteConnection(index: index),
+            operation: MapEditOperation(action: .deleteConnection, eventIndex: index)
+        )
+    }
+
+    @discardableResult
+    func updateWildEncounterField(sourcePath: String, jsonPath: [String], key: String, value: String) -> Bool {
+        stageSourceOnlyOperation(
+            command: .updateWildEncounterField(sourcePath: sourcePath, jsonPath: jsonPath, key: key, value: value),
+            operation: MapEditOperation(
+                action: .updateWildEncounterField,
+                fieldKey: key,
+                fieldValue: value,
+                sourcePath: sourcePath,
+                jsonPath: jsonPath
+            )
+        )
+    }
+
+    @discardableResult
+    func updateMetatileAttribute(metatileID: Int, tilesetSymbol: String? = nil, key: String, value: String) -> Bool {
+        stageSourceOnlyOperation(
+            command: .updateMetatileAttribute(metatileID: metatileID, tilesetSymbol: tilesetSymbol, key: key, value: value),
+            operation: MapEditOperation(
+                action: .updateMetatileAttribute,
+                fieldKey: key,
+                fieldValue: value,
+                tilesetSymbol: tilesetSymbol,
+                metatileID: metatileID
+            )
+        )
+    }
+
+    @discardableResult
+    func updateMetatileTile(metatileID: Int, tilesetSymbol: String? = nil, tileEntryIndex: Int, rawValue: UInt16) -> Bool {
+        stageSourceOnlyOperation(
+            command: .updateMetatileTile(metatileID: metatileID, tilesetSymbol: tilesetSymbol, tileEntryIndex: tileEntryIndex, rawValue: rawValue),
+            operation: MapEditOperation(
+                action: .updateMetatileTile,
+                rawValue: rawValue,
+                tilesetSymbol: tilesetSymbol,
+                metatileID: metatileID,
+                tileEntryIndex: tileEntryIndex
+            )
+        )
+    }
+
     func selectMapEvent(id: String?) {
         guard let id else {
             selectedMapEventID = nil
@@ -422,13 +619,29 @@ final class MapEditorSession: ObservableObject {
         return true
     }
 
-    @discardableResult
-    func addObjectEvent(atX x: Int, y: Int) -> Bool {
-        addMapEvent(kind: .object, atX: x, y: y, templateProperties: Self.objectEventTemplate(x: x, y: y))
+    func selectEventTemplate(_ template: MapEventTemplateKind) {
+        selectedEventTemplate = template
     }
 
     @discardableResult
-    func addMapEvent(
+    func addObjectEvent(atX x: Int, y: Int) -> Bool {
+        addMapEvent(template: .object, atX: x, y: y)
+    }
+
+    @discardableResult
+    func addMapEvent(template: MapEventTemplateKind, atX x: Int, y: Int) -> Bool {
+        addMapEvent(
+            template: template,
+            kind: template.eventKind,
+            atX: x,
+            y: y,
+            templateProperties: template.templateProperties(x: x, y: y, mapID: selectedMapVisualDocument?.mapID)
+        )
+    }
+
+    @discardableResult
+    private func addMapEvent(
+        template: MapEventTemplateKind,
         kind: MapEventKind,
         atX x: Int,
         y: Int,
@@ -440,7 +653,7 @@ final class MapEditorSession: ObservableObject {
         stagedMapEvents = Self.normalizedEvents(stagedMapEvents)
         selectedMapEventID = event.id
         appendHistory(
-            command: .addObjectEvent(x: x, y: y),
+            command: .addMapEvent(template: template, x: x, y: y),
             operations: [
                 MapEditOperation(
                     action: .addEvent,
@@ -448,6 +661,55 @@ final class MapEditorSession: ObservableObject {
                     y: y,
                     eventKind: kind,
                     templateProperties: event.properties
+                )
+            ]
+        )
+        return true
+    }
+
+    func stagedScriptBody(label: String, sourcePath: String) -> String? {
+        stagedMapScriptBodies[StagedMapScriptBody.key(label: label, sourcePath: sourcePath)]?.body
+    }
+
+    var editableScriptSourcePath: String? {
+        selectedMapVisualDocument?.scriptIndex?.sources.first { $0.exists && $0.role == .mapLocal }?.path
+            ?? selectedMapVisualDocument?.scriptIndex?.sources.first { $0.exists && $0.role == .shared }?.path
+    }
+
+    @discardableResult
+    func updateScriptBody(label: String, sourcePath: String, body: String) -> Bool {
+        guard MapScriptIndex.normalizedScriptLabel(label) != nil else { return false }
+        let key = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
+        guard stagedMapScriptBodies[key]?.body != body else { return false }
+        stageScriptBody(label: label, sourcePath: sourcePath, body: body, isNew: stagedMapScriptBodies[key]?.isNew ?? false)
+        appendHistory(
+            command: .updateScriptBody(label: label, sourcePath: sourcePath, body: body),
+            operations: [
+                MapEditOperation(
+                    action: .updateScriptBody,
+                    scriptLabel: label,
+                    scriptBody: body,
+                    scriptSourcePath: sourcePath
+                )
+            ]
+        )
+        return true
+    }
+
+    @discardableResult
+    func createScriptLabel(label: String, sourcePath: String, body: String) -> Bool {
+        guard MapScriptIndex.normalizedScriptLabel(label) != nil else { return false }
+        let key = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
+        guard stagedMapScriptBodies[key] == nil else { return false }
+        stageScriptBody(label: label, sourcePath: sourcePath, body: body, isNew: true)
+        appendHistory(
+            command: .createMapScriptLabel(label: label, sourcePath: sourcePath, body: body),
+            operations: [
+                MapEditOperation(
+                    action: .createMapScriptLabel,
+                    scriptLabel: label,
+                    scriptBody: body,
+                    scriptSourcePath: sourcePath
                 )
             ]
         )
@@ -542,6 +804,21 @@ final class MapEditorSession: ObservableObject {
         return result
     }
 
+    func recordApplyFailure(_ error: Error) {
+        guard let plan = latestMapEditPlan else { return }
+        latestMapEditPlan = MapEditPlan(
+            rootPath: plan.rootPath,
+            documentID: plan.documentID,
+            operations: plan.operations,
+            changes: plan.changes,
+            diagnostics: plan.diagnostics + [
+                Diagnostic(severity: .error, code: "MAP_APPLY_FAILED", message: error.localizedDescription)
+            ],
+            mutationPlan: plan.mutationPlan,
+            backupRelativeRoot: plan.backupRelativeRoot
+        )
+    }
+
     @discardableResult
     func dispatch(_ command: MapEditorCommand) -> Bool {
         switch command {
@@ -590,6 +867,14 @@ final class MapEditorSession: ObservableObject {
             return fillMapFromSelection(toX: x, y: y, target: target)
         case .fillMapRectangle(let x, let y, let width, let height, let target, let rawValue):
             return fillMapRectangle(x: x, y: y, width: width, height: height, target: target, rawValue: rawValue)
+        case .updateSelectedBlockCollision(let collision):
+            return updateSelectedBlockCollision(collision)
+        case .updateSelectedBlockElevation(let elevation):
+            return updateSelectedBlockElevation(elevation)
+        case .shiftMap(let deltaX, let deltaY, let fillRawValue):
+            return shiftMap(deltaX: deltaX, deltaY: deltaY, fillRawValue: fillRawValue)
+        case .pasteBlockPattern(let x, let y, let width, let height, let target, let rawValues):
+            return pasteBlockPattern(x: x, y: y, width: width, height: height, target: target, rawValues: rawValues)
         case .selectMapEvent(let id):
             let previous = selectedMapEventID
             selectMapEvent(id: id)
@@ -600,10 +885,35 @@ final class MapEditorSession: ObservableObject {
             return updateSelectedMapEventProperty(key: key, value: value)
         case .addObjectEvent(let x, let y):
             return addObjectEvent(atX: x, y: y)
+        case .selectEventTemplate(let template):
+            selectEventTemplate(template)
+            return true
+        case .addMapEvent(let template, let x, let y):
+            return addMapEvent(template: template, atX: x, y: y)
         case .duplicateSelectedMapEvent:
             return duplicateSelectedMapEvent()
         case .deleteSelectedMapEvent:
             return deleteSelectedMapEvent()
+        case .updateMapHeaderField(let key, let value):
+            return updateMapHeaderField(key: key, value: value)
+        case .updateConnectionField(let index, let key, let value):
+            return updateConnectionField(index: index, key: key, value: value)
+        case .addConnection(let properties):
+            return addConnection(properties: properties)
+        case .duplicateConnection(let index):
+            return duplicateConnection(index: index)
+        case .deleteConnection(let index):
+            return deleteConnection(index: index)
+        case .updateWildEncounterField(let sourcePath, let jsonPath, let key, let value):
+            return updateWildEncounterField(sourcePath: sourcePath, jsonPath: jsonPath, key: key, value: value)
+        case .updateMetatileAttribute(let metatileID, let tilesetSymbol, let key, let value):
+            return updateMetatileAttribute(metatileID: metatileID, tilesetSymbol: tilesetSymbol, key: key, value: value)
+        case .updateMetatileTile(let metatileID, let tilesetSymbol, let tileEntryIndex, let rawValue):
+            return updateMetatileTile(metatileID: metatileID, tilesetSymbol: tilesetSymbol, tileEntryIndex: tileEntryIndex, rawValue: rawValue)
+        case .updateScriptBody(let label, let sourcePath, let body):
+            return updateScriptBody(label: label, sourcePath: sourcePath, body: body)
+        case .createMapScriptLabel(let label, let sourcePath, let body):
+            return createScriptLabel(label: label, sourcePath: sourcePath, body: body)
         case .undo:
             guard hasUndo else { return false }
             undoLastMapEdit()
@@ -635,6 +945,83 @@ final class MapEditorSession: ObservableObject {
             command: .paintMapCell(x: x, y: y, target: target),
             operations: [MapEditOperation(action: .paintMetatile, target: target, x: x, y: y, rawValue: rawValue)]
         )
+        return true
+    }
+
+    private func stageSourceOnlyOperation(command: MapEditorCommand, operation: MapEditOperation) -> Bool {
+        appendHistory(command: command, operations: [operation])
+        return true
+    }
+
+    private func updateBlockAttributes(
+        x: Int,
+        y: Int,
+        target: MapBlockTarget,
+        collision: Int?,
+        elevation: Int?
+    ) -> Bool {
+        guard let rawValue = blockValue(x: x, y: y, target: target) else { return false }
+        guard collision != nil || elevation != nil else { return false }
+        if let collision, !(0...3).contains(collision) { return false }
+        if let elevation, !(0...15).contains(elevation) { return false }
+
+        var nextValue = rawValue
+        if let collision {
+            nextValue = (nextValue & 0xf3ff) | (UInt16(collision) << 10)
+        }
+        if let elevation {
+            nextValue = (nextValue & 0x0fff) | (UInt16(elevation) << 12)
+        }
+        guard nextValue != rawValue else { return false }
+        guard setBlockValue(nextValue, x: x, y: y, target: target) else { return false }
+        selectedMapCell = MapCellSelection(x: x, y: y, rawValue: nextValue)
+        selectedMapBlockTarget = target
+        return true
+    }
+
+    private func shiftStagedLayout(deltaX: Int, deltaY: Int, fillRawValue: UInt16) -> Bool {
+        guard let document = selectedMapVisualDocument else { return false }
+        let width = document.blockdata.width
+        let height = document.blockdata.height
+        guard width > 0, height > 0, stagedMapBlockdataValues.count == width * height else { return false }
+
+        let original = stagedMapBlockdataValues
+        var shifted = Array(repeating: fillRawValue, count: original.count)
+        for y in 0..<height {
+            for x in 0..<width {
+                let sourceX = x - deltaX
+                let sourceY = y - deltaY
+                guard sourceX >= 0, sourceY >= 0, sourceX < width, sourceY < height else { continue }
+                shifted[y * width + x] = original[sourceY * width + sourceX]
+            }
+        }
+        guard shifted != original else { return false }
+        stagedMapBlockdataValues = shifted
+        restoreSelection(cell: selectedMapCell, target: selectedMapBlockTarget, eventID: selectedMapEventID)
+        return true
+    }
+
+    private func pasteStagedBlockPattern(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        target: MapBlockTarget,
+        rawValues: [UInt16]
+    ) -> Bool {
+        guard width > 0, height > 0, rawValues.count >= width * height else { return false }
+        var didChange = false
+        for row in 0..<height {
+            for column in 0..<width {
+                let value = rawValues[row * width + column]
+                didChange = setBlockValue(value, x: x + column, y: y + row, target: target) || didChange
+            }
+        }
+        guard didChange else { return false }
+        if let rawValue = blockValue(x: x, y: y, target: target) {
+            selectedMapCell = MapCellSelection(x: x, y: y, rawValue: rawValue)
+            selectedMapBlockTarget = target
+        }
         return true
     }
 
@@ -708,6 +1095,7 @@ final class MapEditorSession: ObservableObject {
         stagedMapBlockdataValues = document.blockdata.rawValues
         stagedMapBorderValues = document.border?.rawValues ?? []
         stagedMapEvents = Self.normalizedEvents(document.events)
+        stagedMapScriptBodies = [:]
         selectedMapCell = nil
         selectedMapBlockTarget = .layout
         selectedMapEventID = nil
@@ -743,6 +1131,73 @@ final class MapEditorSession: ObservableObject {
                 }
                 selectedMapCell = MapCellSelection(x: x + width - 1, y: y + height - 1, rawValue: rawValue)
                 selectedMapBlockTarget = operation.target ?? .layout
+            }
+        case .updateBlockCollision:
+            if let x = operation.x, let y = operation.y {
+                _ = updateBlockAttributes(
+                    x: x,
+                    y: y,
+                    target: operation.target ?? .layout,
+                    collision: operation.collision ?? operation.rawValue.map(Int.init),
+                    elevation: nil
+                )
+            }
+        case .updateBlockElevation:
+            if let x = operation.x, let y = operation.y {
+                _ = updateBlockAttributes(
+                    x: x,
+                    y: y,
+                    target: operation.target ?? .layout,
+                    collision: nil,
+                    elevation: operation.elevation ?? operation.rawValue.map(Int.init)
+                )
+            }
+        case .updateBlockAttributes:
+            if let x = operation.x, let y = operation.y {
+                _ = updateBlockAttributes(
+                    x: x,
+                    y: y,
+                    target: operation.target ?? .layout,
+                    collision: operation.collision,
+                    elevation: operation.elevation
+                )
+            }
+        case .shiftMap:
+            _ = shiftStagedLayout(
+                deltaX: operation.deltaX ?? 0,
+                deltaY: operation.deltaY ?? 0,
+                fillRawValue: operation.defaultRawValue ?? 0
+            )
+        case .resizeMap:
+            if let newWidth = operation.newWidth ?? operation.width,
+               let newHeight = operation.newHeight ?? operation.height,
+               let document = selectedMapVisualDocument,
+               newWidth > 0,
+               newHeight > 0,
+               stagedMapBlockdataValues.count == document.blockdata.width * document.blockdata.height {
+                let original = stagedMapBlockdataValues
+                var resized = Array(repeating: operation.defaultRawValue ?? 0, count: newWidth * newHeight)
+                let copyWidth = min(document.blockdata.width, newWidth)
+                let copyHeight = min(document.blockdata.height, newHeight)
+                for row in 0..<copyHeight {
+                    for column in 0..<copyWidth {
+                        resized[row * newWidth + column] = original[row * document.blockdata.width + column]
+                    }
+                }
+                stagedMapBlockdataValues = resized
+                selectedMapCell = nil
+                selectedMapBlockTarget = .layout
+            }
+        case .pasteBlockPattern:
+            if let x = operation.x, let y = operation.y, let width = operation.width, let height = operation.height, let rawValues = operation.rawValues {
+                _ = pasteStagedBlockPattern(
+                    x: x,
+                    y: y,
+                    width: width,
+                    height: height,
+                    target: operation.target ?? .layout,
+                    rawValues: rawValues
+                )
             }
         case .moveEvent:
             if let x = operation.x,
@@ -784,6 +1239,36 @@ final class MapEditorSession: ObservableObject {
             stagedMapEvents.removeAll { $0.kind == kind && $0.index == index }
             stagedMapEvents = Self.normalizedEvents(stagedMapEvents)
             selectedMapEventID = nil
+        case .updateScriptBody:
+            guard let label = operation.scriptLabel,
+                  let sourcePath = operation.scriptSourcePath,
+                  let body = operation.scriptBody
+            else {
+                break
+            }
+            stageScriptBody(
+                label: label,
+                sourcePath: sourcePath,
+                body: body,
+                isNew: stagedMapScriptBodies[StagedMapScriptBody.key(label: label, sourcePath: sourcePath)]?.isNew ?? false
+            )
+        case .createMapScriptLabel:
+            guard let label = operation.scriptLabel,
+                  let sourcePath = operation.scriptSourcePath,
+                  let body = operation.scriptBody
+            else {
+                break
+            }
+            stageScriptBody(label: label, sourcePath: sourcePath, body: body, isNew: true)
+        case .updateMapHeaderField,
+             .updateConnectionField,
+             .addConnection,
+             .duplicateConnection,
+             .deleteConnection,
+             .updateWildEncounterField,
+             .updateMetatileTile,
+             .updateMetatileAttribute:
+            break
         }
     }
 
@@ -816,6 +1301,15 @@ final class MapEditorSession: ObservableObject {
             MapEventProperty(key: "script", value: "0x0"),
             MapEventProperty(key: "flag", value: "0")
         ]
+    }
+
+    private func stageScriptBody(label: String, sourcePath: String, body: String, isNew: Bool) {
+        stagedMapScriptBodies[StagedMapScriptBody.key(label: label, sourcePath: sourcePath)] = StagedMapScriptBody(
+            label: label,
+            sourcePath: sourcePath,
+            body: body,
+            isNew: isNew
+        )
     }
 
     private static func duplicate(_ event: MapEventDescriptor, in events: [MapEventDescriptor]) -> MapEventDescriptor {

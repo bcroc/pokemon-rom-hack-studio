@@ -9,13 +9,17 @@ struct SourceLocationView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .truncationMode(.middle)
                 .textSelection(.enabled)
+                .help(source.label)
 
             Text(source.symbol)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
+                .truncationMode(.middle)
                 .textSelection(.enabled)
+                .help(source.symbol)
         }
     }
 }
