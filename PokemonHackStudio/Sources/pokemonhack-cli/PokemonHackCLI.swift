@@ -27,6 +27,8 @@ struct PokemonHackCLI {
             return try validate(arguments: Array(arguments.dropFirst()))
         case "maps":
             return try maps(arguments: Array(arguments.dropFirst()))
+        case "map-visual":
+            return try mapVisual(arguments: Array(arguments.dropFirst()))
         case "references":
             return try references(arguments: Array(arguments.dropFirst()))
         case "patch":
@@ -68,6 +70,14 @@ struct PokemonHackCLI {
         }
         let index = try GameAdapterRegistry.index(path: path)
         return try encode(ProjectMapCatalogLoader.load(from: index))
+    }
+
+    private static func mapVisual(arguments: [String]) throws -> String {
+        guard arguments.count == 3, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(ProjectMapVisualLoader.load(from: index, mapID: arguments[1]))
     }
 
     private static func references(arguments: [String]) throws -> String {
@@ -136,7 +146,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | validate <path> --json | maps <path> --json | references --json | patch <patch> --json | build <path> --json | playtest <path> --headless --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | references --json | patch <patch> --json | build <path> --json | playtest <path> --headless --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

@@ -18,10 +18,34 @@ struct ContentView: View {
                 store.loadSelectedMapCatalogIfNeeded()
             }
         }
+        .confirmationDialog(
+            store.pendingMapNavigation?.title ?? "Staged map edits",
+            isPresented: Binding(
+                get: { store.pendingMapNavigation != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        store.cancelPendingMapNavigation()
+                    }
+                }
+            ),
+            presenting: store.pendingMapNavigation
+        ) { _ in
+            Button("Preview Changes") {
+                store.previewBeforePendingMapNavigation()
+            }
+            Button("Discard and Continue", role: .destructive) {
+                store.discardMapEditsAndContinueNavigation()
+            }
+            Button("Cancel", role: .cancel) {
+                store.cancelPendingMapNavigation()
+            }
+        } message: { pending in
+            Text(pending.message)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if store.hasIndexedProjects {
-                    Picker("Project", selection: $store.selectedProjectID) {
+                    Picker("Project", selection: projectSelection) {
                         ForEach(store.indexedProjects) { project in
                             Text(project.title).tag(project.id)
                         }
@@ -52,6 +76,14 @@ struct ContentView: View {
 
                 IssueCountBadge(count: store.issueCount)
             }
+        }
+    }
+
+    private var projectSelection: Binding<String> {
+        Binding {
+            store.selectedProjectID
+        } set: { projectID in
+            store.requestProjectSelection(projectID)
         }
     }
 

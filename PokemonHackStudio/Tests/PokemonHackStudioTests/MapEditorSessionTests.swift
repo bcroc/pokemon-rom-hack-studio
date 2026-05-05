@@ -1,0 +1,471 @@
+import AppKit
+import CoreGraphics
+import PokemonHackCore
+import XCTest
+@testable import PokemonHackStudio
+
+final class MapEditorSessionTests: XCTestCase {
+    @MainActor
+    func testDirtyStateDiscardAndReset() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        XCTAssertFalse(session.isDirty)
+        XCTAssertFalse(session.canPreviewSelectedMapMutationPlan)
+        XCTAssertEqual(session.previewBlockedReason, "No staged edits to preview.")
+
+        XCTAssertTrue(session.dispatch(.setOverlay(.grid, false)))
+        XCTAssertFalse(session.isOverlayVisible(.grid))
+        XCTAssertTrue(session.dispatch(.toggleOverlay(.grid)))
+        XCTAssertTrue(session.isOverlayVisible(.grid))
+
+        session.selectMapCell(x: 0, y: 0)
+        session.selectBrush(rawValue: 0x0022)
+        XCTAssertTrue(session.paintMapCell(x: 1, y: 0))
+
+        XCTAssertTrue(session.isDirty)
+        XCTAssertTrue(session.canPreviewSelectedMapMutationPlan)
+        XCTAssertEqual(session.stagedMapBlockdataValues, [1, 0x0022, 3, 4])
+        XCTAssertNil(session.latestMapEditPlan)
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        XCTAssertEqual(plan.changes.map(\.path), ["data/layouts/Route1/map.bin"])
+        XCTAssertTrue(session.canApplySelectedMapMutationPlan)
+
+        session.discardChanges()
+        XCTAssertFalse(session.isDirty)
+        XCTAssertEqual(session.stagedMapBlockdataValues, [1, 2, 3, 4])
+        XCTAssertNil(session.latestMapEditPlan)
+        XCTAssertEqual(session.selectedMapCell?.x, 1)
+        XCTAssertEqual(session.selectedMapCell?.y, 0)
+        XCTAssertEqual(session.selectedMapCell?.rawValue, 2)
+
+        session.reset()
+        XCTAssertNil(session.selectedMapVisualDocument)
+        XCTAssertTrue(session.stagedMapBlockdataValues.isEmpty)
+        XCTAssertTrue(session.stagedMapEvents.isEmpty)
+        XCTAssertEqual(session.selectedMapTool, .select)
+        XCTAssertFalse(session.isDirty)
+    }
+
+    @MainActor
+    func testMixedBlockAndEventUndoRedoStacks() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        session.selectBrush(rawValue: 0x0010)
+        XCTAssertTrue(session.paintMapCell(x: 0, y: 0))
+        session.selectMapEvent(id: "object-0")
+        XCTAssertTrue(session.moveSelectedMapEvent(toX: 4, y: 5))
+
+        XCTAssertEqual(session.mapEditOperations.map(\.action), [.paintMetatile, .moveEvent])
+        XCTAssertEqual(session.stagedMapBlockdataValues[0], 0x0010)
+        XCTAssertEqual(session.selectedMapEvent?.x, 4)
+        XCTAssertEqual(session.selectedMapEvent?.y, 5)
+
+        session.undoLastMapEdit()
+        XCTAssertEqual(session.mapEditOperations.map(\.action), [.paintMetatile])
+        XCTAssertEqual(session.undoneMapEditOperations.map(\.action), [.moveEvent])
+        XCTAssertEqual(session.stagedMapBlockdataValues[0], 0x0010)
+        XCTAssertEqual(session.selectedMapEvent?.x, 1)
+        XCTAssertEqual(session.selectedMapEvent?.y, 1)
+
+        session.undoLastMapEdit()
+        XCTAssertFalse(session.isDirty)
+        XCTAssertEqual(session.stagedMapBlockdataValues, [1, 2, 3, 4])
+        XCTAssertEqual(session.undoneMapEditOperations.map(\.action), [.moveEvent, .paintMetatile])
+
+        session.redoMapEdit()
+        session.redoMapEdit()
+        XCTAssertTrue(session.isDirty)
+        XCTAssertEqual(session.stagedMapBlockdataValues[0], 0x0010)
+        XCTAssertEqual(session.selectedMapEvent?.x, 4)
+        XCTAssertEqual(session.selectedMapEvent?.y, 5)
+    }
+
+    @MainActor
+    func testFillAndEyedropperFlows() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        session.eyedropMapCell(x: 1, y: 1)
+        XCTAssertFalse(session.isDirty)
+        XCTAssertEqual(session.selectedBrushRawValue, 4)
+        XCTAssertEqual(session.selectedMapCell?.metatileID, 4)
+
+        session.selectMapCell(x: 0, y: 0)
+        XCTAssertTrue(session.fillMapFromSelection(toX: 1, y: 1))
+
+        XCTAssertTrue(session.isDirty)
+        XCTAssertEqual(session.stagedMapBlockdataValues, [4, 4, 4, 4])
+        XCTAssertEqual(session.mapEditOperations.count, 1)
+        XCTAssertEqual(session.mapEditOperations.first?.action, .fillMetatile)
+        XCTAssertEqual(session.mapEditOperations.first?.width, 2)
+        XCTAssertEqual(session.mapEditOperations.first?.height, 2)
+    }
+
+    @MainActor
+    func testMoveAddDuplicateAndDeleteEventFlows() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        session.selectMapEvent(id: "object-0")
+        XCTAssertTrue(session.moveSelectedMapEvent(toX: 5, y: 6))
+        XCTAssertEqual(session.selectedMapEvent?.x, 5)
+        XCTAssertEqual(session.selectedMapEvent?.y, 6)
+        XCTAssertEqual(session.selectedMapEvent?.properties.first { $0.key == "x" }?.value, "5")
+        XCTAssertEqual(session.selectedMapEvent?.properties.first { $0.key == "y" }?.value, "6")
+
+        XCTAssertTrue(session.addObjectEvent(atX: 2, y: 2))
+        XCTAssertEqual(session.stagedMapEvents.count, 2)
+        XCTAssertEqual(session.selectedMapEventID, "object-1")
+
+        XCTAssertTrue(session.duplicateSelectedMapEvent())
+        XCTAssertEqual(session.stagedMapEvents.count, 3)
+        XCTAssertEqual(session.selectedMapEventID, "object-2")
+        XCTAssertEqual(session.selectedMapEvent?.x, 3)
+        XCTAssertEqual(session.selectedMapEvent?.y, 2)
+        XCTAssertEqual(session.mapEditOperations.map(\.action), [.moveEvent, .addEvent, .duplicateEvent, .moveEvent])
+
+        XCTAssertTrue(session.deleteSelectedMapEvent())
+        XCTAssertEqual(session.stagedMapEvents.count, 2)
+        XCTAssertNil(session.selectedMapEventID)
+        XCTAssertEqual(session.mapEditOperations.last?.action, .deleteEvent)
+
+        session.undoLastMapEdit()
+        XCTAssertEqual(session.stagedMapEvents.count, 3)
+        XCTAssertEqual(session.selectedMapEventID, "object-2")
+    }
+
+    @MainActor
+    func testPreviewGatingHelpers() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        XCTAssertNil(session.previewSelectedMapMutationPlan())
+        XCTAssertFalse(session.canApplySelectedMapMutationPlan)
+        XCTAssertEqual(session.applyBlockedReason, "Preview the staged edits before applying.")
+
+        session.selectBrush(rawValue: 0x0099)
+        XCTAssertTrue(session.paintMapCell(x: 0, y: 0))
+        XCTAssertTrue(session.canPreviewSelectedMapMutationPlan)
+        XCTAssertFalse(session.canApplySelectedMapMutationPlan)
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        XCTAssertFalse(session.canPreviewSelectedMapMutationPlan)
+        XCTAssertEqual(session.previewBlockedReason, "The current edits already have a preview.")
+        XCTAssertTrue(session.isLatestMapEditPlanCurrent)
+        XCTAssertTrue(session.canApplySelectedMapMutationPlan)
+        XCTAssertEqual(plan.mutationPlan.requiresExplicitApply, true)
+
+        XCTAssertTrue(session.paintMapCell(x: 1, y: 1))
+        XCTAssertNil(session.latestMapEditPlan)
+        XCTAssertTrue(session.canPreviewSelectedMapMutationPlan)
+        XCTAssertFalse(session.canApplySelectedMapMutationPlan)
+        XCTAssertEqual(session.applyBlockedReason, "Preview the staged edits before applying.")
+    }
+
+    @MainActor
+    func testLayerSettingsSoloOpacityAndReset() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        XCTAssertEqual(session.mapOverlaySettings.preset, .gameComposite)
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileBottom))
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileMiddle))
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileTop))
+        XCTAssertFalse(session.mapOverlaySettings.showCollision)
+        XCTAssertFalse(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showBorder)
+        XCTAssertTrue(session.mapOverlaySettings.showConnections)
+        XCTAssertTrue(session.mapOverlaySettings.showPlayerView)
+
+        session.setLayerVisible(.collision, isVisible: true)
+        session.setLayerOpacity(.collision, opacity: 0.32)
+
+        XCTAssertEqual(session.mapOverlaySettings.preset, .custom)
+        XCTAssertTrue(session.mapOverlaySettings.showCollision)
+        XCTAssertEqual(session.mapOverlaySettings.layerOpacity(.collision), 0.32, accuracy: 0.0001)
+
+        session.toggleLayerSolo(.collision)
+
+        XCTAssertEqual(session.mapOverlaySettings.soloLayer, .collision)
+        XCTAssertTrue(session.mapOverlaySettings.showCollision)
+        XCTAssertFalse(session.mapOverlaySettings.showObjects)
+        XCTAssertFalse(session.mapOverlaySettings.hasVisibleMetatileLayer)
+
+        session.resetLayerSettings()
+
+        XCTAssertNil(session.mapOverlaySettings.soloLayer)
+        XCTAssertEqual(session.mapOverlaySettings.preset, .gameComposite)
+        XCTAssertFalse(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showBorder)
+        XCTAssertTrue(session.mapOverlaySettings.showConnections)
+        XCTAssertTrue(session.mapOverlaySettings.showPlayerView)
+        XCTAssertFalse(session.mapOverlaySettings.showCollision)
+        XCTAssertTrue(session.mapOverlaySettings.hasVisibleMetatileLayer)
+    }
+
+    @MainActor
+    func testLayerPresetTransitionsAndCustomFallback() throws {
+        let session = MapEditorSession(document: makeDocument())
+
+        session.applyLayerPreset(.bottom)
+
+        XCTAssertEqual(session.mapOverlaySettings.preset, .bottom)
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileBottom))
+        XCTAssertFalse(session.mapOverlaySettings.isLayerVisible(.metatileMiddle))
+        XCTAssertFalse(session.mapOverlaySettings.isLayerVisible(.metatileTop))
+
+        session.setLayerVisible(.metatileTop, isVisible: true)
+
+        XCTAssertEqual(session.mapOverlaySettings.preset, .custom)
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileTop))
+
+        session.applyLayerPreset(.gameComposite)
+
+        XCTAssertEqual(session.mapOverlaySettings.preset, .gameComposite)
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileBottom))
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileMiddle))
+        XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileTop))
+    }
+
+    func testPaletteAwareRendererHandlesTransparencyAndFilteredLayers() throws {
+        let document = makeRenderDocument()
+        let tileImage = IndexedTilesetImage(
+            width: 16,
+            height: 8,
+            indices: syntheticTileIndices()
+        )
+        let renderer = MetatileSwatchRenderer(
+            document: document,
+            indexedTileImages: ["tiles.png": tileImage],
+            paletteSets: [
+                "gTileset_Test": [[
+                    PaletteColor(red: 0, green: 0, blue: 0, alpha: 0),
+                    PaletteColor(red: 255, green: 0, blue: 0),
+                    PaletteColor(red: 0, green: 0, blue: 255)
+                ]]
+            ]
+        )
+
+        let middle = try XCTUnwrap(renderer.image(for: 0, layers: [.middle], opacities: [:]))
+        XCTAssertEqual(pixel(in: middle, x: 0, y: 0), [0, 0, 0, 0])
+        XCTAssertEqual(pixel(in: middle, x: 1, y: 0), [255, 0, 0, 255])
+
+        let top = try XCTUnwrap(renderer.image(for: 0, layers: [.top], opacities: [:]))
+        XCTAssertEqual(pixel(in: top, x: 0, y: 0), [0, 0, 255, 255])
+
+        let bottom = try XCTUnwrap(renderer.image(for: 0, layers: [.bottom], opacities: [:]))
+        XCTAssertEqual(pixel(in: bottom, x: 1, y: 0), [0, 0, 0, 0])
+    }
+
+    func testFitZoomGeometryAllowsFullMapScale() throws {
+        let fitted = MapViewportGeometry.fitZoom(
+            mapWidth: 100,
+            mapHeight: 80,
+            viewportSize: CGSize(width: 400, height: 300)
+        )
+
+        XCTAssertEqual(fitted, 0.190625, accuracy: 0.0001)
+        XCTAssertLessThan(fitted, MapViewportGeometry.minimumEditableZoom)
+        XCTAssertEqual(
+            MapViewportGeometry.fitZoom(mapWidth: 4, mapHeight: 4, viewportSize: CGSize(width: 2000, height: 2000)),
+            MapViewportGeometry.maximumZoom,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            MapViewportGeometry.fitZoom(mapWidth: 0, mapHeight: 4, viewportSize: CGSize(width: 2000, height: 2000)),
+            MapViewportGeometry.unitZoom,
+            accuracy: 0.0001
+        )
+    }
+
+    @MainActor
+    func testSelectionPersistenceAcrossDiscardAndReload() throws {
+        let document = makeDocument()
+        let session = MapEditorSession(document: document)
+
+        session.selectMapCell(x: 1, y: 1)
+        session.selectMapEvent(id: "object-0")
+        XCTAssertTrue(session.updateSelectedMapEventProperty(key: "script", value: "Route1_EventScript_New"))
+
+        session.discardChanges()
+        XCTAssertFalse(session.isDirty)
+        XCTAssertEqual(session.selectedMapCell?.x, 1)
+        XCTAssertEqual(session.selectedMapCell?.y, 1)
+        XCTAssertEqual(session.selectedMapCell?.rawValue, 4)
+        XCTAssertEqual(session.selectedMapEventID, "object-0")
+
+        session.load(document: document)
+        XCTAssertEqual(session.selectedMapCell?.x, 1)
+        XCTAssertEqual(session.selectedMapCell?.y, 1)
+        XCTAssertEqual(session.selectedMapEventID, "object-0")
+
+        session.load(document: makeDocument(mapID: "MAP_ROUTE2", mapName: "Route2", blockdata: [5, 6, 7, 8]))
+        XCTAssertNil(session.selectedMapCell)
+        XCTAssertNil(session.selectedMapEventID)
+        XCTAssertEqual(session.stagedMapBlockdataValues, [5, 6, 7, 8])
+    }
+
+    private func makeDocument(
+        mapID: String = "MAP_ROUTE1",
+        mapName: String = "Route1",
+        blockdata: [UInt16] = [1, 2, 3, 4]
+    ) -> MapVisualDocument {
+        let layout = LayoutSlot(
+            slotIndex: 0,
+            layoutID: "LAYOUT_\(mapName.uppercased())",
+            name: "\(mapName)_Layout",
+            width: 2,
+            height: 2,
+            borderWidth: 2,
+            borderHeight: 2,
+            primaryTileset: "gTileset_General",
+            secondaryTileset: "gTileset_Route",
+            borderFilepath: "data/layouts/\(mapName)/border.bin",
+            blockdataFilepath: "data/layouts/\(mapName)/map.bin",
+            sourcePath: "data/layouts/layouts.json"
+        )
+        let event = MapEventDescriptor(
+            kind: .object,
+            index: 0,
+            x: 1,
+            y: 1,
+            elevation: 3,
+            properties: [
+                MapEventProperty(key: "local_id", value: "LOCALID_ROUTE_NPC"),
+                MapEventProperty(key: "type", value: "object"),
+                MapEventProperty(key: "graphics_id", value: "OBJ_EVENT_GFX_BOY_1"),
+                MapEventProperty(key: "x", value: "1"),
+                MapEventProperty(key: "y", value: "1"),
+                MapEventProperty(key: "elevation", value: "3"),
+                MapEventProperty(key: "script", value: "\(mapName)_EventScript_NPC")
+            ]
+        )
+
+        return MapVisualDocument(
+            id: "/tmp/PokemonHackStudioTests:\(mapID)",
+            rootPath: "/tmp/PokemonHackStudioTests",
+            profile: .pokeemerald,
+            mapID: mapID,
+            mapName: mapName,
+            mapSourcePath: "data/maps/\(mapName)/map.json",
+            layout: layout,
+            blockdata: EditableLayoutBlockdata(
+                filepath: "data/layouts/\(mapName)/map.bin",
+                width: 2,
+                height: 2,
+                rawValues: blockdata
+            ),
+            border: EditableLayoutBlockdata(
+                filepath: "data/layouts/\(mapName)/border.bin",
+                width: 2,
+                height: 2,
+                rawValues: [9, 10, 11, 12]
+            ),
+            primaryTileset: nil,
+            secondaryTileset: nil,
+            metatiles: [],
+            events: [event],
+            mapJSONText: mapJSONText(mapID: mapID, mapName: mapName)
+        )
+    }
+
+    private func makeRenderDocument() -> MapVisualDocument {
+        let layout = LayoutSlot(
+            slotIndex: 0,
+            layoutID: "LAYOUT_RENDER",
+            name: "Render_Layout",
+            width: 1,
+            height: 1,
+            borderWidth: 1,
+            borderHeight: 1,
+            primaryTileset: "gTileset_Test",
+            secondaryTileset: nil,
+            borderFilepath: nil,
+            blockdataFilepath: "data/layouts/Render/map.bin",
+            sourcePath: "data/layouts/layouts.json"
+        )
+        let asset = TilesetAsset(
+            symbol: "gTileset_Test",
+            isSecondary: false,
+            tileImagePath: "tiles.png",
+            palettePaths: [],
+            metatilesPath: nil,
+            metatileAttributesPath: nil,
+            metatileCount: 1
+        )
+        let entries = (0..<8).map { index in
+            MetatileTileEntry(index: index, rawValue: UInt16(index < 4 ? 0 : 1))
+        }
+        let metatile = MetatileDefinition(
+            id: 0,
+            localID: 0,
+            tilesetSymbol: "gTileset_Test",
+            tileEntries: entries,
+            attribute: MetatileAttribute(rawValue: 0, wordSize: 2)
+        )
+        return MapVisualDocument(
+            id: "/tmp/PokemonHackStudioTests:MAP_RENDER",
+            rootPath: "/tmp/PokemonHackStudioTests",
+            profile: .pokeemerald,
+            mapID: "MAP_RENDER",
+            mapName: "Render",
+            mapSourcePath: "data/maps/Render/map.json",
+            layout: layout,
+            blockdata: EditableLayoutBlockdata(filepath: "data/layouts/Render/map.bin", width: 1, height: 1, rawValues: [0]),
+            border: nil,
+            primaryTileset: asset,
+            secondaryTileset: nil,
+            metatiles: [metatile],
+            events: [],
+            mapJSONText: "{}"
+        )
+    }
+
+    private func syntheticTileIndices() -> [UInt8] {
+        var indices = [UInt8](repeating: 1, count: 16 * 8)
+        indices[0] = 0
+        for y in 0..<8 {
+            for x in 8..<16 {
+                indices[y * 16 + x] = 2
+            }
+        }
+        return indices
+    }
+
+    private func pixel(in image: NSImage, x: Int, y: Int) -> [Int] {
+        guard let data = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: data)
+        else {
+            return []
+        }
+        var pixel = [Int](repeating: 0, count: 4)
+        rep.getPixel(&pixel, atX: x, y: y)
+        return Array(pixel.prefix(4))
+    }
+
+    private func mapJSONText(mapID: String, mapName: String) -> String {
+        """
+        {
+          "id": "\(mapID)",
+          "name": "\(mapName)",
+          "layout": "LAYOUT_\(mapName.uppercased())",
+          "music": "MUS_ROUTE",
+          "region_map_section": "MAPSEC_ROUTE",
+          "weather": "WEATHER_SUNNY",
+          "map_type": "MAP_TYPE_ROUTE",
+          "object_events": [
+            {
+              "local_id": "LOCALID_ROUTE_NPC",
+              "type": "object",
+              "graphics_id": "OBJ_EVENT_GFX_BOY_1",
+              "x": 1,
+              "y": 1,
+              "elevation": 3,
+              "script": "\(mapName)_EventScript_NPC"
+            }
+          ],
+          "warp_events": [],
+          "coord_events": [],
+          "bg_events": [],
+          "connections": []
+        }
+        """
+    }
+}

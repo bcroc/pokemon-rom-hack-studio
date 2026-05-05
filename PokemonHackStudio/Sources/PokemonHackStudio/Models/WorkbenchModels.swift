@@ -1,4 +1,5 @@
 import Foundation
+import PokemonHackCore
 
 enum WorkbenchModule: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
@@ -279,4 +280,103 @@ struct LayoutBlockPreviewViewState: Equatable {
     let metatileIDs: [Int]
     let isComplete: Bool
     let diagnostic: String?
+}
+
+enum MapVisualLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No visual map loaded"
+        case .loading:
+            "Loading visual map"
+        case .loaded(let mapName):
+            "Loaded \(mapName)"
+        case .failed(let message):
+            "Visual map failed: \(message)"
+        }
+    }
+}
+
+enum MapEditorTool: String, CaseIterable, Identifiable {
+    case select
+    case hand
+    case eyedropper
+    case pencil
+    case rectangleFill
+    case eventMove
+    case addEvent
+    case duplicate
+    case delete
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .select: "Select"
+        case .hand: "Pan"
+        case .eyedropper: "Pick"
+        case .pencil: "Paint"
+        case .rectangleFill: "Fill"
+        case .eventMove: "Move Event"
+        case .addEvent: "Add Event"
+        case .duplicate: "Duplicate"
+        case .delete: "Delete"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .select: "cursorarrow"
+        case .hand: "hand.draw"
+        case .eyedropper: "eyedropper"
+        case .pencil: "pencil.tip"
+        case .rectangleFill: "rectangle.fill.on.rectangle.fill"
+        case .eventMove: "point.3.connected.trianglepath.dotted"
+        case .addEvent: "plus.circle"
+        case .duplicate: "plus.square.on.square"
+        case .delete: "trash"
+        }
+    }
+}
+
+struct MapCellSelection: Equatable {
+    let x: Int
+    let y: Int
+    let rawValue: UInt16
+
+    var metatileID: Int {
+        Int(rawValue & 0x03ff)
+    }
+}
+
+enum PendingMapNavigation: Identifiable, Equatable {
+    case project(String)
+    case map(String)
+
+    var id: String {
+        switch self {
+        case .project(let id):
+            "project:\(id)"
+        case .map(let id):
+            "map:\(id)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .project:
+            "Switch project?"
+        case .map:
+            "Switch map?"
+        }
+    }
+
+    var message: String {
+        "This map has staged edits. Preview or discard them before changing selection."
+    }
 }

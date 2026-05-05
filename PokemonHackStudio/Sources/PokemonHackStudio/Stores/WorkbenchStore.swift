@@ -8,10 +8,25 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedProjectID: IndexedProjectSummary.ID = ""
     @Published var selectedMapID: String = ""
     @Published var searchText = ""
+    @Published var pendingMapNavigation: PendingMapNavigation?
     @Published private(set) var indexedProjects: [IndexedProjectSummary] = []
     @Published private(set) var projectIndexStatus: ProjectIndexLoadStatus = .idle
     @Published private(set) var selectedMapCatalog: MapCatalogViewState?
     @Published private(set) var mapCatalogStatus: MapCatalogLoadStatus = .idle
+    @Published private(set) var mapEditorSession = MapEditorSession()
+    @Published private(set) var selectedMapVisualDocument: PokemonHackCore.MapVisualDocument?
+    @Published private(set) var mapVisualStatus: MapVisualLoadStatus = .idle
+    @Published var selectedMapTool: MapEditorTool = .select
+    @Published var mapOverlaySettings = MapOverlaySettings()
+    @Published private(set) var selectedBrushRawValue: UInt16?
+    @Published private(set) var selectedMapCell: MapCellSelection?
+    @Published private(set) var selectedMapEventID: String?
+    @Published private(set) var stagedMapBlockdataValues: [UInt16] = []
+    @Published private(set) var stagedMapEvents: [PokemonHackCore.MapEventDescriptor] = []
+    @Published private(set) var mapEditOperations: [PokemonHackCore.MapEditOperation] = []
+    @Published private(set) var undoneMapEditOperations: [PokemonHackCore.MapEditOperation] = []
+    @Published private(set) var latestMapEditPlan: PokemonHackCore.MapEditPlan?
+    @Published private(set) var latestMapApplyResult: PokemonHackCore.MapApplyResult?
     @Published private(set) var recentProjectRoots: [String]
 
     let targets: [BuildTarget]
@@ -62,6 +77,10 @@ final class WorkbenchStore: ObservableObject {
         selectedIndexedProject?.diagnosticCount ?? issues.count
     }
 
+    var hasStagedMapEdits: Bool {
+        mapEditorSession.isDirty || !mapEditOperations.isEmpty
+    }
+
     func records(for module: WorkbenchModule) -> [WorkbenchRecord] {
         let moduleRecords = records.filter { $0.module == module }
         guard !searchText.isEmpty else { return moduleRecords }
@@ -106,6 +125,52 @@ final class WorkbenchStore: ObservableObject {
         openProject(path: url.standardizedFileURL.path)
     }
 
+    func requestProjectSelection(_ projectID: String) {
+        guard projectID != selectedProjectID else { return }
+        if hasStagedMapEdits {
+            pendingMapNavigation = .project(projectID)
+        } else {
+            selectedProjectID = projectID
+        }
+    }
+
+    func requestMapSelection(_ mapID: String) {
+        guard mapID != selectedMapID else { return }
+        if hasStagedMapEdits {
+            pendingMapNavigation = .map(mapID)
+        } else {
+            selectedMapID = mapID
+        }
+    }
+
+    func cancelPendingMapNavigation() {
+        pendingMapNavigation = nil
+    }
+
+    func previewBeforePendingMapNavigation() {
+        previewSelectedMapMutationPlan()
+        pendingMapNavigation = nil
+        selection = .maps
+    }
+
+    func discardMapEdits() {
+        mapEditorSession.discardChanges()
+        rebuildStagedMapStateFromOperations([], clearRedoStack: true)
+    }
+
+    func discardMapEditsAndContinueNavigation() {
+        guard let pendingMapNavigation else { return }
+        discardMapEdits()
+        self.pendingMapNavigation = nil
+
+        switch pendingMapNavigation {
+        case .project(let projectID):
+            selectedProjectID = projectID
+        case .map(let mapID):
+            selectedMapID = mapID
+        }
+    }
+
     func openProject(path: String) {
         let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
 
@@ -141,6 +206,7 @@ final class WorkbenchStore: ObservableObject {
         selectedMapCatalog = nil
         selectedMapID = ""
         mapCatalogStatus = selectedIndexedProject == nil ? .idle : .loading
+        clearSelectedMapVisualDocument()
     }
 
     func loadSelectedMapCatalogIfNeeded() {
@@ -174,11 +240,449 @@ final class WorkbenchStore: ObservableObject {
                 selectedMapID = viewState.maps.first?.id ?? ""
             }
             mapCatalogStatus = .loaded(viewState.mapCount)
+            loadSelectedMapVisualDocument()
         } catch {
             selectedMapCatalog = nil
             selectedMapID = ""
             mapCatalogStatus = .failed(error.localizedDescription)
+            clearSelectedMapVisualDocument()
         }
+    }
+
+    func loadSelectedMapVisualDocumentIfNeeded() {
+        guard selectedMapVisualDocument?.mapID != selectedMapID else { return }
+        loadSelectedMapVisualDocument()
+    }
+
+    func loadSelectedMapVisualDocument() {
+        guard !selectedMapID.isEmpty, let selectedIndexedProject else {
+            clearSelectedMapVisualDocument()
+            return
+        }
+
+        mapVisualStatus = .loading
+
+        do {
+            let index: PokemonHackCore.ProjectIndex
+            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
+                index = retainedIndex
+            } else {
+                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
+                projectIndexesByID[selectedIndexedProject.id] = index
+            }
+
+            let document = try ProjectMapVisualLoader.load(from: index, mapID: selectedMapID, fileManager: fileManager)
+            selectedMapVisualDocument = document
+            mapEditorSession.load(document: document, preserveSelection: false)
+            stagedMapBlockdataValues = document.blockdata.rawValues
+            stagedMapEvents = document.events
+            selectedBrushRawValue = document.blockdata.rawValues.first
+            selectedMapCell = nil
+            selectedMapEventID = nil
+            mapEditOperations = []
+            undoneMapEditOperations = []
+            latestMapEditPlan = nil
+            latestMapApplyResult = nil
+            mapVisualStatus = .loaded(document.mapName)
+        } catch {
+            selectedMapVisualDocument = nil
+            mapEditorSession.reset()
+            stagedMapBlockdataValues = []
+            stagedMapEvents = []
+            mapVisualStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func clearSelectedMapVisualDocument() {
+        selectedMapVisualDocument = nil
+        mapEditorSession.reset()
+        mapVisualStatus = .idle
+        selectedBrushRawValue = nil
+        selectedMapCell = nil
+        selectedMapEventID = nil
+        stagedMapBlockdataValues = []
+        stagedMapEvents = []
+        mapEditOperations = []
+        undoneMapEditOperations = []
+        latestMapEditPlan = nil
+        latestMapApplyResult = nil
+    }
+
+    func selectMapCell(x: Int, y: Int) {
+        guard let document = selectedMapVisualDocument else { return }
+        let index = y * document.blockdata.width + x
+        guard stagedMapBlockdataValues.indices.contains(index) else { return }
+        selectedMapCell = MapCellSelection(x: x, y: y, rawValue: stagedMapBlockdataValues[index])
+    }
+
+    func selectBrush(rawValue: UInt16) {
+        selectedBrushRawValue = rawValue
+        selectedMapTool = .pencil
+    }
+
+    func eyedropMapCell(x: Int, y: Int) {
+        guard let document = selectedMapVisualDocument else { return }
+        let index = y * document.blockdata.width + x
+        guard stagedMapBlockdataValues.indices.contains(index) else { return }
+        selectedBrushRawValue = stagedMapBlockdataValues[index]
+        selectedMapCell = MapCellSelection(x: x, y: y, rawValue: stagedMapBlockdataValues[index])
+    }
+
+    func paintMapCell(x: Int, y: Int) {
+        guard let document = selectedMapVisualDocument, let rawValue = selectedBrushRawValue else { return }
+        let index = y * document.blockdata.width + x
+        guard stagedMapBlockdataValues.indices.contains(index) else { return }
+        stagedMapBlockdataValues[index] = rawValue
+        selectedMapCell = MapCellSelection(x: x, y: y, rawValue: rawValue)
+        appendMapOperation(
+            MapEditOperation(action: .paintMetatile, target: .layout, x: x, y: y, rawValue: rawValue)
+        )
+    }
+
+    func fillMapFromSelection(to x: Int, y: Int) {
+        guard let start = selectedMapCell, let rawValue = selectedBrushRawValue else {
+            paintMapCell(x: x, y: y)
+            return
+        }
+        let minX = min(start.x, x)
+        let maxX = max(start.x, x)
+        let minY = min(start.y, y)
+        let maxY = max(start.y, y)
+        for fillY in minY...maxY {
+            for fillX in minX...maxX {
+                let index = fillY * (selectedMapVisualDocument?.blockdata.width ?? 0) + fillX
+                if stagedMapBlockdataValues.indices.contains(index) {
+                    stagedMapBlockdataValues[index] = rawValue
+                }
+            }
+        }
+        appendMapOperation(
+            MapEditOperation(
+                action: .fillMetatile,
+                target: .layout,
+                x: minX,
+                y: minY,
+                width: maxX - minX + 1,
+                height: maxY - minY + 1,
+                rawValue: rawValue
+            )
+        )
+    }
+
+    func selectMapEvent(id: String?) {
+        selectedMapEventID = id
+    }
+
+    func moveSelectedMapEvent(toX x: Int, y: Int) {
+        guard let selectedMapEventID, let event = stagedMapEvents.first(where: { $0.id == selectedMapEventID }) else { return }
+        stagedMapEvents = stagedMapEvents.map { current in
+            guard current.id == selectedMapEventID else { return current }
+            let updatedProperties = current.properties.map { property -> MapEventProperty in
+                if property.key == "x" { return MapEventProperty(key: property.key, value: "\(x)") }
+                if property.key == "y" { return MapEventProperty(key: property.key, value: "\(y)") }
+                return property
+            }
+            return MapEventDescriptor(kind: current.kind, index: current.index, x: x, y: y, elevation: current.elevation, properties: updatedProperties)
+        }
+        appendMapOperation(MapEditOperation(action: .moveEvent, x: x, y: y, eventKind: event.kind, eventIndex: event.index))
+    }
+
+    func updateSelectedMapEventProperty(key: String, value: String) {
+        guard let selectedMapEventID, let event = stagedMapEvents.first(where: { $0.id == selectedMapEventID }) else { return }
+        let updated = Self.updated(event, key: key, value: value)
+        guard updated != event else { return }
+        stagedMapEvents = stagedMapEvents.map { $0.id == selectedMapEventID ? updated : $0 }
+        appendMapOperation(
+            MapEditOperation(
+                action: .updateEventField,
+                eventKind: event.kind,
+                eventIndex: event.index,
+                fieldKey: key,
+                fieldValue: value
+            )
+        )
+    }
+
+    func duplicateSelectedMapEvent() {
+        guard let selectedMapEventID, let event = stagedMapEvents.first(where: { $0.id == selectedMapEventID }) else { return }
+        let duplicate = Self.duplicate(event, in: stagedMapEvents)
+        stagedMapEvents.insert(duplicate, at: insertionIndex(after: event))
+        self.selectedMapEventID = duplicate.id
+        appendMapOperation(MapEditOperation(action: .duplicateEvent, eventKind: event.kind, eventIndex: event.index))
+    }
+
+    func deleteSelectedMapEvent() {
+        guard let selectedMapEventID, let event = stagedMapEvents.first(where: { $0.id == selectedMapEventID }) else { return }
+        stagedMapEvents.removeAll { $0.id == selectedMapEventID }
+        self.selectedMapEventID = nil
+        appendMapOperation(MapEditOperation(action: .deleteEvent, eventKind: event.kind, eventIndex: event.index))
+    }
+
+    func addObjectEvent(atX x: Int, y: Int) {
+        let index = stagedMapEvents.filter { $0.kind == .object }.count
+        let properties = [
+            MapEventProperty(key: "type", value: "object"),
+            MapEventProperty(key: "graphics_id", value: "OBJ_EVENT_GFX_BOY_1"),
+            MapEventProperty(key: "x", value: "\(x)"),
+            MapEventProperty(key: "y", value: "\(y)"),
+            MapEventProperty(key: "elevation", value: "3"),
+            MapEventProperty(key: "movement_type", value: "MOVEMENT_TYPE_FACE_DOWN"),
+            MapEventProperty(key: "movement_range_x", value: "0"),
+            MapEventProperty(key: "movement_range_y", value: "0"),
+            MapEventProperty(key: "trainer_type", value: "TRAINER_TYPE_NONE"),
+            MapEventProperty(key: "trainer_sight_or_berry_tree_id", value: "0"),
+            MapEventProperty(key: "script", value: "0x0"),
+            MapEventProperty(key: "flag", value: "0")
+        ]
+        let event = MapEventDescriptor(kind: .object, index: index, x: x, y: y, elevation: 3, properties: properties)
+        stagedMapEvents.append(event)
+        selectedMapEventID = event.id
+        appendMapOperation(MapEditOperation(action: .addEvent, x: x, y: y, eventKind: .object, templateProperties: properties))
+    }
+
+    func undoLastMapEdit() {
+        guard !mapEditOperations.isEmpty else { return }
+        undoneMapEditOperations.append(mapEditOperations.removeLast())
+        rebuildStagedMapStateFromOperations()
+    }
+
+    func redoMapEdit() {
+        guard let operation = undoneMapEditOperations.popLast() else { return }
+        mapEditOperations.append(operation)
+        rebuildStagedMapStateFromOperations()
+    }
+
+    func previewSelectedMapMutationPlan() {
+        if mapEditorSession.isDirty {
+            latestMapEditPlan = mapEditorSession.previewSelectedMapMutationPlan()
+            return
+        }
+
+        guard let document = selectedMapVisualDocument, !mapEditOperations.isEmpty else {
+            latestMapEditPlan = nil
+            return
+        }
+        latestMapEditPlan = MapMutationPlanner.plan(document: document, operations: mapEditOperations)
+    }
+
+    func applySelectedMapMutationPlan() {
+        if mapEditorSession.latestMapEditPlan != nil || mapEditorSession.isDirty {
+            applySelectedMapEditorSessionMutationPlan()
+            return
+        }
+
+        guard let plan = latestMapEditPlan else { return }
+        let projectIDBeforeApply = selectedProjectID
+        let mapIDBeforeApply = selectedMapVisualDocument?.mapID ?? selectedMapID
+        do {
+            let result = try MapMutationApplier.apply(plan: plan, fileManager: fileManager)
+            latestMapApplyResult = result
+            refreshProjectIndexes()
+            if indexedProjects.contains(where: { $0.id == projectIDBeforeApply }) {
+                selectedProjectID = projectIDBeforeApply
+            }
+            if !mapIDBeforeApply.isEmpty {
+                selectedMapID = mapIDBeforeApply
+            }
+            if selectedProjectID == projectIDBeforeApply {
+                loadSelectedMapCatalog()
+                loadSelectedMapVisualDocument()
+            }
+            latestMapApplyResult = result
+        } catch {
+            latestMapEditPlan = MapEditPlan(
+                rootPath: plan.rootPath,
+                documentID: plan.documentID,
+                operations: plan.operations,
+                changes: plan.changes,
+                diagnostics: plan.diagnostics + [
+                    Diagnostic(severity: .error, code: "MAP_APPLY_FAILED", message: error.localizedDescription)
+                ],
+                mutationPlan: plan.mutationPlan,
+                backupRelativeRoot: plan.backupRelativeRoot
+            )
+        }
+    }
+
+    private func applySelectedMapEditorSessionMutationPlan() {
+        if mapEditorSession.latestMapEditPlan == nil {
+            _ = mapEditorSession.previewSelectedMapMutationPlan()
+        }
+
+        let projectIDBeforeApply = selectedProjectID
+        let mapIDBeforeApply = mapEditorSession.selectedMapVisualDocument?.mapID ?? selectedMapID
+        do {
+            guard let result = try mapEditorSession.applySelectedMapMutationPlan(fileManager: fileManager) else { return }
+            latestMapApplyResult = result
+            refreshProjectIndexes()
+            if indexedProjects.contains(where: { $0.id == projectIDBeforeApply }) {
+                selectedProjectID = projectIDBeforeApply
+            }
+            if !mapIDBeforeApply.isEmpty {
+                selectedMapID = mapIDBeforeApply
+            }
+            if selectedProjectID == projectIDBeforeApply {
+                loadSelectedMapCatalog()
+                loadSelectedMapVisualDocument()
+            }
+            latestMapApplyResult = result
+        } catch {
+            guard let plan = mapEditorSession.latestMapEditPlan else { return }
+            latestMapEditPlan = MapEditPlan(
+                rootPath: plan.rootPath,
+                documentID: plan.documentID,
+                operations: plan.operations,
+                changes: plan.changes,
+                diagnostics: plan.diagnostics + [
+                    Diagnostic(severity: .error, code: "MAP_APPLY_FAILED", message: error.localizedDescription)
+                ],
+                mutationPlan: plan.mutationPlan,
+                backupRelativeRoot: plan.backupRelativeRoot
+            )
+        }
+    }
+
+    private func appendMapOperation(_ operation: MapEditOperation) {
+        mapEditOperations.append(operation)
+        undoneMapEditOperations = []
+        latestMapEditPlan = nil
+        latestMapApplyResult = nil
+    }
+
+    private func rebuildStagedMapStateFromOperations() {
+        rebuildStagedMapStateFromOperations(mapEditOperations, clearRedoStack: false)
+    }
+
+    private func rebuildStagedMapStateFromOperations(_ operations: [MapEditOperation], clearRedoStack: Bool) {
+        guard let document = selectedMapVisualDocument else { return }
+        stagedMapBlockdataValues = document.blockdata.rawValues
+        stagedMapEvents = document.events
+        selectedMapCell = nil
+        selectedMapEventID = nil
+        mapEditOperations = operations
+        if clearRedoStack {
+            undoneMapEditOperations = []
+        }
+        for operation in operations {
+            switch operation.action {
+            case .paintMetatile:
+                if let x = operation.x, let y = operation.y, let rawValue = operation.rawValue {
+                    let index = y * document.blockdata.width + x
+                    if stagedMapBlockdataValues.indices.contains(index) {
+                        stagedMapBlockdataValues[index] = rawValue
+                    }
+                }
+            case .fillMetatile:
+                if let x = operation.x, let y = operation.y, let width = operation.width, let height = operation.height, let rawValue = operation.rawValue {
+                    for fillY in y..<(y + height) {
+                        for fillX in x..<(x + width) {
+                            let index = fillY * document.blockdata.width + fillX
+                            if stagedMapBlockdataValues.indices.contains(index) {
+                                stagedMapBlockdataValues[index] = rawValue
+                            }
+                        }
+                    }
+                }
+            case .moveEvent:
+                if let x = operation.x,
+                   let y = operation.y,
+                   let eventIndex = stagedMapEvents.firstIndex(where: { $0.kind == operation.eventKind && $0.index == operation.eventIndex }) {
+                    stagedMapEvents[eventIndex] = Self.moved(stagedMapEvents[eventIndex], x: x, y: y)
+                    selectedMapEventID = stagedMapEvents[eventIndex].id
+                }
+            case .addEvent:
+                guard let kind = operation.eventKind, let x = operation.x, let y = operation.y else { break }
+                let index = stagedMapEvents.filter { $0.kind == kind }.count
+                let event = Self.event(kind: kind, index: index, x: x, y: y, properties: operation.templateProperties)
+                stagedMapEvents.append(event)
+                selectedMapEventID = event.id
+            case .duplicateEvent:
+                guard let source = stagedMapEvents.first(where: { $0.kind == operation.eventKind && $0.index == operation.eventIndex }) else {
+                    break
+                }
+                let duplicate = Self.duplicate(source, in: stagedMapEvents)
+                stagedMapEvents.insert(duplicate, at: insertionIndex(after: source))
+                selectedMapEventID = duplicate.id
+            case .deleteEvent:
+                guard let kind = operation.eventKind, let index = operation.eventIndex else { break }
+                stagedMapEvents.removeAll { $0.kind == kind && $0.index == index }
+                selectedMapEventID = nil
+            case .updateEventField:
+                guard let kind = operation.eventKind,
+                      let index = operation.eventIndex,
+                      let key = operation.fieldKey,
+                      let value = operation.fieldValue,
+                      let eventIndex = stagedMapEvents.firstIndex(where: { $0.kind == kind && $0.index == index })
+                else {
+                    break
+                }
+                stagedMapEvents[eventIndex] = Self.updated(stagedMapEvents[eventIndex], key: key, value: value)
+                selectedMapEventID = stagedMapEvents[eventIndex].id
+            }
+        }
+        latestMapEditPlan = nil
+    }
+
+    private func insertionIndex(after event: MapEventDescriptor) -> Int {
+        guard let index = stagedMapEvents.firstIndex(where: { $0.id == event.id }) else {
+            return stagedMapEvents.endIndex
+        }
+        return stagedMapEvents.index(after: index)
+    }
+
+    private static func duplicate(_ event: MapEventDescriptor, in events: [MapEventDescriptor]) -> MapEventDescriptor {
+        let index = events.filter { $0.kind == event.kind }.count
+        let x = event.x.map { $0 + 1 }
+        let y = event.y
+        let properties = event.properties.map { property -> MapEventProperty in
+            if property.key == "x", let x { return MapEventProperty(key: property.key, value: "\(x)") }
+            if property.key == "y", let y { return MapEventProperty(key: property.key, value: "\(y)") }
+            return property
+        }
+        return Self.event(kind: event.kind, index: index, x: x, y: y, properties: properties)
+    }
+
+    private static func moved(_ event: MapEventDescriptor, x: Int, y: Int) -> MapEventDescriptor {
+        Self.event(kind: event.kind, index: event.index, x: x, y: y, properties: event.properties)
+    }
+
+    private static func updated(_ event: MapEventDescriptor, key: String, value: String) -> MapEventDescriptor {
+        var didUpdate = false
+        var properties = event.properties.map { property -> MapEventProperty in
+            guard property.key == key else { return property }
+            didUpdate = true
+            return MapEventProperty(key: key, value: value)
+        }
+        if !didUpdate {
+            properties.append(MapEventProperty(key: key, value: value))
+        }
+        let x = key == "x" ? Int(value) : event.x
+        let y = key == "y" ? Int(value) : event.y
+        return Self.event(kind: event.kind, index: event.index, x: x, y: y, properties: properties)
+    }
+
+    private static func event(
+        kind: MapEventKind,
+        index: Int,
+        x: Int?,
+        y: Int?,
+        properties: [MapEventProperty]
+    ) -> MapEventDescriptor {
+        var keys = Set(properties.map(\.key))
+        var normalized = properties.map { property -> MapEventProperty in
+            if property.key == "x", let x { return MapEventProperty(key: property.key, value: "\(x)") }
+            if property.key == "y", let y { return MapEventProperty(key: property.key, value: "\(y)") }
+            return property
+        }
+        if !keys.contains("x"), let x {
+            normalized.append(MapEventProperty(key: "x", value: "\(x)"))
+            keys.insert("x")
+        }
+        if !keys.contains("y"), let y {
+            normalized.append(MapEventProperty(key: "y", value: "\(y)"))
+        }
+        let elevation = normalized.first(where: { $0.key == "elevation" }).flatMap { Int($0.value) }
+        return MapEventDescriptor(kind: kind, index: index, x: x, y: y, elevation: elevation, properties: normalized)
     }
 
     private func defaultProjectRoots() -> [String] {

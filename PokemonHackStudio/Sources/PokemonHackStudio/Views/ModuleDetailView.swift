@@ -9,12 +9,13 @@ struct ModuleDetailView: View {
             DashboardView(store: store)
         case .maps:
             MapEditorView(
+                store: store,
                 records: store.records(for: .maps),
-                catalog: store.selectedMapCatalog,
-                selectedMapID: $store.selectedMapID
+                catalog: store.selectedMapCatalog
             )
             .onAppear {
                 store.loadSelectedMapCatalogIfNeeded()
+                store.loadSelectedMapVisualDocumentIfNeeded()
             }
         case .trainers:
             TrainerEditorView(records: store.records(for: .trainers))
