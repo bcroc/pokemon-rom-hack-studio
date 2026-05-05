@@ -273,7 +273,7 @@ final class MetatileSwatchRenderer {
     }
 }
 
-private enum IndexedPNGParser {
+enum IndexedPNGParser {
     static func parse(url: URL) -> IndexedTilesetImage? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return parse(data: data)
@@ -337,8 +337,38 @@ private enum IndexedPNGParser {
     }
 
     private static func inflate(_ data: Data, expectedSize: Int) -> [UInt8]? {
-        var destination = [UInt8](repeating: 0, count: expectedSize)
+        guard expectedSize > 0 else { return [] }
         let source = [UInt8](data)
+        if source.count == expectedSize {
+            return source
+        }
+
+        if let compressedPayload = zlibDeflatePayload(from: source),
+           let inflated = decodeCompressedBytes(compressedPayload, expectedSize: expectedSize) {
+            return inflated
+        }
+
+        return decodeCompressedBytes(source, expectedSize: expectedSize)
+    }
+
+    private static func zlibDeflatePayload(from source: [UInt8]) -> [UInt8]? {
+        guard source.count > 6 else { return nil }
+        let compressionMethod = source[0] & 0x0f
+        let compressionInfo = source[0] >> 4
+        let header = UInt16(source[0]) << 8 | UInt16(source[1])
+        guard compressionMethod == 8,
+              compressionInfo <= 7,
+              header % 31 == 0,
+              source[1] & 0x20 == 0
+        else {
+            return nil
+        }
+        return Array(source.dropFirst(2).dropLast(4))
+    }
+
+    private static func decodeCompressedBytes(_ source: [UInt8], expectedSize: Int) -> [UInt8]? {
+        guard !source.isEmpty else { return nil }
+        var destination = [UInt8](repeating: 0, count: expectedSize)
         let decoded = destination.withUnsafeMutableBytes { destinationBuffer in
             source.withUnsafeBufferPointer { sourceBuffer in
                 compression_decode_buffer(
