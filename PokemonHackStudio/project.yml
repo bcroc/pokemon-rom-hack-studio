@@ -1,0 +1,89 @@
+name: PokemonHackStudio
+options:
+  bundleIdPrefix: com.pokemonhack
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+packages: {}
+targets:
+  PokemonHackCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/PokemonHackCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackCore
+  pokemonhack-cli:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/pokemonhack-cli
+    dependencies:
+      - target: PokemonHackCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.pokemonhack-cli
+  PokemonHackStudio:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PokemonHackStudio
+    dependencies:
+      - target: PokemonHackCore
+    info:
+      path: Config/PokemonHackStudio-Info.plist
+      properties:
+        CFBundleDisplayName: PokemonHackStudio
+        CFBundleExecutable: "$(EXECUTABLE_NAME)"
+        CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        CFBundleName: "$(PRODUCT_NAME)"
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        NSHumanReadableCopyright: "PokemonHackStudio kickoff mockup"
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackStudio
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+  PokemonHackCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PokemonHackCoreTests
+    dependencies:
+      - target: PokemonHackCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackCoreTests
+schemes:
+  PokemonHackStudio:
+    build:
+      targets:
+        PokemonHackStudio: all
+        PokemonHackCore: all
+        pokemonhack-cli: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PokemonHackCoreTests
+  PokemonHackCore:
+    build:
+      targets:
+        PokemonHackCore: all
+        pokemonhack-cli: all
+    test:
+      config: Debug
+      targets:
+        - PokemonHackCoreTests

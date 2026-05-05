@@ -1,0 +1,40 @@
+# Local game assets and generated ROM outputs
+*.gba
+*.sav
+*.sgm
+*.sa1
+*.ss[0-9]
+*.elf
+*.map
+*.sym
+*.o
+*.a
+*.i
+*.dump
+*.diff
+
+# Build and derived data
+build/
+dist/
+DerivedData/
+.build/
+artifacts/
+*.xcuserstate
+xcuserdata/
+
+# Existing upstream decomp/toolchain checkouts used as local fixtures
+/agbcc/
+/pokeemerald/
+/pokefirered/
+
+# Read-only external research clones; keep only the manifest tracked
+/references/*
+!/references/manifest.json
+
+# macOS/editor noise
+.DS_Store
+.idea/
+.vscode/
+
+# XcodeGen output
+/PokemonHackStudio/*.xcodeproj/

@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-05T04:25:44Z",
+  "policy": {
+    "scope": "Read-only first-wave reference repositories cloned under references/.",
+    "tracking": "references/* is ignored; references/manifest.json is the tracked catalog.",
+    "pinning": "Each entry records the exact shallow-clone HEAD observed at pinnedAt."
+  },
+  "references": [
+    {
+      "name": "porymap",
+      "source": "huderlem/porymap",
+      "repoUrl": "https://github.com/huderlem/porymap.git",
+      "folder": "references/porymap",
+      "branch": "master",
+      "head": "26b919d7ff4b54152de010abd5bf344af2ebe116",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "LGPL-3.0",
+        "detectedFrom": [
+          "references/porymap/LICENSE.md",
+          "GitHub repository metadata"
+        ],
+        "notes": "Local license text is GNU Lesser General Public License v3."
+      },
+      "usage": "Map editor and project-layout reference for Gen III ROM hacking workflows.",
+      "risk": "LGPL obligations apply if code is copied or linked; keep as a read-only behavioral and UX reference unless legal review approves reuse.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "poryscript",
+      "source": "huderlem/poryscript",
+      "repoUrl": "https://github.com/huderlem/poryscript.git",
+      "folder": "references/poryscript",
+      "branch": "master",
+      "head": "ae917083df2b4a86be11a1bb308eef2cacb5222c",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "MIT",
+        "detectedFrom": [
+          "references/poryscript/LICENSE.md",
+          "GitHub repository metadata"
+        ],
+        "notes": "Local license file is MIT."
+      },
+      "usage": "Scripting language/compiler reference for Pokemon disassembly projects.",
+      "risk": "Compiler semantics may be project-specific; prefer conceptual reference and verify compatibility before adopting syntax or generated output assumptions.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "porytiles",
+      "source": "grunt-lucas/porytiles",
+      "repoUrl": "https://github.com/grunt-lucas/porytiles.git",
+      "folder": "references/porytiles",
+      "branch": "develop",
+      "head": "689ca12c92731214d3730e802d87f2525dbfc3f7",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "MIT",
+        "detectedFrom": [
+          "references/porytiles/LICENSE",
+          "GitHub repository metadata"
+        ],
+        "notes": "Local license file is MIT."
+      },
+      "usage": "Tileset compiler and asset-pipeline reference for metatile workflows.",
+      "risk": "Default branch is develop, so APIs and file formats may be less stable than a release branch; keep the commit pin when comparing behavior.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "pokeemerald-expansion",
+      "source": "rh-hideout/pokeemerald-expansion",
+      "repoUrl": "https://github.com/rh-hideout/pokeemerald-expansion.git",
+      "folder": "references/pokeemerald-expansion",
+      "branch": "master",
+      "head": "7377e8839681e75d083cffd9e8a6f74737f7528b",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "NOASSERTION",
+        "detectedFrom": [
+          "GitHub repository metadata",
+          "no root license file found locally"
+        ],
+        "notes": "No repository-level license was detected in the shallow checkout."
+      },
+      "usage": "Large feature-expansion reference for modernized pokeemerald mechanics, data structures, and content organization.",
+      "risk": "No detected repository license; treat as read-only reference only. Large upstream surface may include generated or third-party assets.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "hex-maniac-advance",
+      "source": "haven1433/HexManiacAdvance",
+      "repoUrl": "https://github.com/haven1433/HexManiacAdvance.git",
+      "folder": "references/hex-maniac-advance",
+      "branch": "master",
+      "head": "877e3e5b58fd83c41303fec15d1d049b2f6901b4",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "MIT",
+        "detectedFrom": [
+          "references/hex-maniac-advance/LICENSE",
+          "GitHub repository metadata"
+        ],
+        "notes": "Local license file is MIT."
+      },
+      "usage": "ROM inspection and editing UX/reference implementation for GBA Pokemon data discovery.",
+      "risk": "Editor behavior can encode assumptions about ROM variants; validate against target ROM formats before borrowing parsing logic.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "rompatcher-js",
+      "source": "marcrobledo/RomPatcher.js",
+      "repoUrl": "https://github.com/marcrobledo/RomPatcher.js.git",
+      "folder": "references/rompatcher-js",
+      "branch": "master",
+      "head": "e90a62f256e4e69a9c52d7d8f8ea8679bd27fae2",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "MIT",
+        "detectedFrom": [
+          "references/rompatcher-js/LICENSE"
+        ],
+        "notes": "Local license file is MIT; GitHub repository metadata returned NOASSERTION."
+      },
+      "usage": "Browser patching reference for IPS/BPS/UPS and related ROM patch workflows.",
+      "risk": "Patch formats are security-sensitive binary parsers; keep fuzzing/error handling in mind before reusing logic.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "mgba",
+      "source": "mgba-emu/mgba",
+      "repoUrl": "https://github.com/mgba-emu/mgba.git",
+      "folder": "references/mgba",
+      "branch": "master",
+      "head": "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "MPL-2.0",
+        "detectedFrom": [
+          "references/mgba/LICENSE",
+          "GitHub repository metadata"
+        ],
+        "notes": "Local license file is Mozilla Public License 2.0."
+      },
+      "usage": "Emulator architecture, debugging, and test-runner reference for GBA behavior.",
+      "risk": "MPL file-level copyleft obligations apply to copied source; repository includes substantial emulator code and bundled license notices.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "pokeruby",
+      "source": "pret/pokeruby",
+      "repoUrl": "https://github.com/pret/pokeruby.git",
+      "folder": "references/pokeruby",
+      "branch": "master",
+      "head": "63a8cbf0016b351a4e68f7036fa0b77e23d2f2c1",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "NOASSERTION",
+        "detectedFrom": [
+          "GitHub repository metadata",
+          "no root license file found locally"
+        ],
+        "notes": "No repository-level license was detected in the shallow checkout."
+      },
+      "usage": "Canonical Pokemon Ruby disassembly reference for source layout, build flow, and data representation.",
+      "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    },
+    {
+      "name": "pokemon-game-editor",
+      "source": "Gamer2020/PokemonGameEditor",
+      "repoUrl": "https://github.com/Gamer2020/PokemonGameEditor.git",
+      "folder": "references/pokemon-game-editor",
+      "branch": "master",
+      "head": "441ff797499bd0e9b6c18f0f7493185ca001e908",
+      "cloneDepth": 1,
+      "license": {
+        "spdx": "LicenseRef-Custom-PokemonGameEditor",
+        "detectedFrom": [
+          "references/pokemon-game-editor/LICENSE"
+        ],
+        "notes": "Custom local license; GitHub repository metadata returned NOASSERTION."
+      },
+      "usage": "Legacy Pokemon ROM editor reference for data tables, UI affordances, and import/export behavior.",
+      "risk": "Custom restrictive license and checkout warning for case-colliding generated obj files on case-insensitive filesystems; do not copy code without review.",
+      "pinnedAt": "2026-05-05T04:25:44Z"
+    }
+  ],
+  "failedClones": []
+}
