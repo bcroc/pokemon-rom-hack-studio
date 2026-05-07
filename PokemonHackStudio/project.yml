@@ -36,6 +36,11 @@ targets:
       - path: Sources/PokemonHackStudio
     dependencies:
       - target: PokemonHackCore
+    postBuildScripts:
+      - name: Bundle Local Source Assets
+        script: |
+          "$SRCROOT/../script/bundle_app_assets.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+        basedOnDependencyAnalysis: false
     info:
       path: Config/PokemonHackStudio-Info.plist
       properties:

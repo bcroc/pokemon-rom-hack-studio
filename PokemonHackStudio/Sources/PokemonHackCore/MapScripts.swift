@@ -167,6 +167,38 @@ public struct MapScriptIndex: Codable, Equatable, Identifiable {
         )
     }
 
+    public func suggestions(
+        matching query: String,
+        includeShared: Bool = true,
+        limit: Int = 12
+    ) -> [MapScriptLabelSpan] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = labels
+            .filter { includeShared || $0.sourceRole == .mapLocal }
+            .filter { $0.label != "NULL" }
+
+        let filtered: [MapScriptLabelSpan]
+        if trimmed.isEmpty || trimmed == "0x0" {
+            filtered = candidates
+        } else {
+            filtered = candidates.filter {
+                $0.label.localizedCaseInsensitiveContains(trimmed)
+                    || $0.sourcePath.localizedCaseInsensitiveContains(trimmed)
+            }
+        }
+
+        return Array(
+            filtered
+                .sorted { lhs, rhs in
+                    if lhs.sourceRole == rhs.sourceRole {
+                        return lhs.label < rhs.label
+                    }
+                    return lhs.sourceRole == .mapLocal
+                }
+                .prefix(max(limit, 0))
+        )
+    }
+
     public static func normalizedScriptLabel(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)

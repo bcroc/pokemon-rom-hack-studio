@@ -23,16 +23,42 @@ struct PokemonHackCLI {
             return try inspect(arguments: Array(arguments.dropFirst()))
         case "index":
             return try index(arguments: Array(arguments.dropFirst()))
+        case "source-index":
+            return try sourceIndex(arguments: Array(arguments.dropFirst()))
+        case "script-outline":
+            return try scriptOutline(arguments: Array(arguments.dropFirst()))
+        case "script-readiness":
+            return try scriptReadiness(arguments: Array(arguments.dropFirst()))
+        case "moves-graph":
+            return try movesGraph(arguments: Array(arguments.dropFirst()))
+        case "species-graph":
+            return try speciesGraph(arguments: Array(arguments.dropFirst()))
+        case "resources":
+            return try resources(arguments: Array(arguments.dropFirst()))
+        case "resource-index":
+            return try resourceIndex(arguments: Array(arguments.dropFirst()))
+        case "asset-index":
+            return try assetIndex(arguments: Array(arguments.dropFirst()))
+        case "pokemon-catalog":
+            return try pokemonCatalog(arguments: Array(arguments.dropFirst()))
+        case "trainer-catalog":
+            return try trainerCatalog(arguments: Array(arguments.dropFirst()))
         case "validate":
             return try validate(arguments: Array(arguments.dropFirst()))
         case "maps":
             return try maps(arguments: Array(arguments.dropFirst()))
         case "map-visual":
             return try mapVisual(arguments: Array(arguments.dropFirst()))
+        case "graphics":
+            return try graphics(arguments: Array(arguments.dropFirst()))
+        case "toolchain-health":
+            return try toolchainHealth(arguments: Array(arguments.dropFirst()))
         case "references":
             return try references(arguments: Array(arguments.dropFirst()))
         case "patch":
             return try patch(arguments: Array(arguments.dropFirst()))
+        case "patch-manifest":
+            return try patchManifest(arguments: Array(arguments.dropFirst()))
         case "build":
             return try build(arguments: Array(arguments.dropFirst()))
         case "playtest":
@@ -56,12 +82,123 @@ struct PokemonHackCLI {
         return try encode(GameAdapterRegistry.index(path: path))
     }
 
+    private static func sourceIndex(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(ProjectSourceIndexLoader.load(from: index))
+    }
+
+    private static func scriptOutline(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(ProjectScriptOutlineLoader.load(from: index))
+    }
+
+    private static func scriptReadiness(arguments: [String]) throws -> String {
+        guard
+            arguments.count == 4,
+            let path = arguments.first,
+            let targetFlag = arguments.dropFirst().first,
+            let targetID = arguments.dropFirst(2).first,
+            arguments.last == "--json"
+        else {
+            throw CLIError.usage
+        }
+
+        let kind: ScriptReadinessTargetKind
+        switch targetFlag {
+        case "--map":
+            kind = .map
+        case "--script":
+            kind = .script
+        default:
+            throw CLIError.usage
+        }
+
+        let index = try GameAdapterRegistry.index(path: path)
+        let target = ScriptReadinessTarget(kind: kind, identifier: targetID)
+        return try encode(ScriptReadinessReportBuilder.build(index: index, target: target))
+    }
+
+    private static func movesGraph(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(MoveGraphBuilder.build(index: index))
+    }
+
+    private static func speciesGraph(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(SpeciesGraphBuilder.build(index: index))
+    }
+
+    private static func resources(arguments: [String]) throws -> String {
+        guard arguments == ["--json"] else {
+            throw CLIError.usage
+        }
+        return try encode(GenIIIResourceRegistry.load())
+    }
+
+    private static func resourceIndex(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(GenIIIResourceRegistry.resourceIndex(path: path))
+    }
+
+    private static func assetIndex(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(GenIIIAssetCatalogBuilder.build(path: path))
+    }
+
+    private static func pokemonCatalog(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(ProjectSpeciesCatalogBuilder.build(path: path))
+    }
+
+    private static func trainerCatalog(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(ProjectTrainerCatalogBuilder.build(path: path))
+    }
+
     private static func validate(arguments: [String]) throws -> String {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
         }
         let index = try GameAdapterRegistry.index(path: path)
-        return try encode(ValidationReport(index: index))
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
+        let buildReport = BuildValidationReportBuilder.build(index: index)
+        let assetCatalog = GenIIIAssetCatalogBuilder.build(index: index, sourceIndex: sourceIndex, buildReport: buildReport)
+        let playtestReport = PlaytestHandoffReportBuilder.build(index: index)
+        let toolchainHealthReport = ToolchainHealthMatrixBuilder.build(
+            index: index,
+            buildReport: buildReport,
+            playtestReport: playtestReport
+        )
+        return try encode(
+            ValidationReport(
+                index: index,
+                sourceIndex: sourceIndex,
+                assetCatalog: assetCatalog,
+                buildReport: buildReport,
+                playtestReport: playtestReport,
+                toolchainHealthReport: toolchainHealthReport
+            )
+        )
     }
 
     private static func maps(arguments: [String]) throws -> String {
@@ -80,6 +217,22 @@ struct PokemonHackCLI {
         return try encode(ProjectMapVisualLoader.load(from: index, mapID: arguments[1]))
     }
 
+    private static func graphics(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(GraphicsDiagnosticsReportBuilder.build(index: index))
+    }
+
+    private static func toolchainHealth(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(ToolchainHealthMatrixBuilder.build(index: index))
+    }
+
     private static func references(arguments: [String]) throws -> String {
         guard arguments == ["--json"] else {
             throw CLIError.usage
@@ -91,8 +244,17 @@ struct PokemonHackCLI {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
         }
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
-        return try encode(PatchParser.parseSummary(data: data))
+        return try encode(PatchValidationReportBuilder.validate(path: path))
+    }
+
+    private static func patchManifest(arguments: [String]) throws -> String {
+        if arguments.count == 2, let patch = arguments.first, arguments.last == "--json" {
+            return try encode(PatchManifestBuilder.build(patchPath: patch))
+        }
+        guard arguments.count == 3, let project = arguments.first, let patch = arguments.dropFirst().first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(PatchManifestBuilder.build(patchPath: patch, projectPath: project))
     }
 
     private static func build(arguments: [String]) throws -> String {
@@ -100,7 +262,7 @@ struct PokemonHackCLI {
             throw CLIError.usage
         }
         let index = try GameAdapterRegistry.index(path: path)
-        return try encode(BuildPlanSummary(index: index))
+        return try encode(BuildValidationReportBuilder.build(index: index))
     }
 
     private static func playtest(arguments: [String]) throws -> String {
@@ -108,20 +270,7 @@ struct PokemonHackCLI {
             throw CLIError.usage
         }
         let index = try GameAdapterRegistry.index(path: path)
-        let session = PlaytestSession(
-            mode: .headless,
-            romPath: index.buildTargets.first(where: { $0.outputPath?.hasSuffix(".gba") == true })?.outputPath,
-            arguments: ["--headless"],
-            isRunnable: false,
-            diagnostics: [
-                Diagnostic(
-                    severity: .info,
-                    code: "PLAYTEST_PLAN_ONLY",
-                    message: "Headless playtest is planned but external emulator execution is not invoked by this command."
-                )
-            ]
-        )
-        return try encode(session)
+        return try encode(PlaytestHandoffReportBuilder.build(index: index, mode: .headless))
     }
 
     private static func encode<T: Encodable>(_ value: T) throws -> String {
@@ -146,7 +295,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | references --json | patch <patch> --json | build <path> --json | playtest <path> --headless --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> --json | patch-manifest <project> <patch> --json | build <path> --json | playtest <path> --headless --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }
@@ -157,24 +306,36 @@ struct ValidationReport: Encodable {
     let adapterID: String
     let profile: GameProfile
     let issueCount: Int
+    let sourceIndexRecordCount: Int
+    let assetCount: Int
+    let assetCatalog: GenIIIAssetCatalog
+    let buildReport: BuildValidationReport
+    let playtestReport: PlaytestHandoffReport
+    let toolchainHealthReport: ToolchainHealthMatrixReport
     let diagnostics: [Diagnostic]
 
-    init(index: ProjectIndex) {
+    init(
+        index: ProjectIndex,
+        sourceIndex: ProjectSourceIndex,
+        assetCatalog: GenIIIAssetCatalog,
+        buildReport: BuildValidationReport,
+        playtestReport: PlaytestHandoffReport,
+        toolchainHealthReport: ToolchainHealthMatrixReport
+    ) {
         adapterID = index.adapterID
         profile = index.profile
-        issueCount = index.diagnostics.count
+        sourceIndexRecordCount = sourceIndex.records.count
+        assetCount = assetCatalog.assetCount
+        self.assetCatalog = assetCatalog
+        self.buildReport = buildReport
+        self.playtestReport = playtestReport
+        self.toolchainHealthReport = toolchainHealthReport
         diagnostics = index.diagnostics
-    }
-}
-
-struct BuildPlanSummary: Encodable {
-    let adapterID: String
-    let profile: GameProfile
-    let targets: [BuildTarget]
-
-    init(index: ProjectIndex) {
-        adapterID = index.adapterID
-        profile = index.profile
-        targets = index.buildTargets
+            + sourceIndex.diagnostics
+            + assetCatalog.diagnostics
+            + buildReport.diagnostics
+            + playtestReport.diagnostics
+            + toolchainHealthReport.diagnostics
+        issueCount = diagnostics.count
     }
 }

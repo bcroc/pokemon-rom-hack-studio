@@ -10,6 +10,7 @@ struct MapEventsPaneView: View {
     let onCenterEvent: (MapEventDescriptor) -> Void
 
     @State private var selectedKindFilter: MapEventKind?
+    @State private var includeSharedScriptSuggestions = true
 
     var body: some View {
         EditorSection(title: "Events") {
@@ -391,7 +392,24 @@ struct MapEventsPaneView: View {
         }
     }
 
-    private func textField(_ title: String, key: String) -> some View {
+    private func textField(_ title: String, key: String) -> AnyView {
+        if key == "script" {
+            return AnyView(scriptField(title, key: key))
+        }
+        return AnyView(
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 96, alignment: .leading)
+                TextField(key, text: propertyBinding(for: key))
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+            }
+        )
+    }
+
+    private func scriptField(_ title: String, key: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(title)
                 .font(.caption)
@@ -400,7 +418,33 @@ struct MapEventsPaneView: View {
             TextField(key, text: propertyBinding(for: key))
                 .font(.caption)
                 .textFieldStyle(.roundedBorder)
+            Menu {
+                Toggle("Include Shared", isOn: $includeSharedScriptSuggestions)
+                Divider()
+                ForEach(scriptSuggestions) { suggestion in
+                    Button {
+                        session.updateSelectedMapEventProperty(key: key, value: suggestion.label)
+                    } label: {
+                        Label(suggestion.label, systemImage: suggestion.sourceRole == .mapLocal ? "curlybraces" : "link")
+                    }
+                }
+                if scriptSuggestions.isEmpty {
+                    Text("No labels")
+                }
+            } label: {
+                Image(systemName: "text.magnifyingglass")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Choose a script label from this map")
         }
+    }
+
+    private var scriptSuggestions: [MapScriptLabelSpan] {
+        guard let scriptIndex = document.scriptIndex else { return [] }
+        return scriptIndex.suggestions(
+            matching: selectedEvent?.propertyValue("script") ?? "",
+            includeShared: includeSharedScriptSuggestions
+        )
     }
 
     private func numericField(_ title: String, key: String, range: ClosedRange<Int>) -> some View {

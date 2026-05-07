@@ -11,7 +11,7 @@ struct EditorListShell<Content: View>: View {
                 .navigationTitle(title)
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(records) { record in
                         VStack(alignment: .leading, spacing: 14) {
                             SourceHeader(record: record)
@@ -58,6 +58,26 @@ struct NotesList: View {
                     Label(note, systemImage: "note.text")
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+}
+
+struct SourcePreviewBlock: View {
+    let text: String?
+
+    var body: some View {
+        EditorSection(title: "Source Preview") {
+            if let text, !text.isEmpty {
+                ScrollView(.horizontal) {
+                    Text(text)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                Text("No preview available.")
+                    .foregroundStyle(.secondary)
             }
         }
     }

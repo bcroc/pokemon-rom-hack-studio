@@ -2,40 +2,28 @@ import PokemonHackCore
 import SwiftUI
 
 enum MapWorkbenchTab: String, CaseIterable, Identifiable {
-    case map
-    case collision
-    case events
-    case header
-    case connections
-    case wild
-    case scripts
-    case tilesets
+    case overviewLayers
+    case paintCollision
+    case eventsScripts
+    case mapData
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .map: "Map"
-        case .collision: "Collision"
-        case .events: "Events"
-        case .header: "Header"
-        case .connections: "Connections"
-        case .wild: "Wild"
-        case .scripts: "Scripts"
-        case .tilesets: "Tilesets"
+        case .overviewLayers: "Overview/Layers"
+        case .paintCollision: "Paint/Collision"
+        case .eventsScripts: "Events/Scripts"
+        case .mapData: "Map Data"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .map: "map"
-        case .collision: "figure.walk.diamond"
-        case .events: "point.3.connected.trianglepath.dotted"
-        case .header: "doc.text"
-        case .connections: "arrow.triangle.branch"
-        case .wild: "leaf"
-        case .scripts: "curlybraces"
-        case .tilesets: "square.grid.3x3"
+        case .overviewLayers: "square.stack.3d.up"
+        case .paintCollision: "paintbrush.pointed"
+        case .eventsScripts: "point.3.connected.trianglepath.dotted"
+        case .mapData: "doc.text.magnifyingglass"
         }
     }
 
@@ -56,10 +44,6 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
     let onSelectViewportCenter: (CGFloat, CGFloat) -> Void
     let onCenterEvent: (MapEventDescriptor) -> Void
     let mutationReview: () -> MutationReview
-    @State private var wildSourcePath = "src/data/wild_encounters.json"
-    @State private var wildJSONPath = ""
-    @State private var wildFieldKey = "encounter_rate"
-    @State private var wildFieldValue = "20"
     @State private var metatileTileIndex = 0
     @State private var metatileTileRawValue = ""
     @State private var metatileAttributeKey = "behavior"
@@ -133,26 +117,18 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
     @ViewBuilder
     private var selectedPanel: some View {
         switch selectedTab {
-        case .map:
-            mapPanel
-        case .collision:
-            collisionPanel
-        case .events:
-            eventsPanel
-        case .header:
-            headerPanel
-        case .connections:
-            connectionsPanel
-        case .wild:
-            wildPanel
-        case .scripts:
-            scriptsPanel
-        case .tilesets:
-            tilesetsPanel
+        case .overviewLayers:
+            overviewLayersPanel
+        case .paintCollision:
+            paintCollisionPanel
+        case .eventsScripts:
+            eventsScriptsPanel
+        case .mapData:
+            mapDataPanel
         }
     }
 
-    private var mapPanel: some View {
+    private var overviewLayersPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             MapLayerInspectorView(
                 document: document,
@@ -165,8 +141,30 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
 
             mapSummary
             selectionSummary
-            mapAuthoring
             sceneDiagnostics
+        }
+    }
+
+    private var paintCollisionPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            mapAuthoring
+            collisionPanel
+            tilesetsPanel
+        }
+    }
+
+    private var eventsScriptsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            eventsPanel
+            scriptsPanel
+        }
+    }
+
+    private var mapDataPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            headerPanel
+            connectionsPanel
+            wildPanel
         }
     }
 
@@ -317,42 +315,35 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
     private var wildPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             EditorSection(title: "Wild Encounters") {
-                FactGrid(
-                    facts: [
-                        Fact(label: "Map", value: document.mapID),
-                        Fact(label: "State", value: "Not indexed in the visual document"),
-                        Fact(label: "Source", value: "Encounter tables")
-                    ]
-                )
-            }
-
-            EditorSection(title: "Encounter Authoring") {
-                VStack(alignment: .leading, spacing: 10) {
-                    LabeledContent("Source") {
-                        TextField("src/data/wild_encounters.json", text: $wildSourcePath)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    LabeledContent("JSON Path") {
-                        TextField("groups.0.encounters.0", text: $wildJSONPath)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    LabeledContent("Field") {
-                        TextField("encounter_rate", text: $wildFieldKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    LabeledContent("Value") {
-                        TextField("20", text: $wildFieldValue)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    Button("Stage Encounter Field", systemImage: "leaf") {
-                        session.updateWildEncounterField(
-                            sourcePath: wildSourcePath,
-                            jsonPath: wildJSONPathComponents,
-                            key: wildFieldKey,
-                            value: wildFieldValue
+                if let wild = document.wildEncounters {
+                    VStack(alignment: .leading, spacing: 10) {
+                        FactGrid(
+                            facts: [
+                                Fact(label: "Map", value: document.mapID),
+                                Fact(label: "Groups", value: "\(wild.groups.count)"),
+                                Fact(label: "Entries", value: "\(wild.groups.flatMap(\.encounters).count)"),
+                                Fact(label: "Source", value: wild.sourcePath)
+                            ]
                         )
+
+                        if wild.groups.isEmpty {
+                            Text("No encounter rows are indexed for this map.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(wild.groups) { group in
+                                wildGroupRow(group)
+                            }
+                        }
+
+                        Label("Encounter editing is queued for row-based mutation plans; this panel is read-only.", systemImage: "lock")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .disabled(wildSourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || wildFieldKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } else {
+                    Text("No wild encounter index is loaded.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -596,10 +587,10 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
                         scriptResolutionRows(scriptIndex.resolution(for: event.scriptLabel))
                     }
 
-                    Button("Edit In Events", systemImage: MapWorkbenchTab.events.systemImage) {
-                        selectedTab = .events
+                    Button("Edit In Events", systemImage: MapWorkbenchTab.eventsScripts.systemImage) {
+                        selectedTab = .eventsScripts
                     }
-                    .accessibilityLabel("Edit selected event script in Events tab")
+                    .accessibilityLabel("Edit selected event script in Events and Scripts group")
                 }
             } else {
                 Text("No event script is selected.")
@@ -710,13 +701,6 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
         return "collision \(attributes.collision), elevation \(attributes.elevation)"
     }
 
-    private var wildJSONPathComponents: [String] {
-        wildJSONPath
-            .split(separator: ".")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
     private var collisionBinding: Binding<Int> {
         Binding {
             guard let cell = session.selectedMapCell else { return 0 }
@@ -771,6 +755,12 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
                         .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
                         .lineLimit(2)
                 }
+                ForEach(connection.diagnostics.filter { $0.id != connection.diagnostic?.id }.prefix(3)) { diagnostic in
+                    Text(diagnostic.message)
+                        .font(.caption2)
+                        .foregroundStyle(diagnostic.severity == .error ? .red : .orange)
+                        .lineLimit(2)
+                }
             }
 
             Spacer()
@@ -807,6 +797,66 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
             .accessibilityLabel("Delete connection \(connection.index)")
         }
         .padding(.vertical, 2)
+    }
+
+    private func wildGroupRow(_ group: MapWildEncounterGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(group.label, systemImage: "leaf")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text("\(group.encounters.count) table\(group.encounters.count == 1 ? "" : "s")")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(group.encounters) { encounter in
+                wildEncounterRow(encounter)
+            }
+        }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func wildEncounterRow(_ encounter: MapWildEncounterEntry) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(encounter.encounterType)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if let encounterRate = encounter.encounterRate {
+                    Text("Rate \(encounterRate)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let baseLabel = encounter.baseLabel {
+                Text(baseLabel)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(uniqueSpecies(for: encounter).prefix(8).joined(separator: ", "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            Text(encounter.jsonPath.joined(separator: "."))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func uniqueSpecies(for encounter: MapWildEncounterEntry) -> [String] {
+        var seen: Set<String> = []
+        var values: [String] = []
+        for slot in encounter.slots where seen.insert(slot.species).inserted {
+            values.append(slot.species)
+        }
+        return values
     }
 
     private func scriptSourceList(_ scriptIndex: MapScriptIndex) -> some View {

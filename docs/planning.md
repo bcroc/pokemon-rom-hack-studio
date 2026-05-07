@@ -7,6 +7,7 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 1. **Source Project Foundation**
    - Detect supported Gen III project shapes.
    - Index source documents, generated outputs, diagnostics, and build targets.
+   - Auto-load editable roots, pinned reference roots, recent roots, and safe top-level ROM/media inputs into one resource library.
    - Keep source locations visible across app and CLI surfaces.
 
 2. **Map And Layout Workbench**
@@ -25,11 +26,18 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
    - Expand patch parsing toward manifests and checksum workflows.
    - Prepare mGBA-compatible interactive and headless playtest handoff.
 
+5. **Cross-Media Resource Library**
+   - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface.
+   - Keep GameCube `.iso`/`.gcm` media as direct parser inputs for `resource-index`, not auto-loaded Resources rows, until the GBA asset workflow is mature.
+   - Parse GameCube headers, FST entries, DOL ranges, FSYS archives, and LZSS members before any future export workflow.
+   - Show missing Colosseum, XD, Box, and Channel inputs as diagnostics instead of silently omitting them.
+
 ## Operating Guardrails
 
 - Keep reference repos as behavioral guidance unless a license review explicitly approves reuse.
 - Do not bundle commercial ROMs, generated ROMs, decomp assets, or unlicensed expansion content.
 - Treat generated files as caches unless an adapter marks them as source.
+- Treat GameCube disc and archive resources as direct read-only parser inputs until a future mutation/export policy and UI scope are designed.
 - Keep all writes preview-first through mutation plans and diffs.
 - Back up source files under ignored `.pokemonhackstudio/backups/` before explicit apply operations.
 - Use local `pokeemerald` and `pokefirered` as smoke targets, not hard unit-test dependencies.

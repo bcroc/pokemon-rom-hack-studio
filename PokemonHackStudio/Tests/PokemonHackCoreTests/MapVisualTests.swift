@@ -46,7 +46,7 @@ final class MapVisualTests: XCTestCase {
 
     func testVisualLoaderUsesFieldmapMetatileLimitsForSecondaryBase() throws {
         let root = try makeVisualProject()
-        try writeFieldmap(primaryMetatiles: 640, totalMetatiles: 1024, to: root)
+        try writeFieldmap(primaryMetatiles: 640, totalMetatiles: 1024, primaryTiles: 640, totalTiles: 1024, to: root)
         try writeWords([0x0000, 0x0280, 0x0281, 0x0282], to: root.appendingPathComponent("data/layouts/Route1/map.bin"))
         try writeWords([0x0000, 0x0000, 0x0000, 0x0000], to: root.appendingPathComponent("data/layouts/Route1/border.bin"))
         try writeWords(
@@ -66,11 +66,25 @@ final class MapVisualTests: XCTestCase {
 
         XCTAssertEqual(document.metatileLimits.primary, 640)
         XCTAssertEqual(document.metatileLimits.total, 1024)
+        XCTAssertEqual(document.tileLimits.primary, 640)
+        XCTAssertEqual(document.tileLimits.total, 1024)
         XCTAssertEqual(document.blockdata.metatileIDs, [0, 0x280, 0x281, 0x282])
         XCTAssertTrue(document.metatiles.contains { $0.id == 0x280 && $0.localID == 0 && $0.tilesetSymbol == "gTileset_Route" })
         XCTAssertTrue(document.metatiles.contains { $0.id == 0x282 && $0.localID == 2 && $0.tilesetSymbol == "gTileset_Route" })
         XCTAssertEqual(document.metatiles.filter { $0.id == 0x280 }.count, 1)
         XCTAssertFalse(document.diagnostics.contains { $0.code == "MAP_VISUAL_METATILE_DEFINITION_MISSING" })
+    }
+
+    func testVisualLoaderKeepsTileAndMetatileLimitsIndependent() throws {
+        let root = try makeVisualProject()
+        try writeFieldmap(primaryMetatiles: 512, totalMetatiles: 1024, primaryTiles: 640, totalTiles: 1280, to: root)
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+
+        XCTAssertEqual(document.metatileLimits.primary, 512)
+        XCTAssertEqual(document.metatileLimits.total, 1024)
+        XCTAssertEqual(document.tileLimits.primary, 640)
+        XCTAssertEqual(document.tileLimits.total, 1280)
     }
 
     func testVisualLoaderReportsUsedMetatilesMissingDefinitions() throws {
@@ -103,6 +117,11 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(resolvedConnections.count, 4)
         XCTAssertEqual(document.scene.connections.count, 5)
         XCTAssertTrue(document.scene.diagnostics.contains { $0.code == "MAP_SCENE_CONNECTION_MAP_MISSING" })
+        XCTAssertTrue(document.scene.diagnostics.contains { $0.code == "MAP_SCENE_CONNECTION_REVERSE_MISSING" })
+        XCTAssertTrue(document.scene.diagnostics.contains { $0.code == "MAP_SCENE_CONNECTION_OFFSET_OUT_OF_BOUNDS" })
+        let eastConnections = document.scene.connections.filter { $0.targetMapID == "MAP_ROUTE_EAST" }
+        let eastConnection: MapSceneConnection = try XCTUnwrap(eastConnections.first)
+        XCTAssertTrue(eastConnection.diagnostics.contains { $0.code == "MAP_SCENE_CONNECTION_OFFSET_OUT_OF_BOUNDS" })
 
         let north = try XCTUnwrap(document.scene.placements.first { $0.mapID == "MAP_ROUTE_NORTH" })
         XCTAssertEqual(north.originX, -1)
@@ -272,6 +291,59 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(missing.state, .missingLabel)
         XCTAssertEqual(duplicate.state, .duplicateLabel)
         XCTAssertTrue(index.diagnostics.contains { $0.code == "MAP_SCRIPT_LABEL_DUPLICATE" })
+
+        let localSuggestions = index.suggestions(matching: "EventScript", includeShared: false).map(\.label)
+        let sharedSuggestions = index.suggestions(matching: "EventScript", includeShared: true).map(\.label)
+        XCTAssertEqual(localSuggestions, ["Route1_EventScript_NPC"])
+        XCTAssertEqual(sharedSuggestions, ["Route1_EventScript_NPC", "Shared_EventScript"])
+    }
+
+    func testWildEncounterIndexLoadsReadOnlyRowsForCurrentMap() throws {
+        let root = try makeVisualProject()
+        try write(
+            """
+            {
+              "wild_encounter_groups": [
+                {
+                  "label": "gWildMonHeaders",
+                  "for_maps": true,
+                  "fields": [
+                    { "type": "land_mons", "encounter_rates": [20, 10] }
+                  ],
+                  "encounters": [
+                    {
+                      "map": "MAP_ROUTE1",
+                      "base_label": "gRoute1",
+                      "land_mons": {
+                        "encounter_rate": 25,
+                        "mons": [
+                          { "min_level": 2, "max_level": 3, "species": "SPECIES_POOCHYENA" },
+                          { "min_level": 4, "max_level": 5, "species": "SPECIES_ZIGZAGOON" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """,
+            to: root.appendingPathComponent("src/data/wild_encounters.json")
+        )
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+        let wild = try XCTUnwrap(document.wildEncounters)
+        let group = try XCTUnwrap(wild.groups.first)
+        let entry = try XCTUnwrap(group.encounters.first)
+
+        XCTAssertTrue(wild.hasEncounters)
+        XCTAssertEqual(group.label, "gWildMonHeaders")
+        XCTAssertEqual(entry.mapID, "MAP_ROUTE1")
+        XCTAssertEqual(entry.baseLabel, "gRoute1")
+        XCTAssertEqual(entry.encounterType, "land_mons")
+        XCTAssertEqual(entry.encounterRate, 25)
+        XCTAssertEqual(entry.jsonPath, ["wild_encounter_groups", "0", "encounters", "0", "land_mons"])
+        XCTAssertEqual(entry.slots.map(\.species), ["SPECIES_POOCHYENA", "SPECIES_ZIGZAGOON"])
+        XCTAssertEqual(entry.slots.map(\.rate), [20, 10])
     }
 
     func testMutationPlannerReplacesOnlyScriptBodyAndKeepsNeighborLabels() throws {
@@ -564,6 +636,32 @@ final class MapVisualTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: backupMapPath.path))
         XCTAssertEqual(try Data(contentsOf: backupMapPath), originalMapData)
         XCTAssertNotEqual(try Data(contentsOf: mapPath), originalMapData)
+    }
+
+    func testApplyabilityRejectsSameSizeSourceHashMismatch() throws {
+        let root = try makeVisualProject()
+        let scriptPath = root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        try write("abc", to: scriptPath)
+        let plan = manualPlan(
+            root: root,
+            changes: [
+                fileChange(
+                    path: "data/maps/Route1/scripts.inc",
+                    originalByteCount: 3,
+                    originalSHA1: "a9993e364706816aba3e25717850c26c9cd0d89d",
+                    newData: Data("zzz".utf8)
+                )
+            ]
+        )
+        try write("abd", to: scriptPath)
+
+        let applyability = plan.validateApplyability()
+        let result = try MapMutationApplier.apply(plan: plan)
+
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "MAP_APPLY_ORIGINAL_HASH_MISMATCH" })
+        XCTAssertTrue(result.appliedChanges.isEmpty)
+        XCTAssertEqual(try String(contentsOf: scriptPath, encoding: .utf8), "abd")
     }
 
     private func makeMetatile(layerType: MetatileLayerType? = nil, attribute: MetatileAttribute? = nil) -> MetatileDefinition {
@@ -907,11 +1005,21 @@ final class MapVisualTests: XCTestCase {
         )
     }
 
-    private func writeFieldmap(primaryMetatiles: Int, totalMetatiles: Int, to root: URL) throws {
+    private func writeFieldmap(
+        primaryMetatiles: Int,
+        totalMetatiles: Int,
+        primaryTiles: Int? = nil,
+        totalTiles: Int? = nil,
+        to root: URL
+    ) throws {
+        let resolvedPrimaryTiles = primaryTiles ?? primaryMetatiles
+        let resolvedTotalTiles = totalTiles ?? totalMetatiles
         try write(
             """
             #define NUM_METATILES_IN_PRIMARY \(primaryMetatiles)
             #define NUM_METATILES_TOTAL \(totalMetatiles)
+            #define NUM_TILES_IN_PRIMARY \(resolvedPrimaryTiles)
+            #define NUM_TILES_TOTAL \(resolvedTotalTiles)
             """,
             to: root.appendingPathComponent("include/fieldmap.h")
         )
@@ -977,11 +1085,17 @@ final class MapVisualTests: XCTestCase {
         )
     }
 
-    private func fileChange(path: String, originalByteCount: Int = 0, newData: Data = Data([0x01])) -> MapEditFileChange {
+    private func fileChange(
+        path: String,
+        originalByteCount: Int = 0,
+        originalSHA1: String? = nil,
+        newData: Data = Data([0x01])
+    ) -> MapEditFileChange {
         MapEditFileChange(
             path: path,
             summary: "Fixture change",
             originalByteCount: originalByteCount,
+            originalSHA1: originalSHA1,
             newByteCount: newData.count,
             newData: newData
         )

@@ -12,7 +12,7 @@ struct ContentView: View {
             ModuleDetailView(store: store)
         }
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search sources")
-        .onChange(of: store.selectedProjectID) { _ in
+        .onChange(of: store.selectedProjectID) { _, _ in
             store.refreshSelectedMapCatalog()
             if store.selection == .maps {
                 store.loadSelectedMapCatalogIfNeeded()
@@ -47,11 +47,13 @@ struct ContentView: View {
                 if store.hasIndexedProjects {
                     Picker("Project", selection: projectSelection) {
                         ForEach(store.indexedProjects) { project in
-                            Text(project.title).tag(project.id)
+                            Text(project.menuTitle)
+                                .tag(project.id)
+                                .help(project.menuSubtitle)
                         }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 180)
+                    .frame(minWidth: 150, idealWidth: 200, maxWidth: 240)
                 } else {
                     Picker("Target", selection: $store.selectedTargetID) {
                         ForEach(store.targets) { target in
@@ -59,7 +61,7 @@ struct ContentView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 150)
+                    .frame(minWidth: 110, idealWidth: 130, maxWidth: 150)
                 }
 
                 Divider()
@@ -67,12 +69,28 @@ struct ContentView: View {
                 Button("Open Project", systemImage: "folder.badge.plus") {
                     openProjectPanel()
                 }
+                .labelStyle(.iconOnly)
+                .help("Open project")
                 Button("Refresh", systemImage: "arrow.clockwise") {
                     store.refreshProjectIndexes()
                 }
-                Button("Build", systemImage: "hammer") {}
-                Button("Run", systemImage: "play.fill") {}
-                Button("Validate", systemImage: "checkmark.seal") {}
+                .labelStyle(.iconOnly)
+                .help("Refresh project indexes")
+                Button("Build", systemImage: "hammer") {
+                    store.selection = .build
+                }
+                .labelStyle(.iconOnly)
+                .help("Show build workbench")
+                Button("Run", systemImage: "play.fill") {
+                    store.selection = .build
+                }
+                .labelStyle(.iconOnly)
+                .help("Show run and playtest workbench")
+                Button("Validate", systemImage: "checkmark.seal") {
+                    store.selection = .issues
+                }
+                .labelStyle(.iconOnly)
+                .help("Show diagnostics")
 
                 IssueCountBadge(count: store.issueCount)
             }

@@ -1,0 +1,416 @@
+import XCTest
+@testable import PokemonHackCore
+
+final class TrainerCatalogTests: XCTestCase {
+    func testEmeraldTrainerCatalogJoinsTrainerTableToAllClassicPartyShapes() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+
+        XCTAssertEqual(catalog.profile, .pokeemerald)
+        XCTAssertEqual(catalog.trainers.count, 5)
+        XCTAssertFalse(catalog.trainers.filter { $0.trainerID != "TRAINER_DUMMY" }.flatMap(\.diagnostics).contains { $0.severity == .error })
+
+        let defaultTrainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        XCTAssertEqual(defaultTrainer.partyShape, .noItemDefaultMoves)
+        XCTAssertEqual(defaultTrainer.party.first?.species, "SPECIES_TREECKO")
+        XCTAssertNil(defaultTrainer.party.first?.heldItem)
+        XCTAssertEqual(defaultTrainer.party.first?.moves, [])
+        XCTAssertEqual(defaultTrainer.party.first?.defaultMoves, ["MOVE_POUND", "MOVE_ABSORB", "MOVE_NONE", "MOVE_NONE"])
+        XCTAssertEqual(defaultTrainer.party.first?.ivs, .uniform(0))
+
+        let itemDefaultTrainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ITEM_DEFAULT" })
+        XCTAssertEqual(itemDefaultTrainer.partyShape, .itemDefaultMoves)
+        XCTAssertEqual(itemDefaultTrainer.party.first?.heldItem, "ITEM_POTION")
+
+        let customTrainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_CUSTOM" })
+        XCTAssertEqual(customTrainer.partyShape, .noItemCustomMoves)
+        XCTAssertEqual(customTrainer.party.first?.moves, ["MOVE_POUND", "MOVE_ABSORB", "MOVE_NONE", "MOVE_NONE"])
+
+        let itemCustomTrainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ITEM_CUSTOM" })
+        XCTAssertEqual(itemCustomTrainer.partyShape, .itemCustomMoves)
+        XCTAssertEqual(itemCustomTrainer.trainerItems.first, "ITEM_SUPER_POTION")
+        XCTAssertEqual(itemCustomTrainer.aiFlags, ["AI_SCRIPT_CHECK_BAD_MOVE", "AI_SCRIPT_TRY_TO_FAINT"])
+        XCTAssertTrue(itemCustomTrainer.isEditable)
+    }
+
+    func testFireRedTrainerCatalogUsesClassicSources() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeFireRedFixture(at: temp.url)
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+
+        XCTAssertEqual(catalog.profile, .pokefirered)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_FIRE" })
+        XCTAssertEqual(trainer.displayName, "FIRE (TRAINER_FIRE)")
+        XCTAssertEqual(trainer.partyShape, .itemCustomMoves)
+        XCTAssertEqual(trainer.party.first?.species, "SPECIES_CHARMANDER")
+        XCTAssertEqual(trainer.party.first?.heldItem, "ITEM_ORAN_BERRY")
+        XCTAssertEqual(trainer.party.first?.moves.first, "MOVE_EMBER")
+        XCTAssertTrue(trainer.isEditable)
+    }
+
+    func testTrainerMutationPlannerRewritesOnlyTrainerAndPartyBlocksThenAppliesWithBackup() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ITEM_CUSTOM" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.trainerName = "EDITED"
+        draft.trainerItems = ["ITEM_HYPER_POTION", "ITEM_NONE", "ITEM_NONE", "ITEM_NONE"]
+        draft.doubleBattle = true
+        draft.aiFlags = ["AI_SCRIPT_CHECK_BAD_MOVE", "AI_SCRIPT_CHECK_VIABILITY"]
+        draft.party[0].species = "SPECIES_TORCHIC"
+        draft.party[0].level = 33
+        draft.party[0].ivs = .uniform(14)
+        draft.party[0].heldItem = "ITEM_ORAN_BERRY"
+        draft.party[0].moves = ["MOVE_EMBER", "MOVE_POUND", "MOVE_NONE", "MOVE_NONE"]
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), ["src/data/trainer_parties.h", "src/data/trainers.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainers.h" }?.textPreview?.contains(".trainerName = _(\"EDITED\")") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainer_parties.h" }?.textPreview?.contains(".species = SPECIES_TORCHIC") == true)
+
+        let result = try TrainerMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+
+        let reloaded = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let edited = try XCTUnwrap(reloaded.trainers.first { $0.trainerID == "TRAINER_ITEM_CUSTOM" })
+        XCTAssertEqual(edited.trainerName, "EDITED")
+        XCTAssertEqual(edited.party.first?.species, "SPECIES_TORCHIC")
+        XCTAssertEqual(edited.party.first?.level, 33)
+        XCTAssertEqual(edited.party.first?.ivs, .uniform(14))
+    }
+
+    func testTrainerDraftUsesDefaultMovesAsCustomMoveStartingPoint() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+
+        let draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+
+        XCTAssertEqual(draft.party.first?.defaultMoves, ["MOVE_POUND", "MOVE_ABSORB", "MOVE_NONE", "MOVE_NONE"])
+        XCTAssertEqual(draft.party.first?.moves, ["MOVE_POUND", "MOVE_ABSORB", "MOVE_NONE", "MOVE_NONE"])
+    }
+
+    func testTrainerPlannerBlocksPerStatIVsAndUnsupportedNatureForClassicParties() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.party[0].ivs = TrainerPokemonIVs(hp: 31, attack: 30, defense: 31, speed: 31, spAttack: 31, spDefense: 31)
+        draft.party[0].nature = "NATURE_ADAMANT"
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_PARTY_INDIVIDUAL_IVS_UNSUPPORTED" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_PARTY_NATURE_UNSUPPORTED" })
+    }
+
+    func testTrainerMutationPlannerBlocksUnsupportedPartyMembers() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DUMMY" })
+        let draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(trainer.isEditable)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_NOT_EDITABLE" })
+    }
+
+    private func writeEmeraldFixture(at root: URL) throws {
+        try writeProjectSkeleton(at: root, makefile: "POKEMON EMER\n")
+        try writeConstants(at: root)
+        try write(emeraldTrainers, to: root.appendingPathComponent("src/data/trainers.h"))
+        try write(classicTrainerParties, to: root.appendingPathComponent("src/data/trainer_parties.h"))
+    }
+
+    private func writeFireRedFixture(at root: URL) throws {
+        try writeProjectSkeleton(at: root, makefile: "poke$(BUILD_NAME).gba\n")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics/quest_log"), withIntermediateDirectories: true)
+        try writeConstants(at: root)
+        try write(
+            """
+            const struct Trainer gTrainers[] = {
+                [TRAINER_FIRE] = {
+                    .trainerClass = TRAINER_CLASS_RIVAL,
+                    .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                    .trainerPic = TRAINER_PIC_RIVAL,
+                    .trainerName = _("FIRE"),
+                    .items = {},
+                    .doubleBattle = FALSE,
+                    .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE,
+                    .party = ITEM_CUSTOM_MOVES(sParty_Fire),
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/trainers.h")
+        )
+        try write(
+            """
+            static const struct TrainerMonItemCustomMoves sParty_Fire[] = {
+                {
+                    .iv = 50,
+                    .lvl = 18,
+                    .species = SPECIES_CHARMANDER,
+                    .heldItem = ITEM_ORAN_BERRY,
+                    .moves = { MOVE_EMBER, MOVE_POUND, MOVE_NONE, MOVE_NONE },
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/trainer_parties.h")
+        )
+    }
+
+    private func writeProjectSkeleton(at root: URL, makefile: String) throws {
+        try write(makefile, to: root.appendingPathComponent("Makefile"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try write("const struct SpeciesInfo gSpeciesInfo[] = { [SPECIES_TREECKO] = { .baseHP = 40 }, };\n", to: root.appendingPathComponent("src/data/pokemon/species_info.h"))
+        try write("const struct Item gItems[] = { [ITEM_POTION] = { .name = _(\"POTION\"), .itemId = ITEM_POTION }, };\n", to: root.appendingPathComponent("src/data/items.h"))
+        try writeLevelUpLearnsets(at: root)
+    }
+
+    private func writeConstants(at root: URL) throws {
+        try write(
+            """
+            #define SPECIES_NONE 0
+            #define SPECIES_TREECKO 1
+            #define SPECIES_TORCHIC 2
+            #define SPECIES_MUDKIP 3
+            #define SPECIES_CHARMANDER 4
+            """,
+            to: root.appendingPathComponent("include/constants/species.h")
+        )
+        try write(
+            """
+            #define MOVE_NONE 0
+            #define MOVE_POUND 1
+            #define MOVE_ABSORB 2
+            #define MOVE_EMBER 3
+            """,
+            to: root.appendingPathComponent("include/constants/moves.h")
+        )
+        try write(
+            """
+            #define ITEM_NONE 0
+            #define ITEM_POTION 1
+            #define ITEM_SUPER_POTION 2
+            #define ITEM_HYPER_POTION 3
+            #define ITEM_ORAN_BERRY 4
+            """,
+            to: root.appendingPathComponent("include/constants/items.h")
+        )
+        try write(
+            """
+            #define TRAINER_CLASS_PKMN_TRAINER_1 1
+            #define TRAINER_CLASS_RIVAL 2
+            #define TRAINER_PIC_HIKER 1
+            #define TRAINER_PIC_RIVAL 2
+            #define TRAINER_ENCOUNTER_MUSIC_MALE 1
+            #define TRAINER_ENCOUNTER_MUSIC_FEMALE 2
+            #define F_TRAINER_FEMALE (1 << 7)
+            """,
+            to: root.appendingPathComponent("include/constants/trainers.h")
+        )
+        try write(
+            """
+            #define AI_SCRIPT_CHECK_BAD_MOVE (1 << 0)
+            #define AI_SCRIPT_TRY_TO_FAINT (1 << 1)
+            #define AI_SCRIPT_CHECK_VIABILITY (1 << 2)
+            """,
+            to: root.appendingPathComponent("include/constants/battle_ai.h")
+        )
+        try write(
+            """
+            #define NATURE_HARDY 0
+            #define NATURE_ADAMANT 1
+            #define TYPE_NORMAL 0
+            """,
+            to: root.appendingPathComponent("include/constants/pokemon.h")
+        )
+    }
+
+    private func writeLevelUpLearnsets(at root: URL) throws {
+        try write(
+            """
+            const u16 *const gLevelUpLearnsets[NUM_SPECIES] =
+            {
+                [SPECIES_TREECKO] = sTreeckoLevelUpLearnset,
+                [SPECIES_TORCHIC] = sTorchicLevelUpLearnset,
+                [SPECIES_MUDKIP] = sMudkipLevelUpLearnset,
+                [SPECIES_CHARMANDER] = sCharmanderLevelUpLearnset,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h")
+        )
+        try write(
+            """
+            #define LEVEL_UP_MOVE(lvl, move) ((lvl << 9) | move)
+
+            static const u16 sTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_MOVE(5, MOVE_ABSORB),
+                LEVEL_UP_END
+            };
+
+            static const u16 sTorchicLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_MOVE(10, MOVE_EMBER),
+                LEVEL_UP_END
+            };
+
+            static const u16 sMudkipLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_END
+            };
+
+            static const u16 sCharmanderLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_MOVE(7, MOVE_EMBER),
+                LEVEL_UP_END
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        )
+    }
+
+    private var emeraldTrainers: String {
+        """
+        const struct Trainer gTrainers[] = {
+            [TRAINER_DEFAULT] =
+            {
+                .trainerClass = TRAINER_CLASS_PKMN_TRAINER_1,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_HIKER,
+                .trainerName = _("DEFAULT"),
+                .items = {},
+                .doubleBattle = FALSE,
+                .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE,
+                .party = NO_ITEM_DEFAULT_MOVES(sParty_Default),
+            },
+            [TRAINER_CUSTOM] =
+            {
+                .trainerClass = TRAINER_CLASS_PKMN_TRAINER_1,
+                .encounterMusic_gender = F_TRAINER_FEMALE | TRAINER_ENCOUNTER_MUSIC_FEMALE,
+                .trainerPic = TRAINER_PIC_HIKER,
+                .trainerName = _("CUSTOM"),
+                .items = {},
+                .doubleBattle = FALSE,
+                .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE,
+                .party = NO_ITEM_CUSTOM_MOVES(sParty_Custom),
+            },
+            [TRAINER_ITEM_DEFAULT] =
+            {
+                .trainerClass = TRAINER_CLASS_RIVAL,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_RIVAL,
+                .trainerName = _("ITEM"),
+                .items = {},
+                .doubleBattle = FALSE,
+                .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE,
+                .party = ITEM_DEFAULT_MOVES(sParty_ItemDefault),
+            },
+            [TRAINER_ITEM_CUSTOM] =
+            {
+                .trainerClass = TRAINER_CLASS_RIVAL,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_RIVAL,
+                .trainerName = _("BOSS"),
+                .items = {ITEM_SUPER_POTION, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                .doubleBattle = FALSE,
+                .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE | AI_SCRIPT_TRY_TO_FAINT,
+                .party = ITEM_CUSTOM_MOVES(sParty_ItemCustom),
+            },
+            [TRAINER_DUMMY] =
+            {
+                .trainerClass = TRAINER_CLASS_RIVAL,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_RIVAL,
+                .trainerName = _("DUMMY"),
+                .items = {},
+                .doubleBattle = FALSE,
+                .aiFlags = AI_SCRIPT_CHECK_BAD_MOVE,
+                .party = NO_ITEM_DEFAULT_MOVES(sParty_Dummy),
+            },
+        };
+        """
+    }
+
+    private var classicTrainerParties: String {
+        """
+        #define DUMMY_TRAINER_MON {0}
+
+        static const struct TrainerMonNoItemDefaultMoves sParty_Default[] = {
+            {
+                .iv = 0,
+                .lvl = 5,
+                .species = SPECIES_TREECKO,
+            },
+        };
+
+        static const struct TrainerMonNoItemCustomMoves sParty_Custom[] = {
+            {
+                .iv = 10,
+                .lvl = 12,
+                .species = SPECIES_TORCHIC,
+                .moves = { MOVE_POUND, MOVE_ABSORB, MOVE_NONE, MOVE_NONE },
+            },
+        };
+
+        static const struct TrainerMonItemDefaultMoves sParty_ItemDefault[] = {
+            {
+                .iv = 20,
+                .lvl = 18,
+                .species = SPECIES_MUDKIP,
+                .heldItem = ITEM_POTION,
+            },
+        };
+
+        static const struct TrainerMonItemCustomMoves sParty_ItemCustom[] = {
+            {
+                .iv = 100,
+                .lvl = 30,
+                .species = SPECIES_TREECKO,
+                .heldItem = ITEM_POTION,
+                .moves = { MOVE_POUND, MOVE_ABSORB, MOVE_NONE, MOVE_NONE },
+            },
+        };
+
+        static const struct TrainerMonNoItemDefaultMoves sParty_Dummy[] = {DUMMY_TRAINER_MON};
+        """
+    }
+
+    private func write(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+private final class TrainerCatalogTemporaryDirectory {
+    let url: URL
+
+    init() throws {
+        url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PokemonHackTrainerCatalogTests")
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: url)
+    }
+}

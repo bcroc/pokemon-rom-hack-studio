@@ -347,6 +347,36 @@ final class MapEditorSessionTests: XCTestCase {
         XCTAssertEqual(pixel(in: bottom, x: 1, y: 0), [0, 0, 0, 0])
     }
 
+    func testRendererResolvesMixedTileEntriesAcrossPrimaryAndSecondaryTilesets() throws {
+        let document = makeMixedTilesetRenderDocument()
+        let renderer = MetatileSwatchRenderer(
+            document: document,
+            indexedTileImages: [
+                "primary.png": IndexedTilesetImage(width: 8, height: 8, indices: solidTileIndices(1)),
+                "secondary.png": IndexedTilesetImage(width: 8, height: 8, indices: solidTileIndices(1))
+            ],
+            paletteSets: [
+                "gTileset_Primary": [
+                    [
+                        PaletteColor(red: 0, green: 0, blue: 0, alpha: 0),
+                        PaletteColor(red: 255, green: 0, blue: 0)
+                    ]
+                ],
+                "gTileset_Secondary": [
+                    [
+                        PaletteColor(red: 0, green: 0, blue: 0, alpha: 0),
+                        PaletteColor(red: 0, green: 0, blue: 255)
+                    ]
+                ]
+            ]
+        )
+
+        let image = try XCTUnwrap(renderer.image(for: 2, layers: [.middle], opacities: [:]))
+        XCTAssertEqual(pixel(in: image, x: 0, y: 0), [255, 0, 0, 255])
+        XCTAssertEqual(pixel(in: image, x: 8, y: 0), [0, 0, 255, 255])
+        XCTAssertEqual(pixel(in: image, x: 0, y: 8), [0, 0, 0, 0])
+    }
+
     func testIndexedPNGParserInflatesZlibWrappedIndexedRows() throws {
         let image = try XCTUnwrap(IndexedPNGParser.parse(data: Data(zlibWrappedIndexedPNGFixture())))
 
@@ -521,6 +551,69 @@ final class MapEditorSessionTests: XCTestCase {
         )
     }
 
+    private func makeMixedTilesetRenderDocument() -> MapVisualDocument {
+        let layout = LayoutSlot(
+            slotIndex: 0,
+            layoutID: "LAYOUT_MIXED_RENDER",
+            name: "MixedRender_Layout",
+            width: 1,
+            height: 1,
+            borderWidth: 1,
+            borderHeight: 1,
+            primaryTileset: "gTileset_Primary",
+            secondaryTileset: "gTileset_Secondary",
+            borderFilepath: nil,
+            blockdataFilepath: "data/layouts/MixedRender/map.bin",
+            sourcePath: "data/layouts/layouts.json"
+        )
+        let primaryAsset = TilesetAsset(
+            symbol: "gTileset_Primary",
+            isSecondary: false,
+            tileImagePath: "primary.png",
+            palettePaths: [],
+            metatilesPath: nil,
+            metatileAttributesPath: nil,
+            metatileCount: 1
+        )
+        let secondaryAsset = TilesetAsset(
+            symbol: "gTileset_Secondary",
+            isSecondary: true,
+            tileImagePath: "secondary.png",
+            palettePaths: [],
+            metatilesPath: nil,
+            metatileAttributesPath: nil,
+            metatileCount: 1
+        )
+        let entries = [0, 2, 4, 2, 0, 0, 0, 0].enumerated().map { index, rawValue in
+            MetatileTileEntry(index: index, rawValue: UInt16(rawValue))
+        }
+        let metatile = MetatileDefinition(
+            id: 2,
+            localID: 0,
+            tilesetSymbol: "gTileset_Secondary",
+            tileEntries: entries,
+            attribute: MetatileAttribute(rawValue: 0, wordSize: 2)
+        )
+        return MapVisualDocument(
+            id: "/tmp/PokemonHackStudioTests:MAP_MIXED_RENDER",
+            rootPath: "/tmp/PokemonHackStudioTests",
+            profile: .pokefirered,
+            mapID: "MAP_MIXED_RENDER",
+            mapName: "MixedRender",
+            mapSourcePath: "data/maps/MixedRender/map.json",
+            layout: layout,
+            blockdata: EditableLayoutBlockdata(filepath: "data/layouts/MixedRender/map.bin", width: 1, height: 1, rawValues: [2]),
+            border: nil,
+            primaryTileset: primaryAsset,
+            secondaryTileset: secondaryAsset,
+            metatileLimits: MapMetatileLimits(primary: 2, total: 4),
+            tileLimits: MapTileLimits(primary: 2, total: 4),
+            metatiles: [metatile],
+            events: [],
+            mapJSONText: "{}"
+        )
+    }
+
     private func syntheticTileIndices() -> [UInt8] {
         var indices = [UInt8](repeating: 1, count: 16 * 8)
         indices[0] = 0
@@ -530,6 +623,10 @@ final class MapEditorSessionTests: XCTestCase {
             }
         }
         return indices
+    }
+
+    private func solidTileIndices(_ paletteIndex: UInt8) -> [UInt8] {
+        [UInt8](repeating: paletteIndex, count: 8 * 8)
     }
 
     private func pixel(in image: NSImage, x: Int, y: Int) -> [Int] {

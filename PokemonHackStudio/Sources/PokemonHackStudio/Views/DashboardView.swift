@@ -46,6 +46,13 @@ struct DashboardView: View {
         }
 
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+            if let library = store.resourceLibrary {
+                MetricCard(
+                    title: "Gen III Resources",
+                    value: "\(library.entryCount)",
+                    detail: "\(library.parsedCount) parsed"
+                )
+            }
             MetricCard(
                 title: "Source Documents",
                 value: "\(project.sourceDocumentCount)",
@@ -58,7 +65,7 @@ struct DashboardView: View {
             )
             MetricCard(
                 title: "Diagnostics",
-                value: "\(project.diagnosticCount)",
+                value: "\(store.issueCount)",
                 detail: "Read-only index"
             )
             MetricCard(
@@ -78,6 +85,10 @@ struct DashboardView: View {
             )
         }
 
+        if let library = store.resourceLibrary {
+            resourceLibrarySection(library)
+        }
+
         EditorSection(title: "Indexed Source Surfaces") {
             VStack(spacing: 10) {
                 ForEach(project.sourceSurfaces.prefix(8)) { surface in
@@ -94,10 +105,10 @@ struct DashboardView: View {
             }
         }
 
-        if !project.diagnostics.isEmpty {
+        if !store.selectedDiagnosticRows.isEmpty {
             EditorSection(title: "Index Diagnostics") {
                 VStack(spacing: 10) {
-                    ForEach(project.diagnostics.prefix(5)) { diagnostic in
+                    ForEach(store.selectedDiagnosticRows.prefix(5)) { diagnostic in
                         IndexedDiagnosticRowView(diagnostic: diagnostic)
                     }
                 }
@@ -116,10 +127,17 @@ struct DashboardView: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
+                    if let library = store.resourceLibrary {
+                        MetricCard(title: "Gen III Resources", value: "\(library.entryCount)", detail: "\(library.missingCount) missing")
+                    }
                     MetricCard(title: "Modules", value: "\(WorkbenchModule.allCases.count)", detail: "Editor surfaces")
                     MetricCard(title: "Dirty Fixtures", value: "\(store.records.filter(\.isDirty).count)", detail: "Unsaved mock edits")
                     MetricCard(title: "Issues", value: "\(store.issueCount)", detail: "Validation queue")
                     MetricCard(title: "Targets", value: "\(store.targets.count)", detail: "Build profiles")
+                }
+
+                if let library = store.resourceLibrary {
+                    resourceLibrarySection(library)
                 }
 
                 EditorSection(title: "Recent Source Surfaces") {
@@ -139,6 +157,79 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private func resourceLibrarySection(_ library: ResourceLibraryViewState) -> some View {
+        EditorSection(title: "Generation III Resource Library") {
+            VStack(spacing: 10) {
+                ForEach(library.entries) { entry in
+                    ResourceLibraryRow(entry: entry)
+                }
+            }
+        }
+    }
+}
+
+private struct ResourceLibraryRow: View {
+    let entry: ResourceLibraryEntryViewState
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: iconName)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(entry.title)
+                        .font(.headline)
+                    StatusPill(state: entry.status)
+                    Text(entry.platform)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text("\(entry.variantSummary) · \(entry.moduleSummary)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Text(entry.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("\(entry.resourceCount)")
+                    .font(.headline)
+                Text(entry.parseStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if entry.diagnosticCount > 0 {
+                    Text("\(entry.diagnosticCount) diagnostics")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var iconName: String {
+        switch entry.platform {
+        case "gbaSource":
+            "folder"
+        case "gbaROM":
+            "memorychip"
+        case "gameCube":
+            "opticaldisc"
+        default:
+            "questionmark.folder"
         }
     }
 }

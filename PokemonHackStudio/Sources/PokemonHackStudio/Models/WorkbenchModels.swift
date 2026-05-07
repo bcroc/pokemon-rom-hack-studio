@@ -3,6 +3,7 @@ import PokemonHackCore
 
 enum WorkbenchModuleGroup: String, CaseIterable, Identifiable {
     case project = "Project"
+    case resources = "Resources"
     case maps = "Maps"
     case data = "Data"
     case scriptsText = "Scripts/Text"
@@ -19,6 +20,7 @@ enum WorkbenchModuleGroup: String, CaseIterable, Identifiable {
 
 enum WorkbenchModule: String, CaseIterable, Identifiable {
     case dashboard = "Project"
+    case resources = "Resources"
     case maps = "Maps"
     case pokemon = "Pokemon"
     case trainers = "Trainers"
@@ -38,6 +40,8 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard:
             .project
+        case .resources:
+            .resources
         case .maps:
             .maps
         case .pokemon, .trainers, .items, .encounters:
@@ -56,6 +60,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .dashboard: "square.grid.2x2"
+        case .resources: "externaldrive.connected.to.line.below"
         case .maps: "map"
         case .pokemon: "sparkles"
         case .trainers: "person.2"
@@ -72,6 +77,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .dashboard: "Source index and project health"
+        case .resources: "ROMs, discs, archives"
         case .maps: "Layouts, events, warps"
         case .pokemon: "Species tables"
         case .trainers: "Parties and AI flags"
@@ -90,6 +96,13 @@ enum ValidationState: String, Identifiable {
     case valid = "Valid"
     case warning = "Warning"
     case error = "Error"
+
+    var id: String { rawValue }
+}
+
+enum ScriptReadinessTargetMode: String, CaseIterable, Identifiable {
+    case map = "Map"
+    case script = "Script"
 
     var id: String { rawValue }
 }
@@ -116,6 +129,31 @@ struct WorkbenchRecord: Identifiable {
     let tags: [String]
     let facts: [Fact]
     let notes: [String]
+    let preview: String?
+
+    init(
+        title: String,
+        subtitle: String,
+        module: WorkbenchModule,
+        source: SourceLocation,
+        validation: ValidationState,
+        isDirty: Bool,
+        tags: [String],
+        facts: [Fact],
+        notes: [String],
+        preview: String? = nil
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.module = module
+        self.source = source
+        self.validation = validation
+        self.isDirty = isDirty
+        self.tags = tags
+        self.facts = facts
+        self.notes = notes
+        self.preview = preview
+    }
 }
 
 struct Fact: Identifiable {
@@ -144,6 +182,317 @@ struct BuildStep: Identifiable {
     let status: ValidationState
     let detail: String
     let source: SourceLocation
+}
+
+enum BuildReportSection: String, CaseIterable, Identifiable {
+    case buildTargets = "Build Targets"
+    case generatedArtifacts = "Generated Artifacts"
+    case toolchain = "Toolchain Readiness"
+    case healthMatrix = "Toolchain Health Matrix"
+    case playtest = "Playtest Handoff"
+    case diagnostics = "Diagnostics"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .buildTargets:
+            "hammer"
+        case .generatedArtifacts:
+            "archivebox"
+        case .toolchain:
+            "wrench.and.screwdriver"
+        case .healthMatrix:
+            "checklist"
+        case .playtest:
+            "gamecontroller"
+        case .diagnostics:
+            "exclamationmark.triangle"
+        }
+    }
+}
+
+struct BuildPatchPlaytestReportViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let status: ValidationState
+    let buildTargets: [BuildTargetValidationViewState]
+    let generatedArtifacts: [GeneratedArtifactValidationViewState]
+    let toolchain: ToolchainReadinessViewState
+    let healthMatrix: ToolchainHealthMatrixViewState
+    let playtest: PlaytestHandoffPlanViewState
+    let diagnostics: [IndexedDiagnosticRow]
+
+    var rows: [BuildReportRow] {
+        buildTargets.map(BuildReportRow.init(target:))
+            + generatedArtifacts.map(BuildReportRow.init(artifact:))
+            + toolchain.rows
+            + healthMatrix.rows
+            + [BuildReportRow(playtest: playtest)]
+            + diagnostics.map(BuildReportRow.init(diagnostic:))
+    }
+}
+
+struct ToolchainHealthMatrixViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let detail: String
+    let readyCount: Int
+    let warningCount: Int
+    let errorCount: Int
+    let notApplicableCount: Int
+    let rows: [BuildReportRow]
+}
+
+struct BuildTargetValidationViewState: Identifiable {
+    let id: String
+    let name: String
+    let kind: String
+    let command: String
+    let outputPath: String?
+    let status: ValidationState
+    let detail: String
+    let source: SourceLocation
+}
+
+struct GeneratedArtifactValidationViewState: Identifiable {
+    let id: String
+    let title: String
+    let path: String
+    let role: String
+    let exists: Bool
+    let checksumSummary: String
+    let freshnessSummary: String
+    let status: ValidationState
+    let source: SourceLocation
+}
+
+struct ToolchainReadinessViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let detail: String
+    let rows: [BuildReportRow]
+}
+
+struct PlaytestHandoffPlanViewState: Identifiable {
+    let id: String
+    let emulator: String
+    let romPath: String?
+    let arguments: [String]
+    let isRunnable: Bool
+    let status: ValidationState
+    let detail: String
+    let source: SourceLocation
+}
+
+struct BuildReportRow: Identifiable {
+    let id: String
+    let section: BuildReportSection
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
+    let healthCategory: WorkbenchHealthCheckCategory?
+    let healthStatus: WorkbenchHealthCheckStatus?
+
+    init(
+        id: String,
+        section: BuildReportSection,
+        title: String,
+        subtitle: String,
+        detail: String,
+        status: ValidationState,
+        source: SourceLocation,
+        tags: [String] = [],
+        healthCategory: WorkbenchHealthCheckCategory? = nil,
+        healthStatus: WorkbenchHealthCheckStatus? = nil
+    ) {
+        self.id = id
+        self.section = section
+        self.title = title
+        self.subtitle = subtitle
+        self.detail = detail
+        self.status = status
+        self.source = source
+        self.tags = tags
+        self.healthCategory = healthCategory
+        self.healthStatus = healthStatus
+    }
+
+    init(target: BuildTargetValidationViewState) {
+        self.init(
+            id: "target:\(target.id)",
+            section: .buildTargets,
+            title: target.name,
+            subtitle: target.kind,
+            detail: target.detail,
+            status: target.status,
+            source: target.source,
+            tags: [target.kind, target.command, target.outputPath ?? ""]
+        )
+    }
+
+    init(artifact: GeneratedArtifactValidationViewState) {
+        self.init(
+            id: "artifact:\(artifact.id)",
+            section: .generatedArtifacts,
+            title: artifact.title,
+            subtitle: artifact.role,
+            detail: "\(artifact.freshnessSummary) \(artifact.checksumSummary)",
+            status: artifact.status,
+            source: artifact.source,
+            tags: [artifact.path, artifact.role]
+        )
+    }
+
+    init(playtest: PlaytestHandoffPlanViewState) {
+        self.init(
+            id: "playtest:\(playtest.id)",
+            section: .playtest,
+            title: "\(playtest.emulator) handoff",
+            subtitle: playtest.romPath ?? "No ROM output selected",
+            detail: playtest.detail,
+            status: playtest.status,
+            source: playtest.source,
+            tags: [playtest.emulator] + playtest.arguments
+        )
+    }
+
+    init(diagnostic: IndexedDiagnosticRow) {
+        self.init(
+            id: "diagnostic:\(diagnostic.id)",
+            section: .diagnostics,
+            title: diagnostic.title,
+            subtitle: diagnostic.source.path,
+            detail: diagnostic.message,
+            status: diagnostic.severity,
+            source: diagnostic.source,
+            tags: [diagnostic.title, diagnostic.message]
+        )
+    }
+}
+
+enum ScriptReadinessReportSection: String, CaseIterable, Identifiable {
+    case source = "Source"
+    case build = "Build"
+    case playtest = "Playtest"
+    case workflow = "Workflow"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .source:
+            "curlybraces"
+        case .build:
+            "hammer"
+        case .playtest:
+            "gamecontroller"
+        case .workflow:
+            "lock.doc"
+        }
+    }
+}
+
+struct ScriptReadinessReportViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let targetMode: ScriptReadinessTargetMode
+    let targetTitle: String
+    let status: ValidationState
+    let isReady: Bool
+    let isReadOnly: Bool
+    let mapContext: ScriptReadinessMapContextViewState?
+    let scriptContext: ScriptReadinessScriptContextViewState?
+    let rows: [ScriptReadinessReportRow]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct ScriptReadinessMapContextViewState {
+    let mapID: String
+    let mapName: String
+    let sourcePath: String
+    let layoutID: String?
+    let scriptSourceCount: Int
+    let eventScriptCount: Int
+}
+
+struct ScriptReadinessScriptContextViewState {
+    let label: String
+    let kind: String
+    let sourcePath: String
+    let sourceRole: String
+    let commandCount: Int
+    let textReferenceCount: Int
+}
+
+struct ScriptReadinessReportRow: Identifiable {
+    let id: String
+    let section: ScriptReadinessReportSection
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
+}
+
+enum GraphicsReportSection: String, CaseIterable, Identifiable {
+    case tilesets = "Tilesets"
+    case artifacts = "Artifacts"
+    case palettes = "Palettes"
+    case animations = "Animations"
+    case diagnostics = "Diagnostics"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .tilesets:
+            "square.grid.3x3"
+        case .artifacts:
+            "photo.stack"
+        case .palettes:
+            "paintpalette"
+        case .animations:
+            "film.stack"
+        case .diagnostics:
+            "exclamationmark.triangle"
+        }
+    }
+}
+
+struct GraphicsDiagnosticsReportViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let status: ValidationState
+    let tilesetCount: Int
+    let tileImageCount: Int
+    let paletteFileCount: Int
+    let animationDirectoryCount: Int
+    let unsupportedSourceArtifactCount: Int
+    let readOnlyDetail: String
+    let rows: [GraphicsReportRow]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct GraphicsReportRow: Identifiable {
+    let id: String
+    let section: GraphicsReportSection
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
 }
 
 enum ProjectIndexLoadStatus: Equatable {
@@ -182,6 +531,9 @@ struct IndexedProjectSummary: Identifiable {
     let title: String
     let subtitle: String
     let rootPath: String
+    let originLabel: String
+    let menuTitle: String
+    let menuSubtitle: String
     let profile: String
     let adapterName: String
     let writePolicy: String
@@ -225,6 +577,217 @@ struct IndexedBuildTargetPreview: Identifiable {
     let kind: String
     let command: String
     let outputPath: String?
+}
+
+struct ResourceLibraryViewState: Identifiable {
+    let id: String
+    let workspaceRoot: String
+    let entries: [ResourceLibraryEntryViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+
+    var entryCount: Int { entries.count }
+    var parsedCount: Int { entries.filter { $0.status == .valid }.count }
+    var missingCount: Int { entries.filter { $0.parseStatus == "missing" }.count }
+    var itemCount: Int { entries.reduce(0) { $0 + $1.items.count } }
+    var allDiagnostics: [IndexedDiagnosticRow] { diagnostics + entries.flatMap(\.diagnostics) }
+}
+
+struct ResourceAssetCatalogViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let assetCount: Int
+    let categoryCounts: [ResourceAssetCategoryCount]
+    let availabilityCounts: [ResourceAssetAvailabilityCount]
+    let rows: [ResourceAssetRowViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+
+    var categoryTitles: [String] {
+        categoryCounts.map(\.category)
+    }
+}
+
+struct ResourceAssetCategoryCount: Identifiable {
+    var id: String { category }
+
+    let category: String
+    let count: Int
+}
+
+struct ResourceAssetAvailabilityCount: Identifiable {
+    var id: String { availability }
+
+    let availability: String
+    let count: Int
+}
+
+enum ResourceAssetCatalogLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Asset catalog not loaded"
+        case .loading:
+            "Loading assets"
+        case .loaded(let count):
+            count == 1 ? "1 asset loaded" : "\(count) assets loaded"
+        case .failed(let message):
+            "Asset catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum SpeciesCatalogLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Pokemon catalog not loaded"
+        case .loading:
+            "Loading Pokemon catalog"
+        case .loaded(let count):
+            count == 1 ? "1 species loaded" : "\(count) species loaded"
+        case .failed(let message):
+            "Pokemon catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum TrainerCatalogLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Trainer catalog not loaded"
+        case .loading:
+            "Loading trainer catalog"
+        case .loaded(let count):
+            count == 1 ? "1 trainer loaded" : "\(count) trainers loaded"
+        case .failed(let message):
+            "Trainer catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum ResourceAssetSortMode: String, CaseIterable, Identifiable {
+    case category
+    case title
+    case path
+    case status
+    case availability
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .category:
+            "Category"
+        case .title:
+            "Title"
+        case .path:
+            "Path"
+        case .status:
+            "Status"
+        case .availability:
+            "Availability"
+        }
+    }
+}
+
+struct ResourceAssetRowViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let path: String
+    let category: String
+    let kind: String
+    let role: String
+    let status: ValidationState
+    let availability: String
+    let availabilitySummary: String
+    let affectsResourceAvailability: Bool
+    let sizeSummary: String
+    let checksumSummary: String
+    let source: SourceLocation
+    let tags: [String]
+    let facts: [Fact]
+    let diagnostics: [IndexedDiagnosticRow]
+    let targetModule: WorkbenchModule?
+    let targetID: String?
+    let searchBlob: String
+}
+
+struct ResourceLibraryEntryViewState: Identifiable {
+    let id: String
+    let title: String
+    let path: String
+    let platform: String
+    let family: String
+    let profile: String
+    let role: String
+    let writePolicy: String
+    let parseStatus: String
+    let status: ValidationState
+    let variantSummary: String
+    let moduleSummary: String
+    let resourceCount: Int
+    let diagnosticCount: Int
+    let items: [ResourceLibraryItemViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let source: SourceLocation
+}
+
+struct ResourceLibraryItemViewState: Identifiable {
+    let id: String
+    let title: String
+    let path: String
+    let kind: String
+    let category: String
+    let locationSummary: String
+    let sizeSummary: String
+    let checksumSummary: String
+    let source: SourceLocation
+    let tags: [String]
 }
 
 enum MapCatalogLoadStatus: Equatable {
@@ -342,6 +905,22 @@ enum MapVisualLoadStatus: Equatable {
     }
 }
 
+enum MapEditorToolGroup: String, CaseIterable, Identifiable {
+    case navigation
+    case paint
+    case events
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .navigation: "Navigation"
+        case .paint: "Paint"
+        case .events: "Events"
+        }
+    }
+}
+
 enum MapEditorTool: String, CaseIterable, Identifiable {
     case select
     case hand
@@ -369,6 +948,31 @@ enum MapEditorTool: String, CaseIterable, Identifiable {
         }
     }
 
+    var shortTitle: String {
+        switch self {
+        case .select: "Select"
+        case .hand: "Pan"
+        case .eyedropper: "Pick"
+        case .pencil: "Paint"
+        case .rectangleFill: "Fill"
+        case .eventMove: "Move"
+        case .addEvent: "Add"
+        case .duplicate: "Copy"
+        case .delete: "Delete"
+        }
+    }
+
+    var group: MapEditorToolGroup {
+        switch self {
+        case .select, .hand:
+            .navigation
+        case .eyedropper, .pencil, .rectangleFill:
+            .paint
+        case .eventMove, .addEvent, .duplicate, .delete:
+            .events
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .select: "cursorarrow"
@@ -381,6 +985,37 @@ enum MapEditorTool: String, CaseIterable, Identifiable {
         case .duplicate: "plus.square.on.square"
         case .delete: "trash"
         }
+    }
+
+    var accessibilityLabel: String {
+        "\(title) map editor tool"
+    }
+
+    var helpText: String {
+        switch self {
+        case .select:
+            "Select map cells or events"
+        case .hand:
+            "Pan the map canvas"
+        case .eyedropper:
+            "Pick a metatile from the canvas"
+        case .pencil:
+            "Paint the selected metatile"
+        case .rectangleFill:
+            "Fill a rectangular map area"
+        case .eventMove:
+            "Move the selected map event"
+        case .addEvent:
+            "Add an event using the selected event template"
+        case .duplicate:
+            "Duplicate the selected event"
+        case .delete:
+            "Delete the selected event"
+        }
+    }
+
+    static func tools(in group: MapEditorToolGroup) -> [MapEditorTool] {
+        allCases.filter { $0.group == group }
     }
 }
 

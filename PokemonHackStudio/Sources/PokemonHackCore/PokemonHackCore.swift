@@ -19,12 +19,17 @@ public struct HackProject: Codable, Equatable {
     }
 }
 
-public enum GameProfile: String, Codable, Equatable, CaseIterable {
+public enum GameProfile: String, Codable, Equatable, CaseIterable, Sendable {
     case pokeemerald
     case pokefirered
     case pokeruby
     case pokeemeraldExpansion
     case binaryROM
+    case pokemonColosseum
+    case pokemonXD
+    case pokemonBox
+    case pokemonChannel
+    case gameCubeMedia
     case unknown
 }
 
@@ -261,27 +266,32 @@ public enum ProjectInspector {
             throw PokemonHackCoreError.pathNotFound(root.path)
         }
 
+        if GameCubeDiscParser.isSupportedDiscImage(root) {
+            return GameCubeDiscParser.detectProfile(at: root, fileManager: fileManager)
+        }
+
+        if BinaryROMAdapter.isSupportedROM(root, fileManager: fileManager) {
+            return .binaryROM
+        }
+
         guard hasRequiredProjectSkeleton(at: root, fileManager: fileManager) else {
             return .unknown
         }
 
         let makefileText = readTextIfPresent(root.appendingPathComponent("Makefile"))
+        let configText = readTextIfPresent(root.appendingPathComponent("config.mk"))
         let sha1Files = sha1FileNames(at: root, fileManager: fileManager)
 
         if hasExpansionAnchors(at: root, fileManager: fileManager) {
             return .pokeemeraldExpansion
         }
 
-        if makefileText.contains("POKEMON EMER")
-            || makefileText.contains("BPEE")
-            || sha1Files.contains("rom.sha1")
-            || directoryExists(root.appendingPathComponent("graphics/pokenav"), fileManager: fileManager) {
-            return .pokeemerald
-        }
-
         if makefileText.contains("pokeruby.gba")
             || makefileText.contains("pokesapphire.gba")
-            || readTextIfPresent(root.appendingPathComponent("config.mk")).contains("GAME_VERSION  ?= RUBY")
+            || makefileText.contains("GAME_VERSION=RUBY")
+            || makefileText.contains("GAME_VERSION=SAPPHIRE")
+            || configText.contains("GAME_VERSION  ?= RUBY")
+            || configText.contains("GAME_VERSION ?= RUBY")
             || fileManager.fileExists(atPath: root.appendingPathComponent("ruby.sha1").path)
             || fileManager.fileExists(atPath: root.appendingPathComponent("sapphire.sha1").path) {
             return .pokeruby
@@ -291,6 +301,13 @@ public enum ProjectInspector {
             || sha1Files.contains(where: { $0.contains("firered") || $0.contains("leafgreen") })
             || directoryExists(root.appendingPathComponent("graphics/quest_log"), fileManager: fileManager) {
             return .pokefirered
+        }
+
+        if makefileText.contains("POKEMON EMER")
+            || makefileText.contains("BPEE")
+            || sha1Files.contains("rom.sha1")
+            || directoryExists(root.appendingPathComponent("graphics/pokenav"), fileManager: fileManager) {
+            return .pokeemerald
         }
 
         return .unknown
@@ -333,6 +350,11 @@ public enum ProjectInspector {
         }
         if directoryExists(root.appendingPathComponent("data/text"), fileManager: fileManager) {
             modules.append(.text)
+        }
+        if GameCubeDiscParser.isSupportedDiscImage(root) || BinaryROMAdapter.isSupportedROM(root, fileManager: fileManager) {
+            modules.append(.rom)
+            modules.append(.patches)
+            modules.append(.playtest)
         }
         modules.append(.build)
         modules.append(.diagnostics)

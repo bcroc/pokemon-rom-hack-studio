@@ -1,0 +1,1504 @@
+import Foundation
+
+public enum SourceIndexModule: String, Codable, Equatable, CaseIterable {
+    case scripts
+    case text
+    case pokemon
+    case trainers
+    case items
+    case moves
+    case learnsets
+    case evolutions
+    case pokedex
+}
+
+public struct SourceIndexFact: Codable, Equatable, Identifiable {
+    public var id: String { label }
+
+    public let label: String
+    public let value: String
+
+    public init(label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+}
+
+public struct SourceIndexRecord: Codable, Equatable, Identifiable {
+    public let id: String
+    public let module: SourceIndexModule
+    public let title: String
+    public let subtitle: String
+    public let sourceSpan: SourceSpan
+    public let tags: [String]
+    public let facts: [SourceIndexFact]
+    public let preview: String?
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        id: String,
+        module: SourceIndexModule,
+        title: String,
+        subtitle: String,
+        sourceSpan: SourceSpan,
+        tags: [String] = [],
+        facts: [SourceIndexFact] = [],
+        preview: String? = nil,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.id = id
+        self.module = module
+        self.title = title
+        self.subtitle = subtitle
+        self.sourceSpan = sourceSpan
+        self.tags = tags
+        self.facts = facts
+        self.preview = preview
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct ProjectSourceIndex: Codable, Equatable {
+    public let root: SourceLocation
+    public let profile: GameProfile
+    public let adapterID: String
+    public let adapterName: String
+    public let records: [SourceIndexRecord]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        root: SourceLocation,
+        profile: GameProfile,
+        adapterID: String,
+        adapterName: String,
+        records: [SourceIndexRecord],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.root = root
+        self.profile = profile
+        self.adapterID = adapterID
+        self.adapterName = adapterName
+        self.records = records
+        self.diagnostics = diagnostics
+    }
+}
+
+public enum CInitializerEntryStyle: String, Codable, Equatable {
+    case bracketed
+    case positional
+}
+
+public struct CInitializerTableDescriptor: Codable, Equatable {
+    public let module: SourceIndexModule
+    public let relativePath: String
+    public let tableSymbol: String
+    public let entryStyle: CInitializerEntryStyle
+    public let idField: String?
+
+    public init(
+        module: SourceIndexModule,
+        relativePath: String,
+        tableSymbol: String,
+        entryStyle: CInitializerEntryStyle,
+        idField: String? = nil
+    ) {
+        self.module = module
+        self.relativePath = relativePath
+        self.tableSymbol = tableSymbol
+        self.entryStyle = entryStyle
+        self.idField = idField
+    }
+}
+
+public struct CInitializerTableParseResult: Codable, Equatable {
+    public let descriptor: CInitializerTableDescriptor
+    public let entries: [CInitializerEntry]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        descriptor: CInitializerTableDescriptor,
+        entries: [CInitializerEntry],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.descriptor = descriptor
+        self.entries = entries
+        self.diagnostics = diagnostics
+    }
+}
+
+public extension CInitializerParser {
+    static func tableEntries(
+        in text: String,
+        descriptor: CInitializerTableDescriptor
+    ) -> CInitializerTableParseResult {
+        let scanner = CInitializerTableScanner(
+            text: text,
+            relativePath: descriptor.relativePath,
+            descriptor: descriptor
+        )
+        return scanner.parse()
+    }
+}
+
+public enum ProjectSourceIndexLoader {
+    public static func load(
+        from index: ProjectIndex,
+        fileManager: FileManager = .default
+    ) throws -> ProjectSourceIndex {
+        let scriptOutline = try ProjectScriptOutlineLoader.load(from: index, fileManager: fileManager)
+        return try load(from: index, scriptOutline: scriptOutline, fileManager: fileManager)
+    }
+
+    public static func load(
+        from index: ProjectIndex,
+        scriptOutline: ProjectScriptOutline,
+        fileManager: FileManager = .default
+    ) throws -> ProjectSourceIndex {
+        let root = URL(fileURLWithPath: index.root.path)
+        let descriptors = SourceIndexDescriptorSet.descriptors(for: index.profile)
+        var records: [SourceIndexRecord] = []
+        var diagnostics: [Diagnostic] = []
+
+        for descriptor in descriptors.tables {
+            let path = root.appendingPathComponent(descriptor.relativePath)
+            guard fileManager.fileExists(atPath: path.path) else {
+                if let fallback = try fallbackRecords(for: descriptor, root: root, fileManager: fileManager) {
+                    records.append(contentsOf: fallback.records)
+                    diagnostics.append(contentsOf: fallback.diagnostics)
+                    continue
+                }
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .warning,
+                        code: "SOURCE_INDEX_DESCRIPTOR_MISSING",
+                        message: "Source index descriptor path is not present: \(descriptor.relativePath)",
+                        span: SourceSpan(relativePath: descriptor.relativePath, startLine: 1)
+                    )
+                )
+                continue
+            }
+
+            let text = try readSourceText(at: path)
+            let parsed = CInitializerParser.tableEntries(in: text, descriptor: descriptor)
+            diagnostics.append(contentsOf: parsed.diagnostics)
+            records.append(contentsOf: parsed.entries.map { record(from: $0, descriptor: descriptor) })
+        }
+
+        for scanner in descriptors.specialScanners {
+            let scanned = try scanner.scan(root: root, fileManager: fileManager)
+            records.append(contentsOf: scanned.records)
+            diagnostics.append(contentsOf: scanned.diagnostics)
+        }
+
+        for descriptor in descriptors.trainerPartyFiles {
+            let path = root.appendingPathComponent(descriptor)
+            guard fileManager.fileExists(atPath: path.path) else {
+                continue
+            }
+
+            let text = try readSourceText(at: path)
+            records.append(contentsOf: TrainerPartyIndexScanner.records(in: text, relativePath: descriptor))
+        }
+
+        records.append(contentsOf: scriptOutline.labels.filter { $0.kind != .text }.map(record(from:)))
+        records.append(contentsOf: scriptOutline.textBlocks.map(record(from:)))
+        diagnostics.append(contentsOf: scriptOutline.diagnostics)
+
+        diagnostics.append(contentsOf: records.flatMap(\.diagnostics))
+
+        return ProjectSourceIndex(
+            root: index.root,
+            profile: index.profile,
+            adapterID: index.adapterID,
+            adapterName: index.adapterName,
+            records: records.sorted { lhs, rhs in
+                if lhs.module.rawValue == rhs.module.rawValue {
+                    return lhs.sourceSpan.relativePath == rhs.sourceSpan.relativePath
+                        ? lhs.sourceSpan.startLine < rhs.sourceSpan.startLine
+                        : lhs.sourceSpan.relativePath < rhs.sourceSpan.relativePath
+                }
+                return lhs.module.rawValue < rhs.module.rawValue
+            },
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func fallbackRecords(
+        for descriptor: CInitializerTableDescriptor,
+        root: URL,
+        fileManager: FileManager
+    ) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic])? {
+        guard descriptor.module == .items, descriptor.relativePath == "src/data/items.h" else {
+            return nil
+        }
+
+        let jsonPath = "src/data/items.json"
+        let url = root.appendingPathComponent(jsonPath)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let text = try readSourceText(at: url)
+        return try JSONSourceIndexScanner.itemRecords(in: text, relativePath: jsonPath)
+    }
+
+    private static func record(
+        from entry: CInitializerEntry,
+        descriptor: CInitializerTableDescriptor
+    ) -> SourceIndexRecord {
+        let module = descriptor.module
+        let title = title(for: entry, descriptor: descriptor)
+        let tags = tags(for: module, descriptor: descriptor)
+        let facts = facts(for: entry, module: module)
+        let diagnostics = diagnostics(for: entry, descriptor: descriptor)
+
+        return SourceIndexRecord(
+            id: "\(module.rawValue):\(descriptor.relativePath):\(entry.symbol)",
+            module: module,
+            title: title,
+            subtitle: descriptor.relativePath,
+            sourceSpan: entry.span,
+            tags: tags,
+            facts: facts,
+            preview: preview(entry.body),
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func record(from label: ScriptOutlineLabel) -> SourceIndexRecord {
+        SourceIndexRecord(
+            id: "scripts:\(label.sourcePath):\(label.label)",
+            module: .scripts,
+            title: label.label,
+            subtitle: label.sourcePath,
+            sourceSpan: label.sourceSpan,
+            tags: ["script", "outline", label.kind.rawValue, label.sourceRole.rawValue],
+            facts: [
+                SourceIndexFact(label: "Commands", value: "\(label.commands.count)"),
+                SourceIndexFact(label: "Text Refs", value: "\(label.textReferences.count)"),
+                SourceIndexFact(label: "Kind", value: label.kind.title),
+                SourceIndexFact(label: "Lines", value: "\(label.sourceSpan.startLine)-\(label.sourceSpan.endLine)")
+            ],
+            preview: label.bodyPreview,
+            diagnostics: label.diagnostics
+        )
+    }
+
+    private static func record(from textBlock: ScriptTextBlock) -> SourceIndexRecord {
+        SourceIndexRecord(
+            id: "text:\(textBlock.sourcePath):\(textBlock.label)",
+            module: .text,
+            title: textBlock.label,
+            subtitle: textBlock.sourcePath,
+            sourceSpan: textBlock.sourceSpan,
+            tags: ["text", "outline"],
+            facts: [
+                SourceIndexFact(label: "String Lines", value: "\(textBlock.stringLineCount)"),
+                SourceIndexFact(label: "Characters", value: "\(textBlock.characterCount)"),
+                SourceIndexFact(label: "Lines", value: "\(textBlock.sourceSpan.startLine)-\(textBlock.sourceSpan.endLine)")
+            ],
+            preview: textBlock.preview,
+            diagnostics: textBlock.diagnostics
+        )
+    }
+
+    private static func title(
+        for entry: CInitializerEntry,
+        descriptor: CInitializerTableDescriptor
+    ) -> String {
+        if descriptor.entryStyle == .positional, let idField = descriptor.idField {
+            return entry.fields[idField] ?? entry.symbol
+        }
+        return entry.symbol
+    }
+
+    private static func tags(
+        for module: SourceIndexModule,
+        descriptor: CInitializerTableDescriptor
+    ) -> [String] {
+        switch (module, descriptor.entryStyle) {
+        case (.pokemon, _):
+            return ["species", "table"]
+        case (.trainers, _):
+            return ["trainer", "table"]
+        case (.items, .positional):
+            return ["item", "positional"]
+        case (.items, .bracketed):
+            return ["item", "bracketed"]
+        case (.moves, _):
+            return ["move", "table"]
+        case (.learnsets, _):
+            return ["learnset", "table"]
+        case (.evolutions, _):
+            return ["evolution", "table"]
+        case (.pokedex, _):
+            return ["pokedex", "table"]
+        default:
+            return ["table"]
+        }
+    }
+
+    private static func facts(
+        for entry: CInitializerEntry,
+        module: SourceIndexModule
+    ) -> [SourceIndexFact] {
+        let preferred: [String]
+        switch module {
+        case .pokemon:
+            preferred = ["baseHP", "baseAttack", "baseDefense", "baseSpeed", "types", "type1", "type2", "abilities", "ability1", "ability2", "growthRate"]
+        case .trainers:
+            preferred = ["trainerName", "trainerClass", "encounterMusic_gender", "items", "doubleBattle", "aiFlags", "party"]
+        case .items:
+            preferred = ["itemId", "name", "price", "pocket", "type", "fieldUseFunc", "battleUsage"]
+        case .moves:
+            preferred = ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags"]
+        case .pokedex:
+            preferred = ["categoryName", "height", "weight", "description", "description1", "description2", "pokemonScale", "trainerScale"]
+        default:
+            preferred = []
+        }
+
+        var facts: [SourceIndexFact] = []
+        if let ordinal = entry.ordinal {
+            facts.append(SourceIndexFact(label: "Index", value: "\(ordinal)"))
+        }
+        for key in preferred {
+            if let value = entry.fields[key] {
+                facts.append(SourceIndexFact(label: key, value: compact(value)))
+            }
+        }
+        facts.append(SourceIndexFact(label: "Lines", value: "\(entry.span.startLine)-\(entry.span.endLine)"))
+        return Array(facts.prefix(8))
+    }
+
+    private static func diagnostics(
+        for entry: CInitializerEntry,
+        descriptor: CInitializerTableDescriptor
+    ) -> [Diagnostic] {
+        guard
+            descriptor.entryStyle == .positional,
+            let idField = descriptor.idField,
+            entry.fields[idField] == nil
+        else {
+            return []
+        }
+
+        return [
+            Diagnostic(
+                severity: .warning,
+                code: "TABLE_ENTRY_ID_MISSING",
+                message: "Positional entry is missing expected \(idField) field.",
+                span: entry.span
+            )
+        ]
+    }
+
+    private static func preview(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .prefix(12)
+            .joined(separator: "\n")
+    }
+
+    private static func compact(_ value: String) -> String {
+        value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func readSourceText(at url: URL) throws -> String {
+        if let utf8 = try? String(contentsOf: url, encoding: .utf8) {
+            return utf8
+        }
+        return try String(contentsOf: url, encoding: .isoLatin1)
+    }
+
+    private static func sourceFiles(
+        root: URL,
+        roots: [String],
+        extensions: Set<String>,
+        fileManager: FileManager
+    ) -> [String] {
+        var paths: [String] = []
+
+        for relativeRoot in roots {
+            let url = root.appendingPathComponent(relativeRoot)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+
+            if isDirectory.boolValue {
+                guard let enumerator = fileManager.enumerator(
+                    at: url,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+
+                for case let fileURL as URL in enumerator {
+                    guard
+                        (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
+                        extensions.contains(fileURL.pathExtension.lowercased())
+                    else {
+                        continue
+                    }
+                    paths.append(relativePath(for: fileURL, root: root))
+                }
+            } else if extensions.contains(url.pathExtension.lowercased()) {
+                paths.append(relativeRoot)
+            }
+        }
+
+        return Array(Set(paths)).sorted()
+    }
+
+    private static func relativePath(for url: URL, root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        if path.hasPrefix(rootPath + "/") {
+            return String(path.dropFirst(rootPath.count + 1))
+        }
+        return path
+    }
+}
+
+struct SourceIndexDescriptorSet {
+    let tables: [CInitializerTableDescriptor]
+    let trainerPartyFiles: [String]
+    let scriptRoots: [String]
+    let textRoots: [String]
+    let specialScanners: [SourceIndexSpecialScanner]
+
+    init(
+        tables: [CInitializerTableDescriptor],
+        trainerPartyFiles: [String],
+        scriptRoots: [String],
+        textRoots: [String],
+        specialScanners: [SourceIndexSpecialScanner] = []
+    ) {
+        self.tables = tables
+        self.trainerPartyFiles = trainerPartyFiles
+        self.scriptRoots = scriptRoots
+        self.textRoots = textRoots
+        self.specialScanners = specialScanners
+    }
+
+    static func descriptors(for profile: GameProfile) -> SourceIndexDescriptorSet {
+        switch profile {
+        case .pokeruby:
+            SourceIndexDescriptorSet(
+                tables: [
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/base_stats.h", tableSymbol: "gBaseStats", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers_en.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items_en.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId"),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .positional),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "gTMHMLearnsets", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                ],
+                trainerPartyFiles: [],
+                scriptRoots: ["data/scripts", "data"],
+                textRoots: ["data/text", "src/data/text", "data-de"]
+            )
+        case .pokefirered:
+            SourceIndexDescriptorSet(
+                tables: [
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId"),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "sTMHMLearnsets", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                ],
+                trainerPartyFiles: [],
+                scriptRoots: ["data/scripts", "data/maps"],
+                textRoots: ["data/text", "src/data/text"]
+            )
+        case .pokeemeraldExpansion:
+            SourceIndexDescriptorSet(
+                tables: [
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItemsInfo", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", entryStyle: .bracketed)
+                ],
+                trainerPartyFiles: [
+                    "src/data/trainers.party",
+                    "src/data/trainers_frlg.party",
+                    "src/data/battle_partners.party",
+                    "src/data/debug_trainers.party"
+                ],
+                scriptRoots: ["data/scripts", "data/maps"],
+                textRoots: ["data/text", "src/data/text"],
+                specialScanners: [
+                    .levelUpLearnsetDirectory("src/data/pokemon/level_up_learnsets"),
+                    .allLearnablesJSON("src/data/pokemon/all_learnables.json"),
+                    .speciesFamilySupplements("src/data/pokemon/species_info")
+                ]
+            )
+        case .pokeemerald:
+            SourceIndexDescriptorSet(
+                tables: [
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "gTMHMLearnsets", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                ],
+                trainerPartyFiles: [],
+                scriptRoots: ["data/scripts", "data/maps"],
+                textRoots: ["data/text", "src/data/text"]
+            )
+        case .binaryROM, .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
+            SourceIndexDescriptorSet(
+                tables: [],
+                trainerPartyFiles: [],
+                scriptRoots: [],
+                textRoots: []
+            )
+        }
+    }
+}
+
+enum SourceIndexSpecialScanner {
+    case allLearnablesJSON(String)
+    case levelUpLearnsetDirectory(String)
+    case speciesFamilySupplements(String)
+
+    func scan(root: URL, fileManager: FileManager) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
+        switch self {
+        case .allLearnablesJSON(let relativePath):
+            let url = root.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: url.path) else { return ([], []) }
+            let text = try readText(at: url)
+            return try JSONSourceIndexScanner.learnableRecords(in: text, relativePath: relativePath)
+        case .levelUpLearnsetDirectory(let relativeRoot):
+            let files = sourceFiles(root: root, relativeRoot: relativeRoot, extensions: ["h"], fileManager: fileManager)
+            var records: [SourceIndexRecord] = []
+            for file in files {
+                let text = try readText(at: root.appendingPathComponent(file))
+                records.append(contentsOf: LevelUpLearnsetSourceScanner.records(in: text, relativePath: file))
+            }
+            return (records, [])
+        case .speciesFamilySupplements(let relativeRoot):
+            let files = sourceFiles(root: root, relativeRoot: relativeRoot, extensions: ["h"], fileManager: fileManager)
+            var records: [SourceIndexRecord] = []
+            for file in files {
+                let text = try readText(at: root.appendingPathComponent(file))
+                records.append(contentsOf: SpeciesFamilySupplementScanner.records(in: text, relativePath: file))
+            }
+            return (records, [])
+        }
+    }
+
+    private func sourceFiles(
+        root: URL,
+        relativeRoot: String,
+        extensions: Set<String>,
+        fileManager: FileManager
+    ) -> [String] {
+        let url = root.appendingPathComponent(relativeRoot)
+        guard
+            let enumerator = fileManager.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return []
+        }
+
+        var paths: [String] = []
+        for case let fileURL as URL in enumerator {
+            guard
+                (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
+                extensions.contains(fileURL.pathExtension.lowercased())
+            else {
+                continue
+            }
+            paths.append(relativePath(for: fileURL, root: root))
+        }
+        return paths.sorted()
+    }
+
+    private func readText(at url: URL) throws -> String {
+        if let utf8 = try? String(contentsOf: url, encoding: .utf8) {
+            return utf8
+        }
+        return try String(contentsOf: url, encoding: .isoLatin1)
+    }
+
+    private func relativePath(for url: URL, root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        if path.hasPrefix(rootPath + "/") {
+            return String(path.dropFirst(rootPath.count + 1))
+        }
+        return path
+    }
+}
+
+private enum JSONSourceIndexScanner {
+    static func itemRecords(in text: String, relativePath: String) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
+        let data = Data(text.utf8)
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let items = root["items"] as? [[String: Any]]
+        else {
+            return ([], [jsonDiagnostic("JSON_ITEM_INDEX_UNREADABLE", "Could not read FireRed item JSON.", relativePath: relativePath)])
+        }
+
+        let records = items.enumerated().map { index, item in
+            let itemID = stringValue(item["itemId"]) ?? "ITEM_\(index)"
+            let line = lineNumber(containing: itemID, in: text) ?? 1
+            let facts = [
+                SourceIndexFact(label: "Index", value: "\(index)"),
+                SourceIndexFact(label: "name", value: stringValue(item["english"]) ?? "Unknown"),
+                SourceIndexFact(label: "price", value: stringValue(item["price"]) ?? "Unknown"),
+                SourceIndexFact(label: "pocket", value: stringValue(item["pocket"]) ?? "Unknown"),
+                SourceIndexFact(label: "type", value: stringValue(item["type"]) ?? "Unknown")
+            ]
+            return SourceIndexRecord(
+                id: "items:\(relativePath):\(itemID)",
+                module: .items,
+                title: itemID,
+                subtitle: relativePath,
+                sourceSpan: SourceSpan(relativePath: relativePath, startLine: line),
+                tags: ["item", "json", "firered"],
+                facts: facts,
+                preview: jsonPreview(item)
+            )
+        }
+        return (records, [])
+    }
+
+    static func learnableRecords(in text: String, relativePath: String) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
+        let data = Data(text.utf8)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ([], [jsonDiagnostic("JSON_LEARNABLES_INDEX_UNREADABLE", "Could not read all-learnables JSON.", relativePath: relativePath)])
+        }
+
+        let records = root.keys.sorted().compactMap { key -> SourceIndexRecord? in
+            guard let moves = root[key] as? [String] else { return nil }
+            let species = key.hasPrefix("SPECIES_") ? key : "SPECIES_\(key)"
+            return SourceIndexRecord(
+                id: "learnsets:\(relativePath):\(species)",
+                module: .learnsets,
+                title: species,
+                subtitle: relativePath,
+                sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
+                tags: ["learnset", "json", "all-learnables"],
+                facts: [
+                    SourceIndexFact(label: "Moves", value: "\(moves.count)"),
+                    SourceIndexFact(label: "First Moves", value: moves.prefix(4).joined(separator: ", "))
+                ],
+                preview: moves.prefix(12).joined(separator: "\n")
+            )
+        }
+        return (records, [])
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        switch value {
+        case let string as String:
+            return string
+        case let number as NSNumber:
+            return number.stringValue
+        default:
+            return nil
+        }
+    }
+
+    private static func jsonPreview(_ value: Any) -> String? {
+        guard
+            JSONSerialization.isValidJSONObject(value),
+            let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted]),
+            let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return text.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+    }
+
+    private static func jsonDiagnostic(_ code: String, _ message: String, relativePath: String) -> Diagnostic {
+        Diagnostic(
+            severity: .warning,
+            code: code,
+            message: message,
+            span: SourceSpan(relativePath: relativePath, startLine: 1)
+        )
+    }
+}
+
+private enum LevelUpLearnsetSourceScanner {
+    static func records(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        let lines = text.components(separatedBy: .newlines)
+        var records: [SourceIndexRecord] = []
+        var index = 0
+        while index < lines.count {
+            guard let symbol = learnsetSymbol(in: lines[index]) else {
+                index += 1
+                continue
+            }
+
+            let start = index
+            var end = index
+            while end < lines.count, !lines[end].contains("};") {
+                end += 1
+            }
+            let clampedEnd = min(end, lines.count - 1)
+            let body = lines[start...clampedEnd].joined(separator: "\n")
+            let moves = symbolTokens(in: body).filter { $0.hasPrefix("MOVE_") && $0 != "MOVE_NONE" && $0 != "LEVEL_UP_MOVE_END" }
+            let species = speciesConstant(fromLearnsetSymbol: symbol)
+            records.append(SourceIndexRecord(
+                id: "learnsets:\(relativePath):\(symbol)",
+                module: .learnsets,
+                title: species,
+                subtitle: relativePath,
+                sourceSpan: SourceSpan(
+                    relativePath: relativePath,
+                    startLine: start + 1,
+                    endLine: clampedEnd + 1
+                ),
+                tags: ["learnset", "level-up", symbol],
+                facts: [
+                    SourceIndexFact(label: "Symbol", value: symbol),
+                    SourceIndexFact(label: "Moves", value: "\(Set(moves).count)"),
+                    SourceIndexFact(label: "First Moves", value: Array(moves.prefix(4)).joined(separator: ", "))
+                ],
+                preview: body.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+            ))
+            index = clampedEnd + 1
+        }
+        return records
+    }
+
+    private static func learnsetSymbol(in line: String) -> String? {
+        guard
+            line.contains("LevelUpLearnset"),
+            let range = line.range(of: #"s[A-Za-z0-9_]+LevelUpLearnset"#, options: .regularExpression)
+        else {
+            return nil
+        }
+        return String(line[range])
+    }
+
+    private static func speciesConstant(fromLearnsetSymbol symbol: String) -> String {
+        var name = symbol
+        if name.hasPrefix("s") {
+            name.removeFirst()
+        }
+        if name.hasSuffix("LevelUpLearnset") {
+            name.removeLast("LevelUpLearnset".count)
+        }
+        return "SPECIES_\(screamingSnakeCase(name))"
+    }
+}
+
+private enum SpeciesFamilySupplementScanner {
+    static func records(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        let blocks = bracketedSpeciesBlocks(in: text, relativePath: relativePath)
+        var records: [SourceIndexRecord] = []
+        for block in blocks {
+            let fields = CFieldExtractor.fields(in: block.body)
+            if block.body.contains(".evolutions") {
+                records.append(
+                    SourceIndexRecord(
+                        id: "evolutions:\(relativePath):\(block.species)",
+                        module: .evolutions,
+                        title: block.species,
+                        subtitle: relativePath,
+                        sourceSpan: block.span,
+                        tags: ["evolution", "species-info"],
+                        facts: [
+                            SourceIndexFact(label: "Evolution", value: compact(block.body, marker: ".evolutions"))
+                        ],
+                        preview: preview(block.body, marker: ".evolutions")
+                    )
+                )
+            }
+
+            if fields["categoryName"] != nil || fields["description"] != nil || fields["natDexNum"] != nil {
+                records.append(
+                    SourceIndexRecord(
+                        id: "pokedex:\(relativePath):\(block.species)",
+                        module: .pokedex,
+                        title: block.species,
+                        subtitle: relativePath,
+                        sourceSpan: block.span,
+                        tags: ["pokedex", "species-info"],
+                        facts: [
+                            SourceIndexFact(label: "Category", value: fields["categoryName"] ?? "Unknown"),
+                            SourceIndexFact(label: "Height", value: fields["height"] ?? "Unknown"),
+                            SourceIndexFact(label: "Weight", value: fields["weight"] ?? "Unknown"),
+                            SourceIndexFact(label: "Description", value: fields["description"] ?? "Unknown")
+                        ],
+                        preview: block.body.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+                    )
+                )
+            }
+        }
+        return records
+    }
+
+    private static func bracketedSpeciesBlocks(in text: String, relativePath: String) -> [(species: String, body: String, span: SourceSpan)] {
+        let lines = text.components(separatedBy: .newlines)
+        var blocks: [(species: String, body: String, span: SourceSpan)] = []
+        var index = 0
+        while index < lines.count {
+            guard let species = speciesName(in: lines[index]) else {
+                index += 1
+                continue
+            }
+
+            let start = index
+            var end = index
+            var depth = 0
+            var foundOpenBrace = false
+            while end < lines.count {
+                for character in lines[end] {
+                    if character == "{" {
+                        depth += 1
+                        foundOpenBrace = true
+                    } else if character == "}" {
+                        depth = max(0, depth - 1)
+                    }
+                }
+                if foundOpenBrace, depth == 0, end > start {
+                    break
+                }
+                end += 1
+            }
+
+            let clampedEnd = min(end, lines.count - 1)
+            let body = lines[start...clampedEnd].joined(separator: "\n")
+            blocks.append(
+                (
+                    species: species,
+                    body: body,
+                    span: SourceSpan(relativePath: relativePath, startLine: start + 1, endLine: clampedEnd + 1)
+                )
+            )
+            index = clampedEnd + 1
+        }
+        return blocks
+    }
+
+    private static func speciesName(in line: String) -> String? {
+        guard
+            let open = line.range(of: "[SPECIES_"),
+            let close = line[open.upperBound...].firstIndex(of: "]")
+        else {
+            return nil
+        }
+        return String(line[line.index(after: open.lowerBound)..<close])
+    }
+
+    private static func compact(_ body: String, marker: String) -> String {
+        preview(body, marker: marker)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func preview(_ body: String, marker: String) -> String {
+        let lines = body.components(separatedBy: .newlines)
+        guard let index = lines.firstIndex(where: { $0.contains(marker) }) else {
+            return lines.prefix(8).joined(separator: "\n")
+        }
+        return lines[index..<min(lines.count, index + 8)].joined(separator: "\n")
+    }
+}
+
+private struct CInitializerTableScanner {
+    let text: String
+    let relativePath: String
+    let descriptor: CInitializerTableDescriptor
+
+    func parse() -> CInitializerTableParseResult {
+        let characters = Array(text)
+        guard
+            let tableRange = text.range(of: descriptor.tableSymbol),
+            let openOffset = firstOpenBrace(after: text.distance(from: text.startIndex, to: tableRange.upperBound), in: characters),
+            let closeOffset = matchingCloseBrace(from: openOffset, in: characters)
+        else {
+            return CInitializerTableParseResult(
+                descriptor: descriptor,
+                entries: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "TABLE_NOT_FOUND",
+                        message: "Could not find C initializer table \(descriptor.tableSymbol).",
+                        span: SourceSpan(relativePath: relativePath, startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        let lineNumbers = lineNumberMap(for: characters)
+        let segments = topLevelSegments(in: characters, openOffset: openOffset, closeOffset: closeOffset)
+        var entries: [CInitializerEntry] = []
+        var ordinal = 0
+
+        for segment in segments {
+            guard let bounds = trimmedBounds(for: segment, in: characters) else { continue }
+            let body = String(characters[bounds.start..<bounds.end])
+            guard !body.isEmpty else { continue }
+
+            let symbol = symbol(for: body, ordinal: ordinal)
+            let fields = CFieldExtractor.fields(in: body)
+            entries.append(
+                CInitializerEntry(
+                    symbol: symbol,
+                    body: body,
+                    span: SourceSpan(
+                        relativePath: relativePath,
+                        startLine: lineNumbers[min(bounds.start, lineNumbers.count - 1)],
+                        endLine: lineNumbers[min(max(bounds.end - 1, bounds.start), lineNumbers.count - 1)]
+                    ),
+                    ordinal: descriptor.entryStyle == .positional ? ordinal : nil,
+                    fields: fields
+                )
+            )
+            ordinal += 1
+        }
+
+        return CInitializerTableParseResult(descriptor: descriptor, entries: entries)
+    }
+
+    private func firstOpenBrace(after start: Int, in characters: [Character]) -> Int? {
+        var index = start
+        while index < characters.count {
+            if characters[index] == "{" {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private func matchingCloseBrace(from openOffset: Int, in characters: [Character]) -> Int? {
+        var index = openOffset
+        var depth = 0
+        var state = ScannerState.normal
+
+        while index < characters.count {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+
+            if state == .normal {
+                if character == "{" {
+                    depth += 1
+                } else if character == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return index
+                    }
+                }
+            }
+
+            index += 1
+        }
+
+        return nil
+    }
+
+    private func topLevelSegments(
+        in characters: [Character],
+        openOffset: Int,
+        closeOffset: Int
+    ) -> [(start: Int, end: Int)] {
+        var segments: [(start: Int, end: Int)] = []
+        var segmentStart = openOffset + 1
+        var index = openOffset + 1
+        var depth = 0
+        var state = ScannerState.normal
+
+        while index < closeOffset {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+
+            if state == .normal {
+                if character == "{" {
+                    depth += 1
+                } else if character == "}" {
+                    depth = max(0, depth - 1)
+                } else if character == "," && depth == 0 {
+                    segments.append((segmentStart, index))
+                    segmentStart = index + 1
+                }
+            }
+
+            index += 1
+        }
+
+        if segmentStart < closeOffset {
+            segments.append((segmentStart, closeOffset))
+        }
+        return segments
+    }
+
+    private func trimmedBounds(
+        for segment: (start: Int, end: Int),
+        in characters: [Character]
+    ) -> (start: Int, end: Int)? {
+        var start = segment.start
+        var end = segment.end
+        while start < end, characters[start].isWhitespace {
+            start += 1
+        }
+        while end > start, characters[end - 1].isWhitespace {
+            end -= 1
+        }
+        guard start < end else { return nil }
+        return (start, end)
+    }
+
+    private func symbol(for body: String, ordinal: Int) -> String {
+        if
+            descriptor.entryStyle == .bracketed,
+            let open = body.firstIndex(of: "["),
+            let close = body[open...].firstIndex(of: "]")
+        {
+            let symbol = body[body.index(after: open)..<close]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !symbol.isEmpty {
+                return symbol
+            }
+        }
+
+        if
+            descriptor.entryStyle == .positional,
+            let idField = descriptor.idField,
+            let idValue = CFieldExtractor.fields(in: body)[idField],
+            !idValue.isEmpty
+        {
+            return idValue
+        }
+
+        return "\(descriptor.tableSymbol)[\(ordinal)]"
+    }
+}
+
+private enum CFieldExtractor {
+    static func fields(in text: String) -> [String: String] {
+        let characters = Array(text)
+        var fields: [String: String] = [:]
+        var index = 0
+
+        while index < characters.count {
+            guard characters[index] == "." else {
+                index += 1
+                continue
+            }
+
+            let nameStart = index + 1
+            var nameEnd = nameStart
+            while nameEnd < characters.count, isIdentifier(characters[nameEnd]) {
+                nameEnd += 1
+            }
+            guard nameEnd > nameStart else {
+                index += 1
+                continue
+            }
+
+            var cursor = nameEnd
+            while cursor < characters.count, characters[cursor].isWhitespace {
+                cursor += 1
+            }
+            guard cursor < characters.count, characters[cursor] == "=" else {
+                index += 1
+                continue
+            }
+            cursor += 1
+            while cursor < characters.count, characters[cursor].isWhitespace {
+                cursor += 1
+            }
+
+            let valueStart = cursor
+            var valueEnd = cursor
+            var depth = 0
+            var state = ScannerState.normal
+
+            while valueEnd < characters.count {
+                let character = characters[valueEnd]
+                let next = valueEnd + 1 < characters.count ? characters[valueEnd + 1] : nil
+                updateState(&state, character: character, next: next, index: &valueEnd)
+
+                if state == .normal {
+                    if character == "{" || character == "(" || character == "[" {
+                        depth += 1
+                    } else if character == "}" || character == ")" || character == "]" {
+                        if depth == 0 {
+                            break
+                        }
+                        depth -= 1
+                    } else if character == "," && depth == 0 {
+                        break
+                    }
+                }
+
+                valueEnd += 1
+            }
+
+            let name = String(characters[nameStart..<nameEnd])
+            let value = String(characters[valueStart..<valueEnd])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            fields[name] = value
+            index = max(valueEnd, index + 1)
+        }
+
+        return fields
+    }
+
+    private static func isIdentifier(_ character: Character) -> Bool {
+        character == "_" || character.isLetter || character.isNumber
+    }
+}
+
+private enum ScriptSourceIndexScanner {
+    static func scriptRecords(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        labelBlocks(in: text, relativePath: relativePath).map { block in
+            let commands = commandNames(in: block.body)
+            let textRefs = symbolTokens(in: block.body).filter { token in
+                token.hasPrefix("gText_") || token.hasPrefix("Text_")
+            }
+            return SourceIndexRecord(
+                id: "scripts:\(relativePath):\(block.label)",
+                module: .scripts,
+                title: block.label,
+                subtitle: relativePath,
+                sourceSpan: block.span,
+                tags: ["script", "read-only"],
+                facts: [
+                    SourceIndexFact(label: "Commands", value: "\(commands.count)"),
+                    SourceIndexFact(label: "Text Refs", value: "\(Set(textRefs).count)"),
+                    SourceIndexFact(label: "Lines", value: "\(block.span.startLine)-\(block.span.endLine)")
+                ],
+                preview: block.body.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+            )
+        }
+    }
+
+    static func textRecords(
+        in text: String,
+        relativePath: String
+    ) -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
+        var allDiagnostics: [Diagnostic] = []
+        let records = labelBlocks(in: text, relativePath: relativePath).compactMap { block -> SourceIndexRecord? in
+            let stringLines = block.body.components(separatedBy: .newlines).filter { line in
+                line.trimmingCharacters(in: .whitespaces).hasPrefix(".string")
+            }
+            guard !stringLines.isEmpty else { return nil }
+
+            let diagnostics = sourceTextDiagnostics(for: block, stringLines: stringLines)
+            allDiagnostics.append(contentsOf: diagnostics)
+            return SourceIndexRecord(
+                id: "text:\(relativePath):\(block.label)",
+                module: .text,
+                title: block.label,
+                subtitle: relativePath,
+                sourceSpan: block.span,
+                tags: ["text", "read-only"],
+                facts: [
+                    SourceIndexFact(label: "String Lines", value: "\(stringLines.count)"),
+                    SourceIndexFact(label: "Characters", value: "\(stringLines.joined().count)"),
+                    SourceIndexFact(label: "Lines", value: "\(block.span.startLine)-\(block.span.endLine)")
+                ],
+                preview: stringLines.prefix(8).joined(separator: "\n"),
+                diagnostics: diagnostics
+            )
+        }
+        return (records, allDiagnostics)
+    }
+
+    private static func sourceTextDiagnostics(
+        for block: LabelBlock,
+        stringLines: [String],
+        maxLineLength: Int = 68
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let lines = block.body.components(separatedBy: .newlines)
+
+        for (offset, line) in lines.enumerated() where line.count > maxLineLength {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "TEXT_LINE_LONG",
+                    message: "Line exceeds \(maxLineLength) characters.",
+                    span: SourceSpan(
+                        relativePath: block.span.relativePath,
+                        startLine: block.span.startLine + offset,
+                        startColumn: maxLineLength + 1
+                    )
+                )
+            )
+        }
+
+        if !stringLines.contains(where: { $0.contains("$") }) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "TEXT_TERMINATOR_MISSING",
+                    message: "Text block has no $ terminator.",
+                    span: block.span
+                )
+            )
+        }
+
+        return diagnostics
+    }
+
+    private static func commandNames(in body: String) -> [String] {
+        body.components(separatedBy: .newlines).compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard
+                !trimmed.isEmpty,
+                !trimmed.hasPrefix("@"),
+                !trimmed.hasSuffix("::")
+            else {
+                return nil
+            }
+            return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+        }
+    }
+}
+
+private struct TrainerPartyIndexScanner {
+    static func records(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        let lines = text.components(separatedBy: .newlines)
+        var records: [SourceIndexRecord] = []
+        var currentLabel: String?
+        var currentStart = 0
+
+        for (index, line) in lines.enumerated() {
+            guard let label = trainerHeader(line) else { continue }
+            if let currentLabel {
+                records.append(record(label: currentLabel, start: currentStart, end: index, lines: lines, relativePath: relativePath))
+            }
+            currentLabel = label
+            currentStart = index
+        }
+
+        if let currentLabel {
+            records.append(record(label: currentLabel, start: currentStart, end: lines.count, lines: lines, relativePath: relativePath))
+        }
+        return records
+    }
+
+    private static func trainerHeader(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("=== "), trimmed.hasSuffix(" ===") else { return nil }
+        return trimmed
+            .replacingOccurrences(of: "=", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func record(
+        label: String,
+        start: Int,
+        end: Int,
+        lines: [String],
+        relativePath: String
+    ) -> SourceIndexRecord {
+        let body = lines[start..<end].joined(separator: "\n")
+        let pokemonCount = body.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty
+                && !trimmed.contains(":")
+                && !trimmed.hasPrefix("===")
+                && !trimmed.hasPrefix("- ")
+                && !trimmed.hasPrefix("/*")
+                && !trimmed.hasPrefix("*")
+        }.count
+
+        return SourceIndexRecord(
+            id: "trainers:\(relativePath):\(label)",
+            module: .trainers,
+            title: label,
+            subtitle: relativePath,
+            sourceSpan: SourceSpan(relativePath: relativePath, startLine: start + 1, endLine: max(start + 1, end)),
+            tags: ["trainer", "party"],
+            facts: [
+                SourceIndexFact(label: "Party Mons", value: "\(pokemonCount)"),
+                SourceIndexFact(label: "Lines", value: "\(start + 1)-\(max(start + 1, end))")
+            ],
+            preview: body.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+        )
+    }
+}
+
+private struct LabelBlock {
+    let label: String
+    let body: String
+    let span: SourceSpan
+}
+
+private func labelBlocks(in text: String, relativePath: String) -> [LabelBlock] {
+    let lines = text.components(separatedBy: .newlines)
+    var blocks: [LabelBlock] = []
+    var currentLabel: String?
+    var currentStart = 0
+
+    for (index, line) in lines.enumerated() {
+        guard let label = sourceLabel(line) else { continue }
+        if let currentLabel {
+            let body = lines[currentStart..<index].joined(separator: "\n")
+            blocks.append(
+                LabelBlock(
+                    label: currentLabel,
+                    body: body,
+                    span: SourceSpan(relativePath: relativePath, startLine: currentStart + 1, endLine: max(currentStart + 1, index))
+                )
+            )
+        }
+        currentLabel = label
+        currentStart = index
+    }
+
+    if let currentLabel {
+        let body = lines[currentStart..<lines.count].joined(separator: "\n")
+        blocks.append(
+            LabelBlock(
+                label: currentLabel,
+                body: body,
+                span: SourceSpan(relativePath: relativePath, startLine: currentStart + 1, endLine: max(currentStart + 1, lines.count))
+            )
+        )
+    }
+
+    return blocks
+}
+
+private func sourceLabel(_ line: String) -> String? {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasSuffix("::") else { return nil }
+    let label = String(trimmed.dropLast(2))
+    guard label.allSatisfy({ $0 == "_" || $0.isLetter || $0.isNumber }) else { return nil }
+    return label
+}
+
+private func symbolTokens(in text: String) -> [String] {
+    text.split { character in
+        !(character == "_" || character.isLetter || character.isNumber)
+    }.map(String.init)
+}
+
+private func regexMatches(
+    _ pattern: String,
+    in text: String,
+    options: NSRegularExpression.Options = []
+) -> [[String]] {
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+        return []
+    }
+    let nsText = text as NSString
+    return regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)).map { match in
+        (0..<match.numberOfRanges).map { index in
+            let range = match.range(at: index)
+            guard range.location != NSNotFound else { return "" }
+            return nsText.substring(with: range)
+        }
+    }
+}
+
+private func lineNumber(containing needle: String, in text: String) -> Int? {
+    guard let range = text.range(of: needle) else { return nil }
+    return lineNumber(at: text.distance(from: text.startIndex, to: range.lowerBound), in: text)
+}
+
+private func lineNumber(at offset: Int, in text: String) -> Int {
+    var line = 1
+    for (index, character) in text.enumerated() {
+        if index >= offset {
+            break
+        }
+        if character == "\n" {
+            line += 1
+        }
+    }
+    return line
+}
+
+private func screamingSnakeCase(_ value: String) -> String {
+    var output = ""
+    var previousWasLowercaseOrNumber = false
+    for character in value {
+        if character == "_" {
+            output.append("_")
+            previousWasLowercaseOrNumber = false
+            continue
+        }
+        if character.isUppercase, previousWasLowercaseOrNumber, !output.hasSuffix("_") {
+            output.append("_")
+        }
+        output.append(character.uppercased())
+        previousWasLowercaseOrNumber = character.isLowercase || character.isNumber
+    }
+    return output
+}
+
+private enum ScannerState: Equatable {
+    case normal
+    case string
+    case character
+    case lineComment
+    case blockComment
+}
+
+private func updateState(
+    _ state: inout ScannerState,
+    character: Character,
+    next: Character?,
+    index: inout Int
+) {
+    switch state {
+    case .normal:
+        if character == "/", next == "/" {
+            state = .lineComment
+            index += 1
+        } else if character == "/", next == "*" {
+            state = .blockComment
+            index += 1
+        } else if character == "\"" {
+            state = .string
+        } else if character == "'" {
+            state = .character
+        }
+    case .string:
+        if character == "\\" {
+            index += 1
+        } else if character == "\"" {
+            state = .normal
+        }
+    case .character:
+        if character == "\\" {
+            index += 1
+        } else if character == "'" {
+            state = .normal
+        }
+    case .lineComment:
+        if character == "\n" {
+            state = .normal
+        }
+    case .blockComment:
+        if character == "*", next == "/" {
+            state = .normal
+            index += 1
+        }
+    }
+}
+
+private func lineNumberMap(for characters: [Character]) -> [Int] {
+    var line = 1
+    return characters.map { character in
+        defer {
+            if character == "\n" {
+                line += 1
+            }
+        }
+        return line
+    }
+}

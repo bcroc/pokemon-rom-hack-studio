@@ -6,7 +6,7 @@ public enum DiagnosticSeverity: String, Codable, Equatable, CaseIterable {
     case error
 }
 
-public struct SourceSpan: Codable, Equatable {
+public struct SourceSpan: Codable, Equatable, Sendable {
     public let relativePath: String
     public let startLine: Int
     public let startColumn: Int
@@ -148,6 +148,7 @@ public struct MutationPlan: Codable, Equatable, Identifiable {
 }
 
 public enum CoreCapability: String, Codable, Equatable, CaseIterable {
+    case resourceIndex
     case mapIndex
     case layoutIndex
     case scriptOutline
@@ -195,6 +196,7 @@ public struct PlaytestSession: Codable, Equatable, Identifiable {
     public let emulator: String
     public let romPath: String?
     public let arguments: [String]
+    public let artifacts: [PlaytestSessionArtifact]
     public let isRunnable: Bool
     public let diagnostics: [Diagnostic]
 
@@ -204,6 +206,7 @@ public struct PlaytestSession: Codable, Equatable, Identifiable {
         emulator: String = "mGBA",
         romPath: String?,
         arguments: [String] = [],
+        artifacts: [PlaytestSessionArtifact] = [],
         isRunnable: Bool = false,
         diagnostics: [Diagnostic] = []
     ) {
@@ -212,8 +215,41 @@ public struct PlaytestSession: Codable, Equatable, Identifiable {
         self.emulator = emulator
         self.romPath = romPath
         self.arguments = arguments
+        self.artifacts = artifacts
         self.isRunnable = isRunnable
         self.diagnostics = diagnostics
+    }
+}
+
+public enum PlaytestSessionArtifactKind: String, Codable, Equatable, CaseIterable {
+    case runLog
+    case screenshot
+    case saveState
+    case stdout
+    case stderr
+}
+
+public struct PlaytestSessionArtifact: Codable, Equatable, Identifiable {
+    public var id: String { "\(kind.rawValue):\(relativePath)" }
+
+    public let kind: PlaytestSessionArtifactKind
+    public let relativePath: String
+    public let isExpected: Bool
+    public let exists: Bool
+    public let detail: String
+
+    public init(
+        kind: PlaytestSessionArtifactKind,
+        relativePath: String,
+        isExpected: Bool = true,
+        exists: Bool = false,
+        detail: String
+    ) {
+        self.kind = kind
+        self.relativePath = relativePath
+        self.isExpected = isExpected
+        self.exists = exists
+        self.detail = detail
     }
 }
 
@@ -274,7 +310,7 @@ public struct EmeraldAdapter: GameAdapter {
     public let displayName = "pokeemerald"
     public let supportedProfiles: [GameProfile] = [.pokeemerald]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -307,7 +343,7 @@ public struct FireRedAdapter: GameAdapter {
     public let displayName = "pokefirered"
     public let supportedProfiles: [GameProfile] = [.pokefirered]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -328,7 +364,12 @@ public struct FireRedAdapter: GameAdapter {
             documents: DecompIndexFactory.fireRedDocuments(root: root, fileManager: fileManager),
             generatedOutputs: DecompIndexFactory.pretGeneratedOutputs(root: root, fileManager: fileManager),
             buildTargets: [
-                BuildTarget(id: "firered-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokefirered.gba")
+                BuildTarget(id: "firered-build", name: "Build FireRed", kind: .build, command: ["make", "firered"], outputPath: "pokefirered.gba"),
+                BuildTarget(id: "firered-rev1-build", name: "Build FireRed Rev 1", kind: .build, command: ["make", "firered_rev1"], outputPath: "pokefirered_rev1.gba"),
+                BuildTarget(id: "firered-switch-build", name: "Build FireRed Switch", kind: .build, command: ["make", "firered_switch"], outputPath: "pokefirered_switch.gba"),
+                BuildTarget(id: "leafgreen-build", name: "Build LeafGreen", kind: .build, command: ["make", "leafgreen"], outputPath: "pokeleafgreen.gba"),
+                BuildTarget(id: "leafgreen-rev1-build", name: "Build LeafGreen Rev 1", kind: .build, command: ["make", "leafgreen_rev1"], outputPath: "pokeleafgreen_rev1.gba"),
+                BuildTarget(id: "leafgreen-switch-build", name: "Build LeafGreen Switch", kind: .build, command: ["make", "leafgreen_switch"], outputPath: "pokeleafgreen_switch.gba")
             ]
         )
     }
@@ -339,7 +380,7 @@ public struct RubySapphireAdapter: GameAdapter {
     public let displayName = "pokeruby / pokesapphire"
     public let supportedProfiles: [GameProfile] = [.pokeruby]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -361,8 +402,14 @@ public struct RubySapphireAdapter: GameAdapter {
             generatedOutputs: DecompIndexFactory.pretGeneratedOutputs(root: root, fileManager: fileManager),
             buildTargets: [
                 BuildTarget(id: "ruby-build", name: "Build Ruby", kind: .build, command: ["make", "ruby"], outputPath: "pokeruby.gba"),
+                BuildTarget(id: "ruby-rev1-build", name: "Build Ruby Rev 1", kind: .build, command: ["make", "ruby_rev1"], outputPath: "pokeruby_rev1.gba"),
+                BuildTarget(id: "ruby-rev2-build", name: "Build Ruby Rev 2", kind: .build, command: ["make", "ruby_rev2"], outputPath: "pokeruby_rev2.gba"),
                 BuildTarget(id: "sapphire-build", name: "Build Sapphire", kind: .build, command: ["make", "sapphire"], outputPath: "pokesapphire.gba"),
-                BuildTarget(id: "ruby-modern", name: "Build Modern", kind: .build, command: ["make", "modern"])
+                BuildTarget(id: "sapphire-rev1-build", name: "Build Sapphire Rev 1", kind: .build, command: ["make", "sapphire_rev1"], outputPath: "pokesapphire_rev1.gba"),
+                BuildTarget(id: "sapphire-rev2-build", name: "Build Sapphire Rev 2", kind: .build, command: ["make", "sapphire_rev2"], outputPath: "pokesapphire_rev2.gba"),
+                BuildTarget(id: "ruby-de-build", name: "Build Ruby German", kind: .build, command: ["make", "ruby_de"], outputPath: "pokeruby_de.gba"),
+                BuildTarget(id: "sapphire-de-build", name: "Build Sapphire German", kind: .build, command: ["make", "sapphire_de"], outputPath: "pokesapphire_de.gba"),
+                BuildTarget(id: "ruby-modern", name: "Build Modern", kind: .build, command: ["make", "modern"], outputPath: "pokeruby.gba")
             ]
         )
     }
@@ -373,7 +420,7 @@ public struct ExpansionAdapter: GameAdapter {
     public let displayName = "pokeemerald-expansion"
     public let supportedProfiles: [GameProfile] = [.pokeemeraldExpansion]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -383,11 +430,10 @@ public struct ExpansionAdapter: GameAdapter {
     }
 
     public func index(root: URL, fileManager: FileManager = .default) throws -> ProjectIndex {
-        var documents = DecompIndexFactory.emeraldDocuments(root: root, fileManager: fileManager)
+        var documents = DecompIndexFactory.expansionDocuments(root: root, fileManager: fileManager)
         documents.append(contentsOf: [
             DecompIndexFactory.document(root: root, "include/constants/expansion.h", .cHeader, fileManager: fileManager),
             DecompIndexFactory.document(root: root, "src/rom_header_rhh.c", .cSource, fileManager: fileManager),
-            DecompIndexFactory.document(root: root, "src/data/trainers.party", .text, fileManager: fileManager),
             DecompIndexFactory.document(root: root, "src/data/gimmicks.h", .cHeader, fileManager: fileManager),
             DecompIndexFactory.document(root: root, "src/data/pokemon/form_change_tables.h", .cHeader, fileManager: fileManager),
             DecompIndexFactory.document(root: root, "include/config/battle.h", .configuration, fileManager: fileManager),
@@ -421,16 +467,20 @@ public struct BinaryROMAdapter: GameAdapter {
     public let displayName = "Gen III binary ROM"
     public let supportedProfiles: [GameProfile] = [.binaryROM]
     public let supportedModules: [EditorModule] = [.rom, .patches, .diagnostics]
-    public let capabilities: [CoreCapability] = [.binaryROMGraph, .patchPlanning, .diagnostics, .playtestBridge]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .binaryROMGraph, .patchPlanning, .diagnostics, .playtestBridge]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
 
-    public func canOpen(root: URL, fileManager: FileManager = .default) -> Bool {
+    public static func isSupportedROM(_ root: URL, fileManager: FileManager = .default) -> Bool {
         var isDirectory: ObjCBool = false
         return fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory)
             && !isDirectory.boolValue
             && root.pathExtension.lowercased() == "gba"
+    }
+
+    public func canOpen(root: URL, fileManager: FileManager = .default) -> Bool {
+        Self.isSupportedROM(root, fileManager: fileManager)
     }
 
     public func index(root: URL, fileManager: FileManager = .default) throws -> ProjectIndex {
@@ -465,13 +515,92 @@ public struct BinaryROMAdapter: GameAdapter {
     }
 }
 
+public struct GameCubeDiscAdapter: GameAdapter {
+    public let id = "gen3.gamecube-disc"
+    public let displayName = "Generation III GameCube disc"
+    public let supportedProfiles: [GameProfile] = [.pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia]
+    public let supportedModules: [EditorModule] = [.rom, .graphics, .pokemon, .trainers, .items, .moves, .text, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .binaryROMGraph, .diagnostics]
+    public let writePolicy: WritePolicy = .mutationPlanOnly
+
+    public init() {}
+
+    public func canOpen(root: URL, fileManager: FileManager = .default) -> Bool {
+        GameCubeDiscParser.isSupportedDiscImage(root, fileManager: fileManager)
+    }
+
+    public func index(root: URL, fileManager: FileManager = .default) throws -> ProjectIndex {
+        let disc = GameCubeDiscParser.parse(path: root.path, fileManager: fileManager)
+        guard disc.header != nil || disc.profile != .unknown else {
+            throw PokemonHackCoreError.unsupportedProject(root.path)
+        }
+
+        let documents = disc.resources.prefix(256).map { resource in
+            SourceDocument(
+                relativePath: resource.path,
+                kind: sourceKind(for: resource),
+                role: .localInput,
+                exists: true
+            )
+        }
+
+        return ProjectIndex(
+            root: SourceLocation(path: root.standardizedFileURL.path, exists: true),
+            profile: disc.profile,
+            adapterID: id,
+            adapterName: adapterName(for: disc.profile),
+            editorModules: supportedModules,
+            capabilities: capabilities,
+            writePolicy: writePolicy,
+            documents: documents.isEmpty ? [
+                SourceDocument(relativePath: root.lastPathComponent, kind: .rom, role: .localInput, exists: true)
+            ] : documents,
+            diagnostics: disc.diagnostics,
+            buildTargets: []
+        )
+    }
+
+    private func adapterName(for profile: GameProfile) -> String {
+        switch profile {
+        case .pokemonColosseum:
+            "Pokemon Colosseum disc"
+        case .pokemonXD:
+            "Pokemon XD disc"
+        case .pokemonBox:
+            "Pokemon Box disc"
+        case .pokemonChannel:
+            "Pokemon Channel disc"
+        default:
+            displayName
+        }
+    }
+
+    private func sourceKind(for resource: GameCubeResource) -> SourceKind {
+        switch resource.kind {
+        case .filesystem, .archive, .archiveMember, .dol:
+            .binary
+        case .text:
+            .text
+        case .pokemonTable, .trainerTable, .itemTable, .moveTable:
+            .configuration
+        case .model, .texture:
+            .graphics
+        case .audio:
+            .binary
+        case .unknown:
+            .unknown
+        }
+    }
+}
+
 public enum GameAdapterRegistry {
     public static var all: [any GameAdapter] {
         [
+            GameCubeDiscAdapter(),
             ExpansionAdapter(),
-            EmeraldAdapter(),
-            FireRedAdapter(),
             RubySapphireAdapter(),
+            FireRedAdapter(),
+            EmeraldAdapter(),
             BinaryROMAdapter()
         ]
     }
@@ -523,6 +652,53 @@ enum DecompIndexFactory {
     }
 
     static func emeraldDocuments(root: URL, fileManager: FileManager) -> [SourceDocument] {
+        decompDocuments(
+            root: root,
+            fileManager: fileManager,
+            trainerDocuments: [
+                document(root: root, "src/data/trainers.h", .cHeader, fileManager: fileManager)
+            ],
+            itemDocument: document(root: root, "src/data/items.h", .cHeader, fileManager: fileManager)
+        )
+    }
+
+    static func fireRedDocuments(root: URL, fileManager: FileManager) -> [SourceDocument] {
+        var documents = decompDocuments(
+            root: root,
+            fileManager: fileManager,
+            trainerDocuments: [
+                document(root: root, "src/data/trainers.h", .cHeader, fileManager: fileManager)
+            ],
+            itemDocument: preferredDocument(
+                root: root,
+                primary: ("src/data/items.h", .cHeader),
+                fallback: ("src/data/items.json", .json),
+                fallbackPreservesUnknownFields: true,
+                fileManager: fileManager
+            )
+        )
+        documents.append(document(root: root, "graphics/quest_log", .graphics, fileManager: fileManager))
+        return documents
+    }
+
+    static func expansionDocuments(root: URL, fileManager: FileManager) -> [SourceDocument] {
+        decompDocuments(
+            root: root,
+            fileManager: fileManager,
+            trainerDocuments: [
+                document(root: root, "src/data/trainers.party", .text, fileManager: fileManager),
+                document(root: root, "src/data/trainer_parties.h", .cHeader, fileManager: fileManager)
+            ],
+            itemDocument: document(root: root, "src/data/items.h", .cHeader, fileManager: fileManager)
+        )
+    }
+
+    private static func decompDocuments(
+        root: URL,
+        fileManager: FileManager,
+        trainerDocuments: [SourceDocument],
+        itemDocument: SourceDocument
+    ) -> [SourceDocument] {
         [
             document(root: root, "Makefile", .makefile, fileManager: fileManager),
             document(root: root, "data/maps/map_groups.json", .mapJson, preservesUnknownFields: true, fileManager: fileManager),
@@ -530,18 +706,12 @@ enum DecompIndexFactory {
             document(root: root, "data/scripts", .script, fileManager: fileManager),
             document(root: root, "data/text", .text, fileManager: fileManager),
             document(root: root, "src/data/pokemon/species_info.h", .cHeader, fileManager: fileManager),
-            document(root: root, "src/data/trainers.h", .cHeader, fileManager: fileManager),
-            document(root: root, "src/data/items.h", .cHeader, fileManager: fileManager),
+        ] + trainerDocuments + [
+            itemDocument,
             document(root: root, "src/data/wild_encounters.json", .json, preservesUnknownFields: true, fileManager: fileManager),
             document(root: root, "graphics/pokemon", .graphics, fileManager: fileManager),
             document(root: root, "graphics/trainers", .graphics, fileManager: fileManager)
         ]
-    }
-
-    static func fireRedDocuments(root: URL, fileManager: FileManager) -> [SourceDocument] {
-        var documents = emeraldDocuments(root: root, fileManager: fileManager)
-        documents.append(document(root: root, "graphics/quest_log", .graphics, fileManager: fileManager))
-        return documents
     }
 
     static func rubyDocuments(root: URL, fileManager: FileManager) -> [SourceDocument] {
@@ -590,6 +760,21 @@ enum DecompIndexFactory {
             exists: fileManager.fileExists(atPath: root.appendingPathComponent(relativePath).path),
             preservesUnknownFields: preservesUnknownFields
         )
+    }
+
+    private static func preferredDocument(
+        root: URL,
+        primary: (String, SourceKind),
+        fallback: (String, SourceKind),
+        primaryPreservesUnknownFields: Bool = false,
+        fallbackPreservesUnknownFields: Bool = false,
+        fileManager: FileManager
+    ) -> SourceDocument {
+        let primaryURL = root.appendingPathComponent(primary.0)
+        if fileManager.fileExists(atPath: primaryURL.path) {
+            return document(root: root, primary.0, primary.1, preservesUnknownFields: primaryPreservesUnknownFields, fileManager: fileManager)
+        }
+        return document(root: root, fallback.0, fallback.1, preservesUnknownFields: fallbackPreservesUnknownFields, fileManager: fileManager)
     }
 
     static func generated(root: URL, _ relativePath: String, _ role: SourceRole, fileManager: FileManager) -> SourceDocument {
@@ -831,11 +1016,21 @@ public struct CInitializerEntry: Codable, Equatable, Identifiable {
     public let symbol: String
     public let body: String
     public let span: SourceSpan
+    public let ordinal: Int?
+    public let fields: [String: String]
 
-    public init(symbol: String, body: String, span: SourceSpan) {
+    public init(
+        symbol: String,
+        body: String,
+        span: SourceSpan,
+        ordinal: Int? = nil,
+        fields: [String: String] = [:]
+    ) {
         self.symbol = symbol
         self.body = body
         self.span = span
+        self.ordinal = ordinal
+        self.fields = fields
     }
 }
 
@@ -1088,7 +1283,7 @@ public struct PatchSummary: Codable, Equatable {
     }
 }
 
-public struct PatchManifest: Codable, Equatable {
+public struct PatchManifestSummary: Codable, Equatable {
     public let name: String
     public let format: PatchFormatID
     public let baseChecksums: [String: String]

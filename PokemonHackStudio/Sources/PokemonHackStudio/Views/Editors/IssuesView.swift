@@ -3,6 +3,7 @@ import SwiftUI
 struct IssuesView: View {
     let issues: [WorkbenchIssue]
     let indexedProject: IndexedProjectSummary?
+    let indexedDiagnostics: [IndexedDiagnosticRow]
 
     var body: some View {
         ScrollView {
@@ -25,7 +26,7 @@ struct IssuesView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if project.diagnostics.isEmpty {
+            if indexedDiagnostics.isEmpty {
                 ContentUnavailableView(
                     "No Diagnostics",
                     systemImage: "checkmark.seal",
@@ -33,7 +34,7 @@ struct IssuesView: View {
                 )
             } else {
                 VStack(spacing: 10) {
-                    ForEach(project.diagnostics) { diagnostic in
+                    ForEach(indexedDiagnostics) { diagnostic in
                         IndexedDiagnosticRowView(diagnostic: diagnostic)
                     }
                 }

@@ -23,6 +23,56 @@ struct PokemonHackStudioApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
 
+                Button("Reveal Selected Project") {
+                    store.revealSelectedProjectInFinder()
+                }
+                .disabled(store.selectedIndexedProject == nil)
+
+                Divider()
+
+                if !store.recentProjectRoots.isEmpty {
+                    ForEach(store.recentProjectRoots, id: \.self) { path in
+                        Button(recentProjectMenuTitle(path)) {
+                            store.openProject(path: path)
+                        }
+                    }
+
+                    Button("Clear Recent Projects") {
+                        store.clearRecentProjects()
+                    }
+
+                    Divider()
+                }
+
+                SettingsLink {
+                    Text("Settings...")
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
+            CommandMenu("Tools") {
+                Button("Validate Sources") {
+                    selectModule(.issues)
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+
+                Button("Refresh Health Checks") {
+                    store.refreshHealthChecks()
+                }
+                .keyboardShortcut("h", modifiers: [.command, .shift])
+                .disabled(!store.hasIndexedProjects)
+
+                Button("Refresh Resource Library") {
+                    store.refreshResourceLibrary()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                Button("Load Asset Catalog") {
+                    store.loadSelectedAssetCatalogIfNeeded(force: true)
+                    selectModule(.resources)
+                }
+                .disabled(store.selectedIndexedProject == nil)
+
                 Divider()
 
                 Button("Build Target") {
@@ -34,19 +84,23 @@ struct PokemonHackStudioApp: App {
                     selectModule(.build)
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
-
-                Button("Validate Sources") {
-                    selectModule(.issues)
-                }
-                    .keyboardShortcut("v", modifiers: [.command, .shift])
             }
 
-            CommandMenu("View") {
+            CommandGroup(after: .sidebar) {
                 Button((showsSourceInspector ?? true) ? "Hide Source Inspector" : "Show Source Inspector") {
                     showsSourceInspector?.toggle()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .disabled(showsSourceInspector == nil)
+
+                Button("Show Diagnostics") {
+                    selectModule(.issues)
+                }
+                .keyboardShortcut("0", modifiers: [.command, .option])
+
+                SettingsLink {
+                    Text("Settings...")
+                }
             }
 
             CommandMenu("Navigate") {
@@ -170,6 +224,10 @@ struct PokemonHackStudioApp: App {
                 .disabled(!canUseMapCommands || !store.mapEditorSession.canDiscardMapEdits)
             }
         }
+
+        Settings {
+            SettingsView(store: store)
+        }
     }
 }
 
@@ -202,6 +260,15 @@ private extension PokemonHackStudioApp {
     func dispatchMapCommand(_ command: MapEditorCommand) {
         guard canUseMapCommands else { return }
         _ = store.mapEditorSession.dispatch(command)
+    }
+
+    func recentProjectMenuTitle(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let title = url.lastPathComponent.isEmpty ? path : url.lastPathComponent
+        if title.count <= 30 {
+            return title
+        }
+        return "\(title.prefix(27))..."
     }
 
     func openProjectPanel() {

@@ -47,6 +47,64 @@ final class CoreScaffoldingTests: XCTestCase {
         XCTAssertTrue(index.buildTargets.contains { $0.id == "expansion-check" })
     }
 
+    func testExpansionAdapterUsesExpansionTrainerSourcesWithoutEmeraldTrainerWarning() throws {
+        let root = try makeDecompFixture(name: "pokeemerald-expansion") { root in
+            try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+            try makeDirectory(root.appendingPathComponent("graphics/pokenav"))
+            try writeCommonDecompSources(root: root, trainerPath: "src/data/trainers.party", itemPath: "src/data/items.h")
+            try write("// trainer parties\n", to: root.appendingPathComponent("src/data/trainer_parties.h"))
+            try write("#define EXPANSION_VERSION 1\n", to: root.appendingPathComponent("include/constants/expansion.h"))
+            try write("// RHH header\n", to: root.appendingPathComponent("src/rom_header_rhh.c"))
+            try write("// gimmicks\n", to: root.appendingPathComponent("src/data/gimmicks.h"))
+            try write("// forms\n", to: root.appendingPathComponent("src/data/pokemon/form_change_tables.h"))
+            try write("#define BATTLE_TEST 1\n", to: root.appendingPathComponent("include/config/battle.h"))
+            try write("#define POKEMON_TEST 1\n", to: root.appendingPathComponent("include/config/pokemon.h"))
+            try write("#define SPECIES_TEST 1\n", to: root.appendingPathComponent("include/config/species_enabled.h"))
+            try write("migration notes\n", to: root.appendingPathComponent("migration_scripts/README.md"))
+            try write("// runner\n", to: root.appendingPathComponent("test/test_runner.c"))
+        }
+
+        let index = try GameAdapterRegistry.index(path: root.path)
+
+        XCTAssertEqual(index.profile, .pokeemeraldExpansion)
+        XCTAssertFalse(index.documents.contains { $0.relativePath == "src/data/trainers.h" })
+        XCTAssertTrue(index.documents.contains { $0.relativePath == "src/data/trainers.party" && $0.exists })
+        XCTAssertTrue(index.documents.contains { $0.relativePath == "src/data/trainer_parties.h" && $0.exists })
+        XCTAssertFalse(index.diagnostics.contains { $0.span?.relativePath == "src/data/trainers.h" })
+        XCTAssertFalse(index.diagnostics.contains { $0.code == "SOURCE_MISSING" })
+    }
+
+    func testFireRedAdapterUsesItemsJSONWhenItemsHeaderIsAbsent() throws {
+        let root = try makeDecompFixture(name: "pokefirered") { root in
+            try write("ROM := poke$(BUILD_NAME).gba\n", to: root.appendingPathComponent("Makefile"))
+            try makeDirectory(root.appendingPathComponent("graphics/quest_log"))
+            try writeCommonDecompSources(root: root, trainerPath: "src/data/trainers.h", itemPath: "src/data/items.json")
+        }
+
+        let index = try GameAdapterRegistry.index(path: root.path)
+
+        XCTAssertEqual(index.profile, .pokefirered)
+        XCTAssertFalse(index.documents.contains { $0.relativePath == "src/data/items.h" })
+        XCTAssertTrue(index.documents.contains { $0.relativePath == "src/data/items.json" && $0.exists })
+        XCTAssertFalse(index.diagnostics.contains { $0.span?.relativePath == "src/data/items.h" })
+        XCTAssertFalse(index.diagnostics.contains { $0.code == "SOURCE_MISSING" })
+    }
+
+    func testMissingPreferredFallbackSourcesStillWarn() throws {
+        let root = try makeDecompFixture(name: "pokefirered") { root in
+            try write("ROM := poke$(BUILD_NAME).gba\n", to: root.appendingPathComponent("Makefile"))
+            try makeDirectory(root.appendingPathComponent("graphics/quest_log"))
+            try writeCommonDecompSources(root: root, trainerPath: "src/data/trainers.h", itemPath: nil)
+        }
+
+        let index = try GameAdapterRegistry.index(path: root.path)
+
+        XCTAssertTrue(index.documents.contains { $0.relativePath == "src/data/items.json" && !$0.exists })
+        XCTAssertTrue(index.diagnostics.contains { diagnostic in
+            diagnostic.code == "SOURCE_MISSING" && diagnostic.span?.relativePath == "src/data/items.json"
+        })
+    }
+
     func testBinaryROMAdapterIndexesLocalROMWithoutMutation() throws {
         let temp = try CoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -205,6 +263,15 @@ final class CoreScaffoldingTests: XCTestCase {
         try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
         try configure(root)
         return root
+    }
+
+    private func writeCommonDecompSources(root: URL, trainerPath: String, itemPath: String?) throws {
+        try write("const struct SpeciesInfo gSpeciesInfo[] = {};\n", to: root.appendingPathComponent("src/data/pokemon/species_info.h"))
+        try write("trainer data\n", to: root.appendingPathComponent(trainerPath))
+        if let itemPath {
+            try write("item data\n", to: root.appendingPathComponent(itemPath))
+        }
+        try write("[]\n", to: root.appendingPathComponent("src/data/wild_encounters.json"))
     }
 
     private func makeDirectory(_ url: URL) throws {

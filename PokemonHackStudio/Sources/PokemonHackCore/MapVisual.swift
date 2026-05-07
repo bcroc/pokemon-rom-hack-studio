@@ -14,9 +14,11 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
     public let primaryTileset: TilesetAsset?
     public let secondaryTileset: TilesetAsset?
     public let metatileLimits: MapMetatileLimits
+    public let tileLimits: MapTileLimits
     public let metatiles: [MetatileDefinition]
     public let events: [MapEventDescriptor]
     public let scriptIndex: MapScriptIndex?
+    public let wildEncounters: MapWildEncounterIndex?
     public let scene: MapVisualScene
     public let diagnostics: [Diagnostic]
     fileprivate let mapJSONText: String
@@ -35,9 +37,11 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         primaryTileset: TilesetAsset?,
         secondaryTileset: TilesetAsset?,
         metatileLimits: MapMetatileLimits = MapMetatileLimits(),
+        tileLimits: MapTileLimits = MapTileLimits(),
         metatiles: [MetatileDefinition],
         events: [MapEventDescriptor],
         scriptIndex: MapScriptIndex? = nil,
+        wildEncounters: MapWildEncounterIndex? = nil,
         scene: MapVisualScene? = nil,
         diagnostics: [Diagnostic] = [],
         mapJSONText: String
@@ -55,9 +59,11 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         self.primaryTileset = primaryTileset
         self.secondaryTileset = secondaryTileset
         self.metatileLimits = metatileLimits
+        self.tileLimits = tileLimits
         self.metatiles = metatiles
         self.events = events
         self.scriptIndex = scriptIndex
+        self.wildEncounters = wildEncounters
         self.scene = scene ?? MapVisualScene(layoutWidth: blockdata.width, layoutHeight: blockdata.height)
         self.diagnostics = diagnostics
         self.mapJSONText = mapJSONText
@@ -65,6 +71,24 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
 }
 
 public struct MapMetatileLimits: Codable, Equatable {
+    public static let defaultPrimary = 512
+    public static let defaultTotal = 1024
+
+    public let primary: Int
+    public let total: Int
+
+    public var secondary: Int {
+        max(total - primary, 0)
+    }
+
+    public init(primary: Int = Self.defaultPrimary, total: Int = Self.defaultTotal) {
+        let resolvedPrimary = max(primary, 1)
+        self.primary = resolvedPrimary
+        self.total = max(total, resolvedPrimary)
+    }
+}
+
+public struct MapTileLimits: Codable, Equatable {
     public static let defaultPrimary = 512
     public static let defaultTotal = 1024
 
@@ -115,6 +139,92 @@ public struct MapVisualMapMetadata: Codable, Equatable, Identifiable {
     }
 }
 
+public struct MapWildEncounterIndex: Codable, Equatable, Identifiable {
+    public var id: String { "\(sourcePath):\(mapID)" }
+
+    public let sourcePath: String
+    public let mapID: String
+    public let groups: [MapWildEncounterGroup]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        sourcePath: String,
+        mapID: String,
+        groups: [MapWildEncounterGroup],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.sourcePath = sourcePath
+        self.mapID = mapID
+        self.groups = groups
+        self.diagnostics = diagnostics
+    }
+
+    public var hasEncounters: Bool {
+        groups.contains { !$0.encounters.isEmpty }
+    }
+}
+
+public struct MapWildEncounterGroup: Codable, Equatable, Identifiable {
+    public var id: String { "\(label):\(groupIndex)" }
+
+    public let groupIndex: Int
+    public let label: String
+    public let forMaps: Bool
+    public let encounters: [MapWildEncounterEntry]
+
+    public init(groupIndex: Int, label: String, forMaps: Bool, encounters: [MapWildEncounterEntry]) {
+        self.groupIndex = groupIndex
+        self.label = label
+        self.forMaps = forMaps
+        self.encounters = encounters
+    }
+}
+
+public struct MapWildEncounterEntry: Codable, Equatable, Identifiable {
+    public var id: String { jsonPath.joined(separator: ".") }
+
+    public let mapID: String
+    public let baseLabel: String?
+    public let encounterType: String
+    public let encounterRate: Int?
+    public let slots: [MapWildEncounterSlot]
+    public let jsonPath: [String]
+
+    public init(
+        mapID: String,
+        baseLabel: String?,
+        encounterType: String,
+        encounterRate: Int?,
+        slots: [MapWildEncounterSlot],
+        jsonPath: [String]
+    ) {
+        self.mapID = mapID
+        self.baseLabel = baseLabel
+        self.encounterType = encounterType
+        self.encounterRate = encounterRate
+        self.slots = slots
+        self.jsonPath = jsonPath
+    }
+}
+
+public struct MapWildEncounterSlot: Codable, Equatable, Identifiable {
+    public var id: Int { index }
+
+    public let index: Int
+    public let species: String
+    public let minLevel: Int?
+    public let maxLevel: Int?
+    public let rate: Int?
+
+    public init(index: Int, species: String, minLevel: Int?, maxLevel: Int?, rate: Int?) {
+        self.index = index
+        self.species = species
+        self.minLevel = minLevel
+        self.maxLevel = maxLevel
+        self.rate = rate
+    }
+}
+
 public enum MapScenePlacementRole: String, Codable, Equatable {
     case layout
     case connection
@@ -125,6 +235,15 @@ public enum MapSceneConnectionDirection: String, Codable, Equatable, CaseIterabl
     case down
     case left
     case right
+
+    public var opposite: MapSceneConnectionDirection {
+        switch self {
+        case .up: .down
+        case .down: .up
+        case .left: .right
+        case .right: .left
+        }
+    }
 
     public init?(rawConnectionDirection: String?) {
         guard let value = rawConnectionDirection?.lowercased() else { return nil }
@@ -260,6 +379,7 @@ public struct MapSceneConnection: Codable, Equatable, Identifiable {
     public let placementID: String?
     public let isResolved: Bool
     public let diagnostic: Diagnostic?
+    public let diagnostics: [Diagnostic]
 
     public init(
         sourceMapID: String,
@@ -270,7 +390,8 @@ public struct MapSceneConnection: Codable, Equatable, Identifiable {
         offset: Int,
         placementID: String?,
         isResolved: Bool,
-        diagnostic: Diagnostic? = nil
+        diagnostic: Diagnostic? = nil,
+        diagnostics: [Diagnostic] = []
     ) {
         self.sourceMapID = sourceMapID
         self.index = index
@@ -281,6 +402,7 @@ public struct MapSceneConnection: Codable, Equatable, Identifiable {
         self.placementID = placementID
         self.isResolved = isResolved
         self.diagnostic = diagnostic
+        self.diagnostics = diagnostics.isEmpty ? diagnostic.map { [$0] } ?? [] : diagnostics
     }
 }
 
@@ -1191,6 +1313,7 @@ public struct MapEditFileChange: Codable, Equatable, Identifiable {
     public let path: String
     public let summary: String
     public let originalByteCount: Int
+    public let originalSHA1: String?
     public let newByteCount: Int
     public let newData: Data
     public let textPreview: String?
@@ -1199,6 +1322,7 @@ public struct MapEditFileChange: Codable, Equatable, Identifiable {
         path: String,
         summary: String,
         originalByteCount: Int,
+        originalSHA1: String? = nil,
         newByteCount: Int,
         newData: Data,
         textPreview: String? = nil
@@ -1206,6 +1330,7 @@ public struct MapEditFileChange: Codable, Equatable, Identifiable {
         self.path = path
         self.summary = summary
         self.originalByteCount = originalByteCount
+        self.originalSHA1 = originalSHA1
         self.newByteCount = newByteCount
         self.newData = newData
         self.textPreview = textPreview
@@ -1303,17 +1428,20 @@ public struct MapApplyResult: Codable, Equatable, Identifiable {
 public struct TilesetIndex: Codable, Equatable {
     public let rootPath: String
     public let metatileLimits: MapMetatileLimits
+    public let tileLimits: MapTileLimits
     public let assets: [TilesetAsset]
     public let diagnostics: [Diagnostic]
 
     public init(
         rootPath: String,
         metatileLimits: MapMetatileLimits = MapMetatileLimits(),
+        tileLimits: MapTileLimits = MapTileLimits(),
         assets: [TilesetAsset],
         diagnostics: [Diagnostic] = []
     ) {
         self.rootPath = rootPath
         self.metatileLimits = metatileLimits
+        self.tileLimits = tileLimits
         self.assets = assets
         self.diagnostics = diagnostics
     }
@@ -1335,6 +1463,7 @@ public enum TilesetIndexLoader {
         let graphicsText = try readText(root: root, path: graphicsPath) + "\n" + ((try? readText(root: root, path: "src/graphics.c")) ?? "")
         let metatilesText = try readText(root: root, path: metatilesPath)
         let metatileLimits = loadMetatileLimits(root: root)
+        let tileLimits = loadTileLimits(root: root)
 
         let headers = parseHeaders(headersText)
         let graphics = parseGraphics(graphicsText, root: root, fileManager: fileManager)
@@ -1374,7 +1503,13 @@ public enum TilesetIndexLoader {
             assets.append(asset)
         }
 
-        return TilesetIndex(rootPath: root.path, metatileLimits: metatileLimits, assets: assets, diagnostics: diagnostics)
+        return TilesetIndex(
+            rootPath: root.path,
+            metatileLimits: metatileLimits,
+            tileLimits: tileLimits,
+            assets: assets,
+            diagnostics: diagnostics
+        )
     }
 
     private static func readText(root: URL, path: String) throws -> String {
@@ -1406,6 +1541,16 @@ public enum TilesetIndexLoader {
         return MapMetatileLimits(
             primary: defineValue("NUM_METATILES_IN_PRIMARY", in: text) ?? MapMetatileLimits.defaultPrimary,
             total: defineValue("NUM_METATILES_TOTAL", in: text) ?? MapMetatileLimits.defaultTotal
+        )
+    }
+
+    private static func loadTileLimits(root: URL) -> MapTileLimits {
+        guard let text = try? readText(root: root, path: "include/fieldmap.h") else {
+            return MapTileLimits()
+        }
+        return MapTileLimits(
+            primary: defineValue("NUM_TILES_IN_PRIMARY", in: text) ?? MapTileLimits.defaultPrimary,
+            total: defineValue("NUM_TILES_TOTAL", in: text) ?? MapTileLimits.defaultTotal
         )
     }
 
@@ -1506,6 +1651,141 @@ public enum TilesetIndexLoader {
     }
 }
 
+public enum MapWildEncounterIndexLoader {
+    private static let sourcePath = "src/data/wild_encounters.json"
+
+    public static func load(
+        root: URL,
+        mapID: String,
+        fileManager: FileManager = .default
+    ) -> MapWildEncounterIndex {
+        let root = root.standardizedFileURL
+        let url = root.appendingPathComponent(sourcePath)
+        guard fileManager.fileExists(atPath: url.path) else {
+            return MapWildEncounterIndex(
+                sourcePath: sourcePath,
+                mapID: mapID,
+                groups: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .info,
+                        code: "WILD_ENCOUNTERS_SOURCE_MISSING",
+                        message: "No wild encounter source was found for this project.",
+                        span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let json = try JSONSerialization.jsonObject(with: data)
+            guard let rootObject = json as? [String: Any],
+                  let rawGroups = rootObject["wild_encounter_groups"] as? [[String: Any]]
+            else {
+                return MapWildEncounterIndex(
+                    sourcePath: sourcePath,
+                    mapID: mapID,
+                    groups: [],
+                    diagnostics: [
+                        Diagnostic(
+                            severity: .warning,
+                            code: "WILD_ENCOUNTERS_SHAPE_UNSUPPORTED",
+                            message: "Wild encounter source does not expose wild_encounter_groups.",
+                            span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                        )
+                    ]
+                )
+            }
+
+            let groups = rawGroups.enumerated().compactMap { groupIndex, groupObject -> MapWildEncounterGroup? in
+                let label = groupObject["label"] as? String ?? "group-\(groupIndex)"
+                let forMaps = groupObject["for_maps"] as? Bool ?? false
+                let rateTable = encounterRatesByType(groupObject["fields"] as? [[String: Any]] ?? [])
+                let encounters = (groupObject["encounters"] as? [[String: Any]] ?? []).enumerated().flatMap { encounterIndex, encounterObject in
+                    entries(
+                        groupIndex: groupIndex,
+                        encounterIndex: encounterIndex,
+                        encounterObject: encounterObject,
+                        mapID: mapID,
+                        rateTable: rateTable
+                    )
+                }
+                guard !encounters.isEmpty else { return nil }
+                return MapWildEncounterGroup(groupIndex: groupIndex, label: label, forMaps: forMaps, encounters: encounters)
+            }
+
+            return MapWildEncounterIndex(sourcePath: sourcePath, mapID: mapID, groups: groups)
+        } catch {
+            return MapWildEncounterIndex(
+                sourcePath: sourcePath,
+                mapID: mapID,
+                groups: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "WILD_ENCOUNTERS_PARSE_FAILED",
+                        message: "Wild encounter source could not be parsed: \(error.localizedDescription)",
+                        span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                    )
+                ]
+            )
+        }
+    }
+
+    private static func entries(
+        groupIndex: Int,
+        encounterIndex: Int,
+        encounterObject: [String: Any],
+        mapID: String,
+        rateTable: [String: [Int]]
+    ) -> [MapWildEncounterEntry] {
+        guard encounterObject["map"] as? String == mapID else { return [] }
+        let baseLabel = encounterObject["base_label"] as? String
+        let encounterKeys = encounterObject.keys
+            .filter { $0.hasSuffix("_mons") }
+            .sorted()
+
+        return encounterKeys.compactMap { key in
+            guard let object = encounterObject[key] as? [String: Any] else { return nil }
+            let mons = object["mons"] as? [[String: Any]] ?? []
+            let rates = rateTable[key] ?? []
+            let slots = mons.enumerated().map { slotIndex, monObject in
+                MapWildEncounterSlot(
+                    index: slotIndex,
+                    species: monObject["species"] as? String ?? "SPECIES_NONE",
+                    minLevel: monObject["min_level"] as? Int,
+                    maxLevel: monObject["max_level"] as? Int,
+                    rate: rates.indices.contains(slotIndex) ? rates[slotIndex] : nil
+                )
+            }
+            return MapWildEncounterEntry(
+                mapID: mapID,
+                baseLabel: baseLabel,
+                encounterType: key,
+                encounterRate: object["encounter_rate"] as? Int,
+                slots: slots,
+                jsonPath: [
+                    "wild_encounter_groups",
+                    "\(groupIndex)",
+                    "encounters",
+                    "\(encounterIndex)",
+                    key
+                ]
+            )
+        }
+    }
+
+    private static func encounterRatesByType(_ fields: [[String: Any]]) -> [String: [Int]] {
+        var rates: [String: [Int]] = [:]
+        for field in fields {
+            guard let type = field["type"] as? String else { continue }
+            rates[type] = field["encounter_rates"] as? [Int] ?? []
+        }
+        return rates
+    }
+}
+
 public enum ProjectMapVisualLoader {
     public static func load(from projectIndex: ProjectIndex, mapID: String, fileManager: FileManager = .default) throws -> MapVisualDocument {
         let root = URL(fileURLWithPath: projectIndex.root.path).standardizedFileURL
@@ -1570,6 +1850,12 @@ public enum ProjectMapVisualLoader {
             fileManager: fileManager
         )
         diagnostics.append(contentsOf: scriptIndex.diagnostics)
+        let wildEncounters = MapWildEncounterIndexLoader.load(
+            root: root,
+            mapID: map.id,
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: wildEncounters.diagnostics)
 
         return MapVisualDocument(
             id: "\(projectIndex.root.path):\(map.id)",
@@ -1585,9 +1871,11 @@ public enum ProjectMapVisualLoader {
             primaryTileset: primary,
             secondaryTileset: secondary,
             metatileLimits: tilesets.metatileLimits,
+            tileLimits: tilesets.tileLimits,
             metatiles: metatiles,
             events: events,
             scriptIndex: scriptIndex,
+            wildEncounters: wildEncounters,
             scene: scene,
             diagnostics: diagnostics,
             mapJSONText: mapJSONText
@@ -1763,6 +2051,15 @@ public enum ProjectMapVisualLoader {
                 targetWidth: targetLayout.width ?? 0,
                 targetHeight: targetLayout.height ?? 0
             )
+            let advisoryDiagnostics = connectionAdvisoryDiagnostics(
+                sourceMap: map,
+                sourceLayout: layout,
+                targetMap: targetMap,
+                targetLayout: targetLayout,
+                connection: connection,
+                direction: direction
+            )
+            diagnostics.append(contentsOf: advisoryDiagnostics)
             let placementID = "connection-\(map.id)-\(connection.index)-\(targetMap.id)"
             placements.append(
                 MapScenePlacement(
@@ -1787,7 +2084,8 @@ public enum ProjectMapVisualLoader {
                     direction: direction,
                     offset: connection.offset ?? 0,
                     placementID: placementID,
-                    isResolved: true
+                    isResolved: true,
+                    diagnostics: advisoryDiagnostics
                 )
             )
         }
@@ -1824,6 +2122,54 @@ public enum ProjectMapVisualLoader {
         case .right:
             return (layoutWidth, offset)
         }
+    }
+
+    private static func connectionAdvisoryDiagnostics(
+        sourceMap: MapDescriptor,
+        sourceLayout: LayoutSlot,
+        targetMap: MapDescriptor,
+        targetLayout: LayoutSlot,
+        connection: MapConnection,
+        direction: MapSceneConnectionDirection
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let offset = connection.offset ?? 0
+        let sourceExtent: Int
+        let targetExtent: Int
+        switch direction {
+        case .up, .down:
+            sourceExtent = sourceLayout.width ?? 0
+            targetExtent = targetLayout.width ?? 0
+        case .left, .right:
+            sourceExtent = sourceLayout.height ?? 0
+            targetExtent = targetLayout.height ?? 0
+        }
+
+        if sourceExtent > 0, targetExtent > 0, abs(offset) >= max(sourceExtent, targetExtent) {
+            diagnostics.append(
+                sceneDiagnostic(
+                    code: "MAP_SCENE_CONNECTION_OFFSET_OUT_OF_BOUNDS",
+                    message: "\(sourceMap.id) connection \(direction.rawValue) uses offset \(offset), which places \(targetMap.id) outside the visible edge span.",
+                    sourcePath: sourceMap.sourcePath
+                )
+            )
+        }
+
+        let hasReverse = targetMap.connections.contains { candidate in
+            candidate.map == sourceMap.id
+                && MapSceneConnectionDirection(rawConnectionDirection: candidate.direction) == direction.opposite
+        }
+        if !hasReverse {
+            diagnostics.append(
+                sceneDiagnostic(
+                    code: "MAP_SCENE_CONNECTION_REVERSE_MISSING",
+                    message: "\(sourceMap.id) connects \(direction.rawValue) to \(targetMap.id), but no reverse \(direction.opposite.rawValue) connection was indexed.",
+                    sourcePath: sourceMap.sourcePath
+                )
+            )
+        }
+
+        return diagnostics
     }
 
     private static func sceneDiagnostic(code: String, message: String, sourcePath: String) -> Diagnostic {
@@ -2208,11 +2554,13 @@ public enum MapMutationPlanner {
 
         if layoutValues != originalLayoutValues {
             let data = encodeUInt16Values(layoutValues)
+            let originalData = encodeUInt16Values(originalLayoutValues)
             changes.append(
                 MapEditFileChange(
                     path: draft.blockdata.filepath,
                     summary: "Update layout blockdata",
-                    originalByteCount: originalLayoutValues.count * 2,
+                    originalByteCount: originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(originalData),
                     newByteCount: data.count,
                     newData: data
                 )
@@ -2221,11 +2569,13 @@ public enum MapMutationPlanner {
 
         if let originalBorderValues, let borderValues, borderValues != originalBorderValues, let border = draft.border {
             let data = encodeUInt16Values(borderValues)
+            let originalData = encodeUInt16Values(originalBorderValues)
             changes.append(
                 MapEditFileChange(
                     path: border.filepath,
                     summary: "Update border blockdata",
-                    originalByteCount: originalBorderValues.count * 2,
+                    originalByteCount: originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(originalData),
                     newByteCount: data.count,
                     newData: data
                 )
@@ -2234,11 +2584,13 @@ public enum MapMutationPlanner {
 
         if draft.mapJSONText != document.mapJSONText {
             let data = Data(draft.mapJSONText.utf8)
+            let originalData = Data(document.mapJSONText.utf8)
             changes.append(
                 MapEditFileChange(
                     path: document.mapSourcePath,
                     summary: "Update map JSON events/header fields",
-                    originalByteCount: Data(document.mapJSONText.utf8).count,
+                    originalByteCount: originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(originalData),
                     newByteCount: data.count,
                     newData: data,
                     textPreview: draft.mapJSONText
@@ -2252,6 +2604,7 @@ public enum MapMutationPlanner {
                     path: sourceFile.path,
                     summary: sourceFile.summary,
                     originalByteCount: sourceFile.originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(sourceFile.originalData),
                     newByteCount: sourceFile.data.count,
                     newData: sourceFile.data,
                     textPreview: sourceFile.textPreview
@@ -2261,11 +2614,13 @@ public enum MapMutationPlanner {
 
         for scriptFile in draft.scriptFiles {
             let data = Data(scriptFile.text.utf8)
+            let originalData = Data(scriptFile.originalText.utf8)
             changes.append(
                 MapEditFileChange(
                     path: scriptFile.path,
                     summary: "Update map script source",
-                    originalByteCount: Data(scriptFile.originalText.utf8).count,
+                    originalByteCount: originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(originalData),
                     newByteCount: data.count,
                     newData: data,
                     textPreview: scriptFile.text
@@ -3715,11 +4070,31 @@ private enum MapEditApplySafety {
             ]
         }
 
+        guard let currentData = try? Data(contentsOf: destination) else {
+            return [
+                pathDiagnostic(
+                    code: "MAP_APPLY_SOURCE_UNREADABLE",
+                    message: "Map edit source file could not be read before apply: \(change.path).",
+                    path: change.path
+                )
+            ]
+        }
+
         guard fileSize.intValue == change.originalByteCount else {
             return [
                 pathDiagnostic(
                     code: "MAP_APPLY_ORIGINAL_SIZE_MISMATCH",
                     message: "Map edit source file changed since planning: \(change.path).",
+                    path: change.path
+                )
+            ]
+        }
+
+        if let originalSHA1 = change.originalSHA1, pokemonHackSHA1Hex(currentData) != originalSHA1 {
+            return [
+                pathDiagnostic(
+                    code: "MAP_APPLY_ORIGINAL_HASH_MISMATCH",
+                    message: "Map edit source file contents changed since planning: \(change.path).",
                     path: change.path
                 )
             ]

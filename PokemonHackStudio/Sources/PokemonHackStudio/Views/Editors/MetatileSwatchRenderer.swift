@@ -26,6 +26,12 @@ struct IndexedTilesetImage: Equatable {
 }
 
 final class MetatileSwatchRenderer {
+    private struct TileEntrySource {
+        let asset: TilesetAsset
+        let tileImage: IndexedTilesetImage
+        let tileIndex: Int
+    }
+
     private var document: MapVisualDocument
     private var images: [Int: NSImage] = [:]
     private var styledImages: [String: NSImage] = [:]
@@ -91,13 +97,11 @@ final class MetatileSwatchRenderer {
         if let image = styledImages[cacheKey] {
             return image
         }
-        guard let asset = asset(symbol: definition.tilesetSymbol),
-              let tileImage = indexedTileImage(for: asset)
-        else {
+        guard asset(symbol: definition.tilesetSymbol) != nil else {
             return nil
         }
 
-        let image = render(definition: definition, asset: asset, tileImage: tileImage, layers: layers, opacities: opacities)
+        let image = render(definition: definition, layers: layers, opacities: opacities)
         if layers == Set(MetatileRenderLayer.allCases), opacities.isEmpty {
             images[definition.id] = image
         } else {
@@ -113,8 +117,6 @@ final class MetatileSwatchRenderer {
 
     private func render(
         definition: MetatileDefinition,
-        asset: TilesetAsset,
-        tileImage: IndexedTilesetImage,
         layers: Set<MetatileRenderLayer>,
         opacities: [MetatileRenderLayer: Double]
     ) -> NSImage {
@@ -142,7 +144,7 @@ final class MetatileSwatchRenderer {
             guard opacity > 0 else { continue }
             for (entryIndex, entry) in cell.tileEntries.enumerated() {
                 guard let entry else { continue }
-                draw(entry: entry, entryIndex: entryIndex, asset: asset, tileImage: tileImage, opacity: opacity, into: bitmapData)
+                draw(entry: entry, entryIndex: entryIndex, opacity: opacity, into: bitmapData)
             }
         }
 
@@ -154,18 +156,17 @@ final class MetatileSwatchRenderer {
     private func draw(
         entry: MetatileTileEntry,
         entryIndex: Int,
-        asset: TilesetAsset,
-        tileImage: IndexedTilesetImage,
         opacity: Double,
         into bitmapData: UnsafeMutablePointer<UInt8>
     ) {
+        guard let source = tileEntrySource(for: entry) else { return }
         let destinationX = entryIndex % 2 == 0 ? 0 : 8
         let destinationY = entryIndex < 2 ? 0 : 8
-        let palette = paletteSet(for: asset, paletteID: entry.palette)
+        let palette = paletteSet(for: source.asset, paletteID: entry.palette)
         for y in 0..<8 {
             for x in 0..<8 {
-                guard let paletteIndex = tileImage.paletteIndex(
-                    tileIndex: entry.tileIndex,
+                guard let paletteIndex = source.tileImage.paletteIndex(
+                    tileIndex: source.tileIndex,
                     x: x,
                     y: y,
                     hFlip: entry.hFlip,
@@ -187,6 +188,31 @@ final class MetatileSwatchRenderer {
                 )
             }
         }
+    }
+
+    private func tileEntrySource(for entry: MetatileTileEntry) -> TileEntrySource? {
+        if entry.tileIndex < document.tileLimits.primary {
+            guard let asset = document.primaryTileset,
+                  let tileImage = indexedTileImage(for: asset)
+            else {
+                return nil
+            }
+            return TileEntrySource(asset: asset, tileImage: tileImage, tileIndex: entry.tileIndex)
+        }
+
+        guard entry.tileIndex < document.tileLimits.total else {
+            return nil
+        }
+        guard let asset = document.secondaryTileset,
+              let tileImage = indexedTileImage(for: asset)
+        else {
+            return nil
+        }
+        return TileEntrySource(
+            asset: asset,
+            tileImage: tileImage,
+            tileIndex: entry.tileIndex - document.tileLimits.primary
+        )
     }
 
     private func blend(color: PaletteColor, opacity: Double, x: Int, y: Int, into bitmapData: UnsafeMutablePointer<UInt8>) {

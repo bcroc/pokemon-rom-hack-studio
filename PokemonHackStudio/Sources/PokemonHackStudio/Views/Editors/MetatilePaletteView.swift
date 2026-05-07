@@ -64,7 +64,7 @@ struct MetatilePaletteView: View {
         .padding(12)
         .frame(maxHeight: 124)
         .background(.regularMaterial)
-        .onChange(of: document.id) { _ in
+        .onChange(of: document.id) { _, _ in
             renderer.update(document: document)
         }
     }
