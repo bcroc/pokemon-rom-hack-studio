@@ -179,18 +179,61 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
 
         let report = try PatchManifestBuilder.build(
             patchPath: root.appendingPathComponent("cleanroom.aps").path,
-            projectPath: root.path
+            projectPath: root.path,
+            baseROMPath: root.appendingPathComponent("pokeemerald.gba").path
         )
 
         XCTAssertEqual(report.patch.summary?.format, .apsGBA)
         XCTAssertEqual(report.compatibilityStatus, .compatible)
+        XCTAssertEqual(report.selectedBaseROM?.sha1, "a9993e364706816aba3e25717850c26c9cd0d89d")
+        XCTAssertEqual(report.selectedBaseROM?.matchedCandidateRelativePath, "rom.sha1")
         XCTAssertEqual(report.baseROMCandidates.count, 1)
         XCTAssertEqual(report.baseROMCandidates.first?.relativePath, "rom.sha1")
         XCTAssertEqual(report.baseROMCandidates.first?.builtOutputPath, "pokeemerald.gba")
         XCTAssertEqual(report.baseROMCandidates.first?.builtOutputSHA1, "a9993e364706816aba3e25717850c26c9cd0d89d")
         XCTAssertTrue(report.baseROMCandidates.first?.exists ?? false)
         XCTAssertEqual(report.dryRunPlans.map(\.id), ["verify", "apply"])
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_BASE_ROM_MATCHED" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_MANIFEST_PLAN_ONLY" })
+    }
+
+    func testPatchManifestReportsSelectedBaseROMMismatch() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(Data("wrong".utf8), to: root.appendingPathComponent("wrong.gba"))
+        try write(Data("APS1".utf8), to: root.appendingPathComponent("cleanroom.aps"))
+
+        let report = try PatchManifestBuilder.build(
+            patchPath: root.appendingPathComponent("cleanroom.aps").path,
+            projectPath: root.path,
+            baseROMPath: root.appendingPathComponent("wrong.gba").path
+        )
+
+        XCTAssertEqual(report.compatibilityStatus, .baseROMMismatch)
+        XCTAssertNil(report.selectedBaseROM?.matchedCandidateRelativePath)
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_BASE_ROM_MISMATCH" })
+    }
+
+    func testPatchManifestNoSelectedBaseROMAndInvalidPatchCompatibilityRemainStable() throws {
+        let root = try makeTemporaryRoot()
+        let ips = Data("PATCH".utf8)
+            + Data([0x00, 0x00, 0x01, 0x00, 0x02, 0xAA, 0xBB])
+            + Data("EOF".utf8)
+        try write(ips, to: root.appendingPathComponent("change.ips"))
+        try write(Data("BPS1".utf8), to: root.appendingPathComponent("broken.bps"))
+
+        let needsBase = try PatchManifestBuilder.build(patchPath: root.appendingPathComponent("change.ips").path)
+        let invalid = try PatchManifestBuilder.build(patchPath: root.appendingPathComponent("broken.bps").path)
+
+        XCTAssertEqual(needsBase.compatibilityStatus, .needsBaseROM)
+        XCTAssertNil(needsBase.selectedBaseROM)
+        XCTAssertEqual(invalid.compatibilityStatus, .invalidPatch)
+        XCTAssertTrue(invalid.diagnostics.contains { $0.code == "PATCH_MALFORMED" })
     }
 
     func testPlaytestReportChecksROMCandidateAndInjectedMGBAAvailability() throws {

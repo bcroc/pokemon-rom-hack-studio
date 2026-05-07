@@ -159,6 +159,147 @@ final class MapEditorSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testGraphicsIDFieldRefreshesStagedSpritePreview() throws {
+        let replacementSprite = MapEventSpriteDescriptor(
+            graphicsID: "OBJ_EVENT_GFX_GIRL_1",
+            imageAssetPath: "graphics/object_events/pics/people/girl_1.png",
+            frameWidth: 16,
+            frameHeight: 32
+        )
+        let options = MapEventOptionsCatalog(
+            objectGraphicsIDs: ["OBJ_EVENT_GFX_BOY_1", "OBJ_EVENT_GFX_GIRL_1"],
+            objectSprites: [replacementSprite]
+        )
+        let session = MapEditorSession(document: makeDocument(eventOptions: options))
+
+        session.selectMapEvent(id: "object-0")
+        XCTAssertNil(session.selectedMapEvent?.sprite)
+        XCTAssertTrue(session.updateSelectedMapEventProperty(key: "graphics_id", value: "OBJ_EVENT_GFX_GIRL_1"))
+
+        XCTAssertEqual(session.selectedMapEvent?.propertyValue("graphics_id"), "OBJ_EVENT_GFX_GIRL_1")
+        XCTAssertEqual(session.selectedMapEvent?.sprite?.graphicsID, "OBJ_EVENT_GFX_GIRL_1")
+        XCTAssertEqual(session.selectedMapEvent?.sprite?.imageAssetPath, "graphics/object_events/pics/people/girl_1.png")
+    }
+
+    @MainActor
+    func testHitTesterReturnsVisibleSameTileEventStack() throws {
+        let document = makeDocument()
+        let session = MapEditorSession(document: document)
+
+        XCTAssertTrue(session.addMapEvent(template: .warp, atX: 1, y: 1))
+
+        let hitTester = MapCanvasHitTester(
+            size: MapCanvasSize(width: 2, height: 2),
+            tileSize: 16,
+            document: document,
+            rawValues: session.stagedMapBlockdataValues,
+            borderRawValues: document.border?.rawValues ?? [],
+            events: session.stagedMapEvents,
+            overlays: session.mapOverlaySettings
+        )
+        let hit = try XCTUnwrap(hitTester.hit(at: NSPoint(x: 17, y: 17)))
+
+        XCTAssertEqual(hit.events.map(\.id), ["object-0", "warp-0"])
+        XCTAssertEqual(hit.eventID, "warp-0")
+        XCTAssertEqual(MapCanvasHoverStatus(hit: hit).eventStackCount, 2)
+
+        session.setLayerVisible(.warps, isVisible: false)
+        let filteredHitTester = MapCanvasHitTester(
+            size: MapCanvasSize(width: 2, height: 2),
+            tileSize: 16,
+            document: document,
+            rawValues: session.stagedMapBlockdataValues,
+            borderRawValues: document.border?.rawValues ?? [],
+            events: session.stagedMapEvents,
+            overlays: session.mapOverlaySettings
+        )
+        let filteredHit = try XCTUnwrap(filteredHitTester.hit(at: NSPoint(x: 17, y: 17)))
+        XCTAssertEqual(filteredHit.events.map(\.id), ["object-0"])
+        XCTAssertEqual(MapCanvasHoverStatus(hit: filteredHit).eventStackCount, 1)
+    }
+
+    @MainActor
+    func testEventRenderIndexCachesVisibleStacksAndSelectedScriptBadges() throws {
+        let source = MapScriptSource(
+            path: "data/maps/Route1/scripts.inc",
+            role: .mapLocal,
+            exists: true,
+            text: "Route1_EventScript_NPC::\n\tend\n"
+        )
+        let scriptIndex = MapScriptIndex(
+            rootPath: "/tmp/PokemonHackStudioTests",
+            mapName: "Route1",
+            sources: [source],
+            labels: MapScriptIndexLoader.parseLabels(source: source)
+        )
+        let document = makeDocument(scriptIndex: scriptIndex)
+        let session = MapEditorSession(document: document)
+
+        XCTAssertTrue(session.addMapEvent(template: .warp, atX: 1, y: 1))
+
+        let coordinate = MapCanvasCoordinate(x: 1, y: 1)
+        let eventIndex = MapCanvasEventRenderIndex(
+            events: session.stagedMapEvents,
+            overlays: session.mapOverlaySettings,
+            document: document,
+            selectedEventID: "object-0"
+        )
+        let object = try XCTUnwrap(eventIndex.event(id: "object-0"))
+
+        XCTAssertEqual(eventIndex.visibleEvents.map(\.id), ["object-0", "warp-0"])
+        XCTAssertEqual(eventIndex.events(at: coordinate, target: .layout).map(\.id), ["object-0", "warp-0"])
+        XCTAssertEqual(eventIndex.events(at: coordinate, target: .border), [])
+        XCTAssertEqual(eventIndex.stackCount(for: object), 2)
+        XCTAssertEqual(eventIndex.badge(for: object), "local x2")
+
+        session.setLayerVisible(.warps, isVisible: false)
+        let filteredIndex = MapCanvasEventRenderIndex(
+            events: session.stagedMapEvents,
+            overlays: session.mapOverlaySettings,
+            document: document,
+            selectedEventID: "object-0"
+        )
+        let filteredObject = try XCTUnwrap(filteredIndex.event(id: "object-0"))
+
+        XCTAssertEqual(filteredIndex.visibleEvents.map(\.id), ["object-0"])
+        XCTAssertEqual(filteredIndex.events(at: coordinate, target: .layout).map(\.id), ["object-0"])
+        XCTAssertNil(filteredIndex.event(id: "warp-0"))
+        XCTAssertEqual(filteredIndex.stackCount(for: filteredObject), 1)
+        XCTAssertEqual(filteredIndex.badge(for: filteredObject), "local")
+    }
+
+    @MainActor
+    func testCreateAndAssignScriptLabelPreviewUsesStagedLabelResolution() throws {
+        let source = MapScriptSource(
+            path: "data/maps/Route1/scripts.inc",
+            role: .mapLocal,
+            exists: true,
+            text: ""
+        )
+        let scriptIndex = MapScriptIndex(
+            rootPath: "/tmp/PokemonHackStudioTests",
+            mapName: "Route1",
+            sources: [source],
+            labels: []
+        )
+        let session = MapEditorSession(document: makeDocument(scriptIndex: scriptIndex))
+
+        session.selectMapEvent(id: "object-0")
+        XCTAssertTrue(session.createScriptLabel(
+            label: "Route1_EventScript_New",
+            sourcePath: "data/maps/Route1/scripts.inc",
+            body: "\tend"
+        ))
+        XCTAssertTrue(session.updateSelectedMapEventProperty(key: "script", value: "Route1_EventScript_New"))
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview?.contains("Route1_EventScript_New::\n\tend") ?? false)
+        XCTAssertTrue(plan.changes.first { $0.path == "data/maps/Route1/map.json" }?.textPreview?.contains(#""script": "Route1_EventScript_New""#) ?? false)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "MAP_EVENT_SCRIPT_UNRESOLVED" }, "\(plan.diagnostics.map(\.code))")
+        XCTAssertTrue(session.canApplySelectedMapMutationPlan)
+    }
+
+    @MainActor
     func testScriptBodyEditsParticipateInUndoRedoAndPreview() throws {
         let source = MapScriptSource(
             path: "data/maps/Route1/scripts.inc",
@@ -198,7 +339,7 @@ final class MapEditorSessionTests: XCTestCase {
             path: "data/maps/Route1/scripts.inc",
             role: .mapLocal,
             exists: true,
-            text: ""
+            text: "Route1_EventScript_NPC::\n\tend\n"
         )
         let scriptIndex = MapScriptIndex(
             rootPath: "/tmp/PokemonHackStudioTests",
@@ -262,7 +403,10 @@ final class MapEditorSessionTests: XCTestCase {
         XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileMiddle))
         XCTAssertTrue(session.mapOverlaySettings.isLayerVisible(.metatileTop))
         XCTAssertFalse(session.mapOverlaySettings.showCollision)
-        XCTAssertFalse(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showWarps)
+        XCTAssertTrue(session.mapOverlaySettings.showCoordEvents)
+        XCTAssertTrue(session.mapOverlaySettings.showBGEvents)
         XCTAssertTrue(session.mapOverlaySettings.showBorder)
         XCTAssertTrue(session.mapOverlaySettings.showConnections)
         XCTAssertTrue(session.mapOverlaySettings.showPlayerView)
@@ -285,7 +429,10 @@ final class MapEditorSessionTests: XCTestCase {
 
         XCTAssertNil(session.mapOverlaySettings.soloLayer)
         XCTAssertEqual(session.mapOverlaySettings.preset, .gameComposite)
-        XCTAssertFalse(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showObjects)
+        XCTAssertTrue(session.mapOverlaySettings.showWarps)
+        XCTAssertTrue(session.mapOverlaySettings.showCoordEvents)
+        XCTAssertTrue(session.mapOverlaySettings.showBGEvents)
         XCTAssertTrue(session.mapOverlaySettings.showBorder)
         XCTAssertTrue(session.mapOverlaySettings.showConnections)
         XCTAssertTrue(session.mapOverlaySettings.showPlayerView)
@@ -437,7 +584,8 @@ final class MapEditorSessionTests: XCTestCase {
         mapID: String = "MAP_ROUTE1",
         mapName: String = "Route1",
         blockdata: [UInt16] = [1, 2, 3, 4],
-        scriptIndex: MapScriptIndex? = nil
+        scriptIndex: MapScriptIndex? = nil,
+        eventOptions: MapEventOptionsCatalog = .empty
     ) -> MapVisualDocument {
         let layout = LayoutSlot(
             slotIndex: 0,
@@ -467,7 +615,8 @@ final class MapEditorSessionTests: XCTestCase {
                 MapEventProperty(key: "y", value: "1"),
                 MapEventProperty(key: "elevation", value: "3"),
                 MapEventProperty(key: "script", value: "\(mapName)_EventScript_NPC")
-            ]
+            ],
+            sprite: eventOptions.sprite(for: "OBJ_EVENT_GFX_BOY_1")
         )
 
         return MapVisualDocument(
@@ -494,6 +643,7 @@ final class MapEditorSessionTests: XCTestCase {
             secondaryTileset: nil,
             metatiles: [],
             events: [event],
+            eventOptions: eventOptions,
             scriptIndex: scriptIndex,
             mapJSONText: mapJSONText(mapID: mapID, mapName: mapName)
         )

@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No active implementation row. The May 6 build-time asset bundling pass is complete as `PHS-T34`: the generated macOS app bundle now receives safe local source asset trees during Xcode builds while keeping ROMs, saves, generated outputs, build products, toolchains, and reference clones excluded. The completed `PHS-T33` compact UX refactor, `PHS-T32` Pokemon species editor, `PHS-T31` Trainers workbench, `PHS-T27`/`PHS-T28` Resources baseline, `PHS-T29` Maps polish, `PHS-T30` Settings/menu extension, `PHS-T18` resource library, `PHS-T15` Graphics diagnostics, `PHS-T21` script readiness, and `PHS-T23` toolchain matrix remain the active product baseline. `PHS-T25` remains the broader UX bridge for app-visible backlinks across Resources, Pokemon, Maps, Scripts, Graphics, and Build/Patch/Playtest.
+No active implementation row. `PHS-T13` is complete: read-only C initializer table parsing now has descriptor-driven known-field metadata, opt-in unknown-field diagnostics, top-level field extraction, explicit malformed/unsupported table-shape diagnostics, and source spans/raw bodies preserved for later mutation-plan workflows. `PHS-T14` is complete: Build/Patch/Playtest now has preview-only selected base ROM patch-manifest verification, app patch metadata/candidate/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON without invoking builds, patch apply/export, emulator launch, ROM export, or source writes. `PHS-T25` is complete: Resources navigation now lands on matching Maps, Scripts, Pokemon, Trainers, Graphics, Build/Patch/Playtest, or catalog rows, including layout IDs and script source paths, and Pokemon species detail exposes small in-context backlinks for evolution targets and species assets. `PHS-T36` is complete: Maps loading now uses cancellable background catalog/visual tasks, a reusable per-project map-visual cache, cheaper event/render indexes, cached overview rasters, batched script lookups, option membership maps, and metatile definition lookup caches while preserving the PHS-T35 event-authoring write gates. The completed `PHS-T35` event authoring pass, `PHS-T34` build-time asset bundling pass, `PHS-T33` compact UX refactor, `PHS-T32` Pokemon species editor, `PHS-T31` Trainers workbench, `PHS-T27`/`PHS-T28` Resources baseline, `PHS-T29` Maps polish, `PHS-T30` Settings/menu extension, `PHS-T18` resource library, `PHS-T15` Graphics diagnostics, `PHS-T21` script readiness, and `PHS-T23` toolchain matrix remain the active product baseline.
 
 ## Active Board
 
@@ -20,8 +20,8 @@ No active implementation row. The May 6 build-time asset bundling pass is comple
 | PHS-T10 | Done | Map Canvas Input Navigation | Scroll-wheel/touchpad zoom, pinch magnification, center-preserving zoom updates, and arrow-key viewport panning are implemented for the maps canvas. |
 | PHS-T11 | Done | Maps Event Pane And Inline Scripts | First-class map event browsing, subtype templates, typed editing, canvas/session sync, undo/redo script staging, map-local script indexing, and preview-first inline script mutation plans are implemented and verified. |
 | PHS-T12 | Done | All-In Source Workbench Overhaul | Source workbench shell, tabbed Maps authoring, reusable mutation review, source inspectors, session-owned map edit state, and Porymap/Poryscript/Porytiles-inspired source mutation planners are implemented and verified. |
-| PHS-T13 | Candidate | Table Parser Hardening | Follow-up hardening beyond the `PHS-T2` read-only index: expand descriptor coverage, unknown-field reporting, source-shape edge cases, and mutation-plan readiness for later table workflows. |
-| PHS-T14 | Candidate | Build/Patch/Playtest Report Follow-ups | Follow-up beyond `PHS-T3`: patch manifests, user-selectable base ROM catalogs, report export/persistence, richer run-plan UI, and fuller patch/base-ROM workflows. |
+| PHS-T13 | Done | Table Parser Hardening | Descriptor-driven known fields, opt-in unknown-field diagnostics, top-level field extraction, malformed/unsupported table-shape diagnostics, and mutation-plan readiness are implemented for the read-only table index. |
+| PHS-T14 | Done | Build/Patch/Playtest Report Follow-ups | Preview-only workflow polish beyond `PHS-T3`: selected base ROM patch-manifest verification, user-selectable base ROM candidates, richer patch/playtest rows, and Copy Report JSON are implemented without build, patch, emulator, ROM export, or source-write actions. |
 | PHS-T15 | Done | Graphics And Tileset Diagnostics | Live read-only Graphics diagnostics now cover tileset artifact inventory, checksums, generated-output freshness, palette/metatile diagnostics, layer-mode summaries, animation folders, source-asset warnings, CLI JSON, and the SwiftUI Graphics module. |
 | PHS-T16 | Done | Map Workflow Polish From Reference Audit | Current-map script autocomplete, read-only wild encounter index, SHA1 source snapshot checks before apply, and reverse/offset connection diagnostics are implemented; event-limit warnings and row-based wild edits remain later follow-ups. |
 | PHS-T17 | Candidate | Binary ROM Graph Baseline | Later binary-only fallback lane for semantic ROM runs, anchors, pointers, goto, free-space/repoint planning, diffs, backups, and mutation-plan posture. |
@@ -32,7 +32,7 @@ No active implementation row. The May 6 build-time asset bundling pass is comple
 | PHS-T22 | Done | Patch Manifest Models And CLI | `patch-manifest` now reports patch metadata, base ROM checksum candidates, compatibility state, and dry-run plans without applying or exporting patches; app workbench polish remains a follow-up. |
 | PHS-T23 | Done | Toolchain Health Matrix | Preview-only core/CLI/app matrix reports external and project-local tool discovery, ROM-header config/output expectations, graphics conversion prerequisites, and generated-artifact health across Emerald, FireRed/LeafGreen, and Ruby/Sapphire decomp projects. |
 | PHS-T24 | Done | mGBA Playtest Artifact Plans | Playtest handoff sessions now include planned run-log, stdout/stderr, screenshot, and headless savestate artifacts while keeping emulator launch/capture out of scope. |
-| PHS-T25 | Candidate | All-In-One Related Data UX | Core related-data nodes/edges exist for species, moves, learnsets, Pokedex entries, and assets; app-visible backlinks across Resources, Pokemon, Maps, Scripts, Graphics, and Build/Patch/Playtest remain next. |
+| PHS-T25 | Done | All-In-One Related Data UX | Existing asset catalog rows now act as the app-wide backlink index: Resources-to-module navigation resolves map/layout IDs, script labels/source paths, Pokemon/trainer records, graphics/build/text/item targets, and store-owned resource row focus; Pokemon evolution and asset rows expose small visible backlinks. |
 | PHS-T26 | Done | Resource Library Editor Surface | Resources is now a first-class editor module with library metrics, search-filtered entries, item drill-down for source paths and byte ranges, resource diagnostics, source inspector support, and open-project resource refresh. |
 | PHS-T27 | Done | Gen III GBA Asset Catalog And Fast Navigation | A cached read-only GBA asset catalog now composes project, source-index, map, script, graphics, build, and resource data; CLI `asset-index` emits JSON; Resources defaults to fast asset rows and filters; auto-loaded Resources exclude GameCube rows for now. |
 | PHS-T28 | Done | GBA Asset Availability And Fast Resources Navigation | Resources now reports source-first availability, keeps optional generated/build outputs out of warning state, hardens FireRed and Expansion parser paths, loads selected asset catalogs lazily off the main UI path, and filters/sorts cached asset rows through the table-based Resources view. |
@@ -42,6 +42,8 @@ No active implementation row. The May 6 build-time asset bundling pass is comple
 | PHS-T32 | Done | Editable Pokemon Species Workbench | Core species drafts/plans/apply, constant-backed pickers, Emerald/FireRed source rewrites, app dirty-state wiring, and a cleaned-up Data > Pokemon editor are implemented for species info, stats, level-up moves, TM/HM moves, and egg moves; evolutions, Pokedex, and assets remain read-only. |
 | PHS-T33 | Done | App-Wide Compact UX Refactor | Shared shell geometry, compact source-inspector affordance, wrapped Resources controls, compact Pokemon/Trainers browser access, collapsed source preview defaults, stacked mutation review details, and resizable Settings are implemented and verified. |
 | PHS-T34 | Done | Build-Time App Asset Bundling | Xcode builds now copy safe local Emerald/FireRed source asset trees into the app bundle under `PokemonHackStudioAssets`, write a bundle manifest, exclude ROM/generated/build/toolchain/reference payloads, and expose bundled entries as read-only Resources fallback data. |
+| PHS-T35 | Done | Events Authoring V1 | Map event overlays default visible, the Maps chrome has counted event visibility controls, canvas markers expose stacks and script-resolution state, the Events/Scripts pane has palette actions plus option-backed fields, staged object sprites refresh on `graphics_id`, and preview diagnostics cover bounds, constants, scripts, warp destinations, and same-tile stacks. |
+| PHS-T36 | Done | Runtime Smoothness And Loading Efficiency | Map catalog and visual document loads now publish asynchronously with stale-selection guards, map visuals reuse shared per-project cache data, canvas/overview redraws avoid hover and viewport churn, event/script/option lookups are batched or indexed, and validation records the remaining asset-bundling dev-loop cost as follow-up. |
 
 ## Recent Progress
 
@@ -74,6 +76,12 @@ No active implementation row. The May 6 build-time asset bundling pass is comple
 - `PHS-T32` makes Data > Pokemon editable for the first species pass: the workbench now shows readable labels instead of raw `MOVE_*`/`ABILITY_*`/`TYPE_*` text, keeps source previews collapsed by default, edits stats/training/breeding/held-item fields plus level-up/TM-HM/egg moves, and routes preview/apply/discard through the existing mutation-plan panel with source hash checks and backups.
 - `PHS-T33` refactored the app-wide macOS layout for smaller screens: `EditorShell` is geometry-aware, compact mode moves the source inspector behind a toolbar popover, Resources wraps its controls and uses compact asset rows, Pokemon and Trainers use compact browser popovers, Trainer/Pokemon source previews default collapsed, mutation review details stack in compact mode, Settings is resizable, and wide windows still restore split layouts.
 - `PHS-T34` added build-time asset bundling for the macOS app: XcodeGen now runs `script/bundle_app_assets.sh`, the script copies safe `constants`, `data`, `graphics`, `include`, `sound`, `songs`, and `src/data` trees plus small root metadata for local source projects, and the app Resources library treats bundled source roots as read-only fallback entries when local editable roots are not available.
+- `PHS-T35` upgraded event authoring in Maps: object, warp, coord, and BG event layers start visible; the top chrome shows counted event overlay controls; event badges, hover labels, same-tile stacks, context-menu selection, and repeated-click cycling make canvas selection clearer; the inspector adds event palette actions and searchable option-backed fields; script rows surface resolution state; and preview diagnostics catch invalid coordinates, constants, scripts, destinations, warp IDs, and event stacks before apply.
+- `PHS-T36` made Maps smoother without changing source-write policy: Workbench map catalog and visual loads now run through cancellable background tasks, `ProjectMapVisualSharedCache` reuses project-wide catalog/tileset/sprite/event-option data, canvas event lookup/badges/stacks are pre-indexed, overview and layer previews avoid full repaint on viewport changes, script resolution and draft-label parsing are batched, and option/metatile lookup hot paths use dictionaries or sets.
+- Dev-loop timing captured during `PHS-T36`: warm direct `map-visual` CLI smokes remained fast (`pokeemerald` `MAP_PETALBURG_CITY` in 0.15s; `pokefirered` `MAP_BATTLE_COLOSSEUM_2P` in 0.12s), while `make validate` took 37.84s and `make verify` took 17.71s with the Xcode bundle phase still copying 2 local source projects every build. Incremental/bundle-skip optimization remains a follow-up outside the runtime-first slice.
+- `PHS-T25` made related-data navigation app-visible without inventing a new graph UI: Resources row actions now focus the target module and row/search context for maps, layouts, scripts, source paths, Pokemon/trainer data, graphics, generated build outputs, text, and items; store-owned resource selection supports backlinks from other modules; and Data > Pokemon now links evolution targets plus species assets back into existing workbench surfaces.
+- `PHS-T14` finished the Build/Patch/Playtest preview workflow: `patch-manifest` accepts `--base-rom`, reports selected base ROM path/SHA1/size/candidate match, distinguishes base ROM mismatch, and the app now has a Patch tab with safe patch/base ROM selectors, project/resource base ROM options, manifest/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON while keeping apply/export/build/run disabled.
+- `PHS-T13` hardened the read-only table parser: descriptors can carry known-field metadata and opt into unknown-field warnings; table parsing now reports missing/unterminated initializers and unsupported bracketed entries with spans; field extraction only reports top-level designators so nested trainer party and TM/HM members do not become false unknown fields; and SourceIndex rows surface the diagnostics while preserving raw source bodies.
 - Reference refresh added pinned source-first refs for `pokeemerald`, `pokefirered`, and `agbcc`; `docs/reference-improvement-audit.md` now captures the comparison against current code and the prioritized follow-up rows.
 - ProjectIndex-backed dashboard slice is complete and verified.
 - Reference synthesis and product architecture docs are in place.
@@ -334,6 +342,59 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make verify` (regenerated the Xcode project, built, signed, launched, and verified the macOS app; the Xcode build phase bundled 2 local source projects into `Contents/Resources/PokemonHackStudioAssets`)
   - Bundle artifact proof: `Contents/Resources/PokemonHackStudioAssets/Projects` contained 32,505 files / 164M from local `pokeemerald` and `pokefirered`; `data/maps/map_groups.json` and `graphics/` existed for both projects; `.gba` and `.o` files were absent; `jq empty` validated the generated manifest JSON.
   - `make test` (95 tests)
+- `PHS-T35`:
+  - `swift test --package-path PokemonHackStudio --filter MapVisualTests` (26 tests)
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination platform=macOS test -only-testing:PokemonHackStudioTests/MapEditorSessionTests`
+  - `make verify`
+  - Manual app smoke: opened Maps on repo-local `pokeemerald`, confirmed the top chrome showed `Events 31/31`, object/warp/coord/BG event layers were visible by default, the Events/Scripts pane exposed the event palette and per-row script-resolution labels, and no apply/source-write action was invoked.
+  - `git -C pokeemerald status --short` and `git -C pokefirered status --short` stayed clean.
+  - `git diff --check`
+- `PHS-T36`:
+  - `make test` (98 tests)
+  - `xcodebuild -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio test` (`PokemonHackCoreTests`: 98 tests; `PokemonHackStudioTests`: 41 tests)
+  - `PokemonHackStudio/.build/debug/pokemonhack-cli map-visual pokeemerald MAP_PETALBURG_CITY --json > /tmp/phs-t36-emerald-map-visual.json` (`real 0.15`; 33 events; 1 diagnostic)
+  - `PokemonHackStudio/.build/debug/pokemonhack-cli map-visual pokefirered MAP_BATTLE_COLOSSEUM_2P --json > /tmp/phs-t36-firered-map-visual.json` (`real 0.12`; 5 events; 0 diagnostics)
+  - `make validate` (`real 37.84`; includes package tests and CLI smokes)
+  - `make verify` (`real 17.71`; regenerated Xcode project, built/signed app, and bundled 2 local source projects)
+  - Dev-loop follow-up recorded: the Xcode `Bundle Local Source Assets` phase still runs on every build, so incremental bundle-skip work stays outside the runtime-first slice.
+- `PHS-T25`:
+  - `swift test --package-path PokemonHackStudio --filter GenIIIAssetCatalogTests` (5 tests; navigation targets covered for map, layout, script, species, moves, graphics, and generated build assets)
+  - `make test` (98 tests)
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination platform=macOS test` (`PokemonHackCoreTests`: 98 tests; `PokemonHackStudioTests`: 43 tests; one initial resource-backlink assertion exposed ambiguous script-source row focus and was fixed by preferring exact navigation targets)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli asset-index pokeemerald --json > /tmp/phs-t25-emerald-asset-index.json` (`pokeemerald`; 31,874 assets; 31,874 navigation targets; 0 diagnostics; `real 4.10`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli asset-index pokefirered --json > /tmp/phs-t25-firered-asset-index.json` (`pokefirered`; 31,423 assets; 31,423 navigation targets; 0 diagnostics; `real 3.36`)
+  - `make validate` (`real 37.92`; includes package tests, asset-index, graph, map, script-readiness, and toolchain smokes)
+  - `make verify` (`real 17.59`; regenerated Xcode project, built/signed app, launched it, and bundled 2 local source projects)
+  - `git diff --check`
+  - `git -C pokeemerald status --short` and `git -C pokefirered status --short` stayed clean.
+- `PHS-T14`:
+  - `swift test --package-path PokemonHackStudio --filter BuildPatchPlaytestValidationTests` (10 tests)
+  - `make test` (100 tests)
+  - `cd PokemonHackStudio && xcodegen generate`
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination platform=macOS test`
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli patch-manifest pokeemerald /tmp/phs-t14-cleanroom.aps --json` (`unknown`; no selected base ROM)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli patch-manifest pokefirered /tmp/phs-t14-cleanroom.aps --json` (`unknown`; no selected base ROM)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli patch-manifest pokeemerald /tmp/phs-t14-cleanroom.aps --base-rom pokefirered/pokefirered.gba --json` (`baseROMMismatch`; Emerald expected hash did not match the selected FireRed ROM)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli patch-manifest pokefirered /tmp/phs-t14-cleanroom.aps --base-rom pokefirered/pokefirered.gba --json` (`compatible`; matched `firered.sha1`)
+  - `make validate`
+  - `make verify`
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination platform=macOS test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testPatchManifestPreviewLoadsBaseROMSelectionAndCopiesJSON`
+  - `git diff --check`
+  - `git -C pokeemerald status --short` and `git -C pokefirered status --short` stayed clean.
+  - Stopped the `PokemonHackStudio.app` process left running by verify.
+- `PHS-T13`:
+  - `swift test --package-path PokemonHackStudio --filter SourceIndexTests` (11 tests)
+  - `swift test --package-path PokemonHackStudio --filter PokemonSpeciesCatalogTests` (4 tests)
+  - `swift test --package-path PokemonHackStudio --filter TrainerCatalogTests` (6 tests)
+  - `swift test --package-path PokemonHackStudio --filter GenIIIAssetCatalogTests` (5 tests)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli source-index pokeemerald --json > /tmp/phs-t13-emerald-source-index.json` (`20,647` records; `138` diagnostics, all `TEXT_LINE_LONG`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli source-index pokefirered --json > /tmp/phs-t13-firered-source-index.json` (`9,905` records; `368` diagnostics, all `TEXT_LINE_LONG`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli source-index references/pokeruby --json > /tmp/phs-t13-pokeruby-source-index.json` (`15,738` records; `1,995` diagnostics: `SCRIPT_LABEL_DUPLICATE` and `TEXT_LINE_LONG`)
+  - `make test` (104 tests)
+  - `make validate`
+  - `make verify` (regenerated the Xcode project, built/signed the macOS app, and bundled 2 local source projects)
+  - `git diff --check`
+  - `git -C pokeemerald status --short` and `git -C pokefirered status --short` stayed clean.
 - `PHS-T16` / `PHS-T19` / `PHS-T20` / `PHS-T22` / `PHS-T24` reference-informed follow-through:
   - `swift test --package-path PokemonHackStudio --filter PokemonDataGraphTests` (2 tests)
   - `swift test --package-path PokemonHackStudio --filter BuildPatchPlaytestValidationTests` (8 tests)

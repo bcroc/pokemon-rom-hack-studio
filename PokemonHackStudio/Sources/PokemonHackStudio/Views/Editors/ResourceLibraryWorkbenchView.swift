@@ -6,13 +6,13 @@ struct ResourceLibraryWorkbenchView: View {
     let assetCatalog: ResourceAssetCatalogViewState?
     let assets: [ResourceAssetRowViewState]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
+    @Binding var selectedAssetID: ResourceAssetRowViewState.ID?
     @Binding var selectedCategory: String
     @Binding var sortMode: ResourceAssetSortMode
     let onLoadAssetCatalog: () -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
 
     @State private var mode: ResourceLibraryMode = .assets
-    @State private var selectedAssetID: ResourceAssetRowViewState.ID?
 
     @ViewBuilder
     var body: some View {
@@ -502,11 +502,11 @@ private struct ResourceAssetDetailPane: View {
                         }
                     }
 
-                    if asset.targetModule != nil {
+                    if let targetModule = asset.targetModule {
                         Button {
                             onNavigate(asset)
                         } label: {
-                            Label("Open Related Module", systemImage: "arrow.right.circle")
+                            Label("Open in \(targetModule.title)", systemImage: "arrow.right.circle")
                         }
                     }
                 }

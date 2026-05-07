@@ -44,6 +44,81 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(sprite.paletteTag, "OBJ_EVENT_PAL_TAG_NPC_1")
     }
 
+    func testCacheBackedVisualLoaderMatchesProjectIndexLoader() throws {
+        let root = try makeVisualProject()
+        try addObjectEventSpriteFixtures(to: root)
+        try addEventOptionConstantFixtures(to: root)
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tend
+
+            Route1_EventScript_Sign::
+            \tend
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+        let index = projectIndex(root: root)
+
+        let directDocument = try ProjectMapVisualLoader.load(from: index, mapID: "MAP_ROUTE1")
+        let sharedCache = try ProjectMapVisualSharedCache.load(from: index)
+        let cachedDocument = try ProjectMapVisualLoader.load(from: sharedCache, mapID: "MAP_ROUTE1")
+        let decodedCache = try JSONDecoder().decode(
+            ProjectMapVisualSharedCache.self,
+            from: JSONEncoder().encode(sharedCache)
+        )
+        let decodedCacheDocument = try ProjectMapVisualLoader.load(from: decodedCache, mapID: "MAP_ROUTE1")
+
+        assertStableVisualDocument(cachedDocument, matches: directDocument)
+        assertStableVisualDocument(decodedCacheDocument, matches: directDocument)
+        XCTAssertEqual(sharedCache.catalog.maps.map(\.id), ["MAP_ROUTE1"])
+        XCTAssertEqual(sharedCache.objectSprites.map(\.graphicsID), ["OBJ_EVENT_GFX_BOY_1"])
+    }
+
+    func testVisualLoaderBuildsEventOptionsCatalogFromProjectSources() throws {
+        let root = try makeVisualProject()
+        try addObjectEventSpriteFixtures(to: root)
+        try addEventOptionConstantFixtures(to: root)
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tend
+
+            Route1_EventScript_Sign::
+            \tend
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+        let options = document.eventOptions
+
+        XCTAssertEqual(options.mapIDs, ["MAP_ROUTE1"])
+        XCTAssertEqual(options.mapWarpCounts["MAP_ROUTE1"], 0)
+        XCTAssertEqual(options.scriptLabels, ["Route1_EventScript_NPC", "Route1_EventScript_Sign"])
+        XCTAssertEqual(options.objectGraphicsIDs, ["OBJ_EVENT_GFX_BOY_1"])
+        XCTAssertEqual(options.sprite(for: "OBJ_EVENT_GFX_BOY_1")?.imageAssetPath, "graphics/object_events/pics/people/boy_1.png")
+        XCTAssertTrue(options.itemIDs.contains("ITEM_POTION"))
+        XCTAssertTrue(options.variableIDs.contains("VAR_TEMP_1"))
+        XCTAssertTrue(options.movementTypes.contains("MOVEMENT_TYPE_FACE_DOWN"))
+        XCTAssertTrue(options.trainerTypes.contains("TRAINER_TYPE_NONE"))
+        XCTAssertTrue(options.facingDirections.contains("BG_EVENT_PLAYER_FACING_ANY"))
+        XCTAssertTrue(options.flags.contains("FLAG_HIDE_ROUTE1_NPC"))
+        XCTAssertTrue(options.flags.contains("FLAG_NONE"))
+        XCTAssertTrue(options.contains("MAP_ROUTE1", in: .maps))
+        XCTAssertTrue(options.contains("Route1_EventScript_NPC", in: .scripts))
+        XCTAssertTrue(options.contains("OBJ_EVENT_GFX_BOY_1", in: .objectGraphics))
+        XCTAssertFalse(options.contains("MAP_MISSING", in: .maps))
+
+        let decoded = try JSONDecoder().decode(MapEventOptionsCatalog.self, from: JSONEncoder().encode(options))
+        XCTAssertEqual(decoded.mapIDs, options.mapIDs)
+        XCTAssertEqual(decoded.scriptLabels, options.scriptLabels)
+        XCTAssertEqual(decoded.objectGraphicsIDs, options.objectGraphicsIDs)
+        XCTAssertTrue(decoded.contains("MAP_ROUTE1", in: .maps))
+        XCTAssertTrue(decoded.contains("Route1_EventScript_Sign", in: .scripts))
+        XCTAssertEqual(decoded.sprite(for: "OBJ_EVENT_GFX_BOY_1")?.imageAssetPath, "graphics/object_events/pics/people/boy_1.png")
+    }
+
     func testVisualLoaderUsesFieldmapMetatileLimitsForSecondaryBase() throws {
         let root = try makeVisualProject()
         try writeFieldmap(primaryMetatiles: 640, totalMetatiles: 1024, primaryTiles: 640, totalTiles: 1024, to: root)
@@ -282,6 +357,13 @@ final class MapVisualTests: XCTestCase {
         let shared = index.resolution(for: "Shared_EventScript")
         let missing = index.resolution(for: "Route1_EventScript_Missing")
         let duplicate = index.resolution(for: "DuplicateScript")
+        let batch = index.resolutions(for: [
+            "Route1_EventScript_NPC",
+            "Shared_EventScript",
+            "Route1_EventScript_Missing",
+            "DuplicateScript",
+            " "
+        ])
 
         XCTAssertEqual(local.state, .resolved)
         XCTAssertEqual(local.span?.sourceRole, .mapLocal)
@@ -290,6 +372,11 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(shared.span?.sourceRole, .shared)
         XCTAssertEqual(missing.state, .missingLabel)
         XCTAssertEqual(duplicate.state, .duplicateLabel)
+        XCTAssertEqual(batch["Route1_EventScript_NPC"]?.state, .resolved)
+        XCTAssertEqual(batch["Shared_EventScript"]?.span?.sourceRole, .shared)
+        XCTAssertEqual(batch["Route1_EventScript_Missing"]?.state, .missingLabel)
+        XCTAssertEqual(batch["DuplicateScript"]?.state, .duplicateLabel)
+        XCTAssertNil(batch[" "])
         XCTAssertTrue(index.diagnostics.contains { $0.code == "MAP_SCRIPT_LABEL_DUPLICATE" })
 
         let localSuggestions = index.suggestions(matching: "EventScript", includeShared: false).map(\.label)
@@ -468,6 +555,57 @@ final class MapVisualTests: XCTestCase {
         let script = try XCTUnwrap(plan.changes.first { $0.path == "data/maps/Route1/scripts.inc" }?.textPreview)
         XCTAssertTrue(script.contains("Route1_EventScript_New::\n\tmsgbox Route1_Text\n\tend"))
         XCTAssertEqual(script.components(separatedBy: "Route1_EventScript_New::").count, 2)
+        XCTAssertTrue(plan.isApplyable, "\(plan.diagnostics.map(\.code))")
+    }
+
+    func testMutationPlannerReportsEventAuthoringDiagnostics() throws {
+        let root = try makeVisualProject()
+        try addObjectEventSpriteFixtures(to: root)
+        try addEventOptionConstantFixtures(to: root)
+        try write(
+            """
+            Route1_EventScript_NPC::
+            \tend
+
+            Route1_EventScript_Sign::
+            \tend
+            """,
+            to: root.appendingPathComponent("data/maps/Route1/scripts.inc")
+        )
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+        let invalidKnownWarp = [
+            MapEventProperty(key: "x", value: "4"),
+            MapEventProperty(key: "y", value: "4"),
+            MapEventProperty(key: "elevation", value: "0"),
+            MapEventProperty(key: "dest_map", value: "MAP_ROUTE1"),
+            MapEventProperty(key: "dest_warp_id", value: "0")
+        ]
+        let missingMapWarp = [
+            MapEventProperty(key: "x", value: "1"),
+            MapEventProperty(key: "y", value: "1"),
+            MapEventProperty(key: "elevation", value: "0"),
+            MapEventProperty(key: "dest_map", value: "MAP_ROUTE_MISSING"),
+            MapEventProperty(key: "dest_warp_id", value: "0")
+        ]
+
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(action: .moveEvent, x: 0, y: 0, eventKind: .object, eventIndex: 0),
+                MapEditOperation(action: .updateEventField, eventKind: .object, eventIndex: 0, fieldKey: "graphics_id", fieldValue: "OBJ_EVENT_GFX_UNKNOWN"),
+                MapEditOperation(action: .updateEventField, eventKind: .object, eventIndex: 0, fieldKey: "script", fieldValue: "Route1_EventScript_Missing"),
+                MapEditOperation(action: .addEvent, x: 4, y: 4, eventKind: .warp, templateProperties: invalidKnownWarp),
+                MapEditOperation(action: .addEvent, x: 1, y: 1, eventKind: .warp, templateProperties: missingMapWarp)
+            ]
+        )
+
+        let codes = Set(plan.diagnostics.map(\.code))
+        XCTAssertTrue(codes.contains("MAP_EVENT_TILE_STACK"), "\(codes)")
+        XCTAssertTrue(codes.contains("MAP_EVENT_OUT_OF_BOUNDS"), "\(codes)")
+        XCTAssertTrue(codes.contains("MAP_EVENT_CONSTANT_UNRESOLVED"), "\(codes)")
+        XCTAssertTrue(codes.contains("MAP_EVENT_SCRIPT_UNRESOLVED"), "\(codes)")
+        XCTAssertTrue(codes.contains("MAP_EVENT_DESTINATION_UNRESOLVED"), "\(codes)")
+        XCTAssertTrue(codes.contains("MAP_EVENT_DESTINATION_WARP_UNRESOLVED"), "\(codes)")
         XCTAssertTrue(plan.isApplyable, "\(plan.diagnostics.map(\.code))")
     }
 
@@ -677,6 +815,50 @@ final class MapVisualTests: XCTestCase {
 
     private func tileIndices(in cell: MetatileLayerCell) -> [Int] {
         cell.tileEntries.compactMap { $0?.tileIndex }
+    }
+
+    private func assertStableVisualDocument(
+        _ actual: MapVisualDocument,
+        matches expected: MapVisualDocument,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.id, expected.id, file: file, line: line)
+        XCTAssertEqual(actual.rootPath, expected.rootPath, file: file, line: line)
+        XCTAssertEqual(actual.profile, expected.profile, file: file, line: line)
+        XCTAssertEqual(actual.mapID, expected.mapID, file: file, line: line)
+        XCTAssertEqual(actual.mapName, expected.mapName, file: file, line: line)
+        XCTAssertEqual(actual.mapMetadata, expected.mapMetadata, file: file, line: line)
+        XCTAssertEqual(actual.layout, expected.layout, file: file, line: line)
+        XCTAssertEqual(actual.blockdata, expected.blockdata, file: file, line: line)
+        XCTAssertEqual(actual.border, expected.border, file: file, line: line)
+        XCTAssertEqual(actual.primaryTileset, expected.primaryTileset, file: file, line: line)
+        XCTAssertEqual(actual.secondaryTileset, expected.secondaryTileset, file: file, line: line)
+        XCTAssertEqual(actual.metatileLimits, expected.metatileLimits, file: file, line: line)
+        XCTAssertEqual(actual.tileLimits, expected.tileLimits, file: file, line: line)
+        XCTAssertEqual(actual.metatiles, expected.metatiles, file: file, line: line)
+        XCTAssertEqual(actual.events, expected.events, file: file, line: line)
+        XCTAssertEqual(actual.eventOptions, expected.eventOptions, file: file, line: line)
+        XCTAssertEqual(actual.scriptIndex, expected.scriptIndex, file: file, line: line)
+        XCTAssertEqual(actual.scene, expected.scene, file: file, line: line)
+        XCTAssertEqual(stableDiagnostics(actual.diagnostics), stableDiagnostics(expected.diagnostics), file: file, line: line)
+        XCTAssertEqual(
+            stableDiagnostics(actual.wildEncounters?.diagnostics ?? []),
+            stableDiagnostics(expected.wildEncounters?.diagnostics ?? []),
+            file: file,
+            line: line
+        )
+    }
+
+    private func stableDiagnostics(_ diagnostics: [Diagnostic]) -> [String] {
+        diagnostics.map { diagnostic in
+            [
+                String(describing: diagnostic.severity),
+                diagnostic.code,
+                diagnostic.message,
+                diagnostic.span?.relativePath ?? ""
+            ].joined(separator: "|")
+        }
     }
 
     private func makeVisualProject(
@@ -1002,6 +1184,21 @@ final class MapVisualTests: XCTestCase {
             const u16 gObjectEventPic_Boy1[] = INCGFX_U16("graphics/object_events/pics/people/boy_1.png", ".4bpp");
             """,
             to: root.appendingPathComponent("src/data/object_events/object_event_graphics.h")
+        )
+    }
+
+    private func addEventOptionConstantFixtures(to root: URL) throws {
+        try write("#define ITEM_POTION 13\n", to: root.appendingPathComponent("include/constants/items.h"))
+        try write("#define VAR_TEMP_1 0x8000\n", to: root.appendingPathComponent("include/constants/vars.h"))
+        try write("#define MOVEMENT_TYPE_FACE_DOWN 1\n", to: root.appendingPathComponent("include/constants/event_object_movement.h"))
+        try write("#define TRAINER_TYPE_NONE 0\n", to: root.appendingPathComponent("include/constants/trainer_types.h"))
+        try write("#define BG_EVENT_PLAYER_FACING_ANY 0\n", to: root.appendingPathComponent("include/constants/event_bg.h"))
+        try write(
+            """
+            #define FLAG_NONE 0
+            #define FLAG_HIDE_ROUTE1_NPC 100
+            """,
+            to: root.appendingPathComponent("include/constants/flags.h")
         )
     }
 

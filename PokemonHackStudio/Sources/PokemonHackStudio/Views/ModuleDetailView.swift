@@ -38,6 +38,10 @@ struct ModuleDetailView: View {
                 assetCatalog: store.selectedAssetCatalog,
                 assets: store.filteredResourceAssetRows,
                 assetLoadStatus: store.assetCatalogLoadStatus,
+                selectedAssetID: Binding(
+                    get: { store.selectedResourceAssetID },
+                    set: { store.requestResourceAssetSelection($0) }
+                ),
                 selectedCategory: Binding(
                     get: { store.resourceAssetCategory },
                     set: { store.resourceAssetCategory = $0 }
@@ -99,7 +103,8 @@ struct ModuleDetailView: View {
                 onLoadCatalog: {
                     store.loadSelectedSpeciesCatalogIfNeeded()
                 },
-                onUpdateDraft: store.updateSelectedSpeciesDraft
+                onUpdateDraft: store.updateSelectedSpeciesDraft,
+                onNavigateToResourceAsset: store.navigateToResourceAsset
             )
         case .encounters:
             EncounterEditorView(records: store.records(for: .encounters))
@@ -117,13 +122,7 @@ struct ModuleDetailView: View {
         case .graphics:
             graphicsWorkbenchView
         case .build:
-            BuildWorkbenchView(
-                target: store.selectedTarget,
-                steps: store.buildSteps,
-                indexedProject: store.selectedIndexedProject,
-                report: store.selectedBuildReport,
-                rows: store.filteredBuildReportRows
-            )
+            BuildWorkbenchView(store: store)
         case .issues:
             IssuesView(
                 issues: store.issues,

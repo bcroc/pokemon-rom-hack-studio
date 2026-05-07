@@ -22,6 +22,14 @@ struct MapOverviewView: NSViewRepresentable {
     }
 }
 
+private struct MapOverviewRenderInputs: Equatable {
+    let documentID: String
+    let rawValues: [UInt16]
+    let borderRawValues: [UInt16]
+    let events: [MapEventDescriptor]
+    let overlays: MapOverlaySettings
+}
+
 final class MapOverviewNSView: NSView {
     private var document: MapVisualDocument?
     private var rawValues: [UInt16] = []
@@ -30,6 +38,9 @@ final class MapOverviewNSView: NSView {
     private var overlays = MapOverlaySettings()
     private var viewport = MapCanvasViewport.zero
     private var renderer: MetatileSwatchRenderer?
+    private var staticOverviewImage: NSImage?
+    private var staticOverviewImageSize = CGSize.zero
+    private var staticRenderInputs: MapOverviewRenderInputs?
     private var onSelectViewportCenter: (CGFloat, CGFloat) -> Void = { _, _ in }
 
     override var isFlipped: Bool { true }
@@ -49,6 +60,15 @@ final class MapOverviewNSView: NSView {
 
     func update(from overview: MapOverviewView) {
         let needsRenderer = document?.id != overview.document.id
+        let nextRenderInputs = MapOverviewRenderInputs(
+            documentID: overview.document.id,
+            rawValues: overview.rawValues,
+            borderRawValues: overview.borderRawValues,
+            events: overview.events,
+            overlays: overview.overlays
+        )
+        let staticInputsChanged = staticRenderInputs != nextRenderInputs
+        let previousViewport = viewport
         document = overview.document
         rawValues = overview.rawValues
         borderRawValues = overview.borderRawValues
@@ -61,13 +81,58 @@ final class MapOverviewNSView: NSView {
         } else {
             renderer?.update(document: overview.document)
         }
-        setNeedsDisplay(bounds)
+        if staticInputsChanged {
+            staticRenderInputs = nextRenderInputs
+            staticOverviewImage = nil
+            staticOverviewImageSize = .zero
+            setNeedsDisplay(bounds)
+        } else if previousViewport != overview.viewport {
+            setNeedsDisplay(bounds)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let document else { return }
+        if let image = staticImage(for: document) {
+            image.draw(in: bounds)
+        } else {
+            NSColor.textBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
+
+        let mapRect = overviewMapRect(for: document)
+        let scene = document.scene.viewport
+        let cellWidth = mapRect.width / max(CGFloat(scene.width), 1)
+        let cellHeight = mapRect.height / max(CGFloat(scene.height), 1)
+        drawViewport(in: mapRect, cellWidth: cellWidth, cellHeight: cellHeight)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if bounds.size != newSize {
+            staticOverviewImage = nil
+            staticOverviewImageSize = .zero
+        }
+        super.setFrameSize(newSize)
+    }
+
+    private func staticImage(for document: MapVisualDocument) -> NSImage? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        if let staticOverviewImage, staticOverviewImageSize == bounds.size {
+            return staticOverviewImage
+        }
+
+        let image = NSImage(size: bounds.size)
+        image.lockFocus()
+        drawStaticOverview(document: document)
+        image.unlockFocus()
+        staticOverviewImage = image
+        staticOverviewImageSize = bounds.size
+        return image
+    }
+
+    private func drawStaticOverview(document: MapVisualDocument) {
         NSColor.textBackgroundColor.setFill()
-        dirtyRect.fill()
+        bounds.fill()
 
         let mapRect = overviewMapRect(for: document)
         NSColor.windowBackgroundColor.setFill()
@@ -113,7 +178,6 @@ final class MapOverviewNSView: NSView {
         if overlays.showGrid, cellWidth >= 4, cellHeight >= 4 {
             drawGrid(in: mapRect, viewport: scene)
         }
-        drawViewport(in: mapRect, cellWidth: cellWidth, cellHeight: cellHeight)
     }
 
     override func mouseDown(with event: NSEvent) {

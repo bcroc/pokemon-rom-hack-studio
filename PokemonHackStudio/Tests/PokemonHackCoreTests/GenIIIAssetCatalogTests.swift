@@ -26,6 +26,34 @@ final class GenIIIAssetCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.assets.contains { $0.category == .graphics && $0.relativePath == "graphics/pokemon/treecko.png" })
         XCTAssertTrue(catalog.assets.contains { $0.category == .audio && $0.relativePath == "sound/songs/mus_test.s" })
         XCTAssertTrue(catalog.assets.contains { $0.category == .generated && $0.relativePath == "pokeemerald.gba" })
+
+        let mapAsset = try XCTUnwrap(catalog.assets.first { $0.category == .maps && $0.title == "Route1" })
+        XCTAssertEqual(mapAsset.navigationTarget?.module, .maps)
+        XCTAssertEqual(mapAsset.navigationTarget?.identifier, "MAP_ROUTE1")
+
+        let layoutAsset = try XCTUnwrap(catalog.assets.first { $0.category == .layouts && $0.title == "Route1_Layout" })
+        XCTAssertEqual(layoutAsset.navigationTarget?.module, .maps)
+        XCTAssertEqual(layoutAsset.navigationTarget?.identifier, "LAYOUT_ROUTE1")
+
+        let scriptAsset = try XCTUnwrap(catalog.assets.first { $0.category == .scripts && $0.title == "Test_EventScript" })
+        XCTAssertEqual(scriptAsset.navigationTarget?.module, .scripts)
+        XCTAssertEqual(scriptAsset.navigationTarget?.identifier, "Test_EventScript")
+
+        let speciesAsset = try XCTUnwrap(catalog.assets.first { $0.category == .species && $0.title == "SPECIES_TREECKO" })
+        XCTAssertEqual(speciesAsset.navigationTarget?.module, .pokemon)
+        XCTAssertEqual(speciesAsset.navigationTarget?.identifier, "SPECIES_TREECKO")
+
+        let moveAsset = try XCTUnwrap(catalog.assets.first { $0.category == .moves && $0.title == "MOVE_POUND" })
+        XCTAssertEqual(moveAsset.navigationTarget?.module, .pokemon)
+        XCTAssertEqual(moveAsset.navigationTarget?.identifier, "MOVE_POUND")
+
+        let graphicsAsset = try XCTUnwrap(catalog.assets.first { $0.category == .graphics && $0.relativePath == "graphics/pokemon/treecko.png" })
+        XCTAssertEqual(graphicsAsset.navigationTarget?.module, .graphics)
+        XCTAssertEqual(graphicsAsset.navigationTarget?.identifier, "graphics/pokemon/treecko.png")
+
+        let generatedAsset = try XCTUnwrap(catalog.assets.first { $0.category == .generated && $0.relativePath == "pokeemerald.gba" })
+        XCTAssertEqual(generatedAsset.navigationTarget?.module, .build)
+        XCTAssertEqual(generatedAsset.navigationTarget?.identifier, "pokeemerald.gba")
     }
 
     func testSafeInventoryExcludesGeneratedNestedROMsAndBuildProducts() throws {

@@ -57,11 +57,24 @@ private enum KeyCode {
     static let upArrow: UInt16 = 126
 }
 
+private struct MapCanvasRenderInputs: Equatable {
+    let documentID: String?
+    let rawValues: [UInt16]
+    let borderRawValues: [UInt16]
+    let events: [MapEventDescriptor]
+    let overlays: MapOverlaySettings
+    let zoom: CGFloat
+    let selectedCell: MapCellSelection?
+    let selectedCellTarget: MapBlockTarget
+    let selectedEventID: String?
+}
+
 final class MapCanvasNSView: NSView {
     private var document: MapVisualDocument?
     private var rawValues: [UInt16] = []
     private var borderRawValues: [UInt16] = []
     private var events: [MapEventDescriptor] = []
+    private var eventIndex = MapCanvasEventRenderIndex.empty
     private var selectedTool: MapEditorTool = .select
     private var eventTemplate: MapEventTemplateKind = .object
     private var brushRawValue: UInt16?
@@ -132,6 +145,17 @@ final class MapCanvasNSView: NSView {
 
     func update(from canvas: MapVisualCanvas) {
         let needsRenderer = document?.id != canvas.document.id
+        let previousRenderInputs = MapCanvasRenderInputs(
+            documentID: document?.id,
+            rawValues: rawValues,
+            borderRawValues: borderRawValues,
+            events: events,
+            overlays: overlays,
+            zoom: zoom,
+            selectedCell: selectedCell,
+            selectedCellTarget: selectedCellTarget,
+            selectedEventID: selectedEventID
+        )
         document = canvas.document
         rawValues = canvas.rawValues
         borderRawValues = canvas.borderRawValues
@@ -158,6 +182,12 @@ final class MapCanvasNSView: NSView {
         onViewportChange = canvas.onViewportChange
         onZoom = canvas.onZoom
         onCommand = canvas.onCommand
+        eventIndex = MapCanvasEventRenderIndex(
+            events: canvas.events,
+            overlays: canvas.overlays,
+            document: canvas.document,
+            selectedEventID: canvas.selectedEventID
+        )
         if needsRenderer {
             renderer = MetatileSwatchRenderer(document: canvas.document)
         } else {
@@ -165,7 +195,20 @@ final class MapCanvasNSView: NSView {
         }
         setAccessibilityLabel(accessibilityCanvasLabel)
         setAccessibilityValue(accessibilityCanvasValue)
-        setNeedsDisplay(bounds)
+        let nextRenderInputs = MapCanvasRenderInputs(
+            documentID: canvas.document.id,
+            rawValues: canvas.rawValues,
+            borderRawValues: canvas.borderRawValues,
+            events: canvas.events,
+            overlays: canvas.overlays,
+            zoom: canvas.zoom,
+            selectedCell: canvas.selectedCell,
+            selectedCellTarget: canvas.selectedCellTarget,
+            selectedEventID: canvas.selectedEventID
+        )
+        if previousRenderInputs != nextRenderInputs {
+            setNeedsDisplay(bounds)
+        }
         installScrollObserverIfNeeded()
         handleViewportRequestIfNeeded()
         reportViewportIfNeeded()
@@ -218,6 +261,7 @@ final class MapCanvasNSView: NSView {
         drawSelectedCell()
         drawHover()
         drawEvents()
+        drawHoverEventLabel()
         drawEventDragPreview()
     }
 
@@ -253,9 +297,10 @@ final class MapCanvasNSView: NSView {
             guard let target = hit.target else { return }
             commit(.eyedropMapCell(x: coordinate.x, y: coordinate.y, target: target))
         case .eventMove:
-            if let eventID = hit.eventID {
-                commit(.selectMapEvent(id: eventID))
-                dragState = .event(eventID: eventID, origin: coordinate, current: coordinate, didDrag: false)
+            if hit.eventID != nil {
+                let nextEventID = eventIDToSelect(from: hit) ?? hit.eventID ?? ""
+                commit(.selectMapEvent(id: nextEventID))
+                dragState = .event(eventID: nextEventID, origin: coordinate, current: coordinate, didDrag: false)
             } else if selectedEventID != nil {
                 dragState = .event(eventID: selectedEventID ?? "", origin: nil, current: coordinate, didDrag: false)
             } else if let target = hit.target {
@@ -277,8 +322,8 @@ final class MapCanvasNSView: NSView {
                 commit(.selectMapCell(x: coordinate.x, y: coordinate.y, target: target))
             }
         case .select:
-            if let eventID = hit.eventID {
-                commit(.selectMapEvent(id: eventID))
+            if hit.eventID != nil {
+                commit(.selectMapEvent(id: eventIDToSelect(from: hit)))
             } else if let target = hit.target {
                 commit(.selectMapEvent(id: nil))
                 commit(.selectMapCell(x: coordinate.x, y: coordinate.y, target: target))
@@ -367,6 +412,49 @@ final class MapCanvasNSView: NSView {
         clearHover()
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let hit = hitTester().hit(at: point) else { return nil }
+        let menu = NSMenu()
+
+        if !hit.events.isEmpty {
+            for mapEvent in hit.events.reversed() {
+                let item = NSMenuItem(
+                    title: "\(mapEvent.kind.rawValue.capitalized) #\(mapEvent.index)",
+                    action: #selector(selectEventFromContextMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.representedObject = mapEvent.id
+                item.target = self
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
+
+        if hit.target == .layout {
+            let addItem = NSMenuItem(
+                title: "Add \(eventTemplate.title) Here",
+                action: #selector(addEventFromContextMenu(_:)),
+                keyEquivalent: ""
+            )
+            addItem.representedObject = "\(hit.coordinate.x),\(hit.coordinate.y)"
+            addItem.target = self
+            menu.addItem(addItem)
+        }
+
+        if selectedEventID != nil {
+            menu.addItem(.separator())
+            let duplicateItem = NSMenuItem(title: "Duplicate Selected Event", action: #selector(duplicateEventFromContextMenu(_:)), keyEquivalent: "")
+            duplicateItem.target = self
+            menu.addItem(duplicateItem)
+            let deleteItem = NSMenuItem(title: "Delete Selected Event", action: #selector(deleteEventFromContextMenu(_:)), keyEquivalent: "")
+            deleteItem.target = self
+            menu.addItem(deleteItem)
+        }
+
+        return menu.items.isEmpty ? nil : menu
+    }
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case KeyCode.delete:
@@ -382,6 +470,26 @@ final class MapCanvasNSView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    @objc private func selectEventFromContextMenu(_ sender: NSMenuItem) {
+        guard let eventID = sender.representedObject as? String else { return }
+        commit(.selectMapEvent(id: eventID))
+    }
+
+    @objc private func addEventFromContextMenu(_ sender: NSMenuItem) {
+        guard let encoded = sender.representedObject as? String else { return }
+        let parts = encoded.split(separator: ",").compactMap { Int($0) }
+        guard parts.count == 2 else { return }
+        commit(.addMapEvent(template: eventTemplate, x: parts[0], y: parts[1]))
+    }
+
+    @objc private func duplicateEventFromContextMenu(_ sender: NSMenuItem) {
+        commit(.duplicateSelectedMapEvent)
+    }
+
+    @objc private func deleteEventFromContextMenu(_ sender: NSMenuItem) {
+        commit(.deleteSelectedMapEvent)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -468,8 +576,8 @@ final class MapCanvasNSView: NSView {
             ),
             rawValues: rawValues,
             borderRawValues: borderRawValues,
-            events: events,
-            overlays: overlays
+            overlays: overlays,
+            eventIndex: eventIndex
         )
     }
 
@@ -576,6 +684,17 @@ final class MapCanvasNSView: NSView {
         default:
             break
         }
+    }
+
+    private func eventIDToSelect(from hit: MapCanvasHitResult) -> String? {
+        guard hit.events.count > 1 else { return hit.eventID }
+        guard let selectedEventID,
+              let selectedIndex = hit.events.firstIndex(where: { $0.id == selectedEventID })
+        else {
+            return hit.eventID
+        }
+        let nextIndex = (selectedIndex + 1) % hit.events.count
+        return hit.events[nextIndex].id
     }
 
     private func pan(by delta: CGSize) {
@@ -870,7 +989,7 @@ final class MapCanvasNSView: NSView {
     }
 
     private func drawEvents() {
-        for event in events where MapCanvasHitTester.shouldShow(event.kind, overlays: overlays) {
+        for event in eventIndex.visibleEvents {
             guard let x = event.x, let y = event.y else { continue }
             let rect = rect(for: MapCanvasCoordinate(x: x, y: y))
             let opacity = CGFloat(overlays.layerOpacity(MapCanvasHitTester.layer(for: event.kind)))
@@ -881,9 +1000,19 @@ final class MapCanvasNSView: NSView {
                 tileSize: tileSize,
                 opacity: opacity,
                 selected: event.id == selectedEventID,
-                fallbackColor: eventColor(event.kind)
+                fallbackColor: eventColor(event.kind),
+                badge: eventIndex.badge(for: event)
             )
         }
+    }
+
+    private func drawHoverEventLabel() {
+        guard let hoveredStatus,
+              let eventID = hoveredStatus.eventID,
+              let event = eventIndex.event(id: eventID)
+        else { return }
+        let rect = rect(for: hoveredStatus.sceneCoordinate)
+        drawBadge(eventHoverLabel(event), near: rect)
     }
 
     private func drawEventDragPreview() {
@@ -963,5 +1092,17 @@ final class MapCanvasNSView: NSView {
         case .bg: .systemGreen
         case .connection: .systemPink
         }
+    }
+
+    private func eventHoverLabel(_ event: MapEventDescriptor) -> String {
+        var parts = ["\(event.kind.rawValue.capitalized) #\(event.index)"]
+        if let script = event.propertyValue("script") {
+            parts.append(script)
+        } else if let destination = event.propertyValue("dest_map") {
+            parts.append(destination)
+        } else if let item = event.propertyValue("item") {
+            parts.append(item)
+        }
+        return parts.joined(separator: " ")
     }
 }

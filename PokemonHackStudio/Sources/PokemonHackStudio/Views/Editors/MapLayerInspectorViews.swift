@@ -44,8 +44,7 @@ struct MapLayerInspectorView: View {
                     borderRawValues: session.stagedMapBorderValues,
                     events: session.stagedMapEvents,
                     overlays: session.mapOverlaySettings,
-                    layoutMode: layoutMode,
-                    viewport: viewport
+                    layoutMode: layoutMode
                 ) { layer in
                     session.toggleLayerSolo(MapEditorLayer.layer(for: layer))
                 }
@@ -151,7 +150,6 @@ struct MapBackgroundLayerPreviewStrip: View {
     let events: [MapEventDescriptor]
     let overlays: MapOverlaySettings
     let layoutMode: MapEditorLayoutMode
-    let viewport: MapCanvasViewport
     let onSelectLayer: (MetatileRenderLayer) -> Void
 
     var body: some View {
@@ -204,7 +202,7 @@ struct MapBackgroundLayerPreviewStrip: View {
             borderRawValues: borderRawValues,
             events: events,
             overlays: overlays.previewingOnly(renderLayer: layer),
-            viewport: viewport,
+            viewport: .zero,
             onSelectViewportCenter: { _, _ in }
         )
         .clipShape(RoundedRectangle(cornerRadius: 5))

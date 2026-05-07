@@ -12,6 +12,53 @@ private struct ResourceAssetRowsCache {
     let rows: [ResourceAssetRowViewState]
 }
 
+private struct MapCatalogLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let catalog: PokemonHackCore.ProjectMapCatalog
+}
+
+private struct MapVisualLoadPayload: Codable {
+    let sharedCache: PokemonHackCore.ProjectMapVisualSharedCache
+    let document: PokemonHackCore.MapVisualDocument
+}
+
+private struct BuildPatchPlaytestReportExportPayload: Codable {
+    let projectTitle: String?
+    let rootPath: String?
+    let profile: String?
+    let status: String
+    let buildRows: [BuildReportRowExportPayload]
+    let patchManifest: PokemonHackCore.PatchManifestReport?
+    let playtest: PlaytestReportExportPayload?
+}
+
+private struct BuildReportRowExportPayload: Codable {
+    let section: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: String
+    let path: String
+    let symbol: String
+    let tags: [String]
+}
+
+private struct PlaytestReportExportPayload: Codable {
+    let emulator: String
+    let romPath: String?
+    let arguments: [String]
+    let artifacts: [PlaytestArtifactExportPayload]
+    let isRunnable: Bool
+    let status: String
+    let detail: String
+}
+
+private struct PlaytestArtifactExportPayload: Codable {
+    let kind: String
+    let path: String
+    let detail: String
+}
+
 @MainActor
 final class WorkbenchStore: ObservableObject {
     @Published var selection: WorkbenchModule = .dashboard
@@ -20,6 +67,9 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedMapID: String = ""
     @Published var selectedSpeciesID: String = ""
     @Published var selectedTrainerID: String = ""
+    @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID?
+    @Published var selectedPatchPath: String = ""
+    @Published var selectedBaseROMPath: String = ""
     @Published var scriptReadinessTargetMode: ScriptReadinessTargetMode = .map
     @Published var selectedScriptReadinessLabel: String = ""
     @Published var searchText = ""
@@ -38,6 +88,8 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var assetCatalogLoadStatus: ResourceAssetCatalogLoadStatus = .idle
     @Published private(set) var speciesCatalogLoadStatus: SpeciesCatalogLoadStatus = .idle
     @Published private(set) var trainerCatalogLoadStatus: TrainerCatalogLoadStatus = .idle
+    @Published private(set) var patchManifestLoadStatus: PatchManifestLoadStatus = .idle
+    @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
     @Published private(set) var latestSpeciesApplyResult: PokemonHackCore.SpeciesApplyResult?
     @Published private(set) var latestTrainerEditPlan: PokemonHackCore.TrainerEditPlan?
@@ -58,6 +110,7 @@ final class WorkbenchStore: ObservableObject {
     private var sourceIndexesByID: [String: PokemonHackCore.ProjectSourceIndex] = [:]
     private var scriptOutlinesByID: [String: PokemonHackCore.ProjectScriptOutline] = [:]
     private var buildReportsByID: [String: BuildPatchPlaytestReportViewState] = [:]
+    private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
     private var scriptReadinessReportsByID: [String: ScriptReadinessReportViewState] = [:]
     private var speciesCatalogsByID: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
@@ -65,7 +118,12 @@ final class WorkbenchStore: ObservableObject {
     private var assetCatalogsByID: [String: ResourceAssetCatalogViewState] = [:]
     private var assetCatalogFingerprintsByID: [String: String] = [:]
     private var assetCatalogTask: Task<Void, Never>?
+    private var mapCatalogTask: Task<Void, Never>?
+    private var mapVisualTask: Task<Void, Never>?
+    private var mapVisualSharedCacheDataByID: [String: Data] = [:]
     private var resourceAssetRowsCache: ResourceAssetRowsCache?
+    private var pendingRelatedMapTargetID: String?
+    private var pendingResourceAssetFocus: String?
     private var settingsCancellable: AnyCancellable?
 
     private static let recentRootsKey = "PokemonHackStudio.recentProjectRoots"
@@ -276,6 +334,14 @@ final class WorkbenchStore: ObservableObject {
         return buildReportsByID[selectedIndexedProject.id]
     }
 
+    var baseROMOptions: [BaseROMOptionViewState] {
+        let projectOptions = selectedRawBuildReport?.baseROMOptions ?? []
+        let resourceOptions = (resourceLibrary?.entries ?? [])
+            .filter { $0.platform == GenIIIResourcePlatform.gbaROM.rawValue }
+            .map(Self.baseROMOption(fromResourceEntry:))
+        return uniqueBaseROMOptions(projectOptions + resourceOptions)
+    }
+
     var selectedGraphicsReport: GraphicsDiagnosticsReportViewState? {
         guard let selectedIndexedProject else { return nil }
         return graphicsReportsByID[selectedIndexedProject.id]
@@ -293,6 +359,7 @@ final class WorkbenchStore: ObservableObject {
         } ?? []
         let buildDiagnostics = (selectedBuildReport?.diagnostics ?? [])
             .filter(userSettings.shouldShowHealthDiagnosticInGlobalIssues)
+        let patchDiagnostics = selectedPatchManifestReport?.diagnostics ?? []
         let scriptReadinessDiagnostics = selectedScriptReadinessReport?.diagnostics ?? []
         let graphicsDiagnostics = selectedGraphicsReport?.diagnostics ?? []
         let speciesDiagnostics = selectedSpeciesCatalog?.diagnostics.map {
@@ -306,6 +373,7 @@ final class WorkbenchStore: ObservableObject {
         return selectedIndexedProject.diagnostics
             + sourceDiagnostics
             + buildDiagnostics
+            + patchDiagnostics
             + scriptReadinessDiagnostics
             + graphicsDiagnostics
             + speciesDiagnostics
@@ -382,6 +450,11 @@ final class WorkbenchStore: ObservableObject {
     var filteredBuildReportRows: [BuildReportRow] {
         guard let selectedBuildReport else { return [] }
         return filter(buildRows: selectedBuildReport.rows)
+    }
+
+    var filteredPatchManifestRows: [BuildReportRow] {
+        guard let selectedPatchManifestReport else { return [] }
+        return filter(buildRows: selectedPatchManifestReport.rows)
     }
 
     var filteredScriptReadinessRows: [ScriptReadinessReportRow] {
@@ -510,6 +583,7 @@ final class WorkbenchStore: ObservableObject {
             toolchain: report.toolchain,
             healthMatrix: healthMatrix,
             playtest: report.playtest,
+            baseROMOptions: report.baseROMOptions,
             diagnostics: report.diagnostics
         )
     }
@@ -714,7 +788,13 @@ final class WorkbenchStore: ObservableObject {
         case .maps:
             mapModuleStatus
         case .build:
-            selectedBuildReport?.status ?? Self.validationStatus(for: buildSteps.map(\.status))
+            Self.validationStatus(
+                for: [
+                    selectedBuildReport?.status ?? Self.validationStatus(for: buildSteps.map(\.status)),
+                    patchManifestLoadStatus.validationState,
+                    selectedPatchManifestReport?.status ?? .valid
+                ]
+            )
         case .issues:
             issueCount == 0 ? .valid : .warning
         case .graphics:
@@ -906,9 +986,11 @@ final class WorkbenchStore: ObservableObject {
         trainerCatalogsByID = trainerCatalogs
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
+        mapVisualSharedCacheDataByID = [:]
         resourceAssetRowsCache = nil
         if !summaries.contains(where: { $0.id == selectedProjectID }) {
             selectedProjectID = summaries.first?.id ?? ""
+            resetPatchManifestReportForProjectChange()
         }
         refreshSelectedMapCatalog()
         refreshSelectedScriptReadinessReport()
@@ -932,7 +1014,11 @@ final class WorkbenchStore: ObservableObject {
         } else {
             selectedProjectID = projectID
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
+            resetPatchManifestReportForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
+            selectedResourceAssetID = nil
+            pendingRelatedMapTargetID = nil
+            pendingResourceAssetFocus = nil
             resourceAssetRowsCache = nil
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
@@ -970,31 +1056,187 @@ final class WorkbenchStore: ObservableObject {
         latestTrainerApplyResult = nil
     }
 
+    func requestResourceAssetSelection(_ assetID: ResourceAssetRowViewState.ID?) {
+        selectedResourceAssetID = assetID
+    }
+
+    func requestPatchPath(_ path: String) {
+        selectedPatchPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        rawPatchManifestReport = nil
+        selectedPatchManifestReport = nil
+        patchManifestLoadStatus = selectedPatchPath.isEmpty ? .idle : .idle
+    }
+
+    func requestBaseROMPath(_ path: String) {
+        selectedBaseROMPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selectedPatchPath.isEmpty, selectedPatchManifestReport != nil {
+            loadSelectedPatchManifestReport()
+        }
+    }
+
+    private func resetPatchManifestReportForProjectChange() {
+        selectedBaseROMPath = ""
+        rawPatchManifestReport = nil
+        selectedPatchManifestReport = nil
+        patchManifestLoadStatus = .idle
+    }
+
+    func loadSelectedPatchManifestReport() {
+        guard !selectedPatchPath.isEmpty else {
+            rawPatchManifestReport = nil
+            selectedPatchManifestReport = nil
+            patchManifestLoadStatus = .idle
+            return
+        }
+
+        patchManifestLoadStatus = .loading
+
+        do {
+            let report = try PatchManifestBuilder.build(
+                patchPath: selectedPatchPath,
+                projectPath: selectedIndexedProject?.rootPath,
+                baseROMPath: selectedBaseROMPath.isEmpty ? nil : selectedBaseROMPath,
+                fileManager: fileManager
+            )
+            rawPatchManifestReport = report
+            selectedPatchManifestReport = Self.patchManifestReportViewState(
+                from: report,
+                patchPath: selectedPatchPath,
+                rootPath: selectedIndexedProject?.rootPath ?? workspaceRoot.path
+            )
+            patchManifestLoadStatus = .loaded(selectedPatchManifestReport?.compatibilityLabel ?? report.compatibilityStatus.rawValue)
+        } catch {
+            rawPatchManifestReport = nil
+            selectedPatchManifestReport = nil
+            patchManifestLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
     func navigateToAsset(_ asset: ResourceAssetRowViewState) {
         guard let targetModule = asset.targetModule else { return }
+        selectedResourceAssetID = asset.id
         selection = targetModule
         switch targetModule {
         case .maps:
-            if let targetID = asset.targetID, selectedMapCatalog?.maps.contains(where: { $0.id == targetID }) == true {
-                requestMapSelection(targetID)
-            } else {
-                loadSelectedMapCatalogIfNeeded()
-            }
+            navigateToMapAssetTarget(asset.targetID)
         case .scripts:
-            if let targetID = asset.targetID, selectedScriptOutline?.labels.contains(where: { $0.label == targetID }) == true {
-                selectedScriptReadinessLabel = targetID
-            }
+            navigateToScriptAssetTarget(asset.targetID)
         case .pokemon:
-            if let targetID = asset.targetID {
-                requestSpeciesSelection(targetID)
-            }
+            navigateToPokemonAssetTarget(asset.targetID)
         case .trainers:
-            if let targetID = asset.targetID {
-                requestTrainerSelection(targetID)
-            }
+            navigateToTrainerAssetTarget(asset.targetID)
+        case .graphics, .build, .text, .items:
+            searchText = asset.targetID ?? asset.path
         default:
+            searchText = asset.targetID ?? asset.path
             break
         }
+    }
+
+    func navigateToResourceAsset(path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        selection = .resources
+        resourceAssetCategory = Self.allResourceAssetCategories
+        searchText = trimmed
+        if !selectResourceAsset(matching: trimmed) {
+            pendingResourceAssetFocus = trimmed
+            loadSelectedAssetCatalogIfNeeded()
+        }
+    }
+
+    private func navigateToMapAssetTarget(_ targetID: String?) {
+        guard let targetID, !targetID.isEmpty else {
+            loadSelectedMapCatalogIfNeeded()
+            return
+        }
+        searchText = targetID
+        if let catalog = selectedMapCatalog,
+           let mapID = Self.mapID(forRelatedTarget: targetID, in: catalog)
+        {
+            pendingRelatedMapTargetID = nil
+            requestMapSelection(mapID)
+        } else {
+            pendingRelatedMapTargetID = targetID
+            loadSelectedMapCatalogIfNeeded()
+        }
+    }
+
+    private func navigateToScriptAssetTarget(_ targetID: String?) {
+        guard let targetID, !targetID.isEmpty else { return }
+        searchText = targetID
+        scriptReadinessTargetMode = .script
+        if let label = Self.scriptReadinessLabel(for: targetID, outline: selectedScriptOutline) {
+            selectedScriptReadinessLabel = label
+            refreshSelectedScriptReadinessReport()
+        }
+    }
+
+    private func navigateToPokemonAssetTarget(_ targetID: String?) {
+        guard let targetID, !targetID.isEmpty else { return }
+        searchText = targetID
+        if selectedSpeciesCatalog == nil {
+            loadSelectedSpeciesCatalogIfNeeded()
+        }
+        if selectedSpeciesCatalog?.species.contains(where: { $0.speciesID == targetID }) == true {
+            requestSpeciesSelection(targetID)
+        }
+    }
+
+    private func navigateToTrainerAssetTarget(_ targetID: String?) {
+        guard let targetID, !targetID.isEmpty else { return }
+        searchText = targetID
+        if selectedTrainerCatalog == nil {
+            loadSelectedTrainerCatalogIfNeeded()
+        }
+        if selectedTrainerCatalog?.trainers.contains(where: { $0.trainerID == targetID }) == true {
+            requestTrainerSelection(targetID)
+        }
+    }
+
+    @discardableResult
+    private func selectResourceAsset(matching identifier: String) -> Bool {
+        let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let catalog = selectedAssetCatalog else { return false }
+        let needle = trimmed.lowercased()
+        let exactMatch = catalog.rows.first { $0.id == trimmed }
+            ?? catalog.rows.first { $0.targetID == trimmed }
+            ?? catalog.rows.first { $0.path == trimmed && $0.targetID == trimmed }
+            ?? catalog.rows.first { $0.path == trimmed }
+            ?? catalog.rows.first { $0.title == trimmed }
+            ?? catalog.rows.first { $0.source.path == trimmed }
+        let fallbackMatch = exactMatch ?? catalog.rows.first { row in
+            row.searchBlob.contains(needle)
+        }
+        selectedResourceAssetID = fallbackMatch?.id
+        return fallbackMatch != nil
+    }
+
+    private func resolvePendingResourceAssetFocusIfNeeded() {
+        guard let pendingResourceAssetFocus else { return }
+        _ = selectResourceAsset(matching: pendingResourceAssetFocus)
+        self.pendingResourceAssetFocus = nil
+    }
+
+    private static func mapID(forRelatedTarget targetID: String, in catalog: MapCatalogViewState) -> String? {
+        catalog.maps.first { map in
+            map.id == targetID
+                || map.mapID == targetID
+                || map.name == targetID
+                || map.source.path == targetID
+                || map.layout?.id == targetID
+                || map.layout?.name == targetID
+                || map.layout?.borderFilepath == targetID
+                || map.layout?.blockdataFilepath == targetID
+        }?.id
+    }
+
+    private static func scriptReadinessLabel(for targetID: String, outline: PokemonHackCore.ProjectScriptOutline?) -> String? {
+        guard let outline else { return nil }
+        if outline.labels.contains(where: { $0.label == targetID }) {
+            return targetID
+        }
+        return outline.labels.first { $0.sourcePath == targetID }?.label
     }
 
     func cancelPendingMapNavigation() {
@@ -1020,6 +1262,7 @@ final class WorkbenchStore: ObservableObject {
         case .project(let projectID):
             selectedProjectID = projectID
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
+            resetPatchManifestReportForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
             resourceAssetRowsCache = nil
             refreshSelectedSpeciesSelection()
@@ -1062,6 +1305,9 @@ final class WorkbenchStore: ObservableObject {
             trainerCatalogsByID[summary.id] = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager)
             assetCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogFingerprintsByID.removeValue(forKey: summary.id)
+            selectedResourceAssetID = nil
+            pendingRelatedMapTargetID = nil
+            pendingResourceAssetFocus = nil
             resourceAssetRowsCache = nil
             if let readinessTarget = Self.defaultScriptReadinessTarget(for: index, fileManager: fileManager) {
                 scriptReadinessReportsByID[summary.id] = Self.scriptReadinessReport(
@@ -1077,6 +1323,7 @@ final class WorkbenchStore: ObservableObject {
                 refreshResourceLibrary()
             }
             selectedProjectID = summary.id
+            resetPatchManifestReportForProjectChange()
             refreshSelectedMapCatalog()
             refreshSelectedScriptReadinessReport()
             refreshSelectedSpeciesSelection()
@@ -1530,6 +1777,25 @@ final class WorkbenchStore: ObservableObject {
         NSPasteboard.general.setString(userSettings.exportSnapshot(), forType: .string)
     }
 
+    func copyBuildPatchPlaytestReportJSONToPasteboard() {
+        let report = selectedBuildReport
+        let payload = BuildPatchPlaytestReportExportPayload(
+            projectTitle: report?.projectTitle,
+            rootPath: report?.rootPath,
+            profile: report?.profile,
+            status: report?.status.rawValue ?? moduleStatus(for: .build).rawValue,
+            buildRows: (report?.rows ?? []).map(Self.exportPayload(from:)),
+            patchManifest: rawPatchManifestReport,
+            playtest: report.map(Self.exportPayload(fromPlaytest:))
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(payload), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
     func loadSelectedAssetCatalogIfNeeded(force: Bool = false) {
         guard let project = selectedIndexedProject else {
             assetCatalogLoadStatus = .idle
@@ -1543,6 +1809,7 @@ final class WorkbenchStore: ObservableObject {
             let cached = assetCatalogsByID[project.id]
         {
             assetCatalogLoadStatus = .loaded(cached.assetCount)
+            resolvePendingResourceAssetFocusIfNeeded()
             return
         }
 
@@ -1565,6 +1832,7 @@ final class WorkbenchStore: ObservableObject {
                 assetCatalogsByID[projectID] = viewState
                 assetCatalogFingerprintsByID[projectID] = fingerprint
                 resourceAssetRowsCache = nil
+                resolvePendingResourceAssetFocusIfNeeded()
                 assetCatalogLoadStatus = .loaded(viewState.assetCount)
             } catch {
                 guard let self, self.selectedIndexedProject?.id == projectID else { return }
@@ -1586,6 +1854,8 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func refreshSelectedMapCatalog() {
+        mapCatalogTask?.cancel()
+        mapVisualTask?.cancel()
         selectedMapCatalog = nil
         selectedMapID = ""
         mapCatalogStatus = selectedIndexedProject == nil ? .idle : .loading
@@ -1599,38 +1869,57 @@ final class WorkbenchStore: ObservableObject {
 
     func loadSelectedMapCatalog() {
         guard let selectedIndexedProject else {
+            mapCatalogTask?.cancel()
             selectedMapCatalog = nil
             selectedMapID = ""
             mapCatalogStatus = .idle
             return
         }
 
+        mapCatalogTask?.cancel()
         mapCatalogStatus = .loading
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let projectSummary = selectedIndexedProject
 
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
-            }
+        mapCatalogTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let catalog = try ProjectMapCatalogLoader.load(from: index, fileManager: .default)
+                    return try JSONEncoder().encode(MapCatalogLoadPayload(index: index, catalog: catalog))
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(MapCatalogLoadPayload.self, from: payloadData)
+                guard let self, self.selectedIndexedProject?.id == projectID else { return }
 
-            let catalog = try ProjectMapCatalogLoader.load(from: index, fileManager: fileManager)
-            let viewState = Self.mapCatalogViewState(from: catalog, project: selectedIndexedProject)
-            selectedMapCatalog = viewState
-            if !viewState.maps.contains(where: { $0.id == selectedMapID }) {
-                selectedMapID = viewState.maps.first?.id ?? ""
+                projectIndexesByID[projectID] = payload.index
+                mapVisualSharedCacheDataByID.removeValue(forKey: projectID)
+                let viewState = Self.mapCatalogViewState(from: payload.catalog, project: projectSummary)
+                selectedMapCatalog = viewState
+                if
+                    let pendingRelatedMapTargetID,
+                    let resolvedMapID = Self.mapID(forRelatedTarget: pendingRelatedMapTargetID, in: viewState)
+                {
+                    self.pendingRelatedMapTargetID = nil
+                    requestMapSelection(resolvedMapID)
+                } else {
+                    self.pendingRelatedMapTargetID = nil
+                }
+                if !viewState.maps.contains(where: { $0.id == selectedMapID }) {
+                    selectedMapID = viewState.maps.first?.id ?? ""
+                }
+                mapCatalogStatus = .loaded(viewState.mapCount)
+                loadSelectedMapVisualDocument()
+                refreshSelectedScriptReadinessReport()
+            } catch {
+                guard let self, self.selectedIndexedProject?.id == projectID else { return }
+                selectedMapCatalog = nil
+                selectedMapID = ""
+                mapCatalogStatus = .failed(error.localizedDescription)
+                clearSelectedMapVisualDocument()
+                refreshSelectedScriptReadinessReport()
             }
-            mapCatalogStatus = .loaded(viewState.mapCount)
-            loadSelectedMapVisualDocument()
-            refreshSelectedScriptReadinessReport()
-        } catch {
-            selectedMapCatalog = nil
-            selectedMapID = ""
-            mapCatalogStatus = .failed(error.localizedDescription)
-            clearSelectedMapVisualDocument()
-            refreshSelectedScriptReadinessReport()
         }
     }
 
@@ -1645,24 +1934,45 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
+        mapVisualTask?.cancel()
         mapVisualStatus = .loading
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let mapID = selectedMapID
+        let cachedSharedCacheData = mapVisualSharedCacheDataByID[projectID]
 
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
+        mapVisualTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let sharedCache: ProjectMapVisualSharedCache
+                    if let cachedSharedCacheData {
+                        sharedCache = try JSONDecoder().decode(ProjectMapVisualSharedCache.self, from: cachedSharedCacheData)
+                    } else {
+                        let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                        sharedCache = try ProjectMapVisualSharedCache.load(from: index, fileManager: .default)
+                    }
+                    let document = try ProjectMapVisualLoader.load(from: sharedCache, mapID: mapID, fileManager: .default)
+                    return try JSONEncoder().encode(MapVisualLoadPayload(sharedCache: sharedCache, document: document))
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(MapVisualLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.selectedIndexedProject?.id == projectID,
+                      self.selectedMapID == mapID
+                else { return }
+
+                mapVisualSharedCacheDataByID[projectID] = try? JSONEncoder().encode(payload.sharedCache)
+                mapEditorSession.load(document: payload.document, preserveSelection: false)
+                applyMapEditorDefaults()
+                mapVisualStatus = .loaded(payload.document.mapName)
+            } catch {
+                guard let self,
+                      self.selectedIndexedProject?.id == projectID,
+                      self.selectedMapID == mapID
+                else { return }
+                mapEditorSession.reset()
+                mapVisualStatus = .failed(error.localizedDescription)
             }
-
-            let document = try ProjectMapVisualLoader.load(from: index, mapID: selectedMapID, fileManager: fileManager)
-            mapEditorSession.load(document: document, preserveSelection: false)
-            applyMapEditorDefaults()
-            mapVisualStatus = .loaded(document.mapName)
-        } catch {
-            mapEditorSession.reset()
-            mapVisualStatus = .failed(error.localizedDescription)
         }
     }
 
@@ -1686,6 +1996,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func clearSelectedMapVisualDocument() {
+        mapVisualTask?.cancel()
         mapEditorSession.reset()
         mapVisualStatus = .idle
     }
@@ -2001,6 +2312,7 @@ final class WorkbenchStore: ObservableObject {
         let toolchain = toolchainReadiness(from: buildReport, playtestReport: playtestReport)
         let healthMatrix = toolchainHealthMatrix(from: healthReport, rootPath: project.rootPath)
         let playtest = playtestHandoffPlan(from: playtestReport, rootPath: project.rootPath)
+        let baseROMOptions = baseROMOptions(from: buildReport, rootPath: project.rootPath)
         let diagnostics = (buildReport.diagnostics + playtestReport.diagnostics + healthReport.diagnostics).map {
             diagnostic(from: $0, rootPath: project.rootPath)
         }
@@ -2022,6 +2334,7 @@ final class WorkbenchStore: ObservableObject {
             toolchain: toolchain,
             healthMatrix: healthMatrix,
             playtest: playtest,
+            baseROMOptions: baseROMOptions,
             diagnostics: diagnostics
         )
     }
@@ -2530,6 +2843,85 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func baseROMOptions(
+        from report: PokemonHackCore.BuildValidationReport,
+        rootPath: String
+    ) -> [BaseROMOptionViewState] {
+        var outputsByExpectation: [String: PokemonHackCore.BuildOutputValidation] = [:]
+        for target in report.targets {
+            guard let output = target.output, let expectation = output.expectation else { continue }
+            if let existing = outputsByExpectation[expectation.relativePath], existing.exists {
+                continue
+            }
+            outputsByExpectation[expectation.relativePath] = output
+        }
+
+        return report.sha1Expectations.map { expectation in
+            let output = outputsByExpectation[expectation.relativePath]
+            let path = output?.absolutePath ?? URL(fileURLWithPath: rootPath)
+                .appendingPathComponent(expectation.relativePath)
+                .standardizedFileURL
+                .path
+            let titlePath = output?.relativePath ?? expectation.relativePath
+            let title = URL(fileURLWithPath: titlePath).lastPathComponent.isEmpty
+                ? titlePath
+                : URL(fileURLWithPath: titlePath).lastPathComponent
+            let sha1 = output?.sha1 ?? expectation.expectedSHA1
+            let status: ValidationState
+            if output?.exists == true {
+                status = output?.checksumStatus == .matched ? .valid : .warning
+            } else {
+                status = .warning
+            }
+            let detail = output?.exists == true
+                ? "Build output is present; selected ROM can be checked against \(expectation.relativePath)."
+                : "Build output is not present yet; this remains a known SHA1 candidate only."
+
+            return BaseROMOptionViewState(
+                id: "project:\(expectation.relativePath):\(path)",
+                title: title,
+                path: path,
+                subtitle: "Project SHA1 candidate",
+                detail: detail,
+                status: status,
+                sourceKind: "Project",
+                sha1Summary: sha1.map { "sha1 \($0.prefix(8))" } ?? "sha1 unavailable"
+            )
+        }
+    }
+
+    private static func baseROMOption(
+        fromResourceEntry entry: ResourceLibraryEntryViewState
+    ) -> BaseROMOptionViewState {
+        let checksum = entry.items
+            .compactMap { item in
+                item.checksumSummary.hasPrefix("sha1 ") ? item.checksumSummary : nil
+            }
+            .first
+        return BaseROMOptionViewState(
+            id: "resource:\(entry.id)",
+            title: entry.title,
+            path: entry.path,
+            subtitle: "Resource library ROM",
+            detail: entry.variantSummary.isEmpty ? entry.moduleSummary : entry.variantSummary,
+            status: entry.status,
+            sourceKind: "Resources",
+            sha1Summary: checksum ?? "sha1 unavailable"
+        )
+    }
+
+    private func uniqueBaseROMOptions(_ options: [BaseROMOptionViewState]) -> [BaseROMOptionViewState] {
+        var seen: Set<String> = []
+        var unique: [BaseROMOptionViewState] = []
+        for option in options {
+            let key = option.path.isEmpty ? option.id : option.path
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            unique.append(option)
+        }
+        return unique
+    }
+
     private static func toolchainReadiness(
         from report: PokemonHackCore.BuildValidationReport,
         playtestReport: PokemonHackCore.PlaytestHandoffReport
@@ -2660,16 +3052,233 @@ final class WorkbenchStore: ObservableObject {
         let detail = report.isRunnable
             ? "ROM output and emulator are available; launch remains an explicit disabled action."
             : "Handoff is planned only; review ROM output and emulator readiness."
+        let artifacts = report.session.artifacts.map { artifact in
+            PlaytestArtifactViewState(
+                id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
+                kind: artifact.kind.rawValue,
+                path: artifact.relativePath,
+                detail: artifact.detail,
+                source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
+            )
+        }
 
         return PlaytestHandoffPlanViewState(
             id: "playtest:\(rootPath)",
             emulator: report.emulator.name,
             romPath: romPath,
             arguments: report.session.arguments,
+            artifacts: artifacts,
             isRunnable: report.isRunnable,
             status: status,
             detail: detail,
             source: SourceLocation(path: romPath ?? rootPath, symbol: report.emulator.name, line: 1)
+        )
+    }
+
+    private static func patchManifestReportViewState(
+        from report: PokemonHackCore.PatchManifestReport,
+        patchPath: String,
+        rootPath: String
+    ) -> PatchManifestReportViewState {
+        let patchSourcePath = report.patch.path ?? patchPath
+        let title = URL(fileURLWithPath: patchSourcePath).lastPathComponent
+        let format = report.patch.summary?.format.rawValue.uppercased() ?? "unknown"
+        let embedded = report.patch.summary?.hasEmbeddedChecksums == true ? "embedded checksums" : "no embedded checksums"
+        let size = report.patch.sizeBytes.map { "\($0) bytes" } ?? "size unavailable"
+        let compatibility = compatibilityLabel(for: report.compatibilityStatus)
+        let status = validationState(for: report.compatibilityStatus)
+        let selectedBaseROM = report.selectedBaseROM.map {
+            selectedBaseROMViewState(from: $0, compatibility: report.compatibilityStatus)
+        }
+        let candidates = report.baseROMCandidates.map {
+            patchBaseROMCandidateViewState(from: $0, rootPath: report.projectRoot ?? rootPath)
+        }
+        let diagnostics = report.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let dryRuns = report.dryRunPlans.map { plan in
+            let rows = plan.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+            return PatchDryRunPlanViewState(
+                id: plan.id,
+                title: plan.title,
+                steps: plan.steps,
+                diagnostics: rows,
+                status: validationStatus(for: rows.map(\.severity))
+            )
+        }
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch:metadata",
+                section: .patchManifest,
+                title: title.isEmpty ? "Patch" : title,
+                subtitle: "\(format) · \(compatibility)",
+                detail: "\(size); \(embedded).",
+                status: status,
+                source: SourceLocation(path: patchSourcePath, symbol: format, line: 1),
+                tags: [patchSourcePath, format, compatibility]
+            )
+        ]
+        if let selected = selectedBaseROM {
+            rows.append(
+                BuildReportRow(
+                    id: "patch:selected-base-rom",
+                    section: .patchManifest,
+                    title: selected.title,
+                    subtitle: selected.sha1Summary,
+                    detail: selected.detail,
+                    status: selected.status,
+                    source: SourceLocation(path: selected.path, symbol: selected.title, line: 1),
+                    tags: [selected.path, selected.sha1Summary, selected.matchedCandidate ?? ""]
+                )
+            )
+        }
+        rows.append(contentsOf: candidates.map { candidate in
+            BuildReportRow(
+                id: "patch:candidate:\(candidate.id)",
+                section: .patchManifest,
+                title: candidate.title,
+                subtitle: candidate.subtitle,
+                detail: candidate.detail,
+                status: candidate.status,
+                source: candidate.source,
+                tags: [candidate.sha1Summary, candidate.source.path]
+            )
+        })
+        rows.append(contentsOf: dryRuns.map { plan in
+            BuildReportRow(
+                id: "patch:dry-run:\(plan.id)",
+                section: .patchManifest,
+                title: plan.title,
+                subtitle: "\(plan.steps.count) preview step\(plan.steps.count == 1 ? "" : "s")",
+                detail: plan.steps.joined(separator: " "),
+                status: plan.status,
+                source: SourceLocation(path: patchSourcePath, symbol: plan.id, line: 1),
+                tags: plan.steps
+            )
+        })
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return PatchManifestReportViewState(
+            id: "patch-manifest:\(patchSourcePath)",
+            patchPath: patchSourcePath,
+            patchTitle: title.isEmpty ? "Patch" : title,
+            patchSubtitle: "\(format) · \(compatibility)",
+            patchDetail: "\(size); \(embedded).",
+            compatibilityLabel: compatibility,
+            status: validationStatus(for: [status] + diagnostics.map(\.severity)),
+            selectedBaseROM: selectedBaseROM,
+            baseROMCandidates: candidates,
+            dryRunPlans: dryRuns,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func selectedBaseROMViewState(
+        from selected: PokemonHackCore.PatchSelectedBaseROM,
+        compatibility: PokemonHackCore.PatchManifestCompatibilityStatus
+    ) -> PatchSelectedBaseROMViewState {
+        let title = URL(fileURLWithPath: selected.absolutePath).lastPathComponent
+        let status: ValidationState
+        if !selected.exists {
+            status = .warning
+        } else if compatibility == .compatible {
+            status = .valid
+        } else if compatibility == .baseROMMismatch {
+            status = .warning
+        } else {
+            status = .warning
+        }
+        let size = selected.sizeBytes.map { "\($0) bytes" } ?? "size unavailable"
+        let match = selected.matchedCandidateRelativePath
+        let detail = match.map { "\(size); matches candidate \($0)." } ?? "\(size); no candidate match."
+        return PatchSelectedBaseROMViewState(
+            id: selected.absolutePath,
+            title: title.isEmpty ? "Selected base ROM" : title,
+            path: selected.absolutePath,
+            detail: detail,
+            status: status,
+            sha1Summary: selected.sha1.map { "sha1 \($0.prefix(8))" } ?? "sha1 unavailable",
+            matchedCandidate: match
+        )
+    }
+
+    private static func patchBaseROMCandidateViewState(
+        from candidate: PokemonHackCore.PatchBaseROMCandidate,
+        rootPath: String
+    ) -> PatchBaseROMCandidateViewState {
+        let title = URL(fileURLWithPath: candidate.builtOutputPath ?? candidate.relativePath).lastPathComponent
+        let sha1 = candidate.builtOutputSHA1 ?? candidate.expectedSHA1
+        let subtitle = candidate.exists ? "Build output present" : "Known SHA1 candidate"
+        let detail = candidate.builtOutputPath.map { "Expected by \(candidate.relativePath); output \($0)." }
+            ?? "Expected by \(candidate.relativePath)."
+        return PatchBaseROMCandidateViewState(
+            id: candidate.relativePath,
+            title: title.isEmpty ? candidate.relativePath : title,
+            subtitle: subtitle,
+            detail: detail,
+            status: candidate.exists ? .valid : .warning,
+            sha1Summary: sha1.map { "sha1 \($0.prefix(8))" } ?? "sha1 unavailable",
+            source: SourceLocation(path: candidate.builtOutputPath ?? candidate.relativePath, symbol: candidate.relativePath, line: 1)
+        )
+    }
+
+    private static func compatibilityLabel(
+        for status: PokemonHackCore.PatchManifestCompatibilityStatus
+    ) -> String {
+        switch status {
+        case .compatible:
+            "Base ROM matched"
+        case .needsBaseROM:
+            "Needs base ROM"
+        case .baseROMMismatch:
+            "Base ROM mismatch"
+        case .unknown:
+            "Compatibility unknown"
+        case .invalidPatch:
+            "Invalid patch"
+        }
+    }
+
+    private static func validationState(
+        for status: PokemonHackCore.PatchManifestCompatibilityStatus
+    ) -> ValidationState {
+        switch status {
+        case .compatible:
+            .valid
+        case .needsBaseROM, .baseROMMismatch, .unknown:
+            .warning
+        case .invalidPatch:
+            .error
+        }
+    }
+
+    private static func exportPayload(
+        from row: BuildReportRow
+    ) -> BuildReportRowExportPayload {
+        BuildReportRowExportPayload(
+            section: row.section.rawValue,
+            title: row.title,
+            subtitle: row.subtitle,
+            detail: row.detail,
+            status: row.status.rawValue,
+            path: row.source.path,
+            symbol: row.source.symbol,
+            tags: row.tags
+        )
+    }
+
+    private static func exportPayload(
+        fromPlaytest report: BuildPatchPlaytestReportViewState
+    ) -> PlaytestReportExportPayload {
+        PlaytestReportExportPayload(
+            emulator: report.playtest.emulator,
+            romPath: report.playtest.romPath,
+            arguments: report.playtest.arguments,
+            artifacts: report.playtest.artifacts.map {
+                PlaytestArtifactExportPayload(kind: $0.kind, path: $0.path, detail: $0.detail)
+            },
+            isRunnable: report.playtest.isRunnable,
+            status: report.playtest.status.rawValue,
+            detail: report.playtest.detail
         )
     }
 

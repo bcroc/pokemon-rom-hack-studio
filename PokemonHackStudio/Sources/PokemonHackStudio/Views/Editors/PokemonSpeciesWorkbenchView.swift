@@ -13,6 +13,7 @@ struct PokemonSpeciesWorkbenchView: View {
     let loadStatus: SpeciesCatalogLoadStatus
     let onLoadCatalog: () -> Void
     let onUpdateDraft: (PokemonHackCore.SpeciesEditDraft) -> Void
+    let onNavigateToResourceAsset: (String) -> Void
 
     @State private var sourceExpanded = false
     @State private var showCompactBrowser = false
@@ -399,8 +400,18 @@ struct PokemonSpeciesWorkbenchView: View {
                                 .foregroundStyle(.secondary)
                             Image(systemName: "arrow.right")
                                 .foregroundStyle(.secondary)
-                            Text(displayConstant(evolution.targetSpecies))
-                                .fontWeight(.medium)
+                            if canSelectSpecies(evolution.targetSpecies) {
+                                Button {
+                                    selectedSpeciesID = evolution.targetSpecies
+                                } label: {
+                                    Text(displayConstant(evolution.targetSpecies))
+                                        .fontWeight(.medium)
+                                }
+                                .buttonStyle(.borderless)
+                            } else {
+                                Text(displayConstant(evolution.targetSpecies))
+                                    .fontWeight(.medium)
+                            }
                             Spacer()
                             SourceLocationView(source: sourceLocation(evolution.sourceSpan, symbol: evolution.targetSpecies))
                         }
@@ -453,7 +464,9 @@ struct PokemonSpeciesWorkbenchView: View {
     private func assetsSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], alignment: .leading, spacing: 12) {
             ForEach(species.assets) { asset in
-                SpeciesAssetTile(asset: asset, rootPath: rootPath)
+                SpeciesAssetTile(asset: asset, rootPath: rootPath) {
+                    onNavigateToResourceAsset(asset.relativePath)
+                }
             }
         }
     }
@@ -518,6 +531,10 @@ struct PokemonSpeciesWorkbenchView: View {
             return .warning
         }
         return .valid
+    }
+
+    private func canSelectSpecies(_ speciesID: String) -> Bool {
+        catalog?.species.contains(where: { $0.speciesID == speciesID }) == true
     }
 
     private func sourceLocation(_ span: PokemonHackCore.SourceSpan, symbol: String) -> SourceLocation {
@@ -996,6 +1013,7 @@ private struct SpeciesTag: View {
 private struct SpeciesAssetTile: View {
     let asset: PokemonHackCore.SpeciesAsset
     let rootPath: String?
+    let onOpenResource: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1008,6 +1026,13 @@ private struct SpeciesAssetTile: View {
                 Spacer()
                 StatusPill(state: asset.exists ? .valid : .warning)
             }
+
+            Button("Open Resource", systemImage: "arrow.uturn.left.circle") {
+                onOpenResource()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("Open this asset in Resources")
 
             Text(asset.relativePath)
                 .font(.system(.caption, design: .monospaced))

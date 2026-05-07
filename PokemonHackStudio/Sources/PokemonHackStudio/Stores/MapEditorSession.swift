@@ -582,7 +582,7 @@ final class MapEditorSession: ObservableObject {
 
         stagedMapEvents = stagedMapEvents.map { current in
             guard current.id == selectedMapEventID else { return current }
-            return Self.moved(current, x: x, y: y)
+            return moved(current, x: x, y: y)
         }
         self.selectedMapEventID = selectedMapEventID
         appendHistory(
@@ -599,7 +599,7 @@ final class MapEditorSession: ObservableObject {
         else {
             return false
         }
-        let updated = Self.updated(event, key: key, value: value)
+        let updated = updated(event, key: key, value: value)
         guard updated != event else { return false }
 
         stagedMapEvents = stagedMapEvents.map { $0.id == selectedMapEventID ? updated : $0 }
@@ -1203,7 +1203,7 @@ final class MapEditorSession: ObservableObject {
             if let x = operation.x,
                let y = operation.y,
                let eventIndex = stagedMapEvents.firstIndex(where: { $0.kind == operation.eventKind && $0.index == operation.eventIndex }) {
-                stagedMapEvents[eventIndex] = Self.moved(stagedMapEvents[eventIndex], x: x, y: y)
+                stagedMapEvents[eventIndex] = moved(stagedMapEvents[eventIndex], x: x, y: y)
                 selectedMapEventID = stagedMapEvents[eventIndex].id
             }
         case .updateEventField:
@@ -1215,7 +1215,7 @@ final class MapEditorSession: ObservableObject {
             else {
                 break
             }
-            stagedMapEvents[eventIndex] = Self.updated(stagedMapEvents[eventIndex], key: key, value: value)
+                stagedMapEvents[eventIndex] = updated(stagedMapEvents[eventIndex], key: key, value: value)
             selectedMapEventID = stagedMapEvents[eventIndex].id
         case .addEvent:
             guard let kind = operation.eventKind, let x = operation.x, let y = operation.y else { break }
@@ -1324,11 +1324,11 @@ final class MapEditorSession: ObservableObject {
         return Self.event(kind: event.kind, index: index, x: x, y: y, properties: properties, sprite: event.sprite)
     }
 
-    private static func moved(_ event: MapEventDescriptor, x: Int, y: Int) -> MapEventDescriptor {
+    private func moved(_ event: MapEventDescriptor, x: Int, y: Int) -> MapEventDescriptor {
         updated(updated(event, key: "x", value: "\(x)"), key: "y", value: "\(y)")
     }
 
-    private static func updated(_ event: MapEventDescriptor, key: String, value: String) -> MapEventDescriptor {
+    private func updated(_ event: MapEventDescriptor, key: String, value: String) -> MapEventDescriptor {
         var didUpdate = false
         var properties = event.properties.map { property -> MapEventProperty in
             guard property.key == key else { return property }
@@ -1349,7 +1349,7 @@ final class MapEditorSession: ObservableObject {
             y: y,
             elevation: elevation,
             properties: properties,
-            sprite: key == "graphics_id" ? nil : event.sprite
+            sprite: key == "graphics_id" ? selectedMapVisualDocument?.eventOptions.sprite(for: value) : event.sprite
         )
     }
 

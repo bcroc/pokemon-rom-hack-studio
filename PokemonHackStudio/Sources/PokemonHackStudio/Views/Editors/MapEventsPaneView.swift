@@ -7,6 +7,7 @@ struct MapEventsPaneView: View {
     @Binding var eventSearchText: String
     @Binding var scriptDraftKey: String
     @Binding var scriptDraftText: String
+    let viewportCenter: (x: Int, y: Int)?
     let onCenterEvent: (MapEventDescriptor) -> Void
 
     @State private var selectedKindFilter: MapEventKind?
@@ -16,6 +17,7 @@ struct MapEventsPaneView: View {
         EditorSection(title: "Events") {
             VStack(alignment: .leading, spacing: 12) {
                 eventToolbar
+                eventPalette
                 kindTabs
                 eventBrowser
                 selectedEventEditor
@@ -55,6 +57,36 @@ struct MapEventsPaneView: View {
             .pickerStyle(.menu)
             .help("Choose the event type used by the canvas add-event tool")
         }
+    }
+
+    private var eventPalette: some View {
+        HStack(spacing: 6) {
+            ForEach(MapEventTemplateKind.allCases) { template in
+                Menu {
+                    Button("At Selected Cell", systemImage: "plus.circle") {
+                        add(template: template, at: insertionCoordinate)
+                    }
+                    .disabled(session.selectedMapCell == nil && session.selectedMapEvent == nil)
+
+                    Button("At Viewport Center", systemImage: "scope") {
+                        add(template: template, at: viewportCenter ?? insertionCoordinate)
+                    }
+                    .disabled(viewportCenter == nil)
+
+                    Button("At Origin", systemImage: "arrow.up.left") {
+                        add(template: template, at: (0, 0))
+                    }
+                } label: {
+                    Image(systemName: template.systemImage)
+                        .frame(width: 26, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .help("Add \(template.title)")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Event template palette")
     }
 
     private var kindTabs: some View {
@@ -112,6 +144,7 @@ struct MapEventsPaneView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
+                let resolutions = scriptResolutionCache
                 LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(groupedFilteredEvents) { group in
                         VStack(alignment: .leading, spacing: 5) {
@@ -119,7 +152,7 @@ struct MapEventsPaneView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             ForEach(group.events) { event in
-                                eventRow(event)
+                                eventRow(event, resolutions: resolutions)
                             }
                         }
                     }
@@ -128,7 +161,7 @@ struct MapEventsPaneView: View {
         }
     }
 
-    private func eventRow(_ event: MapEventDescriptor) -> some View {
+    private func eventRow(_ event: MapEventDescriptor, resolutions: [String: MapScriptResolution]) -> some View {
         Button {
             session.selectMapEvent(id: event.id)
         } label: {
@@ -146,6 +179,12 @@ struct MapEventsPaneView: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                if let state = scriptResolutionSummary(for: event, resolutions: resolutions) {
+                    Text(state)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(scriptResolutionColor(for: event, resolutions: resolutions))
+                        .lineLimit(1)
+                }
                 if session.selectedMapEventID == event.id {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.tint)
@@ -174,6 +213,7 @@ struct MapEventsPaneView: View {
     @ViewBuilder
     private var selectedEventEditor: some View {
         if let event = selectedEvent {
+            let resolutions = scriptResolutionCache
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -182,6 +222,14 @@ struct MapEventsPaneView: View {
                     Text("#\(event.index)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    if let state = scriptResolutionSummary(for: event, resolutions: resolutions) {
+                        Text(state)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(scriptResolutionColor(for: event, resolutions: resolutions))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(scriptResolutionColor(for: event, resolutions: resolutions).opacity(0.12), in: Capsule())
+                    }
                     Spacer()
                     Button("Center", systemImage: "scope") {
                         onCenterEvent(event)
@@ -366,12 +414,7 @@ struct MapEventsPaneView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let sourcePath = session.editableScriptSourcePath {
                 Button(title, systemImage: "plus.rectangle.on.folder") {
-                    let label = generatedScriptLabel(for: event)
-                    let body = "\tend"
-                    session.createScriptLabel(label: label, sourcePath: sourcePath, body: body)
-                    session.updateSelectedMapEventProperty(key: "script", value: label)
-                    scriptDraftKey = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
-                    scriptDraftText = body
+                    createAndAssignScript(for: event)
                 }
                 .help("Create a map script label in \(sourcePath)")
             } else {
@@ -396,6 +439,10 @@ struct MapEventsPaneView: View {
         if key == "script" {
             return AnyView(scriptField(title, key: key))
         }
+        let options = document.eventOptions.options(for: key)
+        if !options.isEmpty {
+            return AnyView(optionField(title, key: key, options: options))
+        }
         return AnyView(
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title)
@@ -407,6 +454,39 @@ struct MapEventsPaneView: View {
                     .textFieldStyle(.roundedBorder)
             }
         )
+    }
+
+    private func optionField(_ title: String, key: String, options: [String]) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            TextField(key, text: propertyBinding(for: key))
+                .font(.caption)
+                .textFieldStyle(.roundedBorder)
+            Menu {
+                let suggestions = optionSuggestions(options, key: key)
+                if let value = selectedEvent?.propertyValue(key), !value.isEmpty, !options.contains(value) {
+                    Text("Custom: \(value)")
+                    Divider()
+                }
+                ForEach(suggestions, id: \.self) { option in
+                    Button {
+                        session.updateSelectedMapEventProperty(key: key, value: option)
+                    } label: {
+                        Text(displayConstant(option))
+                    }
+                }
+                if suggestions.isEmpty {
+                    Text("No matches")
+                }
+            } label: {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Choose \(title.lowercased())")
+        }
     }
 
     private func scriptField(_ title: String, key: String) -> some View {
@@ -428,6 +508,12 @@ struct MapEventsPaneView: View {
                         Label(suggestion.label, systemImage: suggestion.sourceRole == .mapLocal ? "curlybraces" : "link")
                     }
                 }
+                if let event = selectedEvent, session.editableScriptSourcePath != nil {
+                    Divider()
+                    Button("Create Local Label", systemImage: "plus.rectangle.on.folder") {
+                        createAndAssignScript(for: event, key: key)
+                    }
+                }
                 if scriptSuggestions.isEmpty {
                     Text("No labels")
                 }
@@ -445,6 +531,16 @@ struct MapEventsPaneView: View {
             matching: selectedEvent?.propertyValue("script") ?? "",
             includeShared: includeSharedScriptSuggestions
         )
+    }
+
+    private func optionSuggestions(_ options: [String], key: String) -> [String] {
+        let query = selectedEvent?.propertyValue(key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let matches = query.isEmpty
+            ? options
+            : options.filter { option in
+                option.localizedCaseInsensitiveContains(query) || displayConstant(option).localizedCaseInsensitiveContains(query)
+            }
+        return Array(matches.prefix(80))
     }
 
     private func numericField(_ title: String, key: String, range: ClosedRange<Int>) -> some View {
@@ -486,6 +582,10 @@ struct MapEventsPaneView: View {
         }
     }
 
+    private var scriptResolutionCache: [String: MapScriptResolution] {
+        document.scriptIndex?.resolutions(for: session.stagedMapEvents.compactMap(\.scriptLabel)) ?? [:]
+    }
+
     private func eventCount(for kind: MapEventKind) -> Int {
         session.stagedMapEvents.filter { $0.kind == kind }.count
     }
@@ -506,6 +606,11 @@ struct MapEventsPaneView: View {
             return (x, y)
         }
         return (0, 0)
+    }
+
+    private func add(template: MapEventTemplateKind, at coordinate: (x: Int, y: Int)) {
+        session.selectEventTemplate(template)
+        session.addMapEvent(template: template, atX: coordinate.x, y: coordinate.y)
     }
 
     private func eventTitle(_ event: MapEventDescriptor) -> String {
@@ -555,6 +660,16 @@ struct MapEventsPaneView: View {
         session.stagedMapScriptBodies.values.first { $0.label == label }
     }
 
+    private func createAndAssignScript(for event: MapEventDescriptor, key: String = "script") {
+        guard let sourcePath = session.editableScriptSourcePath else { return }
+        let label = generatedScriptLabel(for: event)
+        let body = "\tend"
+        session.createScriptLabel(label: label, sourcePath: sourcePath, body: body)
+        session.updateSelectedMapEventProperty(key: key, value: label)
+        scriptDraftKey = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
+        scriptDraftText = body
+    }
+
     private func generatedScriptLabel(for event: MapEventDescriptor) -> String {
         let suffix = (event.templateKind?.rawValue ?? event.kind.rawValue)
             .replacingOccurrences(of: #"[^A-Za-z0-9_]"#, with: "_", options: .regularExpression)
@@ -586,6 +701,38 @@ struct MapEventsPaneView: View {
             return true
         case .warp, .bgHiddenItem, nil:
             return false
+        }
+    }
+
+    private func scriptResolutionSummary(for event: MapEventDescriptor, resolutions: [String: MapScriptResolution]) -> String? {
+        guard let scriptLabel = event.scriptLabel, let resolution = resolutions[scriptLabel] else { return nil }
+        switch resolution.state {
+        case .resolved:
+            return resolution.span?.sourceRole == .shared ? "shared" : "local"
+        case .noScript:
+            return nil
+        case .missingLabel:
+            return "missing"
+        case .duplicateLabel:
+            return "duplicate"
+        case .generatedPath:
+            return "generated"
+        case .externalLabel:
+            return "external"
+        }
+    }
+
+    private func scriptResolutionColor(for event: MapEventDescriptor, resolutions: [String: MapScriptResolution]) -> Color {
+        guard let scriptLabel = event.scriptLabel, let state = resolutions[scriptLabel]?.state else {
+            return .secondary
+        }
+        switch state {
+        case .resolved:
+            return .secondary
+        case .noScript:
+            return .secondary
+        case .missingLabel, .duplicateLabel, .generatedPath, .externalLabel:
+            return .orange
         }
     }
 }
@@ -629,4 +776,29 @@ private extension MapEventTemplateKind {
         case .bgHiddenItem: "shippingbox"
         }
     }
+}
+
+private func displayConstant(_ symbol: String) -> String {
+    var value = symbol
+    for prefix in [
+        "OBJ_EVENT_GFX_",
+        "MOVEMENT_TYPE_",
+        "TRAINER_TYPE_",
+        "BG_EVENT_PLAYER_FACING_",
+        "ITEM_",
+        "VAR_",
+        "FLAG_",
+        "MAP_"
+    ] {
+        if value.hasPrefix(prefix) {
+            value.removeFirst(prefix.count)
+            break
+        }
+    }
+    return value
+        .split(separator: "_")
+        .map { word in
+            word.prefix(1).uppercased() + word.dropFirst().lowercased()
+        }
+        .joined(separator: " ")
 }

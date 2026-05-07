@@ -1,3 +1,4 @@
+import PokemonHackCore
 import SwiftUI
 
 struct MapEditorToolbar: View {
@@ -40,6 +41,10 @@ struct MapEditorToolbar: View {
             Divider()
 
             surfaceControls
+
+            Divider()
+
+            eventVisibilityControls
 
             Divider()
 
@@ -133,6 +138,56 @@ struct MapEditorToolbar: View {
                     inspectorPopover
                 }
             }
+        }
+    }
+
+    private var eventVisibilityControls: some View {
+        Menu {
+            eventVisibilityToggle(layer: .objects, title: "Objects", count: eventCount(for: .object))
+            eventVisibilityToggle(layer: .warps, title: "Warps", count: eventCount(for: .warp))
+            eventVisibilityToggle(layer: .coordEvents, title: "Coord Events", count: eventCount(for: .coord))
+            eventVisibilityToggle(layer: .bgEvents, title: "BG Events", count: eventCount(for: .bg))
+            Divider()
+            Button("Show All Events", systemImage: "eye") {
+                setEventLayersVisible(true)
+            }
+            Button("Hide All Events", systemImage: "eye.slash") {
+                setEventLayersVisible(false)
+            }
+        } label: {
+            Label("Events \(visibleEventCount)/\(totalEventCount)", systemImage: "point.3.connected.trianglepath.dotted")
+                .lineLimit(1)
+        }
+        .frame(maxWidth: layoutMode.isCompact ? 104 : 136)
+        .help("Show or hide map event overlays")
+    }
+
+    private func eventVisibilityToggle(layer: MapEditorLayer, title: String, count: Int) -> some View {
+        Toggle(isOn: Binding(
+            get: { session.mapOverlaySettings.isLayerVisible(layer) },
+            set: { session.setLayerVisible(layer, isVisible: $0) }
+        )) {
+            Text("\(title) (\(count))")
+        }
+    }
+
+    private func eventCount(for kind: PokemonHackCore.MapEventKind) -> Int {
+        session.stagedMapEvents.filter { $0.kind == kind }.count
+    }
+
+    private var totalEventCount: Int {
+        session.stagedMapEvents.filter { $0.kind != .connection }.count
+    }
+
+    private var visibleEventCount: Int {
+        session.stagedMapEvents.filter { event in
+            event.kind != .connection && session.mapOverlaySettings.isLayerVisible(MapCanvasHitTester.layer(for: event.kind))
+        }.count
+    }
+
+    private func setEventLayersVisible(_ isVisible: Bool) {
+        for layer in [MapEditorLayer.objects, .warps, .coordEvents, .bgEvents] {
+            session.setLayerVisible(layer, isVisible: isVisible)
         }
     }
 

@@ -12,7 +12,8 @@ enum MapEventSpriteRenderer {
         tileSize: CGFloat,
         opacity: CGFloat,
         selected: Bool,
-        fallbackColor: NSColor
+        fallbackColor: NSColor,
+        badge: String? = nil
     ) {
         if event.kind == .object,
            let sprite = event.sprite,
@@ -20,6 +21,9 @@ enum MapEventSpriteRenderer {
             drawSprite(sprite, image: image, tileRect: tileRect, tileSize: tileSize, opacity: opacity, selected: selected)
         } else {
             drawMarker(in: tileRect, tileSize: tileSize, opacity: opacity, selected: selected, color: fallbackColor)
+        }
+        if let badge, !badge.isEmpty, tileSize >= 10 {
+            drawBadge(badge, near: tileRect, opacity: opacity)
         }
     }
 
@@ -85,6 +89,24 @@ enum MapEventSpriteRenderer {
             ring.lineWidth = 3
             ring.stroke()
         }
+    }
+
+    private static func drawBadge(_ label: String, near rect: NSRect, opacity: CGFloat) {
+        let fontSize = max(8, min(11, rect.width * 0.28))
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(opacity)
+        ]
+        let size = label.size(withAttributes: attributes)
+        let badge = NSRect(
+            x: rect.midX - size.width / 2 - 4,
+            y: max(rect.minY - size.height * 0.35, rect.minY + 1),
+            width: size.width + 8,
+            height: size.height + 4
+        )
+        NSColor.black.withAlphaComponent(0.58 * opacity).setFill()
+        NSBezierPath(roundedRect: badge, xRadius: 4, yRadius: 4).fill()
+        label.draw(at: NSPoint(x: badge.minX + 4, y: badge.minY + 2), withAttributes: attributes)
     }
 
     private static func spriteDestinationRect(sprite: MapEventSpriteDescriptor, tileRect: NSRect, tileSize: CGFloat) -> NSRect {

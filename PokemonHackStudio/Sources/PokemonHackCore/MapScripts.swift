@@ -120,7 +120,20 @@ public struct MapScriptIndex: Codable, Equatable, Identifiable {
             return MapScriptResolution(label: label ?? "", state: .noScript)
         }
 
-        let matches = labels.filter { $0.label == label }
+        return resolution(forNormalizedLabel: label, matches: labels.filter { $0.label == label })
+    }
+
+    public func resolutions(for labels: [String]) -> [String: MapScriptResolution] {
+        let normalizedLabels = Set(labels.compactMap(Self.normalizedScriptLabel))
+        guard !normalizedLabels.isEmpty else { return [:] }
+
+        let matchesByLabel = Dictionary(grouping: self.labels.filter { normalizedLabels.contains($0.label) }) { $0.label }
+        return Dictionary(uniqueKeysWithValues: normalizedLabels.map { label in
+            (label, resolution(forNormalizedLabel: label, matches: matchesByLabel[label] ?? []))
+        })
+    }
+
+    private func resolution(forNormalizedLabel label: String, matches: [MapScriptLabelSpan]) -> MapScriptResolution {
         if matches.count == 1 {
             let span = matches[0]
             guard Self.isEditableScriptPath(span.sourcePath) else {

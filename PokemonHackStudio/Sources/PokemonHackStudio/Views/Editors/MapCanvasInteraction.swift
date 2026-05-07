@@ -116,6 +116,7 @@ struct MapCanvasHitResult: Equatable {
     let target: MapBlockTarget?
     let rawValue: UInt16?
     let event: MapEventDescriptor?
+    let events: [MapEventDescriptor]
     let placement: MapScenePlacement?
 
     var eventID: String? { event?.id }
@@ -130,6 +131,7 @@ struct MapCanvasHoverStatus: Equatable, Identifiable {
     let metatileID: Int?
     let eventID: String?
     let eventKind: MapEventKind?
+    let eventStackCount: Int
     let placementRole: MapScenePlacementRole?
 
     var id: String { sceneCoordinate.id }
@@ -150,6 +152,9 @@ struct MapCanvasHoverStatus: Equatable, Identifiable {
         if let eventKind {
             parts.append("\(eventKind.rawValue.capitalized) event")
         }
+        if eventStackCount > 1 {
+            parts.append("\(eventStackCount) events")
+        }
         return parts.joined(separator: " | ")
     }
 
@@ -161,7 +166,105 @@ struct MapCanvasHoverStatus: Equatable, Identifiable {
         metatileID = hit.rawValue.map { Int($0 & 0x03ff) }
         eventID = hit.event?.id
         eventKind = hit.event?.kind
+        eventStackCount = hit.events.count
         placementRole = hit.placement?.role
+    }
+}
+
+struct MapCanvasEventRenderIndex: Equatable {
+    static let empty = MapCanvasEventRenderIndex(events: [], overlays: MapOverlaySettings(), document: nil, selectedEventID: nil)
+
+    let visibleEvents: [MapEventDescriptor]
+
+    private let eventsByCoordinate: [MapCanvasCoordinate: [MapEventDescriptor]]
+    private let eventsByID: [String: MapEventDescriptor]
+    private let stackCountsByCoordinate: [MapCanvasCoordinate: Int]
+    private let badgesByEventID: [String: String]
+
+    init(
+        events: [MapEventDescriptor],
+        overlays: MapOverlaySettings,
+        document: MapVisualDocument?,
+        selectedEventID: String?
+    ) {
+        let visibleEvents = events.filter { MapCanvasHitTester.shouldShow($0.kind, overlays: overlays) }
+        let eventsByCoordinate = Dictionary(grouping: visibleEvents.compactMap { event -> (MapCanvasCoordinate, MapEventDescriptor)? in
+            guard let x = event.x, let y = event.y else { return nil }
+            return (MapCanvasCoordinate(x: x, y: y), event)
+        }) { $0.0 }
+            .mapValues { pairs in pairs.map(\.1) }
+        let stackCountsByCoordinate = eventsByCoordinate.mapValues(\.count)
+
+        self.visibleEvents = visibleEvents
+        self.eventsByCoordinate = eventsByCoordinate
+        eventsByID = Dictionary(visibleEvents.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        self.stackCountsByCoordinate = stackCountsByCoordinate
+        badgesByEventID = Dictionary(
+            visibleEvents.compactMap { event in
+                guard let badge = Self.badge(for: event, document: document, selectedEventID: selectedEventID, stackCount: Self.stackCount(for: event, in: stackCountsByCoordinate)) else {
+                    return nil
+                }
+                return (event.id, badge)
+            },
+            uniquingKeysWith: { _, last in last }
+        )
+    }
+
+    func events(at coordinate: MapCanvasCoordinate, target: MapBlockTarget?) -> [MapEventDescriptor] {
+        guard target == .layout else { return [] }
+        return eventsByCoordinate[coordinate] ?? []
+    }
+
+    func event(id: String?) -> MapEventDescriptor? {
+        guard let id else { return nil }
+        return eventsByID[id]
+    }
+
+    func stackCount(for event: MapEventDescriptor) -> Int {
+        Self.stackCount(for: event, in: stackCountsByCoordinate)
+    }
+
+    func badge(for event: MapEventDescriptor) -> String? {
+        badgesByEventID[event.id]
+    }
+
+    private static func stackCount(for event: MapEventDescriptor, in counts: [MapCanvasCoordinate: Int]) -> Int {
+        guard let x = event.x, let y = event.y else { return 1 }
+        return counts[MapCanvasCoordinate(x: x, y: y)] ?? 1
+    }
+
+    private static func badge(
+        for event: MapEventDescriptor,
+        document: MapVisualDocument?,
+        selectedEventID: String?,
+        stackCount: Int
+    ) -> String? {
+        var parts: [String] = []
+        if event.id == selectedEventID, let scriptState = scriptResolutionBadge(for: event, document: document) {
+            parts.append(scriptState)
+        }
+        if stackCount > 1 {
+            parts.append("x\(stackCount)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    private static func scriptResolutionBadge(for event: MapEventDescriptor, document: MapVisualDocument?) -> String? {
+        guard let scriptLabel = event.scriptLabel, let resolution = document?.scriptIndex?.resolution(for: scriptLabel) else { return nil }
+        switch resolution.state {
+        case .resolved:
+            return resolution.span?.sourceRole == .shared ? "shared" : "local"
+        case .noScript:
+            return nil
+        case .missingLabel:
+            return "missing"
+        case .duplicateLabel:
+            return "dup"
+        case .generatedPath:
+            return "gen"
+        case .externalLabel:
+            return "ext"
+        }
     }
 }
 
@@ -171,19 +274,64 @@ struct MapCanvasHitTester {
     let document: MapVisualDocument
     let rawValues: [UInt16]
     let borderRawValues: [UInt16]
-    let events: [MapEventDescriptor]
     let overlays: MapOverlaySettings
+    let eventIndex: MapCanvasEventRenderIndex
+
+    init(
+        size: MapCanvasSize,
+        tileSize: CGFloat,
+        document: MapVisualDocument,
+        rawValues: [UInt16],
+        borderRawValues: [UInt16],
+        events: [MapEventDescriptor],
+        overlays: MapOverlaySettings
+    ) {
+        self.init(
+            size: size,
+            tileSize: tileSize,
+            document: document,
+            rawValues: rawValues,
+            borderRawValues: borderRawValues,
+            overlays: overlays,
+            eventIndex: MapCanvasEventRenderIndex(
+                events: events,
+                overlays: overlays,
+                document: document,
+                selectedEventID: nil
+            )
+        )
+    }
+
+    init(
+        size: MapCanvasSize,
+        tileSize: CGFloat,
+        document: MapVisualDocument,
+        rawValues: [UInt16],
+        borderRawValues: [UInt16],
+        overlays: MapOverlaySettings,
+        eventIndex: MapCanvasEventRenderIndex
+    ) {
+        self.size = size
+        self.tileSize = tileSize
+        self.document = document
+        self.rawValues = rawValues
+        self.borderRawValues = borderRawValues
+        self.overlays = overlays
+        self.eventIndex = eventIndex
+    }
 
     func hit(at point: NSPoint) -> MapCanvasHitResult? {
         guard let sceneCoordinate = sceneCoordinate(at: point),
               let resolved = resolvedCoordinate(sceneCoordinate)
         else { return nil }
+        let events = events(at: resolved.coordinate, target: resolved.target)
         return MapCanvasHitResult(
             sceneCoordinate: sceneCoordinate,
             coordinate: resolved.coordinate,
             target: resolved.target,
             rawValue: resolved.rawValue,
-            event: event(at: resolved.coordinate, target: resolved.target),
+            event: events.last,
+            events: events,
             placement: resolved.placement
         )
     }
@@ -208,13 +356,11 @@ struct MapCanvasHitTester {
     }
 
     func event(at coordinate: MapCanvasCoordinate, target: MapBlockTarget?) -> MapEventDescriptor? {
-        guard target == .layout else { return nil }
-        return events.reversed().first { event in
-            guard let eventX = event.x, let eventY = event.y else { return false }
-            return eventX == coordinate.x
-                && eventY == coordinate.y
-                && Self.shouldShow(event.kind, overlays: overlays)
-        }
+        events(at: coordinate, target: target).last
+    }
+
+    func events(at coordinate: MapCanvasCoordinate, target: MapBlockTarget?) -> [MapEventDescriptor] {
+        eventIndex.events(at: coordinate, target: target)
     }
 
     private func resolvedCoordinate(

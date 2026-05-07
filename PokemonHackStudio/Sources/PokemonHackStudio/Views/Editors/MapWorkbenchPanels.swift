@@ -234,6 +234,7 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
             eventSearchText: $eventSearchText,
             scriptDraftKey: $scriptDraftKey,
             scriptDraftText: $scriptDraftText,
+            viewportCenter: viewportCenterCoordinate,
             onCenterEvent: onCenterEvent
         )
         .accessibilityLabel("Map events editor")
@@ -657,6 +658,14 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
         ]
         .compactMap { $0 }
         return parts.isEmpty ? "Unspecified" : parts.joined(separator: " / ")
+    }
+
+    private var viewportCenterCoordinate: (x: Int, y: Int)? {
+        guard !viewport.isEmpty else { return nil }
+        return (
+            x: min(max(Int((viewport.originX + viewport.width / 2).rounded()), 0), max(document.blockdata.width - 1, 0)),
+            y: min(max(Int((viewport.originY + viewport.height / 2).rounded()), 0), max(document.blockdata.height - 1, 0))
+        )
     }
 
     private var connectionDirectionSummary: String {

@@ -248,13 +248,36 @@ struct PokemonHackCLI {
     }
 
     private static func patchManifest(arguments: [String]) throws -> String {
-        if arguments.count == 2, let patch = arguments.first, arguments.last == "--json" {
-            return try encode(PatchManifestBuilder.build(patchPath: patch))
-        }
-        guard arguments.count == 3, let project = arguments.first, let patch = arguments.dropFirst().first, arguments.last == "--json" else {
+        guard arguments.last == "--json" else {
             throw CLIError.usage
         }
-        return try encode(PatchManifestBuilder.build(patchPath: patch, projectPath: project))
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        if positionals.count == 1, let patch = positionals.first {
+            return try encode(PatchManifestBuilder.build(patchPath: patch, baseROMPath: baseROMPath))
+        }
+        guard positionals.count == 2, let project = positionals.first, let patch = positionals.dropFirst().first else {
+            throw CLIError.usage
+        }
+        return try encode(PatchManifestBuilder.build(patchPath: patch, projectPath: project, baseROMPath: baseROMPath))
     }
 
     private static func build(arguments: [String]) throws -> String {
@@ -295,7 +318,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> --json | patch-manifest <project> <patch> --json | build <path> --json | playtest <path> --headless --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | build <path> --json | playtest <path> --headless --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

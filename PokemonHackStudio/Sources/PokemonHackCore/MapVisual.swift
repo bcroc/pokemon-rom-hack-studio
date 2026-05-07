@@ -17,6 +17,7 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
     public let tileLimits: MapTileLimits
     public let metatiles: [MetatileDefinition]
     public let events: [MapEventDescriptor]
+    public let eventOptions: MapEventOptionsCatalog
     public let scriptIndex: MapScriptIndex?
     public let wildEncounters: MapWildEncounterIndex?
     public let scene: MapVisualScene
@@ -40,6 +41,7 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         tileLimits: MapTileLimits = MapTileLimits(),
         metatiles: [MetatileDefinition],
         events: [MapEventDescriptor],
+        eventOptions: MapEventOptionsCatalog = .empty,
         scriptIndex: MapScriptIndex? = nil,
         wildEncounters: MapWildEncounterIndex? = nil,
         scene: MapVisualScene? = nil,
@@ -62,6 +64,7 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         self.tileLimits = tileLimits
         self.metatiles = metatiles
         self.events = events
+        self.eventOptions = eventOptions
         self.scriptIndex = scriptIndex
         self.wildEncounters = wildEncounters
         self.scene = scene ?? MapVisualScene(layoutWidth: blockdata.width, layoutHeight: blockdata.height)
@@ -639,7 +642,7 @@ public struct MetatileAttribute: Codable, Equatable {
     }
 }
 
-public enum MapEventKind: String, Codable, Equatable, CaseIterable {
+public enum MapEventKind: String, Codable, Equatable, CaseIterable, Sendable {
     case object
     case warp
     case coord
@@ -647,7 +650,7 @@ public enum MapEventKind: String, Codable, Equatable, CaseIterable {
     case connection
 }
 
-public enum MapEventTemplateKind: String, Codable, Equatable, CaseIterable, Identifiable {
+public enum MapEventTemplateKind: String, Codable, Equatable, CaseIterable, Identifiable, Sendable {
     case object
     case warp
     case coordTrigger
@@ -733,7 +736,7 @@ public enum MapEventTemplateKind: String, Codable, Equatable, CaseIterable, Iden
     }
 }
 
-public struct MapEventProperty: Codable, Equatable, Identifiable {
+public struct MapEventProperty: Codable, Equatable, Identifiable, Sendable {
     public var id: String { key }
 
     public let key: String
@@ -745,7 +748,7 @@ public struct MapEventProperty: Codable, Equatable, Identifiable {
     }
 }
 
-public struct MapEventSpriteDescriptor: Codable, Equatable, Identifiable {
+public struct MapEventSpriteDescriptor: Codable, Equatable, Identifiable, Sendable {
     public var id: String { graphicsID }
 
     public let graphicsID: String
@@ -820,7 +823,7 @@ public struct MapEventSpriteDescriptor: Codable, Equatable, Identifiable {
     }
 }
 
-public struct MapEventDescriptor: Codable, Equatable, Identifiable {
+public struct MapEventDescriptor: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "\(kind.rawValue)-\(index)" }
 
     public let kind: MapEventKind
@@ -911,9 +914,17 @@ private struct ObjectEventSpriteIndex {
 
     let spritesByGraphicsID: [String: MapEventSpriteDescriptor]
 
+    var sprites: [MapEventSpriteDescriptor] {
+        spritesByGraphicsID.values.sorted { $0.graphicsID < $1.graphicsID }
+    }
+
     func sprite(for graphicsID: String?) -> MapEventSpriteDescriptor? {
         guard let graphicsID else { return nil }
         return spritesByGraphicsID[graphicsID]
+    }
+
+    static func from(sprites: [MapEventSpriteDescriptor]) -> ObjectEventSpriteIndex {
+        ObjectEventSpriteIndex(spritesByGraphicsID: Dictionary(uniqueKeysWithValues: sprites.map { ($0.graphicsID, $0) }))
     }
 
     static func load(root: URL, fileManager: FileManager) -> ObjectEventSpriteIndex {
@@ -1786,13 +1797,59 @@ public enum MapWildEncounterIndexLoader {
     }
 }
 
-public enum ProjectMapVisualLoader {
-    public static func load(from projectIndex: ProjectIndex, mapID: String, fileManager: FileManager = .default) throws -> MapVisualDocument {
+public struct ProjectMapVisualSharedCache: Codable, Equatable {
+    public let rootPath: String
+    public let profile: GameProfile
+    public let catalog: ProjectMapCatalog
+    public let tilesets: TilesetIndex
+    public let objectSprites: [MapEventSpriteDescriptor]
+    public let staticEventOptions: MapEventOptionsStaticCatalog
+
+    public init(
+        rootPath: String,
+        profile: GameProfile,
+        catalog: ProjectMapCatalog,
+        tilesets: TilesetIndex,
+        objectSprites: [MapEventSpriteDescriptor],
+        staticEventOptions: MapEventOptionsStaticCatalog
+    ) {
+        self.rootPath = rootPath
+        self.profile = profile
+        self.catalog = catalog
+        self.tilesets = tilesets
+        self.objectSprites = objectSprites
+        self.staticEventOptions = staticEventOptions
+    }
+
+    public static func load(from projectIndex: ProjectIndex, fileManager: FileManager = .default) throws -> ProjectMapVisualSharedCache {
         let root = URL(fileURLWithPath: projectIndex.root.path).standardizedFileURL
         let catalog = try ProjectMapCatalogLoader.load(from: projectIndex, fileManager: fileManager)
+        let tilesets = try TilesetIndexLoader.load(from: projectIndex, fileManager: fileManager)
+        let objectSprites = ObjectEventSpriteIndex.load(root: root, fileManager: fileManager).sprites
+        let staticEventOptions = MapEventOptionsStaticCatalog.load(root: root, fileManager: fileManager)
+        return ProjectMapVisualSharedCache(
+            rootPath: root.path,
+            profile: projectIndex.profile,
+            catalog: catalog,
+            tilesets: tilesets,
+            objectSprites: objectSprites,
+            staticEventOptions: staticEventOptions
+        )
+    }
+}
+
+public enum ProjectMapVisualLoader {
+    public static func load(from projectIndex: ProjectIndex, mapID: String, fileManager: FileManager = .default) throws -> MapVisualDocument {
+        let sharedCache = try ProjectMapVisualSharedCache.load(from: projectIndex, fileManager: fileManager)
+        return try load(from: sharedCache, mapID: mapID, fileManager: fileManager)
+    }
+
+    public static func load(from sharedCache: ProjectMapVisualSharedCache, mapID: String, fileManager: FileManager = .default) throws -> MapVisualDocument {
+        let root = URL(fileURLWithPath: sharedCache.rootPath).standardizedFileURL
+        let catalog = sharedCache.catalog
         let map = try resolveMap(mapID: mapID, in: catalog)
         let layout = try resolveLayout(for: map, in: catalog)
-        let tilesets = try TilesetIndexLoader.load(from: projectIndex, fileManager: fileManager)
+        let tilesets = sharedCache.tilesets
 
         var diagnostics = catalog.diagnostics
         let blockdata = readBlockdata(
@@ -1834,7 +1891,7 @@ public enum ProjectMapVisualLoader {
         let mapJSONData = try Data(contentsOf: root.appendingPathComponent(map.sourcePath))
         let mapJSONText = String(decoding: mapJSONData, as: UTF8.self)
         var eventParser = OrderedJSONParser(text: mapJSONText)
-        let objectEventSpriteIndex = ObjectEventSpriteIndex.load(root: root, fileManager: fileManager)
+        let objectEventSpriteIndex = ObjectEventSpriteIndex.from(sprites: sharedCache.objectSprites)
         let events = (try? eventParser.parse()).map {
             extractEvents(
                 from: $0,
@@ -1850,6 +1907,11 @@ public enum ProjectMapVisualLoader {
             fileManager: fileManager
         )
         diagnostics.append(contentsOf: scriptIndex.diagnostics)
+        let eventOptions = sharedCache.staticEventOptions.makeOptions(
+            catalog: catalog,
+            scriptIndex: scriptIndex,
+            objectSprites: sharedCache.objectSprites
+        )
         let wildEncounters = MapWildEncounterIndexLoader.load(
             root: root,
             mapID: map.id,
@@ -1858,9 +1920,9 @@ public enum ProjectMapVisualLoader {
         diagnostics.append(contentsOf: wildEncounters.diagnostics)
 
         return MapVisualDocument(
-            id: "\(projectIndex.root.path):\(map.id)",
-            rootPath: projectIndex.root.path,
-            profile: projectIndex.profile,
+            id: "\(sharedCache.rootPath):\(map.id)",
+            rootPath: sharedCache.rootPath,
+            profile: sharedCache.profile,
             mapID: map.id,
             mapName: map.name,
             mapMetadata: mapMetadata(from: map),
@@ -1874,6 +1936,7 @@ public enum ProjectMapVisualLoader {
             tileLimits: tilesets.tileLimits,
             metatiles: metatiles,
             events: events,
+            eventOptions: eventOptions,
             scriptIndex: scriptIndex,
             wildEncounters: wildEncounters,
             scene: scene,
@@ -2509,6 +2572,7 @@ public enum MapMutationPlanner {
             draftJSONText = document.mapJSONText
             draftEvents = document.events
         }
+        appendEventValidationDiagnostics(events: draftEvents, document: document, scriptTexts: scriptTexts, diagnostics: &diagnostics)
         let scriptFiles = scriptTexts.keys.sorted().compactMap { path -> MapScriptFileDraft? in
             guard let originalText = originalScriptTexts[path], let text = scriptTexts[path], originalText != text else {
                 return nil
@@ -3179,6 +3243,178 @@ public enum MapMutationPlanner {
         default:
             return
         }
+    }
+
+    private static func appendEventValidationDiagnostics(
+        events: [MapEventDescriptor],
+        document: MapVisualDocument,
+        scriptTexts: [String: String],
+        diagnostics: inout [Diagnostic]
+    ) {
+        var eventIDsByTile: [String: [String]] = [:]
+        let draftLabelsByName = draftScriptLabelsByName(scriptIndex: document.scriptIndex, scriptTexts: scriptTexts)
+
+        for event in events where event.kind != .connection {
+            appendPositionDiagnostics(event: event, document: document, diagnostics: &diagnostics)
+            appendEventConstantDiagnostics(event: event, document: document, diagnostics: &diagnostics)
+            appendScriptResolutionDiagnostics(event: event, document: document, draftLabelsByName: draftLabelsByName, diagnostics: &diagnostics)
+            appendWarpDiagnostics(event: event, document: document, diagnostics: &diagnostics)
+
+            if let x = event.x, let y = event.y {
+                eventIDsByTile["\(x),\(y)", default: []].append(event.id)
+            }
+        }
+
+        for (tile, ids) in eventIDsByTile where ids.count > 1 {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "MAP_EVENT_TILE_STACK",
+                    message: "\(ids.count) events share map tile \(tile): \(ids.joined(separator: ", ")).",
+                    span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+                )
+            )
+        }
+    }
+
+    private static func appendPositionDiagnostics(
+        event: MapEventDescriptor,
+        document: MapVisualDocument,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let x = event.x, let y = event.y else { return }
+        guard x < 0 || y < 0 || x >= document.blockdata.width || y >= document.blockdata.height else { return }
+        diagnostics.append(
+            Diagnostic(
+                severity: .warning,
+                code: "MAP_EVENT_OUT_OF_BOUNDS",
+                message: "\(event.kind.rawValue) event #\(event.index) is at \(x), \(y), outside the \(document.blockdata.width)x\(document.blockdata.height) layout.",
+                span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+            )
+        )
+    }
+
+    private static func appendEventConstantDiagnostics(
+        event: MapEventDescriptor,
+        document: MapVisualDocument,
+        diagnostics: inout [Diagnostic]
+    ) {
+        let checks: [(key: String, group: MapEventOptionGroup, values: [String])] = [
+            ("graphics_id", .objectGraphics, document.eventOptions.objectGraphicsIDs),
+            ("item", .items, document.eventOptions.itemIDs),
+            ("var", .variables, document.eventOptions.variableIDs),
+            ("movement_type", .movementTypes, document.eventOptions.movementTypes),
+            ("trainer_type", .trainerTypes, document.eventOptions.trainerTypes),
+            ("player_facing_dir", .facingDirections, document.eventOptions.facingDirections),
+            ("flag", .flags, document.eventOptions.flags)
+        ]
+
+        for check in checks where !check.values.isEmpty {
+            guard let value = event.propertyValue(check.key),
+                  shouldValidateSymbol(value),
+                  !document.eventOptions.contains(value, in: check.group)
+            else { continue }
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "MAP_EVENT_CONSTANT_UNRESOLVED",
+                    message: "\(event.kind.rawValue) event #\(event.index) references \(value), but it is not defined in the indexed \(check.group.rawValue) options.",
+                    span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+                )
+            )
+        }
+    }
+
+    private static func appendScriptResolutionDiagnostics(
+        event: MapEventDescriptor,
+        document: MapVisualDocument,
+        draftLabelsByName: [String: [MapScriptLabelSpan]],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let scriptLabel = event.scriptLabel, let scriptIndex = document.scriptIndex else { return }
+        let draftMatches = draftLabelsByName[scriptLabel] ?? []
+        if draftMatches.count == 1 {
+            return
+        }
+        if draftMatches.count > 1 {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "MAP_EVENT_SCRIPT_UNRESOLVED",
+                    message: "\(event.kind.rawValue) event #\(event.index) references \(scriptLabel), but script resolution is \(MapScriptResolutionState.duplicateLabel.rawValue).",
+                    span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+                )
+            )
+            return
+        }
+        let resolution = scriptIndex.resolution(for: scriptLabel)
+        guard resolution.state != .resolved else { return }
+        diagnostics.append(
+            Diagnostic(
+                severity: .warning,
+                code: "MAP_EVENT_SCRIPT_UNRESOLVED",
+                message: "\(event.kind.rawValue) event #\(event.index) references \(scriptLabel), but script resolution is \(resolution.state.rawValue).",
+                span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+            )
+        )
+    }
+
+    private static func draftScriptLabelsByName(
+        scriptIndex: MapScriptIndex?,
+        scriptTexts: [String: String]
+    ) -> [String: [MapScriptLabelSpan]] {
+        guard let scriptIndex else { return [:] }
+        let labels = scriptTexts.flatMap { path, text -> [MapScriptLabelSpan] in
+            guard let source = scriptIndex.source(path: path) else { return [] }
+            return MapScriptIndexLoader.parseLabels(
+                source: MapScriptSource(path: path, role: source.role, exists: source.exists, text: text)
+            )
+        }
+        return Dictionary(grouping: labels) { $0.label }
+    }
+
+    private static func appendWarpDiagnostics(
+        event: MapEventDescriptor,
+        document: MapVisualDocument,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard event.kind == .warp else { return }
+        let destination = event.propertyValue("dest_map")
+        if let destination,
+           !document.eventOptions.mapIDs.isEmpty,
+           shouldValidateSymbol(destination),
+           !document.eventOptions.contains(destination, in: .maps) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "MAP_EVENT_DESTINATION_UNRESOLVED",
+                    message: "Warp event #\(event.index) targets \(destination), but that map is not in the indexed map catalog.",
+                    span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+                )
+            )
+        }
+
+        guard let count = document.eventOptions.warpCount(for: destination),
+              let warpIDText = event.propertyValue("dest_warp_id"),
+              let warpID = integerValue(warpIDText)
+        else { return }
+        guard warpID < 0 || warpID >= count else { return }
+        diagnostics.append(
+            Diagnostic(
+                severity: .warning,
+                code: "MAP_EVENT_DESTINATION_WARP_UNRESOLVED",
+                message: "Warp event #\(event.index) targets warp \(warpID) on \(destination ?? "MAP_NONE"), but the destination exposes \(count) warp event(s).",
+                span: SourceSpan(relativePath: document.mapSourcePath, startLine: 1)
+            )
+        )
+    }
+
+    private static func shouldValidateSymbol(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed == "0" || trimmed == "0x0" || trimmed == "NULL" { return false }
+        if integerValue(trimmed) != nil { return false }
+        return trimmed.contains("_")
     }
 
     private static func resolvedScriptSpan(

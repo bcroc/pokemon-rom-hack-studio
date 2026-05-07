@@ -1,4 +1,5 @@
 import PokemonHackCore
+import AppKit
 import XCTest
 @testable import PokemonHackStudio
 
@@ -265,6 +266,74 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testResourceAssetNavigationResolvesLayoutAndReportTargets() async throws {
+        let root = try makeVisualProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let layoutAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "layouts" && $0.targetID == "LAYOUT_ROUTE2" })
+
+        store.navigateToAsset(layoutAsset)
+
+        _ = try await waitForSelectedMapCatalog(store)
+        XCTAssertEqual(store.selection, .maps)
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertEqual(store.searchText, "LAYOUT_ROUTE2")
+        XCTAssertEqual(store.selectedResourceAssetID, layoutAsset.id)
+
+        let graphicsAsset = try XCTUnwrap(assetCatalog.rows.first { $0.targetModule == .graphics && $0.targetID != nil })
+        store.navigateToAsset(graphicsAsset)
+
+        XCTAssertEqual(store.selection, .graphics)
+        XCTAssertEqual(store.searchText, graphicsAsset.targetID)
+
+        let buildAsset = try XCTUnwrap(assetCatalog.rows.first { $0.targetModule == .build && $0.targetID != nil })
+        store.navigateToAsset(buildAsset)
+
+        XCTAssertEqual(store.selection, .build)
+        XCTAssertEqual(store.searchText, buildAsset.targetID)
+    }
+
+    @MainActor
+    func testResourceAssetNavigationFocusesScriptsPokemonAndBacklinks() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let scriptSourceAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "scripts" && $0.targetID == "data/scripts/test.inc" })
+
+        store.navigateToAsset(scriptSourceAsset)
+
+        XCTAssertEqual(store.selection, .scripts)
+        XCTAssertEqual(store.searchText, "data/scripts/test.inc")
+        XCTAssertEqual(store.scriptReadinessTargetMode, .script)
+        XCTAssertEqual(store.selectedScriptReadinessLabel, "Test_EventScript")
+        XCTAssertEqual(store.selectedResourceAssetID, scriptSourceAsset.id)
+
+        let speciesAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "species" && $0.targetID == "SPECIES_TREECKO" })
+        store.navigateToAsset(speciesAsset)
+
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(store.searchText, "SPECIES_TREECKO")
+
+        store.navigateToResourceAsset(path: "data/scripts/test.inc")
+
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.resourceAssetCategory, WorkbenchStore.allResourceAssetCategories)
+        XCTAssertEqual(store.searchText, "data/scripts/test.inc")
+        XCTAssertEqual(store.selectedResourceAssetID, scriptSourceAsset.id)
+    }
+
+    @MainActor
     func testProjectMenuTitlesDistinguishEditableAndReferenceRoots() throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -351,6 +420,53 @@ final class MapEditorStoreTests: XCTestCase {
                 || row.source.path.localizedCaseInsensitiveContains("pokeemerald.gba")
                 || row.tags.contains { $0.localizedCaseInsensitiveContains("pokeemerald.gba") }
         })
+    }
+
+    @MainActor
+    func testPatchManifestPreviewLoadsBaseROMSelectionAndCopiesJSON() throws {
+        let root = try makeSourceIndexProject()
+        let gba = root.appendingPathComponent("pokeemerald.gba")
+        let wrongGBA = root.appendingPathComponent("wrong.gba")
+        let patch = root.appendingPathComponent("cleanroom.aps")
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(Data("abc".utf8), to: gba)
+        try write(Data("wrong".utf8), to: wrongGBA)
+        try write(Data("APS1".utf8), to: patch)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        XCTAssertTrue(store.baseROMOptions.contains { $0.path == gba.path && $0.sourceKind == "Project" })
+
+        store.requestPatchPath(patch.path)
+        store.loadSelectedPatchManifestReport()
+
+        let needsBaseReport = try XCTUnwrap(store.selectedPatchManifestReport)
+        XCTAssertEqual(needsBaseReport.compatibilityLabel, "Compatibility unknown")
+        XCTAssertFalse(needsBaseReport.rows.isEmpty)
+        XCTAssertFalse(needsBaseReport.dryRunPlans.isEmpty)
+
+        store.requestBaseROMPath(gba.path)
+
+        let matchedReport = try XCTUnwrap(store.selectedPatchManifestReport)
+        XCTAssertEqual(matchedReport.compatibilityLabel, "Base ROM matched")
+        XCTAssertEqual(matchedReport.selectedBaseROM?.matchedCandidate, "rom.sha1")
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "pokeemerald.gba" })
+
+        store.requestBaseROMPath(wrongGBA.path)
+
+        let mismatchReport = try XCTUnwrap(store.selectedPatchManifestReport)
+        XCTAssertEqual(mismatchReport.compatibilityLabel, "Base ROM mismatch")
+        XCTAssertTrue(mismatchReport.diagnostics.contains { $0.title == "PATCH_BASE_ROM_MISMATCH" })
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertNotNil(object?["patchManifest"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: patch.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: gba.path))
     }
 
     @MainActor
@@ -441,8 +557,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testBrushSelectionUndoAndRedoStacks() throws {
-        let store = try makeLoadedStore()
+    func testBrushSelectionUndoAndRedoStacks() async throws {
+        let store = try await makeLoadedStore()
 
         store.selectMapCell(x: 0, y: 0)
         store.selectBrush(rawValue: 0x0022)
@@ -469,8 +585,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectionPersistenceAndMapSwitchClearsDirtyState() throws {
-        let store = try makeLoadedStore()
+    func testSelectionPersistenceAndMapSwitchClearsDirtyState() async throws {
+        let store = try await makeLoadedStore()
 
         store.selectMapCell(x: 1, y: 1)
         XCTAssertEqual(store.selectedMapCell?.metatileID, 4)
@@ -481,6 +597,7 @@ final class MapEditorStoreTests: XCTestCase {
 
         store.selectedMapID = "MAP_ROUTE2"
         store.loadSelectedMapVisualDocument()
+        try await waitForSelectedMapVisual(store, mapID: "MAP_ROUTE2")
 
         XCTAssertEqual(store.selectedMapVisualDocument?.mapID, "MAP_ROUTE2")
         XCTAssertEqual(store.mapEditOperations.count, 0)
@@ -490,8 +607,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testMutationPreviewAndApplyGatingState() throws {
-        let store = try makeLoadedStore()
+    func testMutationPreviewAndApplyGatingState() async throws {
+        let store = try await makeLoadedStore()
 
         XCTAssertNil(store.latestMapEditPlan)
         store.previewSelectedMapMutationPlan()
@@ -510,8 +627,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testEventPropertyEditsStageJSONMutation() throws {
-        let store = try makeLoadedStore()
+    func testEventPropertyEditsStageJSONMutation() async throws {
+        let store = try await makeLoadedStore()
 
         store.selectMapEvent(id: "object-0")
         store.updateSelectedMapEventProperty(key: "script", value: "Route1_EventScript_New")
@@ -524,8 +641,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreMapEditingFacadeUsesSessionAsSingleOwner() throws {
-        let store = try makeLoadedStore()
+    func testStoreMapEditingFacadeUsesSessionAsSingleOwner() async throws {
+        let store = try await makeLoadedStore()
 
         store.selectBrush(rawValue: 0x0088)
         store.paintMapCell(x: 0, y: 0)
@@ -549,15 +666,45 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    private func makeLoadedStore() throws -> WorkbenchStore {
+    private func makeLoadedStore() async throws -> WorkbenchStore {
         let root = try makeVisualProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
         store.openProject(path: root.path)
         store.selectedMapID = "MAP_ROUTE1"
         store.loadSelectedMapVisualDocument()
-        XCTAssertEqual(store.selectedMapVisualDocument?.mapID, "MAP_ROUTE1")
+        try await waitForSelectedMapVisual(store, mapID: "MAP_ROUTE1")
         return store
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedMapCatalog(_ store: WorkbenchStore) async throws -> MapCatalogViewState {
+        for _ in 0..<100 {
+            if let catalog = store.selectedMapCatalog {
+                return catalog
+            }
+            if case .failed(let message) = store.mapCatalogStatus {
+                throw StoreTestError.mapCatalogFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.mapCatalogTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedMapVisual(_ store: WorkbenchStore, mapID: String) async throws -> MapVisualDocument {
+        for _ in 0..<100 {
+            if let document = store.selectedMapVisualDocument, document.mapID == mapID {
+                return document
+            }
+            if case .failed(let message) = store.mapVisualStatus {
+                throw StoreTestError.mapVisualFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.mapVisualTimedOut
     }
 
     @MainActor
@@ -1183,4 +1330,8 @@ private final class MapEditorStoreTemporaryDirectory {
 private enum StoreTestError: Error {
     case assetCatalogFailed(String)
     case assetCatalogTimedOut
+    case mapCatalogFailed(String)
+    case mapCatalogTimedOut
+    case mapVisualFailed(String)
+    case mapVisualTimedOut
 }

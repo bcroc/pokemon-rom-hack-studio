@@ -77,6 +77,125 @@ final class SourceIndexTests: XCTestCase {
         XCTAssertEqual(records.last?.diagnostics.first?.code, "TABLE_ENTRY_ID_MISSING")
     }
 
+    func testTableParserExtractsOnlyTopLevelDesignatedFields() throws {
+        let descriptor = CInitializerTableDescriptor(
+            module: .trainers,
+            relativePath: "src/data/trainers.h",
+            tableSymbol: "gTrainers",
+            entryStyle: .bracketed
+        )
+        let text = """
+        const struct Trainer gTrainers[] = {
+            [TRAINER_TEST] = {
+                .trainerName = _("TEST"),
+                .party = {
+                    .NoItemDefaultMoves = sParty_Test,
+                },
+            },
+        };
+        """
+
+        let result = CInitializerParser.tableEntries(in: text, descriptor: descriptor)
+
+        XCTAssertEqual(result.entries.first?.fields["trainerName"], "_(\"TEST\")")
+        XCTAssertEqual(result.entries.first?.fields["party"], "{\n            .NoItemDefaultMoves = sParty_Test,\n        }")
+        XCTAssertNil(result.entries.first?.fields["NoItemDefaultMoves"])
+        XCTAssertTrue(result.diagnostics.isEmpty)
+    }
+
+    func testTableParserReportsUnsupportedBracketedShapeAndUnterminatedTable() throws {
+        let descriptor = CInitializerTableDescriptor(
+            module: .pokemon,
+            relativePath: "src/data/pokemon/species_info.h",
+            tableSymbol: "gSpeciesInfo",
+            entryStyle: .bracketed
+        )
+        let unsupportedText = """
+        const struct SpeciesInfo gSpeciesInfo[] = {
+            SPECIES_TREECKO,
+            [SPECIES_GROVYLE] = { .baseHP = 50 },
+        };
+        """
+        let unterminatedText = """
+        const struct SpeciesInfo gSpeciesInfo[] =
+        {
+            [SPECIES_TREECKO] = { .baseHP = 40 },
+        """
+
+        let unsupported = CInitializerParser.tableEntries(in: unsupportedText, descriptor: descriptor)
+        let unterminated = CInitializerParser.tableEntries(in: unterminatedText, descriptor: descriptor)
+
+        XCTAssertEqual(unsupported.entries.map(\.symbol), ["gSpeciesInfo[0]", "SPECIES_GROVYLE"])
+        let shapeDiagnostic = try XCTUnwrap(unsupported.diagnostics.first { $0.code == "TABLE_ENTRY_UNSUPPORTED_SHAPE" })
+        XCTAssertEqual(shapeDiagnostic.span?.relativePath, "src/data/pokemon/species_info.h")
+        XCTAssertEqual(shapeDiagnostic.span?.startLine, 2)
+        XCTAssertEqual(unterminated.entries.count, 0)
+        let tableDiagnostic = try XCTUnwrap(unterminated.diagnostics.first)
+        XCTAssertEqual(tableDiagnostic.code, "TABLE_INITIALIZER_UNTERMINATED")
+        XCTAssertEqual(tableDiagnostic.span?.startLine, 2)
+    }
+
+    func testKnownFieldsDoNotReportUnknownFieldsWithoutOptIn() throws {
+        let descriptor = CInitializerTableDescriptor(
+            module: .pokemon,
+            relativePath: "src/data/pokemon/species_info.h",
+            tableSymbol: "gSpeciesInfo",
+            entryStyle: .bracketed,
+            knownFields: ["baseHP"]
+        )
+        let text = """
+        const struct SpeciesInfo gSpeciesInfo[] = {
+            [SPECIES_TREECKO] = {
+                .baseHP = 40,
+                .forkOnlyField = TRUE,
+            },
+        };
+        """
+
+        let result = CInitializerParser.tableEntries(in: text, descriptor: descriptor)
+
+        XCTAssertEqual(result.entries.first?.fields["forkOnlyField"], "TRUE")
+        XCTAssertFalse(result.diagnostics.contains { $0.code == "TABLE_ENTRY_UNKNOWN_FIELD" })
+    }
+
+    func testSourceIndexReportsDescriptorOptInUnknownFields() throws {
+        let temp = try SourceIndexTemporaryDirectory()
+        let root = temp.url
+        try write("POKEMON EMER\n", to: root.appendingPathComponent("Makefile"))
+        try makeDirectory(root.appendingPathComponent("include"))
+        try makeDirectory(root.appendingPathComponent("graphics"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] = {
+                [SPECIES_TREECKO] = {
+                    .baseHP = 40,
+                    .forkOnlyField = TRUE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write("const struct Trainer gTrainers[] = { [TRAINER_TEST] = { .trainerName = _(\"TEST\") }, };\n", to: root.appendingPathComponent("src/data/trainers.h"))
+        try write("const struct Item gItems[] = { [ITEM_POTION] = { .name = _(\"POTION\"), .itemId = ITEM_POTION }, };\n", to: root.appendingPathComponent("src/data/items.h"))
+        try write("const struct BattleMove gBattleMoves[] = { [MOVE_POUND] = { .power = 40 }, };\n", to: root.appendingPathComponent("src/data/battle_moves.h"))
+        try write("const u16 *const gLevelUpLearnsets[NUM_SPECIES] = { [SPECIES_TREECKO] = sTreeckoLevelUpLearnset, };\n", to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h"))
+        try write("const u32 gTMHMLearnsets[NUM_SPECIES] = { [SPECIES_TREECKO] = TMHM_LEARNSET(MOVE_CUT), };\n", to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h"))
+        try write("const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] = { [SPECIES_TREECKO] = {{EVO_LEVEL, 16, SPECIES_GROVYLE}}, };\n", to: root.appendingPathComponent("src/data/pokemon/evolution.h"))
+        try write("const struct PokedexEntry gPokedexEntries[] = { { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50 }, };\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h"))
+
+        let projectIndex = try GameAdapterRegistry.index(path: root.path)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: projectIndex)
+
+        let species = try XCTUnwrap(sourceIndex.records.first { $0.module == .pokemon && $0.title == "SPECIES_TREECKO" })
+        let diagnostic = try XCTUnwrap(species.diagnostics.first { $0.code == "TABLE_ENTRY_UNKNOWN_FIELD" })
+        XCTAssertTrue(diagnostic.message.contains("forkOnlyField"))
+        XCTAssertEqual(diagnostic.span?.relativePath, "src/data/pokemon/species_info.h")
+        XCTAssertEqual(diagnostic.span?.startLine, 2)
+        XCTAssertTrue(sourceIndex.diagnostics.contains { $0.code == "TABLE_ENTRY_UNKNOWN_FIELD" && $0.message.contains("forkOnlyField") })
+    }
+
     func testScriptAndTextIndexesExposeLabelsSpansAndDiagnostics() throws {
         let temp = try SourceIndexTemporaryDirectory()
         let root = temp.url

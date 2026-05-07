@@ -189,6 +189,7 @@ enum BuildReportSection: String, CaseIterable, Identifiable {
     case generatedArtifacts = "Generated Artifacts"
     case toolchain = "Toolchain Readiness"
     case healthMatrix = "Toolchain Health Matrix"
+    case patchManifest = "Patch Manifest"
     case playtest = "Playtest Handoff"
     case diagnostics = "Diagnostics"
 
@@ -204,6 +205,8 @@ enum BuildReportSection: String, CaseIterable, Identifiable {
             "wrench.and.screwdriver"
         case .healthMatrix:
             "checklist"
+        case .patchManifest:
+            "doc.badge.gearshape"
         case .playtest:
             "gamecontroller"
         case .diagnostics:
@@ -223,6 +226,7 @@ struct BuildPatchPlaytestReportViewState: Identifiable {
     let toolchain: ToolchainReadinessViewState
     let healthMatrix: ToolchainHealthMatrixViewState
     let playtest: PlaytestHandoffPlanViewState
+    let baseROMOptions: [BaseROMOptionViewState]
     let diagnostics: [IndexedDiagnosticRow]
 
     var rows: [BuildReportRow] {
@@ -233,6 +237,89 @@ struct BuildPatchPlaytestReportViewState: Identifiable {
             + [BuildReportRow(playtest: playtest)]
             + diagnostics.map(BuildReportRow.init(diagnostic:))
     }
+}
+
+enum PatchManifestLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No patch manifest loaded"
+        case .loading:
+            "Loading patch manifest"
+        case .loaded(let status):
+            "Patch manifest loaded: \(status)"
+        case .failed(let message):
+            "Patch manifest failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+struct BaseROMOptionViewState: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let path: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let sourceKind: String
+    let sha1Summary: String
+}
+
+struct PatchManifestReportViewState: Identifiable {
+    let id: String
+    let patchPath: String
+    let patchTitle: String
+    let patchSubtitle: String
+    let patchDetail: String
+    let compatibilityLabel: String
+    let status: ValidationState
+    let selectedBaseROM: PatchSelectedBaseROMViewState?
+    let baseROMCandidates: [PatchBaseROMCandidateViewState]
+    let dryRunPlans: [PatchDryRunPlanViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchSelectedBaseROMViewState: Identifiable {
+    let id: String
+    let title: String
+    let path: String
+    let detail: String
+    let status: ValidationState
+    let sha1Summary: String
+    let matchedCandidate: String?
+}
+
+struct PatchBaseROMCandidateViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let sha1Summary: String
+    let source: SourceLocation
+}
+
+struct PatchDryRunPlanViewState: Identifiable {
+    let id: String
+    let title: String
+    let steps: [String]
+    let diagnostics: [IndexedDiagnosticRow]
+    let status: ValidationState
 }
 
 struct ToolchainHealthMatrixViewState: Identifiable {
@@ -281,8 +368,17 @@ struct PlaytestHandoffPlanViewState: Identifiable {
     let emulator: String
     let romPath: String?
     let arguments: [String]
+    let artifacts: [PlaytestArtifactViewState]
     let isRunnable: Bool
     let status: ValidationState
+    let detail: String
+    let source: SourceLocation
+}
+
+struct PlaytestArtifactViewState: Identifiable {
+    let id: String
+    let kind: String
+    let path: String
     let detail: String
     let source: SourceLocation
 }

@@ -3,6 +3,7 @@ import Foundation
 public enum PatchManifestCompatibilityStatus: String, Codable, Equatable {
     case compatible
     case needsBaseROM
+    case baseROMMismatch
     case unknown
     case invalidPatch
 }
@@ -45,10 +46,39 @@ public struct PatchManifestDryRunPlan: Codable, Equatable, Identifiable {
     }
 }
 
+public struct PatchSelectedBaseROM: Codable, Equatable {
+    public let path: String
+    public let absolutePath: String
+    public let exists: Bool
+    public let sizeBytes: UInt64?
+    public let sha1: String?
+    public let matchedCandidateRelativePath: String?
+    public let matchedCandidateBuiltOutputPath: String?
+
+    public init(
+        path: String,
+        absolutePath: String,
+        exists: Bool,
+        sizeBytes: UInt64? = nil,
+        sha1: String? = nil,
+        matchedCandidateRelativePath: String? = nil,
+        matchedCandidateBuiltOutputPath: String? = nil
+    ) {
+        self.path = path
+        self.absolutePath = absolutePath
+        self.exists = exists
+        self.sizeBytes = sizeBytes
+        self.sha1 = sha1
+        self.matchedCandidateRelativePath = matchedCandidateRelativePath
+        self.matchedCandidateBuiltOutputPath = matchedCandidateBuiltOutputPath
+    }
+}
+
 public struct PatchManifestReport: Codable, Equatable {
     public let patch: PatchValidationReport
     public let projectRoot: String?
     public let baseROMCandidates: [PatchBaseROMCandidate]
+    public let selectedBaseROM: PatchSelectedBaseROM?
     public let compatibilityStatus: PatchManifestCompatibilityStatus
     public let dryRunPlans: [PatchManifestDryRunPlan]
     public let diagnostics: [Diagnostic]
@@ -57,6 +87,7 @@ public struct PatchManifestReport: Codable, Equatable {
         patch: PatchValidationReport,
         projectRoot: String?,
         baseROMCandidates: [PatchBaseROMCandidate],
+        selectedBaseROM: PatchSelectedBaseROM? = nil,
         compatibilityStatus: PatchManifestCompatibilityStatus,
         dryRunPlans: [PatchManifestDryRunPlan],
         diagnostics: [Diagnostic]
@@ -64,6 +95,7 @@ public struct PatchManifestReport: Codable, Equatable {
         self.patch = patch
         self.projectRoot = projectRoot
         self.baseROMCandidates = baseROMCandidates
+        self.selectedBaseROM = selectedBaseROM
         self.compatibilityStatus = compatibilityStatus
         self.dryRunPlans = dryRunPlans
         self.diagnostics = diagnostics
@@ -74,6 +106,7 @@ public enum PatchManifestBuilder {
     public static func build(
         patchPath: String,
         projectPath: String? = nil,
+        baseROMPath: String? = nil,
         fileManager: FileManager = .default
     ) throws -> PatchManifestReport {
         let patch = PatchValidationReportBuilder.validate(path: patchPath, fileManager: fileManager)
@@ -89,8 +122,21 @@ public enum PatchManifestBuilder {
             diagnostics.append(contentsOf: buildReport.diagnostics.filter { $0.severity == .error })
         }
 
-        let compatibility = compatibilityStatus(patch: patch, candidates: candidates)
-        let dryRuns = dryRunPlans(patch: patch, candidates: candidates, compatibility: compatibility)
+        let selectedBaseROM = selectedBaseROMReport(
+            from: baseROMPath,
+            projectRoot: projectRoot,
+            candidates: candidates,
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: selectedBaseROMDiagnostics(selectedBaseROM, candidates: candidates))
+
+        let compatibility = compatibilityStatus(patch: patch, selectedBaseROM: selectedBaseROM, candidates: candidates)
+        let dryRuns = dryRunPlans(
+            patch: patch,
+            selectedBaseROM: selectedBaseROM,
+            candidates: candidates,
+            compatibility: compatibility
+        )
         diagnostics.append(
             Diagnostic(
                 severity: .info,
@@ -103,6 +149,7 @@ public enum PatchManifestBuilder {
             patch: patch,
             projectRoot: projectRoot,
             baseROMCandidates: candidates,
+            selectedBaseROM: selectedBaseROM,
             compatibilityStatus: compatibility,
             dryRunPlans: dryRuns,
             diagnostics: diagnostics
@@ -134,28 +181,42 @@ public enum PatchManifestBuilder {
 
     private static func compatibilityStatus(
         patch: PatchValidationReport,
+        selectedBaseROM: PatchSelectedBaseROM?,
         candidates: [PatchBaseROMCandidate]
     ) -> PatchManifestCompatibilityStatus {
         guard patch.isValid else { return .invalidPatch }
-        if patch.summary?.hasEmbeddedChecksums == true {
-            return candidates.isEmpty ? .unknown : .compatible
+        guard let selectedBaseROM else {
+            return patch.summary?.hasEmbeddedChecksums == true ? .unknown : .needsBaseROM
         }
-        return candidates.isEmpty ? .needsBaseROM : .unknown
+        guard selectedBaseROM.exists else { return .needsBaseROM }
+        guard selectedBaseROM.sha1 != nil else { return .unknown }
+        if selectedBaseROM.matchedCandidateRelativePath != nil {
+            return .compatible
+        }
+        return candidates.isEmpty ? .unknown : .baseROMMismatch
     }
 
     private static func dryRunPlans(
         patch: PatchValidationReport,
+        selectedBaseROM: PatchSelectedBaseROM?,
         candidates: [PatchBaseROMCandidate],
         compatibility: PatchManifestCompatibilityStatus
     ) -> [PatchManifestDryRunPlan] {
-        [
+        let baseROMStep = selectedBaseROM.map { selected in
+            selected.exists
+                ? "Selected base ROM: \(selected.absolutePath); SHA1 \(selected.sha1 ?? "unavailable")."
+                : "Selected base ROM is missing at \(selected.absolutePath)."
+        } ?? "No base ROM selected; keep apply/export disabled."
+
+        return [
             PatchManifestDryRunPlan(
                 id: "verify",
                 title: "Verify patch metadata",
                 steps: [
                     "Read patch header and format.",
                     "Report embedded checksum availability.",
-                    "Compare against known base ROM checksum candidates when supplied."
+                    baseROMStep,
+                    "Compare selected base ROM SHA1 against \(candidates.count) known candidate(s) when available."
                 ],
                 diagnostics: patch.diagnostics
             ),
@@ -165,10 +226,118 @@ public enum PatchManifestBuilder {
                 steps: [
                     "Select a user-provided base ROM.",
                     "Check base ROM SHA1 against \(candidates.count) candidate(s).",
-                    "Write patched output only after an explicit export action."
+                    "Keep apply/export disabled in this preview-only pass."
                 ],
-                diagnostics: compatibility == .invalidPatch ? patch.diagnostics : []
+                diagnostics: compatibility == .invalidPatch
+                    ? patch.diagnostics
+                    : selectedBaseROMDiagnostics(selectedBaseROM, candidates: candidates)
             )
         ]
+    }
+
+    private static func selectedBaseROMReport(
+        from baseROMPath: String?,
+        projectRoot: String?,
+        candidates: [PatchBaseROMCandidate],
+        fileManager: FileManager
+    ) -> PatchSelectedBaseROM? {
+        guard
+            let baseROMPath,
+            !baseROMPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        let trimmedPath = baseROMPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = resolvedURL(for: trimmedPath, projectRoot: projectRoot, fileManager: fileManager)
+        let exists = fileManager.fileExists(atPath: url.path)
+        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+        let size = (attributes?[.size] as? NSNumber)?.uint64Value
+        let sha1 = exists ? (try? Data(contentsOf: url)).map(pokemonHackSHA1Hex) : nil
+        let matchedCandidate = sha1.flatMap { matchingCandidate(for: $0, candidates: candidates) }
+
+        return PatchSelectedBaseROM(
+            path: trimmedPath,
+            absolutePath: url.path,
+            exists: exists,
+            sizeBytes: size,
+            sha1: sha1,
+            matchedCandidateRelativePath: matchedCandidate?.relativePath,
+            matchedCandidateBuiltOutputPath: matchedCandidate?.builtOutputPath
+        )
+    }
+
+    private static func selectedBaseROMDiagnostics(
+        _ selectedBaseROM: PatchSelectedBaseROM?,
+        candidates: [PatchBaseROMCandidate]
+    ) -> [Diagnostic] {
+        guard let selectedBaseROM else { return [] }
+        guard selectedBaseROM.exists else {
+            return [
+                Diagnostic(
+                    severity: .warning,
+                    code: "PATCH_BASE_ROM_MISSING",
+                    message: "Selected base ROM does not exist at \(selectedBaseROM.absolutePath)."
+                )
+            ]
+        }
+        guard let sha1 = selectedBaseROM.sha1 else {
+            return [
+                Diagnostic(
+                    severity: .warning,
+                    code: "PATCH_BASE_ROM_UNREADABLE",
+                    message: "Selected base ROM exists but its SHA1 could not be read at \(selectedBaseROM.absolutePath)."
+                )
+            ]
+        }
+        if let matched = selectedBaseROM.matchedCandidateRelativePath {
+            return [
+                Diagnostic(
+                    severity: .info,
+                    code: "PATCH_BASE_ROM_MATCHED",
+                    message: "Selected base ROM SHA1 matches candidate \(matched)."
+                )
+            ]
+        }
+        guard !candidates.isEmpty else { return [] }
+        let expected = candidates
+            .compactMap { $0.expectedSHA1 ?? $0.builtOutputSHA1 }
+            .map { String($0.prefix(8)) }
+            .joined(separator: ", ")
+        return [
+            Diagnostic(
+                severity: .warning,
+                code: "PATCH_BASE_ROM_MISMATCH",
+                message: "Selected base ROM SHA1 \(String(sha1.prefix(8))) does not match known candidate checksum(s)\(expected.isEmpty ? "." : ": \(expected).")"
+            )
+        ]
+    }
+
+    private static func matchingCandidate(
+        for sha1: String,
+        candidates: [PatchBaseROMCandidate]
+    ) -> PatchBaseROMCandidate? {
+        let normalized = sha1.lowercased()
+        return candidates.first { candidate in
+            candidate.expectedSHA1?.lowercased() == normalized
+                || candidate.builtOutputSHA1?.lowercased() == normalized
+        }
+    }
+
+    private static func resolvedURL(for path: String, projectRoot: String?, fileManager: FileManager) -> URL {
+        let url: URL
+        if path.hasPrefix("/") {
+            url = URL(fileURLWithPath: path)
+        } else {
+            let direct = URL(fileURLWithPath: path).standardizedFileURL
+            if fileManager.fileExists(atPath: direct.path) {
+                url = direct
+            } else if let projectRoot {
+                url = URL(fileURLWithPath: projectRoot).appendingPathComponent(path)
+            } else {
+                url = direct
+            }
+        }
+        return url.standardizedFileURL
     }
 }

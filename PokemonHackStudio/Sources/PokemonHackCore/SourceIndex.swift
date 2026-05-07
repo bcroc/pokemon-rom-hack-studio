@@ -94,19 +94,46 @@ public struct CInitializerTableDescriptor: Codable, Equatable {
     public let tableSymbol: String
     public let entryStyle: CInitializerEntryStyle
     public let idField: String?
+    public let knownFields: [String]
+    public let warnsOnUnknownFields: Bool
 
     public init(
         module: SourceIndexModule,
         relativePath: String,
         tableSymbol: String,
         entryStyle: CInitializerEntryStyle,
-        idField: String? = nil
+        idField: String? = nil,
+        knownFields: [String] = [],
+        warnsOnUnknownFields: Bool = false
     ) {
         self.module = module
         self.relativePath = relativePath
         self.tableSymbol = tableSymbol
         self.entryStyle = entryStyle
         self.idField = idField
+        self.knownFields = knownFields
+        self.warnsOnUnknownFields = warnsOnUnknownFields
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case module
+        case relativePath
+        case tableSymbol
+        case entryStyle
+        case idField
+        case knownFields
+        case warnsOnUnknownFields
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        module = try container.decode(SourceIndexModule.self, forKey: .module)
+        relativePath = try container.decode(String.self, forKey: .relativePath)
+        tableSymbol = try container.decode(String.self, forKey: .tableSymbol)
+        entryStyle = try container.decode(CInitializerEntryStyle.self, forKey: .entryStyle)
+        idField = try container.decodeIfPresent(String.self, forKey: .idField)
+        knownFields = try container.decodeIfPresent([String].self, forKey: .knownFields) ?? []
+        warnsOnUnknownFields = try container.decodeIfPresent(Bool.self, forKey: .warnsOnUnknownFields) ?? false
     }
 }
 
@@ -372,22 +399,39 @@ public enum ProjectSourceIndexLoader {
         for entry: CInitializerEntry,
         descriptor: CInitializerTableDescriptor
     ) -> [Diagnostic] {
-        guard
+        var diagnostics: [Diagnostic] = []
+
+        if
             descriptor.entryStyle == .positional,
             let idField = descriptor.idField,
             entry.fields[idField] == nil
-        else {
-            return []
+        {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "TABLE_ENTRY_ID_MISSING",
+                    message: "Positional entry is missing expected \(idField) field.",
+                    span: entry.span
+                )
+            )
         }
 
-        return [
-            Diagnostic(
-                severity: .warning,
-                code: "TABLE_ENTRY_ID_MISSING",
-                message: "Positional entry is missing expected \(idField) field.",
-                span: entry.span
-            )
-        ]
+        if descriptor.warnsOnUnknownFields, !descriptor.knownFields.isEmpty {
+            let knownFields = Set(descriptor.knownFields)
+            let unknownFields = entry.fields.keys
+                .filter { !knownFields.contains($0) }
+                .sorted()
+            diagnostics.append(contentsOf: unknownFields.map { field in
+                Diagnostic(
+                    severity: .warning,
+                    code: "TABLE_ENTRY_UNKNOWN_FIELD",
+                    message: "\(entry.symbol) has unknown designated field \(field); preserving it as raw source for later mutation-plan support.",
+                    span: entry.span
+                )
+            })
+        }
+
+        return diagnostics
     }
 
     private static func preview(_ text: String) -> String {
@@ -478,19 +522,53 @@ struct SourceIndexDescriptorSet {
         self.specialScanners = specialScanners
     }
 
+    private static let speciesFields = [
+        "baseHP", "baseAttack", "baseDefense", "baseSpeed", "baseSpAttack", "baseSpDefense",
+        "types", "type1", "type2", "catchRate", "expYield",
+        "evYield_HP", "evYield_Attack", "evYield_Defense", "evYield_Speed", "evYield_SpAttack", "evYield_SpDefense",
+        "itemCommon", "itemRare", "item1", "item2",
+        "genderRatio", "eggCycles", "friendship", "growthRate",
+        "eggGroups", "eggGroup1", "eggGroup2",
+        "abilities", "ability1", "ability2",
+        "safariZoneFleeRate", "bodyColor", "noFlip"
+    ]
+
+    private static let trainerFields = [
+        "trainerClass", "encounterMusic_gender", "trainerPic", "trainerName",
+        "items", "doubleBattle", "aiFlags", "party", "partyFlags", "partySize"
+    ]
+
+    private static let itemFields = [
+        "itemId", "name", "price", "holdEffect", "holdEffectParam",
+        "description", "descriptionPage1", "descriptionPage2",
+        "importance", "registrability", "pocket", "type",
+        "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "exitsBagOnUse"
+    ]
+
+    private static let moveFields = [
+        "effect", "power", "type", "accuracy", "pp",
+        "secondaryEffectChance", "target", "priority", "flags"
+    ]
+
+    private static let pokedexFields = [
+        "categoryName", "height", "weight",
+        "description", "description1", "description2", "descriptionPage1", "descriptionPage2", "unusedDescription",
+        "pokemonScale", "pokemonOffset", "trainerScale", "trainerOffset"
+    ]
+
     static func descriptors(for profile: GameProfile) -> SourceIndexDescriptorSet {
         switch profile {
         case .pokeruby:
             SourceIndexDescriptorSet(
                 tables: [
-                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/base_stats.h", tableSymbol: "gBaseStats", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers_en.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items_en.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId"),
-                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/base_stats.h", tableSymbol: "gBaseStats", entryStyle: .bracketed, knownFields: speciesFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers_en.h", tableSymbol: "gTrainers", entryStyle: .bracketed, knownFields: trainerFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items_en.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", knownFields: itemFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", entryStyle: .bracketed, knownFields: moveFields, warnsOnUnknownFields: true),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .positional),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "gTMHMLearnsets", entryStyle: .bracketed),
                     CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", entryStyle: .positional, knownFields: pokedexFields, warnsOnUnknownFields: true)
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data"],
@@ -499,14 +577,14 @@ struct SourceIndexDescriptorSet {
         case .pokefirered:
             SourceIndexDescriptorSet(
                 tables: [
-                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId"),
-                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed, knownFields: speciesFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed, knownFields: trainerFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", knownFields: itemFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed, knownFields: moveFields, warnsOnUnknownFields: true),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .bracketed),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "sTMHMLearnsets", entryStyle: .bracketed),
                     CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional, knownFields: pokedexFields, warnsOnUnknownFields: true)
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
@@ -515,9 +593,9 @@ struct SourceIndexDescriptorSet {
         case .pokeemeraldExpansion:
             SourceIndexDescriptorSet(
                 tables: [
-                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItemsInfo", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", entryStyle: .bracketed)
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed, knownFields: speciesFields),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItemsInfo", entryStyle: .bracketed, knownFields: itemFields),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", entryStyle: .bracketed, knownFields: moveFields)
                 ],
                 trainerPartyFiles: [
                     "src/data/trainers.party",
@@ -536,14 +614,14 @@ struct SourceIndexDescriptorSet {
         case .pokeemerald:
             SourceIndexDescriptorSet(
                 tables: [
-                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed),
+                    CInitializerTableDescriptor(module: .pokemon, relativePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", entryStyle: .bracketed, knownFields: speciesFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .trainers, relativePath: "src/data/trainers.h", tableSymbol: "gTrainers", entryStyle: .bracketed, knownFields: trainerFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .items, relativePath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .bracketed, knownFields: itemFields, warnsOnUnknownFields: true),
+                    CInitializerTableDescriptor(module: .moves, relativePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", entryStyle: .bracketed, knownFields: moveFields, warnsOnUnknownFields: true),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/level_up_learnset_pointers.h", tableSymbol: "gLevelUpLearnsets", entryStyle: .bracketed),
                     CInitializerTableDescriptor(module: .learnsets, relativePath: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "gTMHMLearnsets", entryStyle: .bracketed),
                     CInitializerTableDescriptor(module: .evolutions, relativePath: "src/data/pokemon/evolution.h", tableSymbol: "gEvolutionTable", entryStyle: .bracketed),
-                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional)
+                    CInitializerTableDescriptor(module: .pokedex, relativePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", entryStyle: .positional, knownFields: pokedexFields, warnsOnUnknownFields: true)
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
@@ -916,11 +994,7 @@ private struct CInitializerTableScanner {
 
     func parse() -> CInitializerTableParseResult {
         let characters = Array(text)
-        guard
-            let tableRange = text.range(of: descriptor.tableSymbol),
-            let openOffset = firstOpenBrace(after: text.distance(from: text.startIndex, to: tableRange.upperBound), in: characters),
-            let closeOffset = matchingCloseBrace(from: openOffset, in: characters)
-        else {
+        guard let tableRange = text.range(of: descriptor.tableSymbol) else {
             return CInitializerTableParseResult(
                 descriptor: descriptor,
                 entries: [],
@@ -935,27 +1009,68 @@ private struct CInitializerTableScanner {
             )
         }
 
+        guard let openOffset = firstOpenBrace(after: text.distance(from: text.startIndex, to: tableRange.upperBound), in: characters) else {
+            return CInitializerTableParseResult(
+                descriptor: descriptor,
+                entries: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "TABLE_INITIALIZER_MISSING",
+                        message: "Could not find an initializer body for C table \(descriptor.tableSymbol).",
+                        span: SourceSpan(
+                            relativePath: relativePath,
+                            startLine: lineNumber(at: text.distance(from: text.startIndex, to: tableRange.lowerBound), in: text)
+                        )
+                    )
+                ]
+            )
+        }
+
+        guard let closeOffset = matchingCloseBrace(from: openOffset, in: characters) else {
+            return CInitializerTableParseResult(
+                descriptor: descriptor,
+                entries: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "TABLE_INITIALIZER_UNTERMINATED",
+                        message: "Could not find the closing brace for C table \(descriptor.tableSymbol).",
+                        span: SourceSpan(
+                            relativePath: relativePath,
+                            startLine: lineNumber(at: openOffset, in: text)
+                        )
+                    )
+                ]
+            )
+        }
+
         let lineNumbers = lineNumberMap(for: characters)
         let segments = topLevelSegments(in: characters, openOffset: openOffset, closeOffset: closeOffset)
         var entries: [CInitializerEntry] = []
+        var diagnostics: [Diagnostic] = []
         var ordinal = 0
 
         for segment in segments {
             guard let bounds = trimmedBounds(for: segment, in: characters) else { continue }
             let body = String(characters[bounds.start..<bounds.end])
             guard !body.isEmpty else { continue }
+            let span = SourceSpan(
+                relativePath: relativePath,
+                startLine: lineNumbers[min(bounds.start, lineNumbers.count - 1)],
+                endLine: lineNumbers[min(max(bounds.end - 1, bounds.start), lineNumbers.count - 1)]
+            )
 
             let symbol = symbol(for: body, ordinal: ordinal)
             let fields = CFieldExtractor.fields(in: body)
+            if let diagnostic = unsupportedShapeDiagnostic(for: body, ordinal: ordinal, span: span) {
+                diagnostics.append(diagnostic)
+            }
             entries.append(
                 CInitializerEntry(
                     symbol: symbol,
                     body: body,
-                    span: SourceSpan(
-                        relativePath: relativePath,
-                        startLine: lineNumbers[min(bounds.start, lineNumbers.count - 1)],
-                        endLine: lineNumbers[min(max(bounds.end - 1, bounds.start), lineNumbers.count - 1)]
-                    ),
+                    span: span,
                     ordinal: descriptor.entryStyle == .positional ? ordinal : nil,
                     fields: fields
                 )
@@ -963,7 +1078,7 @@ private struct CInitializerTableScanner {
             ordinal += 1
         }
 
-        return CInitializerTableParseResult(descriptor: descriptor, entries: entries)
+        return CInitializerTableParseResult(descriptor: descriptor, entries: entries, diagnostics: diagnostics)
     }
 
     private func firstOpenBrace(after start: Int, in characters: [Character]) -> Int? {
@@ -1057,16 +1172,8 @@ private struct CInitializerTableScanner {
     }
 
     private func symbol(for body: String, ordinal: Int) -> String {
-        if
-            descriptor.entryStyle == .bracketed,
-            let open = body.firstIndex(of: "["),
-            let close = body[open...].firstIndex(of: "]")
-        {
-            let symbol = body[body.index(after: open)..<close]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !symbol.isEmpty {
-                return symbol
-            }
+        if descriptor.entryStyle == .bracketed, let symbol = bracketedSymbol(in: body) {
+            return symbol
         }
 
         if
@@ -1080,20 +1187,65 @@ private struct CInitializerTableScanner {
 
         return "\(descriptor.tableSymbol)[\(ordinal)]"
     }
+
+    private func bracketedSymbol(in body: String) -> String? {
+        guard
+            let open = body.firstIndex(of: "["),
+            let close = body[open...].firstIndex(of: "]")
+        else {
+            return nil
+        }
+
+        let symbol = body[body.index(after: open)..<close]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return symbol.isEmpty ? nil : symbol
+    }
+
+    private func unsupportedShapeDiagnostic(for body: String, ordinal: Int, span: SourceSpan) -> Diagnostic? {
+        guard descriptor.entryStyle == .bracketed, bracketedSymbol(in: body) == nil else {
+            return nil
+        }
+
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return nil }
+        return Diagnostic(
+            severity: .warning,
+            code: "TABLE_ENTRY_UNSUPPORTED_SHAPE",
+            message: "Bracketed entry \(descriptor.tableSymbol)[\(ordinal)] does not expose a [SYMBOL] designator; preserving raw source with a fallback identity.",
+            span: span
+        )
+    }
 }
 
 private enum CFieldExtractor {
     static func fields(in text: String) -> [String: String] {
-        let characters = Array(text)
+        guard let characters = initializerContent(in: text) else { return [:] }
         var fields: [String: String] = [:]
         var index = 0
+        var depth = 0
+        var state = ScannerState.normal
 
         while index < characters.count {
-            guard characters[index] == "." else {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+
+            if state == .normal {
+                if character == "{" || character == "(" || character == "[" {
+                    depth += 1
+                    index += 1
+                    continue
+                } else if character == "}" || character == ")" || character == "]" {
+                    depth = max(0, depth - 1)
+                    index += 1
+                    continue
+                }
+            }
+
+            guard state == .normal, depth == 0, character == "." else {
                 index += 1
                 continue
             }
-
             let nameStart = index + 1
             var nameEnd = nameStart
             while nameEnd < characters.count, isIdentifier(characters[nameEnd]) {
@@ -1151,6 +1303,93 @@ private enum CFieldExtractor {
         }
 
         return fields
+    }
+
+    private static func initializerContent(in text: String) -> [Character]? {
+        let characters = Array(text)
+        guard !characters.isEmpty else { return nil }
+
+        let equals = firstEquals(in: characters)
+        let firstOpen = firstOpenBrace(after: 0, in: characters)
+        let open: Int?
+        if let firstOpen, let equals, firstOpen < equals {
+            open = firstOpen
+        } else if let firstOpen, equals == nil {
+            open = firstOpen
+        } else if let equals {
+            open = firstOpenBrace(after: equals + 1, in: characters)
+        } else {
+            open = firstOpen
+        }
+
+        guard
+            let open,
+            let close = matchingCloseBrace(from: open, in: characters),
+            open + 1 <= close
+        else {
+            return nil
+        }
+
+        return Array(characters[(open + 1)..<close])
+    }
+
+    private static func firstEquals(in characters: [Character]) -> Int? {
+        var index = 0
+        var state = ScannerState.normal
+
+        while index < characters.count {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+            if state == .normal, character == "=" {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func firstOpenBrace(after start: Int, in characters: [Character]) -> Int? {
+        var index = start
+        var state = ScannerState.normal
+
+        while index < characters.count {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+            if state == .normal, character == "{" {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func matchingCloseBrace(from openOffset: Int, in characters: [Character]) -> Int? {
+        var index = openOffset
+        var depth = 0
+        var state = ScannerState.normal
+
+        while index < characters.count {
+            let character = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            updateState(&state, character: character, next: next, index: &index)
+
+            if state == .normal {
+                if character == "{" {
+                    depth += 1
+                } else if character == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return index
+                    }
+                }
+            }
+
+            index += 1
+        }
+
+        return nil
     }
 
     private static func isIdentifier(_ character: Character) -> Bool {

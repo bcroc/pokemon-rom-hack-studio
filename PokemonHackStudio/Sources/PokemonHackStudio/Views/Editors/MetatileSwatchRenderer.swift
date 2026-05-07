@@ -33,6 +33,7 @@ final class MetatileSwatchRenderer {
     }
 
     private var document: MapVisualDocument
+    private var definitionsByID: [Int: MetatileDefinition]
     private var images: [Int: NSImage] = [:]
     private var styledImages: [String: NSImage] = [:]
     private var indexedTileImages: [String: IndexedTilesetImage] = [:]
@@ -40,6 +41,7 @@ final class MetatileSwatchRenderer {
 
     init(document: MapVisualDocument) {
         self.document = document
+        definitionsByID = Self.definitionsByID(for: document)
     }
 
     init(
@@ -48,6 +50,7 @@ final class MetatileSwatchRenderer {
         paletteSets: [String: [[PaletteColor]]]
     ) {
         self.document = document
+        definitionsByID = Self.definitionsByID(for: document)
         self.indexedTileImages = indexedTileImages
         self.paletteSets = paletteSets
     }
@@ -55,6 +58,7 @@ final class MetatileSwatchRenderer {
     func update(document: MapVisualDocument) {
         guard self.document.id != document.id else { return }
         self.document = document
+        definitionsByID = Self.definitionsByID(for: document)
         images = [:]
         styledImages = [:]
         indexedTileImages = [:]
@@ -75,7 +79,11 @@ final class MetatileSwatchRenderer {
                 return image
             }
         }
-        guard let definition = document.metatiles.first(where: { $0.id == metatileID }) else {
+        let cacheKey = self.cacheKey(for: metatileID, layers: layers, opacities: opacities)
+        if let image = styledImages[cacheKey] {
+            return image
+        }
+        guard let definition = definitionsByID[metatileID] else {
             return nil
         }
         return image(for: definition, layers: layers, opacities: opacities)
@@ -113,6 +121,10 @@ final class MetatileSwatchRenderer {
     static func fallbackColor(for metatileID: Int) -> NSColor {
         let hue = CGFloat((metatileID * 37) % 360) / 360
         return NSColor(calibratedHue: hue, saturation: 0.38, brightness: 0.76, alpha: 1)
+    }
+
+    private static func definitionsByID(for document: MapVisualDocument) -> [Int: MetatileDefinition] {
+        Dictionary(document.metatiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     private func render(

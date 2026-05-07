@@ -116,7 +116,9 @@ enum MapEditorLayer: String, CaseIterable, Identifiable, Hashable {
             MapLayerSettings(isVisible: true, opacity: 1)
         case .playerView:
             MapLayerSettings(isVisible: true, opacity: 0.85)
-        case .objects, .warps, .coordEvents, .bgEvents, .grid:
+        case .objects, .warps, .coordEvents, .bgEvents:
+            MapLayerSettings(isVisible: true, opacity: 1)
+        case .grid:
             MapLayerSettings(isVisible: false, opacity: 1)
         }
     }
