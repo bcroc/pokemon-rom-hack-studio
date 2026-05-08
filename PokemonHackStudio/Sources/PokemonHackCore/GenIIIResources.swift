@@ -480,6 +480,26 @@ public enum GenIIIResourceRegistry {
                     size: UInt64($0.length)
                 )
             }
+            let anchorItems = graph.anchors.prefix(16).map {
+                GenIIIResourceItem(
+                    id: "rom-anchor:\($0.id)",
+                    path: String(format: "0x%06X", $0.offset),
+                    kind: $0.kind,
+                    category: "ROM Anchor",
+                    offset: UInt64($0.offset),
+                    size: nil
+                )
+            }
+            let runItems = graph.semanticRuns.prefix(24).map {
+                GenIIIResourceItem(
+                    id: "rom-run:\($0.id)",
+                    path: String(format: "0x%06X", $0.offset),
+                    kind: $0.kind.rawValue,
+                    category: "Semantic ROM Run",
+                    offset: UInt64($0.offset),
+                    size: UInt64($0.length)
+                )
+            }
             return [
                 GenIIIResourceItem(
                     id: url.path,
@@ -490,7 +510,7 @@ public enum GenIIIResourceRegistry {
                     size: size,
                     sha1: sha1
                 )
-            ] + headerItems + pointerItems + freeSpaceItems
+            ] + headerItems + anchorItems + runItems + pointerItems + freeSpaceItems
         }
 
         let sourceItems = index.documents.map { document in

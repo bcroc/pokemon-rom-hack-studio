@@ -1210,20 +1210,29 @@ public struct GBAPointer: Codable, Equatable {
 public struct BinaryROMGraph: Codable, Equatable {
     public let image: ROMImage
     public let headerFacts: [BinaryROMGraphFact]
+    public let semanticRuns: [BinaryROMSemanticRun]
+    public let anchors: [BinaryROMAnchor]
     public let pointerCandidates: [BinaryROMPointerCandidate]
+    public let rejectedPointerCandidates: [BinaryROMRejectedPointerCandidate]
     public let freeSpaceRanges: [BinaryROMRange]
     public let diagnostics: [Diagnostic]
 
     public init(
         image: ROMImage,
         headerFacts: [BinaryROMGraphFact],
+        semanticRuns: [BinaryROMSemanticRun] = [],
+        anchors: [BinaryROMAnchor] = [],
         pointerCandidates: [BinaryROMPointerCandidate],
+        rejectedPointerCandidates: [BinaryROMRejectedPointerCandidate] = [],
         freeSpaceRanges: [BinaryROMRange],
         diagnostics: [Diagnostic] = []
     ) {
         self.image = image
         self.headerFacts = headerFacts
+        self.semanticRuns = semanticRuns
+        self.anchors = anchors
         self.pointerCandidates = pointerCandidates
+        self.rejectedPointerCandidates = rejectedPointerCandidates
         self.freeSpaceRanges = freeSpaceRanges
         self.diagnostics = diagnostics
     }
@@ -1259,6 +1268,20 @@ public struct BinaryROMPointerCandidate: Codable, Equatable, Identifiable {
     }
 }
 
+public struct BinaryROMRejectedPointerCandidate: Codable, Equatable, Identifiable {
+    public var id: String { "\(sourceOffset):\(rawValue)" }
+
+    public let sourceOffset: UInt32
+    public let rawValue: UInt32
+    public let reason: String
+
+    public init(sourceOffset: UInt32, rawValue: UInt32, reason: String) {
+        self.sourceOffset = sourceOffset
+        self.rawValue = rawValue
+        self.reason = reason
+    }
+}
+
 public struct BinaryROMRange: Codable, Equatable, Identifiable {
     public var id: String { "\(offset):\(length)" }
 
@@ -1275,8 +1298,65 @@ public struct BinaryROMRange: Codable, Equatable, Identifiable {
     }
 }
 
+public enum BinaryROMSemanticRunKind: String, Codable, Equatable {
+    case header
+    case nintendoLogo
+    case pointer
+    case freeSpace
+    case unknown
+}
+
+public struct BinaryROMSemanticRun: Codable, Equatable, Identifiable {
+    public var id: String { "\(kind.rawValue):\(offset):\(length)" }
+
+    public let kind: BinaryROMSemanticRunKind
+    public let label: String
+    public let offset: UInt32
+    public let length: UInt32
+    public let confidence: String
+    public let detail: String
+
+    public init(
+        kind: BinaryROMSemanticRunKind,
+        label: String,
+        offset: UInt32,
+        length: UInt32,
+        confidence: String,
+        detail: String
+    ) {
+        self.kind = kind
+        self.label = label
+        self.offset = offset
+        self.length = length
+        self.confidence = confidence
+        self.detail = detail
+    }
+}
+
+public struct BinaryROMAnchor: Codable, Equatable, Identifiable {
+    public var id: String { "\(label):\(offset)" }
+
+    public let label: String
+    public let offset: UInt32
+    public let kind: String
+    public let confidence: String
+
+    public init(label: String, offset: UInt32, kind: String, confidence: String) {
+        self.label = label
+        self.offset = offset
+        self.kind = kind
+        self.confidence = confidence
+    }
+}
+
 public enum BinaryROMGraphBuilder {
-    public static func build(path: String, data: Data, maxPointers: Int = 64, minimumFreeSpaceLength: Int = 32) -> BinaryROMGraph {
+    public static func build(
+        path: String,
+        data: Data,
+        maxPointers: Int = 64,
+        maxRejectedPointers: Int = 32,
+        minimumFreeSpaceLength: Int = 32
+    ) -> BinaryROMGraph {
         let image = ROMImage(path: path, data: data)
         var facts: [BinaryROMGraphFact] = [
             BinaryROMGraphFact(key: "Size", value: "\(image.size) bytes"),
@@ -1290,8 +1370,12 @@ public enum BinaryROMGraphBuilder {
             facts.append(BinaryROMGraphFact(key: "Header Complement", value: String(format: "0x%02X expected 0x%02X", actual, expected), confidence: actual == expected ? "high" : "medium"))
         }
 
-        let pointers = pointerCandidates(data: data, maxPointers: maxPointers)
+        let scan = pointerScan(data: data, maxPointers: maxPointers, maxRejectedPointers: maxRejectedPointers)
+        let pointers = scan.accepted
+        let rejectedPointers = scan.rejected
         let freeSpace = freeSpaceRanges(data: data, minimumLength: minimumFreeSpaceLength)
+        let runs = semanticRuns(data: data, pointers: pointers, freeSpace: freeSpace)
+        let anchors = anchors(image: image, pointers: pointers, freeSpace: freeSpace)
         var diagnostics: [Diagnostic] = []
         if image.isComplementChecksumValid == false {
             diagnostics.append(Diagnostic(severity: .warning, code: "BINARY_ROM_HEADER_COMPLEMENT_MISMATCH", message: "The GBA header complement checksum does not match the calculated value."))
@@ -1299,22 +1383,41 @@ public enum BinaryROMGraphBuilder {
         if pointers.isEmpty {
             diagnostics.append(Diagnostic(severity: .info, code: "BINARY_ROM_POINTERS_NOT_FOUND", message: "No aligned GBA pointer candidates were found in the first graph pass."))
         }
+        if !rejectedPointers.isEmpty {
+            diagnostics.append(Diagnostic(severity: .info, code: "BINARY_ROM_POINTER_CANDIDATES_REJECTED", message: "\(rejectedPointers.count) GBA-looking pointer candidate(s) were rejected because they point outside this ROM image."))
+        }
 
-        return BinaryROMGraph(image: image, headerFacts: facts, pointerCandidates: pointers, freeSpaceRanges: freeSpace, diagnostics: diagnostics)
+        return BinaryROMGraph(
+            image: image,
+            headerFacts: facts,
+            semanticRuns: runs,
+            anchors: anchors,
+            pointerCandidates: pointers,
+            rejectedPointerCandidates: rejectedPointers,
+            freeSpaceRanges: freeSpace,
+            diagnostics: diagnostics
+        )
     }
 
-    private static func pointerCandidates(data: Data, maxPointers: Int) -> [BinaryROMPointerCandidate] {
-        guard data.count >= 4 else { return [] }
-        var candidates: [BinaryROMPointerCandidate] = []
+    private static func pointerScan(
+        data: Data,
+        maxPointers: Int,
+        maxRejectedPointers: Int
+    ) -> (accepted: [BinaryROMPointerCandidate], rejected: [BinaryROMRejectedPointerCandidate]) {
+        guard data.count >= 4 else { return ([], []) }
+        var accepted: [BinaryROMPointerCandidate] = []
+        var rejected: [BinaryROMRejectedPointerCandidate] = []
         for offset in stride(from: 0, through: data.count - 4, by: 4) {
             let raw = readUInt32LE(data, offset: offset)
-            guard let target = GBAPointer(rawValue: raw).romOffset,
-                  target < data.count
-            else { continue }
-            candidates.append(BinaryROMPointerCandidate(sourceOffset: UInt32(offset), rawValue: raw, targetOffset: target))
-            if candidates.count >= maxPointers { break }
+            guard let target = GBAPointer(rawValue: raw).romOffset else { continue }
+            if target < data.count {
+                accepted.append(BinaryROMPointerCandidate(sourceOffset: UInt32(offset), rawValue: raw, targetOffset: target))
+            } else if rejected.count < maxRejectedPointers {
+                rejected.append(BinaryROMRejectedPointerCandidate(sourceOffset: UInt32(offset), rawValue: raw, reason: "Target offset is outside the ROM image."))
+            }
+            if accepted.count >= maxPointers, rejected.count >= maxRejectedPointers { break }
         }
-        return candidates
+        return (accepted, rejected)
     }
 
     private static func freeSpaceRanges(data: Data, minimumLength: Int) -> [BinaryROMRange] {
@@ -1337,6 +1440,81 @@ public enum BinaryROMGraphBuilder {
             }
         }
         return ranges
+    }
+
+    private static func semanticRuns(
+        data: Data,
+        pointers: [BinaryROMPointerCandidate],
+        freeSpace: [BinaryROMRange]
+    ) -> [BinaryROMSemanticRun] {
+        var runs: [BinaryROMSemanticRun] = []
+        if data.count >= 0xC0 {
+            runs.append(
+                BinaryROMSemanticRun(
+                    kind: .header,
+                    label: "GBA header",
+                    offset: 0,
+                    length: 0xC0,
+                    confidence: "high",
+                    detail: "Header, logo, title, game code, maker code, and complement checksum area."
+                )
+            )
+        }
+        if data.count >= 0xA0 {
+            runs.append(
+                BinaryROMSemanticRun(
+                    kind: .nintendoLogo,
+                    label: "Nintendo logo data",
+                    offset: 0x04,
+                    length: 0x9C,
+                    confidence: "medium",
+                    detail: "Logo bytes are present in the fixed GBA header region."
+                )
+            )
+        }
+        runs.append(contentsOf: pointers.prefix(32).map {
+            BinaryROMSemanticRun(
+                kind: .pointer,
+                label: String(format: "Pointer 0x%06X -> 0x%06X", $0.sourceOffset, $0.targetOffset),
+                offset: $0.sourceOffset,
+                length: 4,
+                confidence: $0.confidence,
+                detail: String(format: "Little-endian GBA pointer value 0x%08X.", $0.rawValue)
+            )
+        })
+        runs.append(contentsOf: freeSpace.prefix(32).map {
+            BinaryROMSemanticRun(
+                kind: .freeSpace,
+                label: String(format: "Free space 0x%06X", $0.offset),
+                offset: $0.offset,
+                length: $0.length,
+                confidence: $0.confidence,
+                detail: String(format: "Contiguous fill bytes 0x%02X.", $0.fillByte)
+            )
+        })
+        return runs.sorted { lhs, rhs in
+            lhs.offset == rhs.offset ? lhs.kind.rawValue < rhs.kind.rawValue : lhs.offset < rhs.offset
+        }
+    }
+
+    private static func anchors(
+        image: ROMImage,
+        pointers: [BinaryROMPointerCandidate],
+        freeSpace: [BinaryROMRange]
+    ) -> [BinaryROMAnchor] {
+        var anchors: [BinaryROMAnchor] = [
+            BinaryROMAnchor(label: image.title ?? "ROM header", offset: 0xA0, kind: "title", confidence: image.title == nil ? "low" : "high")
+        ]
+        if image.gameCode != nil {
+            anchors.append(BinaryROMAnchor(label: "Game code", offset: 0xAC, kind: "gameCode", confidence: "high"))
+        }
+        anchors.append(contentsOf: pointers.prefix(16).map {
+            BinaryROMAnchor(label: String(format: "Pointer target 0x%06X", $0.targetOffset), offset: $0.targetOffset, kind: "pointerTarget", confidence: $0.confidence)
+        })
+        anchors.append(contentsOf: freeSpace.prefix(16).map {
+            BinaryROMAnchor(label: String(format: "Free space 0x%06X", $0.offset), offset: $0.offset, kind: "freeSpace", confidence: $0.confidence)
+        })
+        return anchors.sorted { $0.offset < $1.offset }
     }
 
     private static func readUInt32LE(_ data: Data, offset: Int) -> UInt32 {

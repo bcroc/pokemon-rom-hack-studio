@@ -156,9 +156,35 @@ final class CoreScaffoldingTests: XCTestCase {
         XCTAssertEqual(graph.image.isComplementChecksumValid, true)
         XCTAssertTrue(graph.pointerCandidates.contains { $0.sourceOffset == 0x100 && $0.targetOffset == 0x80 })
         XCTAssertTrue(graph.freeSpaceRanges.contains { $0.offset >= 0x104 && $0.fillByte == 0xff })
+        XCTAssertTrue(graph.semanticRuns.contains { $0.kind == .header && $0.offset == 0 })
+        XCTAssertTrue(graph.semanticRuns.contains { $0.kind == .pointer && $0.offset == 0x100 })
+        XCTAssertTrue(graph.anchors.contains { $0.kind == "pointerTarget" && $0.offset == 0x80 })
         XCTAssertTrue(entry.items.contains { $0.category == "ROM Header" && $0.kind == "Game Code" })
+        XCTAssertTrue(entry.items.contains { $0.category == "ROM Anchor" })
+        XCTAssertTrue(entry.items.contains { $0.category == "Semantic ROM Run" })
         XCTAssertTrue(entry.items.contains { $0.category == "GBA Pointer" })
         XCTAssertTrue(entry.items.contains { $0.category == "Free Space" })
+    }
+
+    func testBinaryROMGraphReportsRejectedPointers() throws {
+        let temp = try CoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("rejected.gba")
+        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x00
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x20
+        bytes[0x103] = 0x08
+        try Data(bytes).write(to: rom)
+
+        let graph = BinaryROMGraphBuilder.build(path: rom.path, data: try Data(contentsOf: rom))
+
+        XCTAssertTrue(graph.rejectedPointerCandidates.contains { $0.sourceOffset == 0x100 })
+        XCTAssertTrue(graph.diagnostics.contains { $0.code == "BINARY_ROM_POINTER_CANDIDATES_REJECTED" })
     }
 
     func testMapGroupIndexRoundTripsWithoutLosingGroups() throws {

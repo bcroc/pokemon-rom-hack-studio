@@ -80,12 +80,15 @@ struct GraphicsWorkbenchView: View {
 
             EditorSection(title: "Actions") {
                 HStack {
-                    Button("Import", systemImage: "square.and.arrow.down") {}
+                    Button("Import Plan", systemImage: "square.and.arrow.down") {}
                         .disabled(true)
-                    Button("Convert", systemImage: "wand.and.stars") {}
+                        .help("Graphics import packages are preview-only and require provenance before any future write path.")
+                    Button("Convert Plan", systemImage: "wand.and.stars") {}
                         .disabled(true)
+                        .help("Conversion remains a dry-run report and does not invoke external tools.")
                     Button("Apply", systemImage: "checkmark.seal") {}
                         .disabled(true)
+                        .help("Graphics writes are disabled until an explicit mutation-plan apply path is implemented.")
                     Spacer()
                     Text("Preview only")
                         .font(.caption)

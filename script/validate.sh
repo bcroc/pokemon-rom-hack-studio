@@ -27,9 +27,17 @@ mkdir -p "$PATCH_SMOKE_DIR/blocked-playtest/data/maps" "$PATCH_SMOKE_DIR/blocked
 printf 'TITLE := POKEMON EMER\nGAME_CODE := BPEE\n' > "$PATCH_SMOKE_DIR/blocked-playtest/Makefile"
 printf '{"group_order":[]}\n' > "$PATCH_SMOKE_DIR/blocked-playtest/data/maps/map_groups.json"
 printf '{"layouts_table_label":"gMapLayouts","layouts":[]}\n' > "$PATCH_SMOKE_DIR/blocked-playtest/data/layouts/layouts.json"
+mkdir -p "$PATCH_SMOKE_DIR/graphics-pack/anim"
+printf 'Credit: local validation fixture\n' > "$PATCH_SMOKE_DIR/graphics-pack/credits.txt"
+printf 'id,behavior,layer\n' > "$PATCH_SMOKE_DIR/graphics-pack/attributes.csv"
+printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03PLTE\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00IEND\x00\x00\x00\x00' > "$PATCH_SMOKE_DIR/graphics-pack/top.png"
+printf '// anim\n' > "$PATCH_SMOKE_DIR/graphics-pack/anim/water.c"
+printf '\xff%.0s' {1..512} > "$PATCH_SMOKE_DIR/test.gba"
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch "$PATCH_SMOKE_DIR/cleanroom.aps" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch-manifest "$PATCH_SMOKE_DIR/cleanroom.aps" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$PATCH_SMOKE_DIR/blocked-playtest" --launch --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-import-plan "$PATCH_SMOKE_DIR/blocked-playtest" "$PATCH_SMOKE_DIR/graphics-pack" --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-graph "$PATCH_SMOKE_DIR/test.gba" --json
 
 if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli inspect "$POKEEMERALD_DIR" --json
@@ -44,6 +52,7 @@ if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli maps "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli map-visual "$POKEEMERALD_DIR" MAP_MAUVILLE_CITY --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-import-plan "$POKEEMERALD_DIR" "$PATCH_SMOKE_DIR/graphics-pack" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli build "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$POKEEMERALD_DIR" --headless --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-outline "$POKEEMERALD_DIR" --json

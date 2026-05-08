@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The completed baseline is through `PHS-T43`: wild encounter row editing with slot validation, species picker, level range checks, and order preservation.
+No implementation row is currently active. The completed baseline now includes `PHS-T17A` semantic binary ROM graph reporting and `PHS-T44` preview-only graphics import/conversion planning. The next recommended source-data candidate is `PHS-T47`.
 
 ## Active Board
 
@@ -24,7 +24,7 @@ No implementation row is currently active. The completed baseline is through `PH
 | PHS-T14 | Done | Build/Patch/Playtest Report Follow-ups | Preview-only workflow polish beyond `PHS-T3`: selected base ROM patch-manifest verification, user-selectable base ROM candidates, richer patch/playtest rows, and Copy Report JSON are implemented without build, patch, emulator, ROM export, or source-write actions. |
 | PHS-T15 | Done | Graphics And Tileset Diagnostics | Live read-only Graphics diagnostics now cover tileset artifact inventory, checksums, generated-output freshness, palette/metatile diagnostics, layer-mode summaries, animation folders, source-asset warnings, CLI JSON, and the SwiftUI Graphics module. |
 | PHS-T16 | Done | Map Workflow Polish From Reference Audit | Current-map script autocomplete, read-only wild encounter index, SHA1 source snapshot checks before apply, and reverse/offset connection diagnostics are implemented; event-limit warnings and row-based wild edits remain later follow-ups. |
-| PHS-T17 | Candidate | Binary ROM Graph Baseline | Later binary-only fallback lane for semantic ROM runs, anchors, pointers, goto, free-space/repoint planning, diffs, backups, and mutation-plan posture. Current binary ROM support is read-only resource/patch/playtest input only, not a semantic graph. |
+| PHS-T17 | Done | Binary ROM Graph Baseline | Semantic ROM graph reporting now adds header facts, semantic runs, anchors, accepted/rejected pointer candidates, free-space ranges, Resources navigation rows, and CLI `rom-graph <rom> --json` while staying read-only. Repoint planning, binary diffs, backups, and mutation plans remain future work. |
 | PHS-T18 | Done | Generation III Resource Library And Parsers | Auto-loaded resource library, Ruby/Sapphire detection fix, FireRed/LeafGreen variant targets, top-level GBA ROM indexing, GameCube disc/FST plus FSYS/LZSS parser path, resource CLI, dashboard section, and focused proof are implemented. |
 | PHS-T19 | Done | Moves And Learnset Source Graph | Core/CLI `MoveGraph` and `LearnsetGraphEntry` models now expose level-up, TM/HM, tutor, egg, and Expansion all-learnables buckets with source spans and unresolved-move diagnostics; Data > Pokemon surfaces level-up, TM/HM, and egg learnsets per species. |
 | PHS-T20 | Done | Species Data Graph | Core/CLI species graph now composes species, evolution, Pokedex, asset, learnset, and related-data nodes/edges; `ProjectSpeciesCatalog` and the Data > Pokemon workbench expose detailed species stats, EV/training/breeding fields, Pokedex/evolution data, source links, and local Pokemon asset previews. |
@@ -51,7 +51,8 @@ No implementation row is currently active. The completed baseline is through `PH
 | PHS-T41 | Done | Live Encounters Module | Replace the standalone fixture-backed Encounters module with live read-only wild encounter rows, source links, diagnostics, and Resources/Maps navigation parity. |
 | PHS-T42 | Done | Structured Script Command Editing | Promoted map-local script editing to a structured command list with editable argument fields, source gates for shared/generated files, and a ScriptParser. |
 | PHS-T43 | Done | Wild Encounter Row Editing | Add row-based wild encounter edits with order preservation, capacity warnings, source hash checks, preview diffs, backups, and explicit apply. |
-| PHS-T44 | Candidate | Graphics Import And Conversion Plans | Turn Graphics Import/Convert controls into preview-only asset provenance, credit, conversion, and generated-output plans before any write path. |
+| PHS-T44 | Done | Graphics Import And Conversion Plans | `graphics-import-plan <project> <package> --json` now previews local package provenance, copy targets, layered tileset dry runs, palette-fit diagnostics, and generated-output expectations; Graphics app actions are relabeled as plan-only and no import/convert/apply path writes source or invokes external tools. |
+| PHS-T47 | Candidate | Moves, TM/HM, And Tutor Workbench | Add a first-class Moves workbench and `move-catalog` surface for move definitions, machine/tutor membership, source spans, compatibility diagnostics, and future mutation plans, building on the existing read-only move graph and species learnset editor. |
 
 ## Recent Progress
 
@@ -91,6 +92,7 @@ No implementation row is currently active. The completed baseline is through `PH
 - `PHS-T39` closed the `PHS-T36` dev-loop follow-up: `script/bundle_app_assets.sh` now uses incremental per-path rsync, explicit stale-path pruning, and stable manifest writes so unchanged local source projects are reported as reused instead of recopied during `make verify` and Xcode builds.
 - `PHS-T40` added explicit mGBA launch as the next playtest step: `playtest --headless --json` remains report-only, `playtest --launch --json` uses the report-selected runnable ROM and direct `.app` executable resolution, the Build/Patch/Playtest UI exposes the same launch gate/result state, and only ignored playtest logs are written.
 - Stub/incomplete-surface cleanup after `PHS-T40` made the visible Build/Patch/Playtest Open Playtest button call the app-store launch path, locked no-project fixture actions, routed typed Base ROM paths through the store refresh path, aligned capability flags with real support, documented the GameCube ProjectIndex cap, expanded `make validate` CLI smokes, refreshed stale AGENTS/README/reference docs, and added explicit Candidate rows for the known deferred surfaces.
+- `PHS-T17` / `PHS-T44` reference follow-through promoted the remaining candidate surfaces into concrete preview reports: binary ROMs now expose semantic runs, anchors, accepted/rejected pointers, and free-space rows through Resources plus CLI `rom-graph`; graphics import packages now produce non-mutating provenance, copy-target, layered tileset, palette-fit, and external conversion dry-run plans through CLI `graphics-import-plan`.
 - Dev-loop timing captured during `PHS-T36`: warm direct `map-visual` CLI smokes remained fast (`pokeemerald` `MAP_PETALBURG_CITY` in 0.15s; `pokefirered` `MAP_BATTLE_COLOSSEUM_2P` in 0.12s), while `make validate` took 37.84s and `make verify` took 17.71s with the Xcode bundle phase still copying 2 local source projects every build. `PHS-T39` later replaced that recopy with an unchanged-bundle reuse path.
 - `PHS-T25` made related-data navigation app-visible without inventing a new graph UI: Resources row actions now focus the target module and row/search context for maps, layouts, scripts, source paths, Pokemon/trainer data, graphics, generated build outputs, text, and items; store-owned resource selection supports backlinks from other modules; and Data > Pokemon now links evolution targets plus species assets back into existing workbench surfaces.
 - `PHS-T14` finished the Build/Patch/Playtest preview workflow: `patch-manifest` accepts `--base-rom`, reports selected base ROM path/SHA1/size/candidate match, distinguishes base ROM mismatch, and the app now has a Patch tab with safe patch/base ROM selectors, project/resource base ROM options, manifest/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON while keeping apply/export/build/run disabled.
@@ -489,3 +491,11 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make validate`
   - `make verify` (regenerated Xcode project, built/signed app, and bundled 2 local source projects)
   - Manual app smoke: opened Maps > Encounters on repo-local `pokeemerald`, verified searchable species picker, slot capacity warnings, and level range (Min <= Max) validation in the UI. Confirmed `OrderedJSONValue` preserves property ordering during re-saves.
+- `PHS-T17` / `PHS-T44` reference follow-through:
+  - `swift test --package-path PokemonHackStudio --filter GraphicsDiagnosticsTests` (8 tests; graphics import package credit gate, layered dry run, and palette fit previews covered)
+  - `swift test --package-path PokemonHackStudio --filter CoreScaffoldingTests/testBinaryROMGraphReportsRejectedPointers`
+  - `swift test --package-path PokemonHackStudio --filter PokemonHackCLITests` (4 tests; `graphics-import-plan` and `rom-graph` CLI JSON covered)
+  - `make test` (126 tests; passed)
+  - `make validate` (expanded CLI smokes now include synthetic `graphics-import-plan`, synthetic `rom-graph`, and repo-local `pokeemerald` `graphics-import-plan`)
+  - `make verify` (regenerated Xcode project, built/signed app, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: `graphics-import-plan` and `rom-graph` are report-only; graphics Import/Convert/Apply controls remain disabled, no external conversion tools are invoked, and no binary ROM mutation/repoint/export path was added.

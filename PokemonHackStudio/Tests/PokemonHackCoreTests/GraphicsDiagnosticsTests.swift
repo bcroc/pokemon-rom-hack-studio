@@ -129,6 +129,42 @@ final class GraphicsDiagnosticsTests: XCTestCase {
         XCTAssertTrue(plan.externalToolPlan.contains("Preview external conversion only"))
     }
 
+    func testGraphicsImportPlanRequiresCreditAndPreviewsPaletteFit() throws {
+        let project = try makeGraphicsImportProject()
+        let package = try makeTemporaryRoot().appendingPathComponent("missing-credit")
+        try writePNG(width: 16, height: 16, paletteColors: 17, to: package.appendingPathComponent("tiles.png"))
+        try writeJASCPalette(colors: Array(repeating: (0, 0, 0), count: 16), to: package.appendingPathComponent("palettes/00.pal"))
+
+        let plan = try GraphicsImportPackagePlanBuilder.build(projectPath: project.path, packagePath: package.path)
+
+        XCTAssertEqual(plan.readiness, .blocked)
+        XCTAssertTrue(plan.isPreviewOnly)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "GRAPHICS_IMPORT_PROVENANCE_MISSING" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "GRAPHICS_IMPORT_PALETTE_TOO_LARGE" })
+        XCTAssertEqual(plan.paletteFitPreviews.first { $0.sourceRelativePath == "tiles.png" }?.isReadyFor4bpp, false)
+        XCTAssertTrue(plan.copyPlan.contains { $0.destinationRelativePath == "data/tilesets/imports/missing-credit/tiles.png" })
+    }
+
+    func testGraphicsImportPlanDetectsLayeredPackageAndCredits() throws {
+        let project = try makeGraphicsImportProject()
+        let package = try makeTemporaryRoot().appendingPathComponent("route-tiles")
+        try write("Author: Local Fixture\nLicense: Test Only\n", to: package.appendingPathComponent("README.md"))
+        try writePNG(width: 16, height: 16, paletteColors: 8, to: package.appendingPathComponent("top.png"))
+        try writePNG(width: 16, height: 16, paletteColors: 8, to: package.appendingPathComponent("middle.png"))
+        try write("id,behavior,layer\n0,MB_NORMAL,normal\n", to: package.appendingPathComponent("attributes.csv"))
+        try write("// anim\n", to: package.appendingPathComponent("anim/water.c"))
+
+        let plan = try GraphicsImportPackagePlanBuilder.build(projectPath: project.path, packagePath: package.path)
+
+        XCTAssertEqual(plan.readiness, .ready)
+        XCTAssertEqual(plan.creditMetadataPaths, ["README.md"])
+        XCTAssertEqual(plan.layeredTilesetDryRun.detectedLayerPaths, ["middle.png", "top.png"])
+        XCTAssertEqual(plan.layeredTilesetDryRun.missingLayerNames, ["bottom"])
+        XCTAssertEqual(plan.layeredTilesetDryRun.attributesPath, "attributes.csv")
+        XCTAssertEqual(plan.layeredTilesetDryRun.animationFileCount, 1)
+        XCTAssertTrue(plan.layeredTilesetDryRun.expectedGeneratedOutputs.contains("data/tilesets/imports/route-tiles/metatiles.bin"))
+    }
+
     private func makeGraphicsProject() throws -> URL {
         let root = try makeTemporaryRoot()
         try writeHeaders(to: root)
@@ -144,6 +180,16 @@ final class GraphicsDiagnosticsTests: XCTestCase {
             to: root.appendingPathComponent("data/tilesets/primary/test/palettes/01.pal")
         )
         try write("// anim\n", to: root.appendingPathComponent("data/tilesets/primary/test/anim/water.c"))
+        return root
+    }
+
+    private func makeGraphicsImportProject() throws -> URL {
+        let root = try makeGraphicsProject()
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics/pokenav"), withIntermediateDirectories: true)
         return root
     }
 
