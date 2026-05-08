@@ -21,21 +21,11 @@ struct TrainerEditorView: View {
 
     var body: some View {
         Group {
-            if let catalog {
+            if catalog != nil {
                 GeometryReader { proxy in
                     let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
-
-                    if layoutMode.isCompact {
-                        compactWorkbench(catalog: catalog, layoutMode: layoutMode)
-                    } else {
-                        HSplitView {
-                            trainerBrowser(catalog: catalog)
-                                .frame(minWidth: 240, idealWidth: 300, maxWidth: 420, maxHeight: .infinity)
-
-                            trainerDetail(layoutMode: layoutMode)
-                                .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    }
+                    trainerDetail(layoutMode: layoutMode)
+                        .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else if !fallbackRecords.isEmpty {
                 EditorListShell(title: "Trainers", records: fallbackRecords) { record in

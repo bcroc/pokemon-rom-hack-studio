@@ -3,7 +3,6 @@ import SwiftUI
 
 struct BuildWorkbenchView: View {
     @ObservedObject var store: WorkbenchStore
-    @State private var selectedTab: BuildWorkbenchTab = .build
 
     var body: some View {
         ScrollView {
@@ -13,7 +12,7 @@ struct BuildWorkbenchView: View {
                 fixtureBuild
             }
         }
-        .navigationTitle("Build")
+        .navigationTitle("Build/Patch/Playtest")
     }
 
     private func indexedBuild(
@@ -24,18 +23,25 @@ struct BuildWorkbenchView: View {
             header(project: project, report: report)
             metrics(report: report)
 
-            Picker("Report", selection: $selectedTab) {
-                ForEach(BuildWorkbenchTab.allCases) { tab in
-                    Label(tab.title, systemImage: tab.systemImage).tag(tab)
+            HStack(spacing: 12) {
+                Picker("Report", selection: $store.selectedBuildWorkbenchTab) {
+                    ForEach(BuildWorkbenchTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
+                .pickerStyle(.segmented)
 
-            switch selectedTab {
+                Button("Copy Report JSON", systemImage: "doc.on.doc") {
+                    store.copyBuildPatchPlaytestReportJSONToPasteboard()
+                }
+                .help("Copy the current build, patch, and playtest preview report as JSON")
+            }
+
+            switch store.selectedBuildWorkbenchTab {
             case .build:
                 buildSections(report: report, rows: store.filteredBuildReportRows)
             case .patch:
-                patchSections(report: store.selectedPatchManifestReport, rows: store.filteredPatchManifestRows)
+                patchSections(buildReport: report, report: store.selectedPatchManifestReport, rows: store.filteredPatchManifestRows)
             case .playtest:
                 playtestSections(report: report)
             }
@@ -49,9 +55,9 @@ struct BuildWorkbenchView: View {
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Build")
+                Text("Ship Preview")
                     .font(.largeTitle.weight(.semibold))
-                Text("\(project.title) readiness report for builds, patches, generated outputs, toolchain health, and playtest handoff.")
+                Text("\(project.title) guided previews for build readiness, patch checks, generated outputs, toolchain health, and playtest handoff.")
                     .foregroundStyle(.secondary)
                 Text(report.rootPath)
                     .font(.system(.caption, design: .monospaced))
@@ -74,19 +80,19 @@ struct BuildWorkbenchView: View {
 
     private func metrics(report: BuildPatchPlaytestReportViewState) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-            MetricCard(title: "Build Targets", value: "\(report.buildTargets.count)", detail: "Preview commands")
+            MetricCard(title: "Build Readiness", value: "\(report.buildTargets.count)", detail: "Preview commands")
             MetricCard(
                 title: "Generated",
                 value: "\(report.generatedArtifacts.count)",
                 detail: "\(report.generatedArtifacts.filter(\.exists).count) present"
             )
-            MetricCard(title: "Patch", value: store.patchManifestLoadStatus.validationState.rawValue, detail: store.patchManifestLoadStatus.label)
+            MetricCard(title: "Patch Check", value: store.patchManifestLoadStatus.validationState.rawValue, detail: store.patchManifestLoadStatus.label)
             MetricCard(
                 title: "Health Matrix",
                 value: "\(report.healthMatrix.warningCount + report.healthMatrix.errorCount)",
                 detail: report.healthMatrix.detail
             )
-            MetricCard(title: "Playtest", value: report.playtest.status.rawValue, detail: report.playtest.emulator)
+            MetricCard(title: "Playtest Handoff", value: report.playtest.status.rawValue, detail: report.playtest.emulator)
         }
     }
 
@@ -120,16 +126,17 @@ struct BuildWorkbenchView: View {
                 }
             }
 
-            previewActions(includePatchActions: false)
+            workflowActions(includePatchActions: false)
         }
     }
 
     private func patchSections(
+        buildReport: BuildPatchPlaytestReportViewState,
         report: PatchManifestReportViewState?,
         rows: [BuildReportRow]
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            EditorSection(title: "Patch") {
+            EditorSection(title: "Patch Check") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 8) {
                         TextField(
@@ -165,8 +172,14 @@ struct BuildWorkbenchView: View {
                         }
                         .frame(minWidth: 260)
 
-                        TextField("Base ROM path", text: $store.selectedBaseROMPath)
-                            .textFieldStyle(.roundedBorder)
+                        TextField(
+                            "Base ROM path",
+                            text: Binding(
+                                get: { store.selectedBaseROMPath },
+                                set: { store.requestBaseROMPath($0) }
+                            )
+                        )
+                        .textFieldStyle(.roundedBorder)
                         Button("Choose", systemImage: "folder") {
                             chooseBaseROM()
                         }
@@ -178,9 +191,6 @@ struct BuildWorkbenchView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Button("Copy Report JSON", systemImage: "doc.on.doc") {
-                            store.copyBuildPatchPlaytestReportJSONToPasteboard()
-                        }
                     }
                 }
             }
@@ -229,7 +239,7 @@ struct BuildWorkbenchView: View {
                 }
             }
 
-            previewActions(includePatchActions: true)
+            workflowActions(includePatchActions: true)
         }
     }
 
@@ -252,7 +262,18 @@ struct BuildWorkbenchView: View {
                 }
             }
 
-            previewActions(includePatchActions: false)
+            if let launchResult = store.selectedPlaytestLaunchResult {
+                EditorSection(title: "Launch Result") {
+                    VStack(spacing: 10) {
+                        BuildReportRowView(row: BuildReportRow(launchResult: launchResult))
+                        ForEach(launchResult.artifacts) { artifact in
+                            PlaytestArtifactRow(artifact: artifact)
+                        }
+                    }
+                }
+            }
+
+            workflowActions(includePatchActions: false)
         }
     }
 
@@ -316,24 +337,51 @@ struct BuildWorkbenchView: View {
         )
     }
 
-    private func previewActions(includePatchActions: Bool) -> some View {
+    private func workflowActions(includePatchActions: Bool) -> some View {
         EditorSection(title: "Actions") {
-            HStack {
-                Button("Build", systemImage: "hammer") {}
-                    .disabled(true)
-                Button("Run", systemImage: "play.fill") {}
-                    .disabled(true)
-                Button("Validate", systemImage: "checkmark.seal") {}
-                    .disabled(true)
-                if includePatchActions {
-                    Divider()
-                    Button("Apply Patch", systemImage: "wand.and.stars") {}
-                        .disabled(true)
-                    Button("Export ROM", systemImage: "square.and.arrow.down") {}
-                        .disabled(true)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    ForEach(store.buildWorkflowActions(includePatchActions: includePatchActions)) { action in
+                        workflowButton(action)
+                        if action.id == "validate-sources", includePatchActions {
+                            Divider()
+                        }
+                    }
+                    Spacer()
                 }
-                Spacer()
-                Text("Preview only")
+
+                Text("Open Playtest launches a runnable report-selected ROM in mGBA. Build, validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workflowButton(_ action: BuildWorkflowActionViewState) -> some View {
+        if action.id == "open-playtest" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.launchSelectedPlaytest()
+            }
+            .disabled(!action.isEnabled)
+        } else {
+            Button(action.title, systemImage: action.isPreviewLocked ? "lock" : action.systemImage) {}
+                .disabled(!action.isEnabled)
+        }
+    }
+
+    private var fixtureActions: some View {
+        EditorSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    ForEach(store.fixtureBuildWorkflowActions) { action in
+                        Button(action.title, systemImage: "lock") {}
+                            .disabled(true)
+                    }
+                    Spacer()
+                }
+
+                Text("Fixture preview only")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -366,7 +414,7 @@ struct BuildWorkbenchView: View {
     private var fixtureBuild: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Build")
+                Text("Ship Preview")
                     .font(.largeTitle.weight(.semibold))
                 Text("\(store.selectedTarget.name) targets \(store.selectedTarget.romBase)")
                     .foregroundStyle(.secondary)
@@ -380,43 +428,9 @@ struct BuildWorkbenchView: View {
                 }
             }
 
-            EditorSection(title: "Actions") {
-                HStack {
-                    Button("Build", systemImage: "hammer") {}
-                    Button("Run", systemImage: "play.fill") {}
-                    Button("Validate", systemImage: "checkmark.seal") {}
-                    Spacer()
-                    Text("Mock controls only")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            fixtureActions
         }
         .padding(24)
-    }
-}
-
-private enum BuildWorkbenchTab: String, CaseIterable, Identifiable {
-    case build
-    case patch
-    case playtest
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .build: "Build"
-        case .patch: "Patch"
-        case .playtest: "Playtest"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .build: "hammer"
-        case .patch: "doc.badge.gearshape"
-        case .playtest: "gamecontroller"
-        }
     }
 }
 

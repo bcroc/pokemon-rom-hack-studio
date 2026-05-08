@@ -12,6 +12,7 @@ struct MapEventsPaneView: View {
 
     @State private var selectedKindFilter: MapEventKind?
     @State private var includeSharedScriptSuggestions = true
+    @State private var isAdvancedScriptEditing = false
 
     var body: some View {
         EditorSection(title: "Events") {
@@ -362,37 +363,161 @@ struct MapEventsPaneView: View {
             SourceLocationView(
                 source: SourceLocation(path: span.sourcePath, symbol: span.label, line: span.labelLine)
             )
-
+            
             if span.sourceRole == .shared {
-                Label("Shared script source. Preview before applying.", systemImage: "exclamationmark.triangle")
+                Label("Shared script source. Edits affect multiple maps.", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            } else if !MapScriptIndex.isEditableScriptPath(span.sourcePath) {
+                Label("Read-only or generated source path.", systemImage: "lock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            TextEditor(text: $scriptDraftText)
-                .font(.system(.caption, design: .monospaced))
-                .frame(minHeight: 140)
+            if isAdvancedScriptEditing || !MapScriptIndex.isEditableScriptPath(span.sourcePath) {
+                TextEditor(text: $scriptDraftText)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 140)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor))
+                    )
+                    .onAppear {
+                        syncScriptDraft(span: span)
+                    }
+                    .onChange(of: span.id) { _, _ in
+                        syncScriptDraft(span: span)
+                    }
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(span.lines.indices, id: \.self) { index in
+                        scriptLineRow(span: span, index: index)
+                    }
+                }
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color(nsColor: .separatorColor))
                 )
-                .onAppear {
-                    syncScriptDraft(span: span)
-                }
-                .onChange(of: span.id) { _, _ in
-                    syncScriptDraft(span: span)
-                }
+            }
 
             HStack {
-                Button("Stage Script", systemImage: "square.and.pencil") {
-                    session.updateScriptBody(label: span.label, sourcePath: span.sourcePath, body: scriptDraftText)
+                if MapScriptIndex.isEditableScriptPath(span.sourcePath) {
+                    Button(isAdvancedScriptEditing ? "Structured View" : "Plain Text", systemImage: isAdvancedScriptEditing ? "list.bullet.indent" : "text.alignleft") {
+                        isAdvancedScriptEditing.toggle()
+                    }
+                    .font(.caption)
                 }
-                .disabled(scriptDraftText == (session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body))
+                
                 Spacer()
-                Text("\(scriptDraftText.split(separator: "\n", omittingEmptySubsequences: false).count) lines")
+
+                if isAdvancedScriptEditing {
+                    Button("Stage Changes", systemImage: "square.and.pencil") {
+                        session.updateScriptBody(label: span.label, sourcePath: span.sourcePath, body: scriptDraftText)
+                    }
+                    .disabled(scriptDraftText == (session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body))
+                }
+                
+                Text("\(span.lines.count) lines")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func scriptLineRow(span: MapScriptLabelSpan, index: Int) -> some View {
+        let line = span.lines[index]
+        return HStack(spacing: 8) {
+            Text("\(line.line)")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .trailing)
+            
+            scriptLineContent(line, span: span, index: index)
+                .font(.system(.caption, design: .monospaced))
+            
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 1)
+    }
+
+    @ViewBuilder
+    private func scriptLineContent(_ line: ScriptLine, span: MapScriptLabelSpan, index: Int) -> some View {
+        switch line {
+        case .command(let cmd, _):
+            HStack(spacing: 4) {
+                Text(cmd.name)
+                    .foregroundStyle(Color.accentColor)
+                ForEach(cmd.arguments.indices, id: \.self) { argIndex in
+                    editableArgument(cmd.arguments[argIndex], span: span, lineIndex: index, argIndex: argIndex)
+                }
+                if let comment = cmd.comment {
+                    Text("@ \(comment)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .label(let name, _):
+            Text("\(name)::")
+                .foregroundStyle(.purple)
+        case .macro(let name, let args, _):
+            HStack(spacing: 4) {
+                Text(name)
+                    .foregroundStyle(.blue)
+                ForEach(args.indices, id: \.self) { argIndex in
+                    Text(args[argIndex])
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .directive(let name, let value, _):
+            HStack(spacing: 4) {
+                Text(name)
+                    .foregroundStyle(.secondary)
+                Text(value)
+            }
+        case .comment(let text, _):
+            Text("@ \(text)")
+                .foregroundStyle(.secondary)
+                .italic()
+        case .empty:
+            Color.clear.frame(height: 1)
+        }
+    }
+
+    private func editableArgument(_ value: String, span: MapScriptLabelSpan, lineIndex: Int, argIndex: Int) -> some View {
+        let binding = Binding {
+            value
+        } set: { newValue in
+            updateScriptArgument(span: span, lineIndex: lineIndex, argIndex: argIndex, newValue: newValue)
+        }
+        
+        return TextField("", text: binding)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 4)
+            .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 3))
+            .fixedSize()
+    }
+
+    private func updateScriptArgument(span: MapScriptLabelSpan, lineIndex: Int, argIndex: Int, newValue: String) {
+        let currentBody = session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body
+        let bodyLines = currentBody.components(separatedBy: .newlines)
+        guard bodyLines.indices.contains(lineIndex) else { return }
+        
+        let line = bodyLines[lineIndex]
+        // This is a bit tricky because we need to rebuild the line string accurately.
+        // For now, let's use a simpler approach: if it's a command line, we know its structure.
+        let parsed = ScriptParser.parseLine(line, lineNumber: lineIndex + span.bodyStartLine)
+        if case .command(let cmd, _) = parsed {
+            var newArgs = cmd.arguments
+            guard newArgs.indices.contains(argIndex) else { return }
+            newArgs[argIndex] = newValue
+            
+            var newLine = "\t\(cmd.name) \(newArgs.joined(separator: ", "))"
+            if let comment = cmd.comment {
+                newLine += " @ \(comment)"
+            }
+            session.updateScriptLine(label: span.label, sourcePath: span.sourcePath, lineIndex: lineIndex, content: newLine)
         }
     }
 

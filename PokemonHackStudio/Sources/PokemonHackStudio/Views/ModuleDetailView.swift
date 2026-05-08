@@ -42,6 +42,10 @@ struct ModuleDetailView: View {
                     get: { store.selectedResourceAssetID },
                     set: { store.requestResourceAssetSelection($0) }
                 ),
+                mode: Binding(
+                    get: { store.selectedResourceLibraryMode },
+                    set: { store.selectedResourceLibraryMode = $0 }
+                ),
                 selectedCategory: Binding(
                     get: { store.resourceAssetCategory },
                     set: { store.resourceAssetCategory = $0 }
@@ -127,7 +131,8 @@ struct ModuleDetailView: View {
             IssuesView(
                 issues: store.issues,
                 indexedProject: store.selectedIndexedProject,
-                indexedDiagnostics: store.selectedDiagnosticRows
+                indexedDiagnostics: store.selectedDiagnosticRows,
+                diagnosticSummary: store.diagnosticSummary
             )
         }
     }
@@ -170,11 +175,13 @@ struct ModuleDetailView: View {
     }
 
     private var shellInspectorContext: SourceInspectorContext? {
-        store.selection == .maps ? nil : sourceInspectorContext
+        nil
     }
 
     private var mutationPlanContext: MutationPlanPanelContext? {
         switch store.selection {
+        case .maps:
+            MutationPlanPanelContext.map(session: store.mapEditorSession)
         case .pokemon:
             MutationPlanPanelContext.species(
                 plan: store.latestSpeciesEditPlan,

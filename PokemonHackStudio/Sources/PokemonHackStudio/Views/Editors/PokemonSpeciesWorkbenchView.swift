@@ -20,21 +20,11 @@ struct PokemonSpeciesWorkbenchView: View {
 
     var body: some View {
         Group {
-            if let catalog {
+            if catalog != nil {
                 GeometryReader { proxy in
                     let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
-
-                    if layoutMode.isCompact {
-                        compactWorkbench(catalog: catalog, layoutMode: layoutMode)
-                    } else {
-                        HSplitView {
-                            speciesBrowser(catalog: catalog)
-                                .frame(minWidth: 230, idealWidth: 290, maxWidth: 380, maxHeight: .infinity)
-
-                            speciesDetail(layoutMode: layoutMode)
-                                .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    }
+                    speciesDetail(layoutMode: layoutMode)
+                        .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 ContentUnavailableView(

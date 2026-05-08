@@ -16,4 +16,15 @@ final class WorkbenchLayoutModeTests: XCTestCase {
         XCTAssertEqual(WorkbenchLayoutMode.compactPopoverWidth, 360)
         XCTAssertEqual(WorkbenchLayoutMode.compactPopoverHeight, 620)
     }
+
+    func testWorkbenchModuleGroupsUseCreatorIntentOrder() {
+        XCTAssertEqual(
+            WorkbenchModuleGroup.allCases.map(\.rawValue),
+            ["Workspace", "Create", "Data & Assets", "Ship"]
+        )
+        XCTAssertEqual(WorkbenchModuleGroup.workspace.modules, [.dashboard])
+        XCTAssertEqual(WorkbenchModuleGroup.create.modules, [.maps, .pokemon, .trainers, .scripts])
+        XCTAssertEqual(WorkbenchModuleGroup.dataAssets.modules, [.resources, .graphics, .items, .encounters, .text])
+        XCTAssertEqual(WorkbenchModuleGroup.ship.modules, [.build, .issues])
+    }
 }

@@ -29,6 +29,8 @@ final class CoreScaffoldingTests: XCTestCase {
         XCTAssertEqual(index.adapterID, "pret.pokeruby")
         XCTAssertTrue(index.buildTargets.contains { $0.id == "ruby-build" })
         XCTAssertTrue(index.documents.contains { $0.relativePath == "config.mk" })
+        XCTAssertTrue(index.capabilities.contains(.patchPlanning))
+        XCTAssertTrue(index.capabilities.contains(.playtestBridge))
     }
 
     func testExpansionAdapterWinsOverEmeraldDetection() throws {
@@ -121,9 +123,42 @@ final class CoreScaffoldingTests: XCTestCase {
 
         XCTAssertEqual(index.profile, .binaryROM)
         XCTAssertEqual(index.writePolicy, .mutationPlanOnly)
+        XCTAssertTrue(index.capabilities.contains(.binaryROMGraph))
+        XCTAssertTrue(index.capabilities.contains(.patchPlanning))
+        XCTAssertTrue(index.capabilities.contains(.playtestBridge))
         XCTAssertEqual(image.title, "POKEMON TEST")
         XCTAssertEqual(image.gameCode, "BPEE")
         XCTAssertEqual(image.makerCode, "01")
+    }
+
+    func testBinaryROMGraphReportsHeaderPointersAndFreeSpace() throws {
+        let temp = try CoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("graph.gba")
+        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0xBC] = 0
+        let expected = UInt8((0x19 - bytes[0xA0...0xBC].reduce(0) { ($0 + Int($1)) & 0xff }) & 0xff)
+        bytes[0xBD] = expected
+        bytes[0x100] = 0x80
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        try Data(bytes).write(to: rom)
+
+        let graph = BinaryROMGraphBuilder.build(path: rom.path, data: try Data(contentsOf: rom))
+        let entry = GenIIIResourceRegistry.resourceIndex(path: rom.path)
+
+        XCTAssertEqual(graph.image.gameCode, "BPEE")
+        XCTAssertEqual(graph.image.isComplementChecksumValid, true)
+        XCTAssertTrue(graph.pointerCandidates.contains { $0.sourceOffset == 0x100 && $0.targetOffset == 0x80 })
+        XCTAssertTrue(graph.freeSpaceRanges.contains { $0.offset >= 0x104 && $0.fillByte == 0xff })
+        XCTAssertTrue(entry.items.contains { $0.category == "ROM Header" && $0.kind == "Game Code" })
+        XCTAssertTrue(entry.items.contains { $0.category == "GBA Pointer" })
+        XCTAssertTrue(entry.items.contains { $0.category == "Free Space" })
     }
 
     func testMapGroupIndexRoundTripsWithoutLosingGroups() throws {

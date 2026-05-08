@@ -34,10 +34,19 @@ final class GraphicsDiagnosticsTests: XCTestCase {
         XCTAssertEqual(tileset.tileImage?.freshness, .generatedMissing)
         XCTAssertEqual(tileset.animation?.exists, true)
         XCTAssertEqual(tileset.animation?.fileCount, 1)
+        XCTAssertEqual(report.conversionPlans.count, 1)
+        XCTAssertEqual(tileset.conversionPlan.tilesetSymbol, "gTileset_Test")
+        XCTAssertEqual(tileset.conversionPlan.expectedOutputs.sorted(), [
+            "data/tilesets/primary/test/palettes/01.gbapal",
+            "data/tilesets/primary/test/tiles.4bpp.lz"
+        ])
+        XCTAssertTrue(tileset.conversionPlan.provenanceRequired)
+        XCTAssertTrue(tileset.conversionPlan.paletteFitSummary.contains("17 palette color"))
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_METATILE_LAYER_UNKNOWN" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_IMAGE_TOO_MANY_COLORS_FOR_4BPP" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_GENERATED_ARTIFACT_MISSING" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_15BIT_PRECISION_LOSS" })
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_CONVERSION_PALETTE_FIT_BLOCKED" })
     }
 
     func testGraphicsReportFlagsStaleGeneratedArtifacts() throws {
@@ -107,6 +116,17 @@ final class GraphicsDiagnosticsTests: XCTestCase {
         XCTAssertEqual(report.inventory.unsupportedSourceArtifactCount, 1)
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_PATH_CONTAINS_SPACES" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_UNSUPPORTED_SOURCE_ARTIFACT" })
+    }
+
+    func testGraphicsConversionPlanFindsNearbyCreditMetadata() throws {
+        let root = try makeGraphicsProject()
+        try write("Credit: local test asset\n", to: root.appendingPathComponent("data/tilesets/primary/test/credits.txt"))
+
+        let report = GraphicsDiagnosticsReportBuilder.build(index: projectIndex(root: root))
+        let plan = try XCTUnwrap(report.conversionPlans.first)
+
+        XCTAssertEqual(plan.creditMetadataPaths, ["data/tilesets/primary/test/credits.txt"])
+        XCTAssertTrue(plan.externalToolPlan.contains("Preview external conversion only"))
     }
 
     private func makeGraphicsProject() throws -> URL {

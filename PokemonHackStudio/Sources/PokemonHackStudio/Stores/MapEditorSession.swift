@@ -67,6 +67,7 @@ enum MapEditorCommand: Equatable {
     case updateMetatileAttribute(metatileID: Int, tilesetSymbol: String?, key: String, value: String)
     case updateMetatileTile(metatileID: Int, tilesetSymbol: String?, tileEntryIndex: Int, rawValue: UInt16)
     case updateScriptBody(label: String, sourcePath: String, body: String)
+    case updateScriptLine(label: String, sourcePath: String, lineIndex: Int, content: String)
     case createMapScriptLabel(label: String, sourcePath: String, body: String)
     case undo
     case redo
@@ -697,6 +698,30 @@ final class MapEditorSession: ObservableObject {
     }
 
     @discardableResult
+    func updateScriptLine(label: String, sourcePath: String, lineIndex: Int, content: String) -> Bool {
+        guard let currentBody = stagedScriptBody(label: label, sourcePath: sourcePath) else { return false }
+        var lines = currentBody.components(separatedBy: .newlines)
+        guard lines.indices.contains(lineIndex) else { return false }
+        guard lines[lineIndex] != content else { return false }
+        lines[lineIndex] = content
+        let newBody = lines.joined(separator: "\n")
+        
+        stageScriptBody(label: label, sourcePath: sourcePath, body: newBody, isNew: stagedMapScriptBodies[StagedMapScriptBody.key(label: label, sourcePath: sourcePath)]?.isNew ?? false)
+        appendHistory(
+            command: .updateScriptLine(label: label, sourcePath: sourcePath, lineIndex: lineIndex, content: content),
+            operations: [
+                MapEditOperation(
+                    action: .updateScriptBody,
+                    scriptLabel: label,
+                    scriptBody: newBody,
+                    scriptSourcePath: sourcePath
+                )
+            ]
+        )
+        return true
+    }
+
+    @discardableResult
     func createScriptLabel(label: String, sourcePath: String, body: String) -> Bool {
         guard MapScriptIndex.normalizedScriptLabel(label) != nil else { return false }
         let key = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)
@@ -912,6 +937,8 @@ final class MapEditorSession: ObservableObject {
             return updateMetatileTile(metatileID: metatileID, tilesetSymbol: tilesetSymbol, tileEntryIndex: tileEntryIndex, rawValue: rawValue)
         case .updateScriptBody(let label, let sourcePath, let body):
             return updateScriptBody(label: label, sourcePath: sourcePath, body: body)
+        case .updateScriptLine(let label, let sourcePath, let lineIndex, let content):
+            return updateScriptLine(label: label, sourcePath: sourcePath, lineIndex: lineIndex, content: content)
         case .createMapScriptLabel(let label, let sourcePath, let body):
             return createScriptLabel(label: label, sourcePath: sourcePath, body: body)
         case .undo:

@@ -288,6 +288,141 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PLAYTEST_ROM_NOT_BUILT" })
     }
 
+    func testPlaytestLauncherStartsRunnableROMAndWritesLogs() throws {
+        let root = try makeTemporaryRoot()
+        let output = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: output)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        var capturedRequest: PlaytestProcessRequest?
+        let launchedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let result = PlaytestLauncher.launch(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { request in
+                capturedRequest = request
+                return 4242
+            },
+            now: { launchedAt }
+        )
+
+        let request = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(result.status, .launched)
+        XCTAssertEqual(result.processID, 4242)
+        XCTAssertEqual(result.command, [emulator.path, output.path])
+        XCTAssertEqual(request.executableURL.path, emulator.path)
+        XCTAssertEqual(request.arguments, [output.path])
+        XCTAssertEqual(request.workingDirectoryURL.standardizedFileURL.path, root.standardizedFileURL.path)
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .runLog && $0.exists })
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .stdout && $0.exists })
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .stderr && $0.exists })
+
+        let runLogURL = root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/run.log")
+        let runLog = try String(contentsOf: runLogURL, encoding: .utf8)
+        XCTAssertTrue(runLog.contains("processID: 4242"))
+        XCTAssertTrue(runLog.contains("romSHA1: a9993e364706816aba3e25717850c26c9cd0d89d"))
+        XCTAssertTrue(runLog.contains("targetID: emerald-build"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/stdout.log").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/stderr.log").path))
+    }
+
+    func testPlaytestLauncherBlocksMissingROMWithoutRunningProcess() throws {
+        let root = try makeTemporaryRoot()
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+        var didRun = false
+
+        let result = PlaytestLauncher.launch(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { _ in
+                didRun = true
+                return 1
+            }
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertFalse(didRun)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_ROM_NOT_BUILT" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_LAUNCH_BLOCKED" })
+    }
+
+    func testPlaytestLauncherBlocksMissingEmulatorWithoutRunningProcess() throws {
+        let root = try makeTemporaryRoot()
+        try write(Data("abc".utf8), to: root.appendingPathComponent("pokeemerald.gba"))
+        var didRun = false
+
+        let result = PlaytestLauncher.launch(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            mode: .interactive,
+            toolResolver: availableTools([:]),
+            processRunner: { _ in
+                didRun = true
+                return 1
+            }
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertFalse(didRun)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_EMULATOR_MISSING" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_LAUNCH_BLOCKED" })
+    }
+
+    func testPlaytestLauncherResolvesMacApplicationBundleExecutable() throws {
+        let root = try makeTemporaryRoot()
+        let appExecutable = root.appendingPathComponent("mGBA.app/Contents/MacOS/mGBA")
+        try writeExecutable("#!/bin/sh\n", to: appExecutable)
+
+        let resolved = PlaytestLauncher.executablePath(
+            for: ToolAvailability(name: "mgba", isAvailable: true, resolvedPath: root.appendingPathComponent("mGBA.app").path)
+        )
+
+        XCTAssertEqual(resolved, appExecutable.path)
+    }
+
+    func testPlaytestLauncherReportsFailedProcessRunner() throws {
+        let root = try makeTemporaryRoot()
+        let output = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: output)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        let result = PlaytestLauncher.launch(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { _ in
+                throw NSError(domain: "PlaytestLauncherTests", code: 1)
+            }
+        )
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_LAUNCH_FAILED" })
+    }
+
     private func makeIndex(
         root: URL,
         profile: GameProfile = .pokeemerald,
@@ -333,6 +468,11 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func writeExecutable(_ text: String, to url: URL) throws {
+        try write(text, to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     private func setModificationDate(_ date: Date, for url: URL) throws {

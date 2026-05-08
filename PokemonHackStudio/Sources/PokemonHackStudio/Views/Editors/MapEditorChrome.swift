@@ -314,7 +314,7 @@ struct MapEditorDirtyBanner: View {
     }
 }
 
-private struct MapEditorGroupedToolPicker: View {
+struct MapEditorGroupedToolPicker: View {
     @ObservedObject var session: MapEditorSession
 
     var body: some View {

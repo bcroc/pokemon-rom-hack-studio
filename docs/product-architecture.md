@@ -80,9 +80,9 @@ The CLI is the automation companion for the app:
 - `inspect`: summarize detected project type, paths, build targets, and known assets.
 - `index`: emit or refresh the adapter-selected source graph, generated-output policy, and cacheable index data.
 - `validate`: run non-mutating checks for path integrity, source parseability, and artifact freshness.
-- `build`: delegate to the selected decomp project build.
-- `patch`: parse, create, or verify patch artifacts from an original ROM and built output.
-- `playtest`: prepare interactive or headless mGBA-compatible run plans.
+- `build`: report selected decomp build targets, output existence, checksums, freshness, and tool readiness before any future build execution.
+- `patch`: parse and verify patch metadata, base-ROM compatibility, and dry-run manifests before any future patch apply/export.
+- `playtest`: prepare headless mGBA-compatible run plans and explicitly launch runnable interactive handoffs through the external emulator boundary.
 
 CLI output should be script-friendly by default, with JSON output available for workflows that feed back into the app or tests.
 

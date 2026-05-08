@@ -1,38 +1,7 @@
 import PokemonHackCore
 import SwiftUI
 
-enum MapWorkbenchTab: String, CaseIterable, Identifiable {
-    case overviewLayers
-    case paintCollision
-    case eventsScripts
-    case mapData
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .overviewLayers: "Overview/Layers"
-        case .paintCollision: "Paint/Collision"
-        case .eventsScripts: "Events/Scripts"
-        case .mapData: "Map Data"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .overviewLayers: "square.stack.3d.up"
-        case .paintCollision: "paintbrush.pointed"
-        case .eventsScripts: "point.3.connected.trianglepath.dotted"
-        case .mapData: "doc.text.magnifyingglass"
-        }
-    }
-
-    var accessibilityLabel: String {
-        "\(title) editor tab"
-    }
-}
-
-struct MapWorkbenchPanels<MutationReview: View>: View {
+struct MapWorkbenchPanels: View {
     let document: MapVisualDocument
     @ObservedObject var session: MapEditorSession
     let layoutMode: MapEditorLayoutMode
@@ -43,7 +12,6 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
     @Binding var scriptDraftText: String
     let onSelectViewportCenter: (CGFloat, CGFloat) -> Void
     let onCenterEvent: (MapEventDescriptor) -> Void
-    let mutationReview: () -> MutationReview
     @State private var metatileTileIndex = 0
     @State private var metatileTileRawValue = ""
     @State private var metatileAttributeKey = "behavior"
@@ -59,8 +27,7 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
         scriptDraftKey: Binding<String>,
         scriptDraftText: Binding<String>,
         onSelectViewportCenter: @escaping (CGFloat, CGFloat) -> Void,
-        onCenterEvent: @escaping (MapEventDescriptor) -> Void,
-        @ViewBuilder mutationReview: @escaping () -> MutationReview
+        onCenterEvent: @escaping (MapEventDescriptor) -> Void
     ) {
         self.document = document
         self.session = session
@@ -72,14 +39,12 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
         _scriptDraftText = scriptDraftText
         self.onSelectViewportCenter = onSelectViewportCenter
         self.onCenterEvent = onCenterEvent
-        self.mutationReview = mutationReview
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             tabSelector
             selectedPanel
-            mutationReview()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Map workbench inspector")
@@ -333,11 +298,11 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(wild.groups) { group in
-                                wildGroupRow(group)
+                                wildGroupRow(group, sourcePath: wild.sourcePath, speciesIDs: document.eventOptions.speciesIDs)
                             }
                         }
 
-                        Label("Encounter editing is queued for row-based mutation plans; this panel is read-only.", systemImage: "lock")
+                        Label("Encounter edits are staged as source-backed mutation plans with preview, backups, and explicit apply.", systemImage: "checklist.checked")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -808,7 +773,7 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
         .padding(.vertical, 2)
     }
 
-    private func wildGroupRow(_ group: MapWildEncounterGroup) -> some View {
+    private func wildGroupRow(_ group: MapWildEncounterGroup, sourcePath: String, speciesIDs: [String]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Label(group.label, systemImage: "leaf")
@@ -820,52 +785,16 @@ struct MapWorkbenchPanels<MutationReview: View>: View {
             }
 
             ForEach(group.encounters) { encounter in
-                wildEncounterRow(encounter)
+                WildEncounterEditorRow(
+                    encounter: encounter,
+                    sourcePath: sourcePath,
+                    session: session,
+                    speciesIDs: speciesIDs
+                )
             }
         }
         .padding(10)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func wildEncounterRow(_ encounter: MapWildEncounterEntry) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(encounter.encounterType)
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                if let encounterRate = encounter.encounterRate {
-                    Text("Rate \(encounterRate)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let baseLabel = encounter.baseLabel {
-                Text(baseLabel)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(uniqueSpecies(for: encounter).prefix(8).joined(separator: ", "))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-
-            Text(encounter.jsonPath.joined(separator: "."))
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func uniqueSpecies(for encounter: MapWildEncounterEntry) -> [String] {
-        var seen: Set<String> = []
-        var values: [String] = []
-        for slot in encounter.slots where seen.insert(slot.species).inserted {
-            values.append(slot.species)
-        }
-        return values
     }
 
     private func scriptSourceList(_ scriptIndex: MapScriptIndex) -> some View {
@@ -1065,5 +994,186 @@ private struct HeaderFieldDraftRow: View {
                 .help("Stage \(title) in the map header mutation plan")
             }
         }
+    }
+}
+
+private struct WildEncounterEditorRow: View {
+    let encounter: MapWildEncounterEntry
+    let sourcePath: String
+    @ObservedObject var session: MapEditorSession
+    let speciesIDs: [String]
+
+    @State private var encounterRate: String
+
+    init(encounter: MapWildEncounterEntry, sourcePath: String, session: MapEditorSession, speciesIDs: [String]) {
+        self.encounter = encounter
+        self.sourcePath = sourcePath
+        self.session = session
+        self.speciesIDs = speciesIDs
+        _encounterRate = State(initialValue: encounter.encounterRate.map(String.init) ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(encounter.encounterType)
+                        .font(.caption.weight(.semibold))
+                    if let baseLabel = encounter.baseLabel {
+                        Text(baseLabel)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let diagnostic = slotCountDiagnostic {
+                    Label(diagnostic.message, systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 4)
+                }
+
+                Spacer()
+
+                TextField("Rate", text: $encounterRate)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 72)
+                    .onSubmit { stageEncounterRate() }
+
+                Button("Stage rate", systemImage: "checkmark.circle") {
+                    stageEncounterRate()
+                }
+                .labelStyle(.iconOnly)
+                .help("Stage the encounter rate in the mutation preview")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Slot").frame(width: 42, alignment: .leading)
+                    Text("Species").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Min").frame(width: 58, alignment: .leading)
+                    Text("Max").frame(width: 58, alignment: .leading)
+                    Text("%").frame(width: 48, alignment: .trailing)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+                ForEach(encounter.slots) { slot in
+                    WildEncounterSlotEditorRow(slot: slot, sourcePath: sourcePath, session: session, speciesIDs: speciesIDs)
+                }
+            }
+
+            Text(encounter.jsonPath.joined(separator: "."))
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func stageEncounterRate() {
+        session.updateWildEncounterField(
+            sourcePath: sourcePath,
+            jsonPath: encounter.rateJSONPath,
+            key: "encounter_rate",
+            value: encounterRate
+        )
+    }
+
+    private var slotCountDiagnostic: Diagnostic? {
+        guard let expected = encounter.expectedSlotCount, encounter.slots.count != expected else { return nil }
+        return Diagnostic(
+            severity: .warning,
+            code: "WILD_ENCOUNTER_SLOT_COUNT_MISMATCH",
+            message: "Expected \(expected) slots, found \(encounter.slots.count).",
+            span: SourceSpan(relativePath: sourcePath, startLine: 1)
+        )
+    }
+}
+
+private struct WildEncounterSlotEditorRow: View {
+    let slot: MapWildEncounterSlot
+    let sourcePath: String
+    @ObservedObject var session: MapEditorSession
+    let speciesIDs: [String]
+
+    @State private var species: String
+    @State private var minLevel: String
+    @State private var maxLevel: String
+
+    init(slot: MapWildEncounterSlot, sourcePath: String, session: MapEditorSession, speciesIDs: [String]) {
+        self.slot = slot
+        self.sourcePath = sourcePath
+        self.session = session
+        self.speciesIDs = speciesIDs
+        _species = State(initialValue: slot.species)
+        _minLevel = State(initialValue: slot.minLevel.map(String.init) ?? "")
+        _maxLevel = State(initialValue: slot.maxLevel.map(String.init) ?? "")
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("#\(slot.index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .leading)
+
+            Picker("Species", selection: $species) {
+                if !speciesIDs.contains(species) {
+                    Text(species).tag(species)
+                }
+                ForEach(speciesIDs, id: \.self) { id in
+                    Text(id).tag(id)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: species) { _, newValue in
+                stage(key: "species", value: newValue)
+            }
+
+            TextField("Min", text: $minLevel)
+                .textFieldStyle(.roundedBorder)
+                .foregroundStyle(isLevelRangeValid ? Color.primary : Color.red)
+                .frame(width: 58)
+                .onSubmit { if isLevelRangeValid { stage(key: "min_level", value: minLevel) } }
+
+            TextField("Max", text: $maxLevel)
+                .textFieldStyle(.roundedBorder)
+                .foregroundStyle(isLevelRangeValid ? Color.primary : Color.red)
+                .frame(width: 58)
+                .onSubmit { if isLevelRangeValid { stage(key: "max_level", value: maxLevel) } }
+
+            Text(slot.rate.map { "\($0)" } ?? "-")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 24, alignment: .trailing)
+            Button("Stage slot", systemImage: isLevelRangeValid ? "checkmark.circle" : "exclamationmark.triangle") {
+                stage(key: "species", value: species)
+                if isLevelRangeValid {
+                    stage(key: "min_level", value: minLevel)
+                    stage(key: "max_level", value: maxLevel)
+                }
+            }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(isLevelRangeValid ? Color.accentColor : Color.red)
+            .help(isLevelRangeValid ? "Stage this wild encounter slot in the mutation preview" : "Min level must be less than or equal to max level")
+        }
+    }
+
+    private var isLevelRangeValid: Bool {
+        let min = Int(minLevel.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let max = Int(maxLevel.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 255
+        return min <= max
+    }
+
+    private func stage(key: String, value: String) {
+        session.updateWildEncounterField(
+            sourcePath: sourcePath,
+            jsonPath: slot.jsonPath,
+            key: key,
+            value: value
+        )
     }
 }

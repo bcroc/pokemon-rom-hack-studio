@@ -20,6 +20,10 @@ let package = Package(
         .testTarget(
             name: "PokemonHackCoreTests",
             dependencies: ["PokemonHackCore"]
+        ),
+        .testTarget(
+            name: "PokemonHackCLITests",
+            dependencies: ["pokemonhack-cli"]
         )
     ]
 )

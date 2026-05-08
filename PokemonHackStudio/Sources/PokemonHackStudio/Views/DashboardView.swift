@@ -14,22 +14,41 @@ struct DashboardView: View {
             }
             .padding(24)
         }
-        .navigationTitle("Dashboard")
+        .navigationTitle("Project Hub")
     }
 
     @ViewBuilder
     private func indexedDashboard(_ project: IndexedProjectSummary) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        projectHeader(project)
+        workflowHub
+        diagnosticsHub
+
+        if let library = store.resourceLibrary {
+            resourceLibrarySection(library)
+        }
+
+        EditorSection(title: "Source Shortcuts") {
+            VStack(spacing: 10) {
+                ForEach(project.sourceSurfaces.prefix(6)) { surface in
+                    IndexedSourceSurfaceRow(surface: surface)
+                }
+            }
+        }
+    }
+
+    private func projectHeader(_ project: IndexedProjectSummary) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(project.title)
                         .font(.largeTitle.weight(.semibold))
-                    Text(project.subtitle)
+                    Text("Guided workbench for maps, Pokemon data, trainer battles, assets, patch readiness, and diagnostics.")
                         .foregroundStyle(.secondary)
                     Text(project.rootPath)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                         .textSelection(.enabled)
                 }
 
@@ -38,133 +57,174 @@ struct DashboardView: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     StatusPill(state: project.status)
                     StatusPill(state: store.projectIndexStatus.validationState)
-                    Text(store.projectIndexStatus.label)
+                    Text(project.writePolicy)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-        }
 
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
-            if let library = store.resourceLibrary {
-                MetricCard(
-                    title: "Gen III Resources",
-                    value: "\(library.entryCount)",
-                    detail: "\(library.parsedCount) parsed"
-                )
-            }
-            MetricCard(
-                title: "Source Documents",
-                value: "\(project.sourceDocumentCount)",
-                detail: "\(project.existingSourceDocumentCount) present"
-            )
-            MetricCard(
-                title: "Missing Sources",
-                value: "\(project.missingSourceDocumentCount)",
-                detail: "Adapter expectations"
-            )
-            MetricCard(
-                title: "Diagnostics",
-                value: "\(store.issueCount)",
-                detail: "Read-only index"
-            )
-            MetricCard(
-                title: "Build Targets",
-                value: "\(project.buildTargetCount)",
-                detail: "Preview commands"
-            )
-            MetricCard(
-                title: "Generated Outputs",
-                value: "\(project.generatedOutputCount)",
-                detail: "\(project.artifactCount) artifacts"
-            )
-            MetricCard(
-                title: "Write Policy",
-                value: project.writePolicy,
-                detail: "No direct source writes"
-            )
-        }
-
-        if let library = store.resourceLibrary {
-            resourceLibrarySection(library)
-        }
-
-        EditorSection(title: "Indexed Source Surfaces") {
-            VStack(spacing: 10) {
-                ForEach(project.sourceSurfaces.prefix(8)) { surface in
-                    IndexedSourceSurfaceRow(surface: surface)
-                }
+            let mapMetric = store.dashboardMapMetric
+            let diagnosticSummary = store.diagnosticSummary
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+                MetricCard(title: "Sources", value: "\(project.existingSourceDocumentCount)/\(project.sourceDocumentCount)", detail: "Indexed source files")
+                MetricCard(title: "Maps", value: mapMetric.value, detail: mapMetric.detail)
+                MetricCard(title: "Pokemon", value: "\(store.selectedSpeciesCatalog?.speciesCount ?? 0)", detail: store.speciesCatalogLoadStatus.label)
+                MetricCard(title: "Trainers", value: "\(store.selectedTrainerCatalog?.trainerCount ?? 0)", detail: store.trainerCatalogLoadStatus.label)
+                MetricCard(title: "Build Targets", value: "\(project.buildTargetCount)", detail: "Preview only")
+                MetricCard(title: "Diagnostics", value: "\(diagnosticSummary.totalCount)", detail: diagnosticSummary.compactLabel)
             }
         }
+    }
 
-        EditorSection(title: "Generated Outputs") {
-            VStack(spacing: 10) {
-                ForEach(project.generatedOutputs.prefix(6)) { surface in
-                    IndexedSourceSurfaceRow(surface: surface)
-                }
-            }
-        }
-
-        if !store.selectedDiagnosticRows.isEmpty {
-            EditorSection(title: "Index Diagnostics") {
-                VStack(spacing: 10) {
-                    ForEach(store.selectedDiagnosticRows.prefix(5)) { diagnostic in
-                        IndexedDiagnosticRowView(diagnostic: diagnostic)
+    private var workflowHub: some View {
+        EditorSection(title: "Next Actions") {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12)], spacing: 12) {
+                ForEach(store.guidedFlows) { flow in
+                    GuidedFlowCard(flow: flow) { action in
+                        store.route(to: action)
                     }
                 }
             }
         }
     }
 
+    private var diagnosticsHub: some View {
+        EditorSection(title: "Project Health") {
+            DiagnosticSummaryStrip(summary: store.diagnosticSummary) {
+                store.selection = .issues
+            }
+        }
+    }
+
     private var fixtureDashboard: some View {
-        Group {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(store.selectedTarget.name)
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Source-tree-first workbench for \(store.selectedTarget.romBase)")
-                        .foregroundStyle(.secondary)
-                }
-
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 12)], spacing: 12) {
-                    if let library = store.resourceLibrary {
-                        MetricCard(title: "Gen III Resources", value: "\(library.entryCount)", detail: "\(library.missingCount) missing")
-                    }
-                    MetricCard(title: "Modules", value: "\(WorkbenchModule.allCases.count)", detail: "Editor surfaces")
-                    MetricCard(title: "Dirty Fixtures", value: "\(store.records.filter(\.isDirty).count)", detail: "Unsaved mock edits")
-                    MetricCard(title: "Issues", value: "\(store.issueCount)", detail: "Validation queue")
-                    MetricCard(title: "Targets", value: "\(store.targets.count)", detail: "Build profiles")
-                }
-
-                if let library = store.resourceLibrary {
-                    resourceLibrarySection(library)
-                }
-
-                EditorSection(title: "Recent Source Surfaces") {
-                    VStack(spacing: 10) {
-                        ForEach(store.records.prefix(5)) { record in
-                            RecordSummaryRow(record: record)
-                        }
-                    }
-                }
-
-                EditorSection(title: "Workbench Contract") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Every editor names the source file, symbol, and line it represents.", systemImage: "location")
-                        Label("Dirty and validation badges are fixture-backed UI affordances.", systemImage: "checkmark.seal")
-                        Label("Build, run, and validate controls are mock actions with no source-writing behavior.", systemImage: "lock.doc")
-                    }
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(store.selectedTarget.name)
+                    .font(.largeTitle.weight(.semibold))
+                Text("Open a Generation III source project to use guided ROM-hacking workflows.")
                     .foregroundStyle(.secondary)
+            }
+
+            workflowHub
+            diagnosticsHub
+
+            if let library = store.resourceLibrary {
+                resourceLibrarySection(library)
+            }
+
+            EditorSection(title: "Available Fixture Surfaces") {
+                VStack(spacing: 10) {
+                    ForEach(store.records.prefix(5)) { record in
+                        RecordSummaryRow(record: record)
+                    }
                 }
             }
         }
     }
 
     private func resourceLibrarySection(_ library: ResourceLibraryViewState) -> some View {
-        EditorSection(title: "Generation III Resource Library") {
+        EditorSection(title: "Resource Library") {
             VStack(spacing: 10) {
                 ForEach(library.entries) { entry in
                     ResourceLibraryRow(entry: entry)
+                }
+            }
+        }
+    }
+}
+
+private struct GuidedFlowCard: View {
+    let flow: WorkbenchGuidedFlow
+    let route: (WorkbenchGuidedAction) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: flow.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(flow.title)
+                        .font(.headline)
+                    Text(flow.subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+                StatusPill(state: flow.status)
+            }
+
+            Text(flow.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            FactGrid(facts: flow.facts)
+
+            HStack(spacing: 8) {
+                Button(flow.primaryAction.title, systemImage: flow.primaryAction.systemImage) {
+                    route(flow.primaryAction)
+                }
+                .help(flow.primaryAction.subtitle)
+
+                ForEach(flow.secondaryActions) { action in
+                    Button(action.title, systemImage: action.systemImage) {
+                        route(action)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(action.subtitle)
+                }
+
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct DiagnosticSummaryStrip: View {
+    let summary: DiagnosticSummary
+    let openDiagnostics: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                StatusPill(state: summary.status)
+                Text(summary.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Open Diagnostics", systemImage: "list.bullet.rectangle") {
+                    openDiagnostics()
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
+                ForEach(summary.buckets) { bucket in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: bucket.systemImage)
+                                .foregroundStyle(.secondary)
+                            Text(bucket.title)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(bucket.count)")
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(bucket.count == 0 ? .secondary : .primary)
+                        }
+                        Text(bucket.subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .padding(10)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }

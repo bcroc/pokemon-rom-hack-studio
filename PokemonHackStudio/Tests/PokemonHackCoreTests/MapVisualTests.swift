@@ -431,6 +431,81 @@ final class MapVisualTests: XCTestCase {
         XCTAssertEqual(entry.jsonPath, ["wild_encounter_groups", "0", "encounters", "0", "land_mons"])
         XCTAssertEqual(entry.slots.map(\.species), ["SPECIES_POOCHYENA", "SPECIES_ZIGZAGOON"])
         XCTAssertEqual(entry.slots.map(\.rate), [20, 10])
+        XCTAssertEqual(entry.slots.first?.jsonPath, ["wild_encounter_groups", "0", "encounters", "0", "land_mons", "mons", "0"])
+    }
+
+    func testMutationPlannerStagesWildEncounterRowEditsAndApplyBacksUpSource() throws {
+        let root = try makeVisualProject()
+        try write(
+            """
+            {
+              "wild_encounter_groups": [
+                {
+                  "label": "gWildMonHeaders",
+                  "for_maps": true,
+                  "fields": [
+                    { "type": "land_mons", "encounter_rates": [20, 10] }
+                  ],
+                  "encounters": [
+                    {
+                      "map": "MAP_ROUTE1",
+                      "base_label": "gRoute1",
+                      "land_mons": {
+                        "encounter_rate": 25,
+                        "mons": [
+                          { "min_level": 2, "max_level": 3, "species": "SPECIES_POOCHYENA" },
+                          { "min_level": 4, "max_level": 5, "species": "SPECIES_ZIGZAGOON" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """,
+            to: root.appendingPathComponent("src/data/wild_encounters.json")
+        )
+
+        let document = try ProjectMapVisualLoader.load(from: projectIndex(root: root), mapID: "MAP_ROUTE1")
+        let entry = try XCTUnwrap(document.wildEncounters?.groups.first?.encounters.first)
+        let slot = try XCTUnwrap(entry.slots.first)
+        let plan = MapMutationPlanner.plan(
+            document: document,
+            operations: [
+                MapEditOperation(
+                    action: .updateWildEncounterField,
+                    fieldKey: "encounter_rate",
+                    fieldValue: "35",
+                    sourcePath: document.wildEncounters?.sourcePath,
+                    jsonPath: entry.rateJSONPath
+                ),
+                MapEditOperation(
+                    action: .updateWildEncounterField,
+                    fieldKey: "species",
+                    fieldValue: "SPECIES_WURMPLE",
+                    sourcePath: document.wildEncounters?.sourcePath,
+                    jsonPath: slot.jsonPath
+                ),
+                MapEditOperation(
+                    action: .updateWildEncounterField,
+                    fieldKey: "min_level",
+                    fieldValue: "6",
+                    sourcePath: document.wildEncounters?.sourcePath,
+                    jsonPath: slot.jsonPath
+                )
+            ]
+        )
+
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics.map(\.code))")
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/wild_encounters.json"])
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(#""encounter_rate": 35"#))
+        XCTAssertTrue(preview.contains(#""species": "SPECIES_WURMPLE""#))
+        XCTAssertTrue(preview.contains(#""min_level": 6"#))
+
+        let result = try MapMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/wild_encounters.json"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
     }
 
     func testMutationPlannerReplacesOnlyScriptBodyAndKeepsNeighborLabels() throws {

@@ -469,6 +469,50 @@ final class SourceIndexTests: XCTestCase {
         XCTAssertEqual(partyRecords.first?.facts.first { $0.label == "Party Mons" }?.value, "1")
     }
 
+    func testWildEncountersJSONIndexesEncountersByMap() throws {
+        let encounterJSON = """
+        {
+          "wild_encounter_groups": [
+            {
+              "label": "gWildMonHeaders",
+              "encounters": [
+                {
+                  "map": "MAP_ROUTE101",
+                  "base_label": "gRoute101",
+                  "land_mons": {
+                    "encounter_rate": 20,
+                    "mons": [
+                      { "species": "SPECIES_WURMPLE", "min_level": 2, "max_level": 2 }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+        """
+
+        let temp = try SourceIndexTemporaryDirectory()
+        let root = temp.url
+        try write("POKEMON EMER\n", to: root.appendingPathComponent("Makefile"))
+        try makeDirectory(root.appendingPathComponent("include"))
+        try makeDirectory(root.appendingPathComponent("graphics"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try write("const struct SpeciesInfo gSpeciesInfo[] = { [SPECIES_NONE] = {0}, };\n", to: root.appendingPathComponent("src/data/pokemon/species_info.h"))
+        try write("const struct Trainer gTrainers[] = { [TRAINER_NONE] = {0}, };\n", to: root.appendingPathComponent("src/data/trainers.h"))
+        try write("const struct Item gItems[] = { [ITEM_NONE] = {0}, };\n", to: root.appendingPathComponent("src/data/items.h"))
+        try write(encounterJSON, to: root.appendingPathComponent("src/data/wild_encounters.json"))
+
+        let projectIndex = try GameAdapterRegistry.index(path: root.path)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: projectIndex)
+
+        let encounter = try XCTUnwrap(sourceIndex.records.first { $0.module == .encounters && $0.title == "MAP_ROUTE101" })
+        XCTAssertEqual(encounter.sourceSpan.relativePath, "src/data/wild_encounters.json")
+        XCTAssertTrue(encounter.facts.contains { $0.label == "Base Label" && $0.value == "gRoute101" })
+        XCTAssertTrue(encounter.facts.contains { $0.label == "Land Mons" && $0.value == "1 slots" })
+    }
+
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)

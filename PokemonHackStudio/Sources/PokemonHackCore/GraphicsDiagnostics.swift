@@ -143,6 +143,7 @@ public struct GraphicsTilesetDiagnostics: Codable, Equatable, Identifiable {
     public let animation: GraphicsAnimationStatus?
     public let metatileCount: Int
     public let layerSummary: GraphicsLayerModeSummary
+    public let conversionPlan: GraphicsConversionPlan
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -155,6 +156,7 @@ public struct GraphicsTilesetDiagnostics: Codable, Equatable, Identifiable {
         animation: GraphicsAnimationStatus?,
         metatileCount: Int,
         layerSummary: GraphicsLayerModeSummary,
+        conversionPlan: GraphicsConversionPlan? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.symbol = symbol
@@ -166,6 +168,55 @@ public struct GraphicsTilesetDiagnostics: Codable, Equatable, Identifiable {
         self.animation = animation
         self.metatileCount = metatileCount
         self.layerSummary = layerSummary
+        self.conversionPlan = conversionPlan ?? GraphicsConversionPlan(
+            tilesetSymbol: symbol,
+            targetKind: role,
+            sourcePaths: [],
+            expectedOutputs: [],
+            provenanceRequired: true,
+            creditMetadataPaths: [],
+            paletteFitSummary: "No conversion sources are available.",
+            externalToolPlan: "Preview external conversion only."
+        )
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct GraphicsConversionPlan: Codable, Equatable, Identifiable {
+    public var id: String { "\(tilesetSymbol):\(targetKind)" }
+
+    public let tilesetSymbol: String
+    public let targetKind: String
+    public let sourcePaths: [String]
+    public let expectedOutputs: [String]
+    public let provenanceRequired: Bool
+    public let creditMetadataPaths: [String]
+    public let paletteFitSummary: String
+    public let externalToolPlan: String
+    public let isPreviewOnly: Bool
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        tilesetSymbol: String,
+        targetKind: String,
+        sourcePaths: [String],
+        expectedOutputs: [String],
+        provenanceRequired: Bool,
+        creditMetadataPaths: [String],
+        paletteFitSummary: String,
+        externalToolPlan: String,
+        isPreviewOnly: Bool = true,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.tilesetSymbol = tilesetSymbol
+        self.targetKind = targetKind
+        self.sourcePaths = sourcePaths
+        self.expectedOutputs = expectedOutputs
+        self.provenanceRequired = provenanceRequired
+        self.creditMetadataPaths = creditMetadataPaths
+        self.paletteFitSummary = paletteFitSummary
+        self.externalToolPlan = externalToolPlan
+        self.isPreviewOnly = isPreviewOnly
         self.diagnostics = diagnostics
     }
 }
@@ -213,6 +264,7 @@ public struct GraphicsDiagnosticsReport: Codable, Equatable {
     public let isReadOnly: Bool
     public let inventory: GraphicsSourceAssetInventory
     public let tilesets: [GraphicsTilesetDiagnostics]
+    public let conversionPlans: [GraphicsConversionPlan]
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -224,6 +276,7 @@ public struct GraphicsDiagnosticsReport: Codable, Equatable {
         isReadOnly: Bool = true,
         inventory: GraphicsSourceAssetInventory,
         tilesets: [GraphicsTilesetDiagnostics],
+        conversionPlans: [GraphicsConversionPlan] = [],
         diagnostics: [Diagnostic] = []
     ) {
         self.root = root
@@ -234,6 +287,7 @@ public struct GraphicsDiagnosticsReport: Codable, Equatable {
         self.isReadOnly = isReadOnly
         self.inventory = inventory
         self.tilesets = tilesets
+        self.conversionPlans = conversionPlans
         self.diagnostics = diagnostics
     }
 }
@@ -270,8 +324,10 @@ public enum GraphicsDiagnosticsReportBuilder {
         let tilesets = tilesetIndex.assets.map { asset in
             let tileset = tilesetDiagnostics(for: asset, root: root, fileManager: fileManager)
             diagnostics.append(contentsOf: tileset.diagnostics)
+            diagnostics.append(contentsOf: tileset.conversionPlan.diagnostics)
             return tileset
         }
+        let conversionPlans = tilesets.map(\.conversionPlan)
 
         if inventory.pathsWithSpacesCount > 0 {
             diagnostics.append(
@@ -302,6 +358,7 @@ public enum GraphicsDiagnosticsReportBuilder {
             adapterName: index.adapterName,
             inventory: inventory,
             tilesets: tilesets,
+            conversionPlans: conversionPlans,
             diagnostics: diagnostics
         )
     }
@@ -387,6 +444,15 @@ public enum GraphicsDiagnosticsReportBuilder {
         }
 
         let animation = animationStatus(asset: asset, root: root, fileManager: fileManager)
+        let conversionPlan = graphicsConversionPlan(
+            asset: asset,
+            tileImage: tileImage,
+            palettes: palettes,
+            metatiles: metatiles,
+            metatileAttributes: attributes,
+            root: root,
+            fileManager: fileManager
+        )
 
         return GraphicsTilesetDiagnostics(
             symbol: asset.symbol,
@@ -398,8 +464,89 @@ public enum GraphicsDiagnosticsReportBuilder {
             animation: animation,
             metatileCount: asset.metatileCount,
             layerSummary: layerSummary,
+            conversionPlan: conversionPlan,
             diagnostics: diagnostics
         )
+    }
+
+    private static func graphicsConversionPlan(
+        asset: TilesetAsset,
+        tileImage: GraphicsArtifactStatus?,
+        palettes: [GraphicsArtifactStatus],
+        metatiles: GraphicsArtifactStatus?,
+        metatileAttributes: GraphicsArtifactStatus?,
+        root: URL,
+        fileManager: FileManager
+    ) -> GraphicsConversionPlan {
+        let sourcePaths = ([tileImage?.relativePath, metatiles?.relativePath, metatileAttributes?.relativePath].compactMap { $0 } + palettes.map(\.relativePath)).sorted()
+        let expectedOutputs = ([tileImage?.generatedRelativePath, metatiles?.generatedRelativePath, metatileAttributes?.generatedRelativePath].compactMap { $0 } + palettes.compactMap(\.generatedRelativePath)).sorted()
+        let creditPaths = creditMetadataPaths(for: sourcePaths, root: root, fileManager: fileManager)
+        var diagnostics: [Diagnostic] = []
+        let paletteColorCounts = palettes.compactMap(\.palette?.colorCount)
+        let overLimitPalettes = paletteColorCounts.filter { $0 > 16 }.count
+        let imageColorCount = tileImage?.png?.paletteColorCount
+        let paletteFit: String
+        if let imageColorCount, imageColorCount > 16 {
+            paletteFit = "Image declares \(imageColorCount) palette color(s); reduce to 16 colors before 4bpp conversion."
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "GRAPHICS_CONVERSION_PALETTE_FIT_BLOCKED",
+                    message: "\(asset.symbol) needs palette reduction before conversion planning is safe.",
+                    span: tileImage.map { SourceSpan(relativePath: $0.relativePath, startLine: 1) }
+                )
+            )
+        } else if overLimitPalettes > 0 {
+            paletteFit = "\(overLimitPalettes) palette file(s) exceed the 16-color Gen III palette shape."
+        } else if !paletteColorCounts.isEmpty {
+            paletteFit = "\(paletteColorCounts.count) palette file(s) fit the 16-color Gen III palette shape."
+        } else {
+            paletteFit = "No palette source was found; conversion would need palette provenance first."
+        }
+
+        if creditPaths.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .info,
+                    code: "GRAPHICS_IMPORT_PROVENANCE_REQUIRED",
+                    message: "\(asset.symbol) has no nearby README or credits file; imported assets should record author, source, license, and credit text before writes.",
+                    span: SourceSpan(relativePath: tileImage?.relativePath ?? asset.metatilesPath ?? "data/tilesets", startLine: 1)
+                )
+            )
+        }
+
+        let toolPlan = "Preview external conversion only: validate provenance, fit palettes to 4bpp, then plan PNG/PAL to expected generated artifacts without invoking bundled GPL tools."
+        return GraphicsConversionPlan(
+            tilesetSymbol: asset.symbol,
+            targetKind: asset.isSecondary ? "secondary tileset" : "primary tileset",
+            sourcePaths: sourcePaths,
+            expectedOutputs: expectedOutputs,
+            provenanceRequired: true,
+            creditMetadataPaths: creditPaths,
+            paletteFitSummary: paletteFit,
+            externalToolPlan: toolPlan,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func creditMetadataPaths(for sourcePaths: [String], root: URL, fileManager: FileManager) -> [String] {
+        let names = Set(["readme.md", "readme.txt", "credits.md", "credits.txt"])
+        var paths: Set<String> = []
+        for sourcePath in sourcePaths {
+            var directory = (sourcePath as NSString).deletingLastPathComponent
+            while !directory.isEmpty, directory.hasPrefix("data/tilesets") {
+                for name in names {
+                    let candidate = directory + "/" + name
+                    if fileManager.fileExists(atPath: root.appendingPathComponent(candidate).path) {
+                        paths.insert(candidate)
+                    }
+                }
+                let next = (directory as NSString).deletingLastPathComponent
+                if next == directory { break }
+                directory = next
+            }
+        }
+        return paths.sorted()
     }
 
     private static func artifactStatus(

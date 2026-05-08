@@ -26,4 +26,4 @@ This repo is a local development workspace for PokemonHackStudio. Keep the first
 
 ## Current Focus
 
-`PHS-T1` is active: implement the read-only map/layout viewer backed by `ProjectIndex`, map groups, map JSON, layouts, and blockdata previews.
+No implementation row is currently active. The live baseline is tracked in `docs/planning-and-progress.md` and is complete through `PHS-T40`; choose new work from the Active Board candidate rows and update the board/proof ledger when closing a row.

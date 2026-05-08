@@ -26,6 +26,7 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
     public let trainerTypes: [String]
     public let facingDirections: [String]
     public let flags: [String]
+    public let speciesIDs: [String]
 
     private let mapIDSet: Set<String>
     private let scriptLabelSet: Set<String>
@@ -50,6 +51,7 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
         case trainerTypes
         case facingDirections
         case flags
+        case speciesIDs
     }
 
     public init(
@@ -63,7 +65,8 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
         movementTypes: [String] = [],
         trainerTypes: [String] = [],
         facingDirections: [String] = [],
-        flags: [String] = []
+        flags: [String] = [],
+        speciesIDs: [String] = []
     ) {
         self.mapIDs = Self.uniqueSorted(mapIDs)
         self.mapWarpCounts = mapWarpCounts
@@ -76,6 +79,7 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
         self.trainerTypes = Self.uniqueSorted(trainerTypes)
         self.facingDirections = Self.uniqueSorted(facingDirections)
         self.flags = Self.uniqueSorted(flags)
+        self.speciesIDs = Self.uniqueSorted(speciesIDs)
         mapIDSet = Set(self.mapIDs)
         scriptLabelSet = Set(self.scriptLabels)
         objectGraphicsIDSet = Set(self.objectGraphicsIDs)
@@ -101,7 +105,8 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
             movementTypes: try container.decodeIfPresent([String].self, forKey: .movementTypes) ?? [],
             trainerTypes: try container.decodeIfPresent([String].self, forKey: .trainerTypes) ?? [],
             facingDirections: try container.decodeIfPresent([String].self, forKey: .facingDirections) ?? [],
-            flags: try container.decodeIfPresent([String].self, forKey: .flags) ?? []
+            flags: try container.decodeIfPresent([String].self, forKey: .flags) ?? [],
+            speciesIDs: try container.decodeIfPresent([String].self, forKey: .speciesIDs) ?? []
         )
     }
 
@@ -118,6 +123,7 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
         try container.encode(trainerTypes, forKey: .trainerTypes)
         try container.encode(facingDirections, forKey: .facingDirections)
         try container.encode(flags, forKey: .flags)
+        try container.encode(speciesIDs, forKey: .speciesIDs)
     }
 
     public static func load(
@@ -127,15 +133,15 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
         objectSprites: [MapEventSpriteDescriptor],
         fileManager: FileManager = .default
     ) -> MapEventOptionsCatalog {
-        let mapIDs = catalog.maps.map(\.id)
+        let mapIDs = catalog.maps.map { $0.id }
         let mapWarpCounts = Dictionary(uniqueKeysWithValues: catalog.maps.map { ($0.id, $0.eventCounts.warpEvents) })
-        let spriteIDs = objectSprites.map(\.graphicsID)
+        let spriteIDs = objectSprites.map { $0.graphicsID }
         let staticOptions = MapEventOptionsStaticCatalog.load(root: root, fileManager: fileManager)
 
         return MapEventOptionsCatalog(
             mapIDs: mapIDs,
             mapWarpCounts: mapWarpCounts,
-            scriptLabels: scriptIndex.labels.map(\.label),
+            scriptLabels: scriptIndex.labels.map { $0.label },
             objectGraphicsIDs: spriteIDs,
             objectSprites: objectSprites,
             itemIDs: staticOptions.itemIDs,
@@ -143,7 +149,8 @@ public struct MapEventOptionsCatalog: Codable, Equatable, Sendable {
             movementTypes: staticOptions.movementTypes,
             trainerTypes: staticOptions.trainerTypes,
             facingDirections: staticOptions.facingDirections,
-            flags: staticOptions.flags
+            flags: staticOptions.flags,
+            speciesIDs: staticOptions.speciesIDs
         )
     }
 
@@ -229,6 +236,7 @@ public struct MapEventOptionsStaticCatalog: Codable, Equatable, Sendable {
     public let trainerTypes: [String]
     public let facingDirections: [String]
     public let flags: [String]
+    public let speciesIDs: [String]
 
     public init(
         itemIDs: [String] = [],
@@ -236,7 +244,8 @@ public struct MapEventOptionsStaticCatalog: Codable, Equatable, Sendable {
         movementTypes: [String] = [],
         trainerTypes: [String] = [],
         facingDirections: [String] = [],
-        flags: [String] = []
+        flags: [String] = [],
+        speciesIDs: [String] = []
     ) {
         self.itemIDs = Self.uniqueSorted(itemIDs)
         self.variableIDs = Self.uniqueSorted(variableIDs)
@@ -244,6 +253,7 @@ public struct MapEventOptionsStaticCatalog: Codable, Equatable, Sendable {
         self.trainerTypes = Self.uniqueSorted(trainerTypes)
         self.facingDirections = Self.uniqueSorted(facingDirections)
         self.flags = Self.uniqueSorted(flags)
+        self.speciesIDs = Self.uniqueSorted(speciesIDs)
     }
 
     public static func load(root: URL, fileManager: FileManager = .default) -> MapEventOptionsStaticCatalog {
@@ -253,7 +263,8 @@ public struct MapEventOptionsStaticCatalog: Codable, Equatable, Sendable {
             movementTypes: constants(root: root, path: "include/constants/event_object_movement.h", prefixes: ["MOVEMENT_TYPE_"], fileManager: fileManager),
             trainerTypes: constants(root: root, path: "include/constants/trainer_types.h", prefixes: ["TRAINER_TYPE_"], fileManager: fileManager),
             facingDirections: constants(root: root, path: "include/constants/event_bg.h", prefixes: ["BG_EVENT_PLAYER_FACING_"], fileManager: fileManager),
-            flags: constants(root: root, path: "include/constants/flags.h", prefixes: ["FLAG_"], exactSymbols: ["FLAG_NONE"], fileManager: fileManager)
+            flags: constants(root: root, path: "include/constants/flags.h", prefixes: ["FLAG_"], exactSymbols: ["FLAG_NONE"], fileManager: fileManager),
+            speciesIDs: constants(root: root, path: "include/constants/species.h", prefixes: ["SPECIES_"], fileManager: fileManager)
         )
     }
 
@@ -263,17 +274,18 @@ public struct MapEventOptionsStaticCatalog: Codable, Equatable, Sendable {
         objectSprites: [MapEventSpriteDescriptor]
     ) -> MapEventOptionsCatalog {
         MapEventOptionsCatalog(
-            mapIDs: catalog.maps.map(\.id),
+            mapIDs: catalog.maps.map { $0.id },
             mapWarpCounts: Dictionary(uniqueKeysWithValues: catalog.maps.map { ($0.id, $0.eventCounts.warpEvents) }),
-            scriptLabels: scriptIndex.labels.map(\.label),
-            objectGraphicsIDs: objectSprites.map(\.graphicsID),
+            scriptLabels: scriptIndex.labels.map { $0.label },
+            objectGraphicsIDs: objectSprites.map { $0.graphicsID },
             objectSprites: objectSprites,
             itemIDs: itemIDs,
             variableIDs: variableIDs,
             movementTypes: movementTypes,
             trainerTypes: trainerTypes,
             facingDirections: facingDirections,
-            flags: flags
+            flags: flags,
+            speciesIDs: speciesIDs
         )
     }
 

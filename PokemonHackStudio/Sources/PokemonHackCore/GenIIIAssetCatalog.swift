@@ -12,6 +12,7 @@ public enum GenIIIAssetCategory: String, Codable, Equatable, CaseIterable {
     case learnsets
     case evolutions
     case pokedex
+    case encounters
     case graphics
     case palettes
     case tilesets
@@ -775,6 +776,8 @@ public enum GenIIIAssetCatalogBuilder {
             .evolutions
         case .pokedex:
             .pokedex
+        case .encounters:
+            .encounters
         default:
             nil
         }
@@ -800,6 +803,8 @@ public enum GenIIIAssetCatalogBuilder {
             .evolutions
         case .pokedex:
             .pokedex
+        case .encounters:
+            .encounters
         }
     }
 
@@ -830,6 +835,7 @@ public enum GenIIIAssetCatalogBuilder {
     private static func inferredInventoryCategory(_ relativePath: String) -> GenIIIAssetCategory {
         let lower = relativePath.lowercased()
         if lower.hasPrefix("data/maps/") { return .maps }
+        if lower.contains("wild_encounters") { return .encounters }
         if lower.hasPrefix("data/layouts/") { return .layouts }
         if lower.hasPrefix("data/scripts/") || lower.hasSuffix(".inc") { return .scripts }
         if lower.hasPrefix("data/text/") || lower.contains("/text/") { return .text }
@@ -880,6 +886,8 @@ public enum GenIIIAssetCatalogBuilder {
             return GenIIIAssetNavigationTarget(module: .trainers, identifier: record.title)
         case .items:
             return GenIIIAssetNavigationTarget(module: .items, identifier: record.title)
+        case .encounters:
+            return GenIIIAssetNavigationTarget(module: .encounters, identifier: record.title)
         }
     }
 
@@ -901,6 +909,8 @@ public enum GenIIIAssetCatalogBuilder {
             return GenIIIAssetNavigationTarget(module: .trainers, identifier: identifier)
         case .items:
             return GenIIIAssetNavigationTarget(module: .items, identifier: identifier)
+        case .encounters:
+            return GenIIIAssetNavigationTarget(module: .encounters, identifier: identifier)
         case .graphics, .palettes, .tilesets:
             return GenIIIAssetNavigationTarget(module: .graphics, identifier: identifier)
         case .generated:

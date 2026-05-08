@@ -2,7 +2,7 @@
 
 PokemonHackStudio is a local-first macOS workbench for Pokemon Generation III ROM hacking. The project is source-tree-first: decompilation projects are the canonical editing surface, while ROM inspection, patching, and playtest workflows support validation and migration.
 
-The current active lane is `PHS-T1`: a read-only map/layout viewer backed by `ProjectIndex`, map groups, map JSON, layouts, and blockdata previews.
+The completed baseline is tracked in `docs/planning-and-progress.md` and is currently complete through `PHS-T40`. New implementation work should start from the Active Board candidate rows.
 
 ## Repository Layout
 
@@ -47,9 +47,11 @@ swift test --package-path PokemonHackStudio
 swift run --package-path PokemonHackStudio pokemonhack-cli references --json
 swift run --package-path PokemonHackStudio pokemonhack-cli inspect pokeemerald --json
 swift run --package-path PokemonHackStudio pokemonhack-cli maps pokeemerald --json
+swift run --package-path PokemonHackStudio pokemonhack-cli map-visual pokeemerald MAP_MAUVILLE_CITY --json
+swift run --package-path PokemonHackStudio pokemonhack-cli playtest pokeemerald --headless --json
 ```
 
-The `pokeemerald` checks are skipped when the local fixture is not present.
+The `pokeemerald`, `pokefirered`, and `references/pokeruby` checks are skipped when the local fixture is not present.
 
 ## Operating Boundaries
 

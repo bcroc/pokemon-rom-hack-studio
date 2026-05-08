@@ -192,6 +192,7 @@ public struct MapWildEncounterEntry: Codable, Equatable, Identifiable {
     public let encounterRate: Int?
     public let slots: [MapWildEncounterSlot]
     public let jsonPath: [String]
+    public let rateJSONPath: [String]
 
     public init(
         mapID: String,
@@ -199,7 +200,8 @@ public struct MapWildEncounterEntry: Codable, Equatable, Identifiable {
         encounterType: String,
         encounterRate: Int?,
         slots: [MapWildEncounterSlot],
-        jsonPath: [String]
+        jsonPath: [String],
+        rateJSONPath: [String]? = nil
     ) {
         self.mapID = mapID
         self.baseLabel = baseLabel
@@ -207,6 +209,17 @@ public struct MapWildEncounterEntry: Codable, Equatable, Identifiable {
         self.encounterRate = encounterRate
         self.slots = slots
         self.jsonPath = jsonPath
+        self.rateJSONPath = rateJSONPath ?? jsonPath
+    }
+
+    public var expectedSlotCount: Int? {
+        switch encounterType.lowercased() {
+        case "land_mons": return 12
+        case "water_mons": return 5
+        case "rock_smash_mons": return 5
+        case "fishing_mons": return 10
+        default: return nil
+        }
     }
 }
 
@@ -218,13 +231,15 @@ public struct MapWildEncounterSlot: Codable, Equatable, Identifiable {
     public let minLevel: Int?
     public let maxLevel: Int?
     public let rate: Int?
+    public let jsonPath: [String]
 
-    public init(index: Int, species: String, minLevel: Int?, maxLevel: Int?, rate: Int?) {
+    public init(index: Int, species: String, minLevel: Int?, maxLevel: Int?, rate: Int?, jsonPath: [String] = []) {
         self.index = index
         self.species = species
         self.minLevel = minLevel
         self.maxLevel = maxLevel
         self.rate = rate
+        self.jsonPath = jsonPath
     }
 }
 
@@ -1726,7 +1741,23 @@ public enum MapWildEncounterIndexLoader {
                 return MapWildEncounterGroup(groupIndex: groupIndex, label: label, forMaps: forMaps, encounters: encounters)
             }
 
-            return MapWildEncounterIndex(sourcePath: sourcePath, mapID: mapID, groups: groups)
+            var diagnostics: [Diagnostic] = []
+            for group in groups {
+                for encounter in group.encounters {
+                    if let expected = encounter.expectedSlotCount, encounter.slots.count != expected {
+                        diagnostics.append(
+                            Diagnostic(
+                                severity: .warning,
+                                code: "WILD_ENCOUNTER_SLOT_COUNT_MISMATCH",
+                                message: "\(encounter.encounterType) on \(encounter.mapID) should have \(expected) slots, but found \(encounter.slots.count).",
+                                span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                            )
+                        )
+                    }
+                }
+            }
+
+            return MapWildEncounterIndex(sourcePath: sourcePath, mapID: mapID, groups: groups, diagnostics: diagnostics)
         } catch {
             return MapWildEncounterIndex(
                 sourcePath: sourcePath,
@@ -1761,13 +1792,21 @@ public enum MapWildEncounterIndexLoader {
             guard let object = encounterObject[key] as? [String: Any] else { return nil }
             let mons = object["mons"] as? [[String: Any]] ?? []
             let rates = rateTable[key] ?? []
+            let entryPath = [
+                "wild_encounter_groups",
+                "\(groupIndex)",
+                "encounters",
+                "\(encounterIndex)",
+                key
+            ]
             let slots = mons.enumerated().map { slotIndex, monObject in
                 MapWildEncounterSlot(
                     index: slotIndex,
                     species: monObject["species"] as? String ?? "SPECIES_NONE",
                     minLevel: monObject["min_level"] as? Int,
                     maxLevel: monObject["max_level"] as? Int,
-                    rate: rates.indices.contains(slotIndex) ? rates[slotIndex] : nil
+                    rate: rates.indices.contains(slotIndex) ? rates[slotIndex] : nil,
+                    jsonPath: entryPath + ["mons", "\(slotIndex)"]
                 )
             }
             return MapWildEncounterEntry(
@@ -1776,13 +1815,7 @@ public enum MapWildEncounterIndexLoader {
                 encounterType: key,
                 encounterRate: object["encounter_rate"] as? Int,
                 slots: slots,
-                jsonPath: [
-                    "wild_encounter_groups",
-                    "\(groupIndex)",
-                    "encounters",
-                    "\(encounterIndex)",
-                    key
-                ]
+                jsonPath: entryPath
             )
         }
     }

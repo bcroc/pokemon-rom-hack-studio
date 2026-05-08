@@ -310,7 +310,7 @@ public struct EmeraldAdapter: GameAdapter {
     public let displayName = "pokeemerald"
     public let supportedProfiles: [GameProfile] = [.pokeemerald]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .patchPlanning, .buildRunner, .playtestBridge, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -343,7 +343,7 @@ public struct FireRedAdapter: GameAdapter {
     public let displayName = "pokefirered"
     public let supportedProfiles: [GameProfile] = [.pokefirered]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .patchPlanning, .buildRunner, .playtestBridge, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -380,7 +380,7 @@ public struct RubySapphireAdapter: GameAdapter {
     public let displayName = "pokeruby / pokesapphire"
     public let supportedProfiles: [GameProfile] = [.pokeruby]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .patchPlanning, .buildRunner, .playtestBridge, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -420,7 +420,7 @@ public struct ExpansionAdapter: GameAdapter {
     public let displayName = "pokeemerald-expansion"
     public let supportedProfiles: [GameProfile] = [.pokeemeraldExpansion]
     public let supportedModules: [EditorModule] = [.maps, .scripts, .graphics, .pokemon, .trainers, .items, .encounters, .text, .build]
-    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .buildRunner, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .mapIndex, .layoutIndex, .scriptOutline, .speciesEditor, .trainerEditor, .patchPlanning, .buildRunner, .playtestBridge, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -520,7 +520,7 @@ public struct GameCubeDiscAdapter: GameAdapter {
     public let displayName = "Generation III GameCube disc"
     public let supportedProfiles: [GameProfile] = [.pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia]
     public let supportedModules: [EditorModule] = [.rom, .graphics, .pokemon, .trainers, .items, .moves, .text, .diagnostics]
-    public let capabilities: [CoreCapability] = [.resourceIndex, .binaryROMGraph, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .diagnostics]
     public let writePolicy: WritePolicy = .mutationPlanOnly
 
     public init() {}
@@ -535,12 +535,23 @@ public struct GameCubeDiscAdapter: GameAdapter {
             throw PokemonHackCoreError.unsupportedProject(root.path)
         }
 
-        let documents = disc.resources.prefix(256).map { resource in
+        let documentCap = 256
+        let documents = disc.resources.prefix(documentCap).map { resource in
             SourceDocument(
                 relativePath: resource.path,
                 kind: sourceKind(for: resource),
                 role: .localInput,
                 exists: true
+            )
+        }
+        var diagnostics = disc.diagnostics
+        if disc.resources.count > documents.count {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "GAMECUBE_RESOURCE_DOCUMENT_CAP",
+                    message: "Indexed \(documents.count) of \(disc.resources.count) GameCube resources as ProjectIndex documents; use resource-index for the full parser report."
+                )
             )
         }
 
@@ -555,7 +566,7 @@ public struct GameCubeDiscAdapter: GameAdapter {
             documents: documents.isEmpty ? [
                 SourceDocument(relativePath: root.lastPathComponent, kind: .rom, role: .localInput, exists: true)
             ] : documents,
-            diagnostics: disc.diagnostics,
+            diagnostics: diagnostics,
             buildTargets: []
         )
     }
@@ -1133,6 +1144,11 @@ public struct ROMImage: Codable, Equatable {
     public let title: String?
     public let gameCode: String?
     public let makerCode: String?
+    public let version: UInt8?
+    public let complementChecksum: UInt8?
+    public let expectedComplementChecksum: UInt8?
+    public let isComplementChecksumValid: Bool?
+    public let hasNintendoLogoData: Bool
 
     public init(path: String, data: Data) {
         self.path = path
@@ -1140,6 +1156,18 @@ public struct ROMImage: Codable, Equatable {
         self.title = ROMImage.asciiString(data: data, offset: 0xA0, length: 12)
         self.gameCode = ROMImage.asciiString(data: data, offset: 0xAC, length: 4)
         self.makerCode = ROMImage.asciiString(data: data, offset: 0xB0, length: 2)
+        let version = data.count > 0xBC ? data[0xBC] : nil
+        let complementChecksum = data.count > 0xBD ? data[0xBD] : nil
+        let expectedComplementChecksum = ROMImage.expectedComplementChecksum(data: data)
+        self.version = version
+        self.complementChecksum = complementChecksum
+        self.expectedComplementChecksum = expectedComplementChecksum
+        if let complementChecksum, let expectedComplementChecksum {
+            self.isComplementChecksumValid = complementChecksum == expectedComplementChecksum
+        } else {
+            self.isComplementChecksumValid = nil
+        }
+        self.hasNintendoLogoData = data.count >= 0xA0 && data[0x04..<0xA0].contains { $0 != 0 }
     }
 
     private static func asciiString(data: Data, offset: Int, length: Int) -> String? {
@@ -1149,6 +1177,12 @@ public struct ROMImage: Codable, Equatable {
         let bytes = data[offset..<(offset + length)]
         let string = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .controlCharacters.union(.whitespaces))
         return string.isEmpty ? nil : string
+    }
+
+    private static func expectedComplementChecksum(data: Data) -> UInt8? {
+        guard data.count > 0xBC else { return nil }
+        let sum = data[0xA0...0xBC].reduce(0) { ($0 + Int($1)) & 0xff }
+        return UInt8((0x19 - sum) & 0xff)
     }
 }
 
@@ -1170,6 +1204,146 @@ public struct GBAPointer: Codable, Equatable {
             return nil
         }
         return rawValue - Self.romBase
+    }
+}
+
+public struct BinaryROMGraph: Codable, Equatable {
+    public let image: ROMImage
+    public let headerFacts: [BinaryROMGraphFact]
+    public let pointerCandidates: [BinaryROMPointerCandidate]
+    public let freeSpaceRanges: [BinaryROMRange]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        image: ROMImage,
+        headerFacts: [BinaryROMGraphFact],
+        pointerCandidates: [BinaryROMPointerCandidate],
+        freeSpaceRanges: [BinaryROMRange],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.image = image
+        self.headerFacts = headerFacts
+        self.pointerCandidates = pointerCandidates
+        self.freeSpaceRanges = freeSpaceRanges
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct BinaryROMGraphFact: Codable, Equatable, Identifiable {
+    public var id: String { key }
+
+    public let key: String
+    public let value: String
+    public let confidence: String
+
+    public init(key: String, value: String, confidence: String = "high") {
+        self.key = key
+        self.value = value
+        self.confidence = confidence
+    }
+}
+
+public struct BinaryROMPointerCandidate: Codable, Equatable, Identifiable {
+    public var id: String { "\(sourceOffset):\(targetOffset)" }
+
+    public let sourceOffset: UInt32
+    public let rawValue: UInt32
+    public let targetOffset: UInt32
+    public let confidence: String
+
+    public init(sourceOffset: UInt32, rawValue: UInt32, targetOffset: UInt32, confidence: String = "medium") {
+        self.sourceOffset = sourceOffset
+        self.rawValue = rawValue
+        self.targetOffset = targetOffset
+        self.confidence = confidence
+    }
+}
+
+public struct BinaryROMRange: Codable, Equatable, Identifiable {
+    public var id: String { "\(offset):\(length)" }
+
+    public let offset: UInt32
+    public let length: UInt32
+    public let fillByte: UInt8
+    public let confidence: String
+
+    public init(offset: UInt32, length: UInt32, fillByte: UInt8, confidence: String = "medium") {
+        self.offset = offset
+        self.length = length
+        self.fillByte = fillByte
+        self.confidence = confidence
+    }
+}
+
+public enum BinaryROMGraphBuilder {
+    public static func build(path: String, data: Data, maxPointers: Int = 64, minimumFreeSpaceLength: Int = 32) -> BinaryROMGraph {
+        let image = ROMImage(path: path, data: data)
+        var facts: [BinaryROMGraphFact] = [
+            BinaryROMGraphFact(key: "Size", value: "\(image.size) bytes"),
+            BinaryROMGraphFact(key: "Title", value: image.title ?? "Unavailable", confidence: image.title == nil ? "low" : "high"),
+            BinaryROMGraphFact(key: "Game Code", value: image.gameCode ?? "Unavailable", confidence: image.gameCode == nil ? "low" : "high"),
+            BinaryROMGraphFact(key: "Maker Code", value: image.makerCode ?? "Unavailable", confidence: image.makerCode == nil ? "low" : "high"),
+            BinaryROMGraphFact(key: "Revision", value: image.version.map { "\($0)" } ?? "Unavailable", confidence: image.version == nil ? "low" : "high"),
+            BinaryROMGraphFact(key: "Nintendo Logo", value: image.hasNintendoLogoData ? "Present" : "Missing", confidence: image.hasNintendoLogoData ? "medium" : "low")
+        ]
+        if let actual = image.complementChecksum, let expected = image.expectedComplementChecksum {
+            facts.append(BinaryROMGraphFact(key: "Header Complement", value: String(format: "0x%02X expected 0x%02X", actual, expected), confidence: actual == expected ? "high" : "medium"))
+        }
+
+        let pointers = pointerCandidates(data: data, maxPointers: maxPointers)
+        let freeSpace = freeSpaceRanges(data: data, minimumLength: minimumFreeSpaceLength)
+        var diagnostics: [Diagnostic] = []
+        if image.isComplementChecksumValid == false {
+            diagnostics.append(Diagnostic(severity: .warning, code: "BINARY_ROM_HEADER_COMPLEMENT_MISMATCH", message: "The GBA header complement checksum does not match the calculated value."))
+        }
+        if pointers.isEmpty {
+            diagnostics.append(Diagnostic(severity: .info, code: "BINARY_ROM_POINTERS_NOT_FOUND", message: "No aligned GBA pointer candidates were found in the first graph pass."))
+        }
+
+        return BinaryROMGraph(image: image, headerFacts: facts, pointerCandidates: pointers, freeSpaceRanges: freeSpace, diagnostics: diagnostics)
+    }
+
+    private static func pointerCandidates(data: Data, maxPointers: Int) -> [BinaryROMPointerCandidate] {
+        guard data.count >= 4 else { return [] }
+        var candidates: [BinaryROMPointerCandidate] = []
+        for offset in stride(from: 0, through: data.count - 4, by: 4) {
+            let raw = readUInt32LE(data, offset: offset)
+            guard let target = GBAPointer(rawValue: raw).romOffset,
+                  target < data.count
+            else { continue }
+            candidates.append(BinaryROMPointerCandidate(sourceOffset: UInt32(offset), rawValue: raw, targetOffset: target))
+            if candidates.count >= maxPointers { break }
+        }
+        return candidates
+    }
+
+    private static func freeSpaceRanges(data: Data, minimumLength: Int) -> [BinaryROMRange] {
+        var ranges: [BinaryROMRange] = []
+        var start: Int?
+        var byte: UInt8 = 0
+        for index in 0...data.count {
+            let current = index < data.count ? data[index] : 0xff ^ byte
+            let isFree = current == 0x00 || current == 0xff
+            if isFree, start == nil {
+                start = index
+                byte = current
+            } else if (!isFree || current != byte), let rangeStart = start {
+                let length = index - rangeStart
+                if length >= minimumLength {
+                    ranges.append(BinaryROMRange(offset: UInt32(rangeStart), length: UInt32(length), fillByte: byte))
+                }
+                start = isFree ? index : nil
+                byte = current
+            }
+        }
+        return ranges
+    }
+
+    private static func readUInt32LE(_ data: Data, offset: Int) -> UInt32 {
+        UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
     }
 }
 

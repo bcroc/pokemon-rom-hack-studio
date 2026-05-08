@@ -1,44 +1,1061 @@
+import PokemonHackCore
 import SwiftUI
 
-struct SidebarView: View {
-    @Binding var selection: WorkbenchModule
-    let issueCount: Int
+struct WorkbenchSidebarPanel: View {
+    @ObservedObject var store: WorkbenchStore
+
+    @State private var mapEventSearchText = ""
+    @State private var scriptDraftKey = ""
+    @State private var scriptDraftText = ""
 
     var body: some View {
-        List(selection: $selection) {
-            ForEach(WorkbenchModuleGroup.allCases) { group in
-                Section(group.rawValue) {
-                    ForEach(group.modules) { module in
-                        SidebarModuleRow(module: module, issueCount: issueCount)
-                            .tag(module)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                projectSummary
+                moduleNavigation
+                sidebarSearch
+                objectNavigation
+                contextualTools
+                selectionProperties
+            }
+            .padding(12)
+        }
+        .navigationTitle("PokemonHack")
+        .background(.bar)
+    }
+
+    private var projectSummary: some View {
+        sidebarSection("Workspace", systemImage: "folder") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: store.selection.systemImage)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(store.selectedIndexedProject?.title ?? store.selectedTarget.name)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(store.selectedIndexedProject?.rootPath ?? "Open a source project")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 6)
+                    StatusPill(state: store.selectedIndexedProject?.status ?? store.projectIndexStatus.validationState)
+                }
+
+                HStack(spacing: 8) {
+                    sidebarMetric("Projects", "\(store.indexedProjects.count)")
+                    sidebarMetric("Issues", "\(store.issueCount)")
+                    sidebarMetric("Dirty", store.hasStagedMapEdits ? "Yes" : "No")
+                }
+            }
+        }
+    }
+
+    private var moduleNavigation: some View {
+        sidebarSection("Navigation", systemImage: "sidebar.left") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(WorkbenchModuleGroup.allCases) { group in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(group.rawValue)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(group.modules) { module in
+                            moduleRow(module)
+                        }
                     }
                 }
             }
         }
-        .listStyle(.sidebar)
-        .navigationTitle("PokemonHack")
     }
-}
 
-private struct SidebarModuleRow: View {
-    let module: WorkbenchModule
-    let issueCount: Int
+    private var sidebarSearch: some View {
+        sidebarSection("Find", systemImage: "magnifyingglass") {
+            TextField("Search current module", text: $store.searchText)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
 
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: module.systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+    @ViewBuilder
+    private var objectNavigation: some View {
+        switch store.selection {
+        case .dashboard:
+            dashboardNavigation
+        case .resources:
+            resourcesNavigation
+        case .maps:
+            mapsNavigation
+        case .pokemon:
+            pokemonNavigation
+        case .trainers:
+            trainersNavigation
+        case .scripts:
+            scriptsNavigation
+        case .text, .items, .encounters:
+            genericRecordNavigation(module: store.selection)
+        case .graphics:
+            graphicsNavigation
+        case .build:
+            buildNavigation
+        case .issues:
+            diagnosticsNavigation
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(module.title)
-                    .lineLimit(1)
-
-                Text(module == .issues ? "\(issueCount) open" : module.subtitle)
+    @ViewBuilder
+    private var contextualTools: some View {
+        switch store.selection {
+        case .maps:
+            mapTools
+        case .resources:
+            resourceTools
+        case .build:
+            buildTools
+        case .graphics:
+            previewOnlyTools(title: "Graphics Tools", actions: ["Import", "Convert", "Apply"])
+        case .pokemon:
+            mutationTools(
+                title: "Pokemon Mutation",
+                isDirty: store.selectedSpeciesIsDirty,
+                canPreview: store.canPreviewSelectedSpeciesMutationPlan,
+                canApply: store.canApplySelectedSpeciesMutationPlan,
+                canDiscard: store.canDiscardSpeciesEdits,
+                preview: store.previewSelectedSpeciesMutationPlan,
+                apply: store.applySelectedSpeciesMutationPlan,
+                discard: store.discardSpeciesEdits
+            )
+        case .trainers:
+            mutationTools(
+                title: "Trainer Mutation",
+                isDirty: store.selectedTrainerIsDirty,
+                canPreview: store.canPreviewSelectedTrainerMutationPlan,
+                canApply: store.canApplySelectedTrainerMutationPlan,
+                canDiscard: store.canDiscardTrainerEdits,
+                preview: store.previewSelectedTrainerMutationPlan,
+                apply: store.applySelectedTrainerMutationPlan,
+                discard: store.discardTrainerEdits
+            )
+        default:
+            sidebarSection("Tools", systemImage: "wrench.and.screwdriver") {
+                Text("Context tools appear here when the selected module exposes preview or edit controls.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
         }
+    }
+
+    @ViewBuilder
+    private var selectionProperties: some View {
+        switch store.selection {
+        case .dashboard:
+            dashboardProperties
+        case .resources:
+            resourceProperties
+        case .maps:
+            mapProperties
+        case .pokemon:
+            speciesProperties
+        case .trainers:
+            trainerProperties
+        case .scripts:
+            scriptProperties
+        case .text, .items, .encounters:
+            genericRecordProperties(module: store.selection)
+        case .graphics:
+            graphicsProperties
+        case .build:
+            buildProperties
+        case .issues:
+            diagnosticProperties
+        }
+    }
+
+    private func moduleRow(_ module: WorkbenchModule) -> some View {
+        Button {
+            store.selection = module
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: module.systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 17)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(module.title)
+                        .lineLimit(1)
+                    Text(module == .issues ? store.diagnosticSummary.compactLabel : module.subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(selectionBackground(store.selection == module))
+        }
+        .buttonStyle(.plain)
+        .help(module.subtitle)
+    }
+
+    private var dashboardNavigation: some View {
+        sidebarSection("Project Hub", systemImage: "square.grid.2x2") {
+            sidebarRows(store.guidedFlows, limit: 12) { flow in
+                sidebarButton(
+                    id: flow.id,
+                    title: flow.title,
+                    subtitle: flow.subtitle,
+                    systemImage: flow.systemImage,
+                    isSelected: store.selectedGuidedFlowID == flow.id
+                ) {
+                    store.requestGuidedFlowSelection(flow.id)
+                }
+            }
+        }
+    }
+
+    private var resourcesNavigation: some View {
+        sidebarSection("Resources", systemImage: WorkbenchModule.resources.systemImage) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Resource Mode", selection: $store.selectedResourceLibraryMode) {
+                    ForEach(ResourceLibraryMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                switch store.selectedResourceLibraryMode {
+                case .assets:
+                    sidebarRows(store.filteredResourceAssetRows, limit: 220) { asset in
+                        sidebarButton(
+                            id: asset.id,
+                            title: asset.title,
+                            subtitle: "\(asset.category) · \(asset.availabilitySummary)",
+                            systemImage: iconName(forResourceCategory: asset.category),
+                            isSelected: store.selectedResourceAsset?.id == asset.id
+                        ) {
+                            store.requestResourceAssetSelection(asset.id)
+                        }
+                    }
+                case .entries:
+                    sidebarRows(store.filteredResourceLibraryEntries, limit: 140) { entry in
+                        sidebarButton(
+                            id: entry.id,
+                            title: entry.title,
+                            subtitle: "\(entry.family) · \(entry.parseStatus)",
+                            systemImage: "externaldrive.connected.to.line.below",
+                            isSelected: store.selectedResourceLibraryEntry?.id == entry.id
+                        ) {
+                            store.requestResourceLibraryEntrySelection(entry.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mapsNavigation: some View {
+        sidebarSection("Maps", systemImage: WorkbenchModule.maps.systemImage) {
+            if let catalog = store.selectedMapCatalog {
+                sidebarRows(filteredMaps(in: catalog), limit: 260) { map in
+                    sidebarButton(
+                        id: map.id,
+                        title: map.name,
+                        subtitle: "\(map.groupName) · \(map.layout?.name ?? "No layout")",
+                        systemImage: "map",
+                        isSelected: store.selectedMapID == map.id
+                    ) {
+                        store.requestMapSelection(map.id)
+                    }
+                }
+            } else {
+                emptySidebarText(store.mapCatalogStatus.label)
+            }
+        }
+    }
+
+    private var pokemonNavigation: some View {
+        sidebarSection("Pokemon", systemImage: WorkbenchModule.pokemon.systemImage) {
+            sidebarRows(store.filteredSpeciesDetails, limit: 220) { species in
+                sidebarButton(
+                    id: species.speciesID,
+                    title: species.displayName,
+                    subtitle: species.speciesID,
+                    systemImage: species.isEditable ? "pencil" : "lock",
+                    isSelected: store.selectedSpeciesDetail?.speciesID == species.speciesID
+                ) {
+                    store.requestSpeciesSelection(species.speciesID)
+                }
+            }
+        }
+    }
+
+    private var trainersNavigation: some View {
+        sidebarSection("Trainers", systemImage: WorkbenchModule.trainers.systemImage) {
+            sidebarRows(store.filteredTrainerDetails, limit: 220) { trainer in
+                sidebarButton(
+                    id: trainer.trainerID,
+                    title: trainer.displayName,
+                    subtitle: trainer.trainerID,
+                    systemImage: trainer.isEditable ? "person.crop.circle.badge.checkmark" : "lock",
+                    isSelected: store.selectedTrainerDetail?.trainerID == trainer.trainerID
+                ) {
+                    store.requestTrainerSelection(trainer.trainerID)
+                }
+            }
+        }
+    }
+
+    private var scriptsNavigation: some View {
+        sidebarSection("Scripts", systemImage: WorkbenchModule.scripts.systemImage) {
+            VStack(alignment: .leading, spacing: 12) {
+                if !store.filteredScriptOutlineLabels.isEmpty {
+                    sidebarSubheading("Labels")
+                    sidebarRows(store.filteredScriptOutlineLabels, limit: 120) { label in
+                        sidebarButton(
+                            id: label.id,
+                            title: label.label,
+                            subtitle: "\(label.kind.rawValue) · \(label.sourcePath)",
+                            systemImage: "curlybraces",
+                            isSelected: store.selectedScriptLabel?.id == label.id
+                        ) {
+                            store.requestScriptLabelSelection(label.id)
+                        }
+                    }
+                }
+
+                if !store.filteredScriptOutlineSources.isEmpty {
+                    sidebarSubheading("Sources")
+                    sidebarRows(store.filteredScriptOutlineSources, limit: 80) { source in
+                        sidebarButton(
+                            id: source.id,
+                            title: source.path,
+                            subtitle: "\(source.module.rawValue) · \(source.role.rawValue)",
+                            systemImage: "doc.text",
+                            isSelected: store.selectedScriptSource?.id == source.id
+                        ) {
+                            store.requestScriptSourceSelection(source.id)
+                        }
+                    }
+                }
+
+                if !store.filteredScriptTextBlocks.isEmpty {
+                    sidebarSubheading("Text Blocks")
+                    sidebarRows(store.filteredScriptTextBlocks, limit: 80) { block in
+                        sidebarButton(
+                            id: block.id,
+                            title: block.label,
+                            subtitle: block.sourcePath,
+                            systemImage: "text.quote",
+                            isSelected: store.selectedScriptTextBlock?.id == block.id
+                        ) {
+                            store.requestScriptTextBlockSelection(block.id)
+                        }
+                    }
+                }
+
+                if store.selectedScriptOutline == nil {
+                    emptySidebarText("No script outline loaded.")
+                }
+            }
+        }
+    }
+
+    private func genericRecordNavigation(module: WorkbenchModule) -> some View {
+        sidebarSection(module.title, systemImage: module.systemImage) {
+            let rows = store.records(for: module)
+            if rows.isEmpty {
+                emptySidebarText("No records match the current search.")
+            } else {
+                sidebarRows(rows, limit: 180) { record in
+                    sidebarButton(
+                        id: record.id.uuidString,
+                        title: record.title,
+                        subtitle: record.source.path,
+                        systemImage: module.systemImage,
+                        isSelected: store.selectedRecord(for: module)?.id == record.id
+                    ) {
+                        store.requestRecordSelection(record.id, module: module)
+                    }
+                }
+            }
+        }
+    }
+
+    private var graphicsNavigation: some View {
+        sidebarSection("Graphics Rows", systemImage: WorkbenchModule.graphics.systemImage) {
+            sidebarRows(store.filteredGraphicsReportRows, limit: 180) { row in
+                sidebarButton(
+                    id: row.id,
+                    title: row.title,
+                    subtitle: "\(row.section.rawValue) · \(row.source.path)",
+                    systemImage: row.section.systemImage,
+                    isSelected: store.selectedGraphicsReportRow?.id == row.id
+                ) {
+                    store.requestGraphicsReportRowSelection(row.id)
+                }
+            }
+        }
+    }
+
+    private var buildNavigation: some View {
+        sidebarSection("Ship Rows", systemImage: WorkbenchModule.build.systemImage) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Report", selection: $store.selectedBuildWorkbenchTab) {
+                    ForEach(BuildWorkbenchTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                sidebarRows(store.filteredBuildRowsForSelectedTab, limit: 160) { row in
+                    sidebarButton(
+                        id: row.id,
+                        title: row.title,
+                        subtitle: "\(row.section.rawValue) · \(row.status.rawValue)",
+                        systemImage: row.section.systemImage,
+                        isSelected: store.selectedBuildReportRow?.id == row.id
+                    ) {
+                        store.requestBuildReportRowSelection(row.id)
+                    }
+                }
+            }
+        }
+    }
+
+    private var diagnosticsNavigation: some View {
+        sidebarSection("Diagnostics", systemImage: WorkbenchModule.issues.systemImage) {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(DiagnosticSummaryBucket.allCases) { bucket in
+                    let summary = store.diagnosticSummary.bucket(bucket)
+                    sidebarButton(
+                        id: bucket.id,
+                        title: summary.title,
+                        subtitle: "\(summary.count) · \(summary.status.rawValue)",
+                        systemImage: summary.systemImage,
+                        isSelected: store.selectedDiagnosticBucket == bucket
+                    ) {
+                        store.requestDiagnosticBucketSelection(bucket)
+                    }
+                }
+
+                if !store.selectedDiagnosticBucketSummary.diagnostics.isEmpty {
+                    sidebarSubheading("Findings")
+                    sidebarRows(store.selectedDiagnosticBucketSummary.diagnostics, limit: 160) { diagnostic in
+                        sidebarButton(
+                            id: diagnostic.id,
+                            title: diagnostic.title,
+                            subtitle: diagnostic.source.path,
+                            systemImage: "exclamationmark.triangle",
+                            isSelected: store.selectedDiagnosticRow?.id == diagnostic.id
+                        ) {
+                            store.requestDiagnosticRowSelection(diagnostic.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mapTools: some View {
+        sidebarSection("Map Tools", systemImage: "paintbrush.pointed") {
+            VStack(alignment: .leading, spacing: 12) {
+                MapEditorGroupedToolPicker(session: store.mapEditorSession)
+
+                Picker("Panel", selection: $store.selectedMapWorkbenchTab) {
+                    ForEach(MapWorkbenchTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Toggle("Metatile Palette", isOn: $store.mapShowsPalette)
+                    .toggleStyle(.checkbox)
+
+                if store.mapShowsPalette {
+                    TextField("Filter metatiles", text: $store.mapMetatileFilter)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                mapLayerToggles
+
+                HStack(spacing: 8) {
+                    Button("Undo", systemImage: "arrow.uturn.backward") {
+                        store.undoLastMapEdit()
+                    }
+                    .disabled(store.mapEditOperations.isEmpty)
+
+                    Button("Redo", systemImage: "arrow.uturn.forward") {
+                        store.redoMapEdit()
+                    }
+                    .disabled(store.undoneMapEditOperations.isEmpty)
+                }
+
+                if let document = store.selectedMapVisualDocument {
+                    Divider()
+                    MapWorkbenchPanels(
+                        document: document,
+                        session: store.mapEditorSession,
+                        layoutMode: .compact,
+                        viewport: .zero,
+                        selectedTab: $store.selectedMapWorkbenchTab,
+                        eventSearchText: $mapEventSearchText,
+                        scriptDraftKey: $scriptDraftKey,
+                        scriptDraftText: $scriptDraftText,
+                        onSelectViewportCenter: { centerX, centerY in
+                            store.mapViewportRequest = MapCanvasViewportRequest(centerX: centerX, centerY: centerY)
+                        },
+                        onCenterEvent: { event in
+                            store.mapEditorSession.selectMapEvent(id: event.id)
+                            if let x = event.x, let y = event.y {
+                                store.mapViewportRequest = MapCanvasViewportRequest(centerX: CGFloat(x), centerY: CGFloat(y))
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private var resourceTools: some View {
+        sidebarSection("Resource Tools", systemImage: "line.3.horizontal.decrease.circle") {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Mode", selection: $store.selectedResourceLibraryMode) {
+                    ForEach(ResourceLibraryMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if store.selectedResourceLibraryMode == .assets {
+                    Picker("Category", selection: $store.resourceAssetCategory) {
+                        ForEach(resourceCategoryOptions, id: \.self) { category in
+                            Text(category).tag(category)
+                        }
+                    }
+
+                    Picker("Sort", selection: $store.resourceAssetSortMode) {
+                        ForEach(ResourceAssetSortMode.allCases) { sort in
+                            Text(sort.title).tag(sort)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var buildTools: some View {
+        sidebarSection("Ship Tools", systemImage: "hammer") {
+            VStack(alignment: .leading, spacing: 10) {
+                Button("Copy Report JSON", systemImage: "doc.on.doc") {
+                    store.copyBuildPatchPlaytestReportJSONToPasteboard()
+                }
+                .disabled(store.selectedBuildReport == nil)
+
+                ForEach(store.buildWorkflowActions(includePatchActions: true)) { action in
+                    if action.id == "open-playtest" {
+                        Button(action.title, systemImage: action.systemImage) {
+                            store.launchSelectedPlaytest()
+                        }
+                        .disabled(!action.isEnabled)
+                    } else {
+                        Button(action.title, systemImage: "lock") {}
+                            .disabled(true)
+                    }
+                }
+
+                Text("Build, validate, patch apply, and export stay preview only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var mapLayerToggles: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sidebarSubheading("Layers")
+            ForEach([MapEditorLayer.collision, .objects, .warps, .coordEvents, .bgEvents, .connections, .playerView, .grid], id: \.self) { layer in
+                Toggle(isOn: Binding(
+                    get: { store.mapEditorSession.mapOverlaySettings.state(for: layer).isVisible },
+                    set: { store.mapEditorSession.setLayerVisible(layer, isVisible: $0) }
+                )) {
+                    Label(layer.title, systemImage: layer.systemImage)
+                }
+                .toggleStyle(.checkbox)
+            }
+
+            HStack(spacing: 8) {
+                Button("Solo Collision", systemImage: "scope") {
+                    store.mapEditorSession.toggleLayerSolo(.collision)
+                }
+                Button("Reset", systemImage: "arrow.counterclockwise") {
+                    store.mapEditorSession.resetLayerSettings()
+                }
+            }
+        }
+    }
+
+    private func mutationTools(
+        title: String,
+        isDirty: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        preview: @escaping () -> Void,
+        apply: @escaping () -> Void,
+        discard: @escaping () -> Void
+    ) -> some View {
+        sidebarSection(title, systemImage: "doc.text.magnifyingglass") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    DirtyPill(isDirty: isDirty)
+                    Spacer()
+                }
+                HStack(spacing: 8) {
+                    Button("Preview", systemImage: "doc.text.magnifyingglass", action: preview)
+                        .disabled(!canPreview)
+                    Button("Apply", systemImage: "checkmark.seal", action: apply)
+                        .disabled(!canApply)
+                    Button("Discard", systemImage: "arrow.counterclockwise", action: discard)
+                        .disabled(!canDiscard)
+                }
+            }
+        }
+    }
+
+    private func previewOnlyTools(title: String, actions: [String]) -> some View {
+        sidebarSection(title, systemImage: "lock") {
+            previewOnlyActions(actions)
+        }
+    }
+
+    private func previewOnlyActions(_ actions: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(actions, id: \.self) { action in
+                Button(action, systemImage: "lock") {}
+                    .disabled(true)
+            }
+            Text("Preview only")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var dashboardProperties: some View {
+        let flow = store.guidedFlows.first { $0.id == store.selectedGuidedFlowID } ?? store.guidedFlows.first
+        return sidebarSection("Properties", systemImage: "info.circle") {
+            if let flow {
+                propertyHeader(flow.title, subtitle: flow.detail, systemImage: flow.systemImage, status: flow.status)
+                propertyFacts(flow.facts)
+            } else {
+                emptySidebarText("No guided project action selected.")
+            }
+        }
+    }
+
+    private var resourceProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            switch store.selectedResourceLibraryMode {
+            case .assets:
+                if let asset = store.selectedResourceAsset {
+                    propertyHeader(asset.title, subtitle: asset.path, systemImage: iconName(forResourceCategory: asset.category), status: asset.status)
+                    propertyFacts(asset.facts + [
+                        Fact(label: "Category", value: asset.category),
+                        Fact(label: "Availability", value: asset.availabilitySummary),
+                        Fact(label: "Checksum", value: asset.checksumSummary)
+                    ])
+                    SourceLocationView(source: asset.source)
+                    if let targetModule = asset.targetModule {
+                        Button("Open \(targetModule.title)", systemImage: targetModule.systemImage) {
+                            store.navigateToAsset(asset)
+                        }
+                    }
+                } else {
+                    emptySidebarText("No resource asset selected.")
+                }
+            case .entries:
+                if let entry = store.selectedResourceLibraryEntry {
+                    propertyHeader(entry.title, subtitle: entry.path, systemImage: "externaldrive.connected.to.line.below", status: entry.status)
+                    propertyFacts([
+                        Fact(label: "Family", value: entry.family),
+                        Fact(label: "Profile", value: entry.profile),
+                        Fact(label: "Items", value: "\(entry.items.count)"),
+                        Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)")
+                    ])
+                    SourceLocationView(source: entry.source)
+                } else {
+                    emptySidebarText("No resource entry selected.")
+                }
+            }
+        }
+    }
+
+    private var mapProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let map = selectedMap {
+                propertyHeader(map.name, subtitle: map.mapID, systemImage: "map", status: store.moduleStatus(for: .maps))
+                propertyFacts([
+                    Fact(label: "Group", value: map.groupName),
+                    Fact(label: "Layout", value: map.layout?.name ?? "None"),
+                    Fact(label: "Size", value: map.layout.map { "\($0.width)x\($0.height)" } ?? "Unknown"),
+                    Fact(label: "Events", value: "\(map.eventCounts.total)"),
+                    Fact(label: "Connections", value: "\(map.connections.count)"),
+                    Fact(label: "Tool", value: store.selectedMapTool.title),
+                    Fact(label: "Panel", value: store.selectedMapWorkbenchTab.title)
+                ])
+                SourceLocationView(source: map.source)
+            } else {
+                emptySidebarText(store.mapCatalogStatus.label)
+            }
+        }
+    }
+
+    private var speciesProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let species = store.selectedSpeciesDetail {
+                propertyHeader(species.displayName, subtitle: species.speciesID, systemImage: "sparkles", status: species.diagnostics.isEmpty ? .valid : .warning)
+                propertyFacts([
+                    Fact(label: "Types", value: species.types.joined(separator: " / ")),
+                    Fact(label: "Abilities", value: species.abilities.joined(separator: ", ")),
+                    Fact(label: "Stats", value: statSummary(species.baseStats)),
+                    Fact(label: "Editable", value: species.isEditable ? "Yes" : "No"),
+                    Fact(label: "Dirty", value: store.selectedSpeciesIsDirty ? "Yes" : "No")
+                ])
+                SourceLocationView(source: SourceLocation(path: species.sourceSpan.relativePath, symbol: species.speciesID, line: species.sourceSpan.startLine))
+            } else {
+                emptySidebarText(store.speciesCatalogLoadStatus.label)
+            }
+        }
+    }
+
+    private var trainerProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let trainer = store.selectedTrainerDetail {
+                propertyHeader(trainer.displayName, subtitle: trainer.trainerID, systemImage: "person.2", status: trainer.diagnostics.isEmpty ? .valid : .warning)
+                propertyFacts([
+                    Fact(label: "Class", value: trainer.trainerClass),
+                    Fact(label: "Party", value: "\(trainer.party.count) Pokemon"),
+                    Fact(label: "Battle", value: trainer.doubleBattle ? "Double" : "Single"),
+                    Fact(label: "Items", value: "\(trainer.trainerItems.filter { $0 != "ITEM_NONE" }.count)"),
+                    Fact(label: "Editable", value: trainer.isEditable ? "Yes" : "No"),
+                    Fact(label: "Dirty", value: store.selectedTrainerIsDirty ? "Yes" : "No")
+                ])
+                SourceLocationView(source: SourceLocation(path: trainer.sourceSpan.relativePath, symbol: trainer.trainerID, line: trainer.sourceSpan.startLine))
+            } else {
+                emptySidebarText(store.trainerCatalogLoadStatus.label)
+            }
+        }
+    }
+
+    private var scriptProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let label = store.selectedScriptLabel {
+                propertyHeader(label.label, subtitle: label.sourcePath, systemImage: "curlybraces", status: .valid)
+                propertyFacts([
+                    Fact(label: "Kind", value: label.kind.rawValue),
+                    Fact(label: "Commands", value: "\(label.commands.count)"),
+                    Fact(label: "Text Refs", value: "\(label.textReferences.count)")
+                ])
+                SourceLocationView(source: SourceLocation(path: label.sourcePath, symbol: label.label, line: label.sourceSpan.startLine))
+            } else if let source = store.selectedScriptSource {
+                propertyHeader(source.path, subtitle: "\(source.module.rawValue) · \(source.role.rawValue)", systemImage: "doc.text", status: .valid)
+                propertyFacts([
+                    Fact(label: "Labels", value: "\(source.labelCount)"),
+                    Fact(label: "Text Blocks", value: "\(source.textBlockCount)"),
+                    Fact(label: "Diagnostics", value: "\(source.diagnosticCount)")
+                ])
+            } else if let block = store.selectedScriptTextBlock {
+                propertyHeader(block.label, subtitle: block.sourcePath, systemImage: "text.quote", status: .valid)
+                propertyFacts([
+                    Fact(label: "Preview", value: block.preview),
+                    Fact(label: "Line", value: "\(block.sourceSpan.startLine)")
+                ])
+            } else {
+                emptySidebarText("No script row selected.")
+            }
+        }
+    }
+
+    private func genericRecordProperties(module: WorkbenchModule) -> some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let record = store.selectedRecord(for: module) {
+                propertyHeader(record.title, subtitle: record.subtitle, systemImage: module.systemImage, status: record.validation)
+                propertyFacts(record.facts)
+                SourceLocationView(source: record.source)
+            } else {
+                emptySidebarText("No \(module.title.lowercased()) row selected.")
+            }
+        }
+    }
+
+    private var graphicsProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let row = store.selectedGraphicsReportRow {
+                propertyHeader(row.title, subtitle: row.detail, systemImage: row.section.systemImage, status: row.status)
+                propertyFacts([
+                    Fact(label: "Section", value: row.section.rawValue),
+                    Fact(label: "Kind", value: row.subtitle)
+                ])
+                SourceLocationView(source: row.source)
+            } else {
+                emptySidebarText("No graphics row selected.")
+            }
+        }
+    }
+
+    private var buildProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let row = store.selectedBuildReportRow {
+                propertyHeader(row.title, subtitle: row.detail, systemImage: row.section.systemImage, status: row.status)
+                propertyFacts([
+                    Fact(label: "Section", value: row.section.rawValue),
+                    Fact(label: "Status", value: row.status.rawValue),
+                    Fact(label: "Tab", value: store.selectedBuildWorkbenchTab.title)
+                ])
+                SourceLocationView(source: row.source)
+            } else {
+                emptySidebarText("No ship row selected.")
+            }
+        }
+    }
+
+    private var diagnosticProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let row = store.selectedDiagnosticRow {
+                propertyHeader(row.title, subtitle: row.message, systemImage: "exclamationmark.triangle", status: row.severity)
+                propertyFacts([
+                    Fact(label: "Bucket", value: store.selectedDiagnosticBucket.title),
+                    Fact(label: "Severity", value: row.severity.rawValue)
+                ])
+                SourceLocationView(source: row.source)
+            } else {
+                emptySidebarText("No diagnostic selected.")
+            }
+        }
+    }
+
+    private var selectedMap: MapSummaryViewState? {
+        guard let catalog = store.selectedMapCatalog else { return nil }
+        return catalog.maps.first { $0.id == store.selectedMapID } ?? catalog.maps.first
+    }
+
+    private var resourceCategoryOptions: [String] {
+        [WorkbenchStore.allResourceAssetCategories] + (store.selectedAssetCatalog?.categoryTitles ?? [])
+    }
+
+    private func filteredMaps(in catalog: MapCatalogViewState) -> [MapSummaryViewState] {
+        guard !store.searchText.isEmpty else { return catalog.maps }
+        return catalog.maps.filter { map in
+            map.name.localizedCaseInsensitiveContains(store.searchText)
+                || map.mapID.localizedCaseInsensitiveContains(store.searchText)
+                || map.groupName.localizedCaseInsensitiveContains(store.searchText)
+                || (map.layout?.name.localizedCaseInsensitiveContains(store.searchText) == true)
+                || map.source.path.localizedCaseInsensitiveContains(store.searchText)
+        }
+    }
+
+    private func sidebarSection<Content: View>(
+        _ title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func sidebarRows<Data: RandomAccessCollection, Row: View>(
+        _ rows: Data,
+        limit: Int,
+        @ViewBuilder rowView: @escaping (Data.Element) -> Row
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if rows.isEmpty {
+                emptySidebarText("No rows match the current search.")
+            } else {
+                ForEach(Array(rows.prefix(limit).enumerated()), id: \.offset) { _, row in
+                    rowView(row)
+                }
+
+                if rows.count > limit {
+                    Text("\(rows.count - limit) more rows hidden. Narrow the search to reveal them.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+        }
+    }
+
+    private func sidebarButton(
+        id: String,
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 17)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.callout)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer(minLength: 4)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .background(selectionBackground(isSelected))
+        }
+        .id(id)
+        .buttonStyle(.plain)
+    }
+
+    private func selectionBackground(_ isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+    }
+
+    private func sidebarMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.caption.weight(.semibold))
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func sidebarSubheading(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+    }
+
+    private func propertyHeader(
+        _ title: String,
+        subtitle: String,
+        systemImage: String,
+        status: ValidationState?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                Spacer(minLength: 6)
+            }
+
+            if let status {
+                StatusPill(state: status)
+            }
+        }
+    }
+
+    private func propertyFacts(_ facts: [Fact]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(facts.prefix(10)) { fact in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(fact.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(fact.value)
+                        .font(.caption.weight(.medium))
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private func emptySidebarText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func iconName(forResourceCategory category: String) -> String {
+        switch category {
+        case "maps":
+            "map"
+        case "layouts":
+            "square.grid.3x3"
+        case "scripts":
+            "curlybraces"
+        case "text":
+            "text.quote"
+        case "species", "moves", "learnsets", "evolutions", "pokedex":
+            "sparkles"
+        case "trainers":
+            "person.2"
+        case "items":
+            "shippingbox"
+        case "graphics", "palettes", "tilesets":
+            "photo"
+        case "audio":
+            "waveform"
+        case "rom", "media":
+            "memorychip"
+        case "generated":
+            "hammer"
+        default:
+            "doc"
+        }
+    }
+
+    private func statSummary(_ stats: SpeciesBaseStats) -> String {
+        [
+            stats.hp,
+            stats.attack,
+            stats.defense,
+            stats.speed,
+            stats.spAttack,
+            stats.spDefense
+        ]
+        .map { value in
+            value.map(String.init) ?? "?"
+        }
+        .joined(separator: "/")
     }
 }

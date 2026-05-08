@@ -1,24 +1,29 @@
 import Foundation
 import PokemonHackCore
 
-enum WorkbenchModuleGroup: String, CaseIterable, Identifiable {
-    case project = "Project"
-    case resources = "Resources"
-    case maps = "Maps"
-    case data = "Data"
-    case scriptsText = "Scripts/Text"
-    case graphics = "Graphics"
-    case buildPatchPlaytest = "Build/Patch/Playtest"
-    case diagnostics = "Diagnostics"
+enum WorkbenchModuleGroup: String, CaseIterable, Identifiable, Hashable {
+    case workspace = "Workspace"
+    case create = "Create"
+    case dataAssets = "Data & Assets"
+    case ship = "Ship"
 
     var id: String { rawValue }
 
     var modules: [WorkbenchModule] {
-        WorkbenchModule.allCases.filter { $0.group == self }
+        switch self {
+        case .workspace:
+            [.dashboard]
+        case .create:
+            [.maps, .pokemon, .trainers, .scripts]
+        case .dataAssets:
+            [.resources, .graphics, .items, .encounters, .text]
+        case .ship:
+            [.build, .issues]
+        }
     }
 }
 
-enum WorkbenchModule: String, CaseIterable, Identifiable {
+enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
     case dashboard = "Project"
     case resources = "Resources"
     case maps = "Maps"
@@ -39,21 +44,15 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
     var group: WorkbenchModuleGroup {
         switch self {
         case .dashboard:
-            .project
-        case .resources:
-            .resources
-        case .maps:
-            .maps
-        case .pokemon, .trainers, .items, .encounters:
-            .data
-        case .scripts, .text:
-            .scriptsText
-        case .graphics:
-            .graphics
+            .workspace
+        case .maps, .pokemon, .trainers, .scripts:
+            .create
+        case .resources, .graphics, .items, .encounters, .text:
+            .dataAssets
         case .build:
-            .buildPatchPlaytest
+            .ship
         case .issues:
-            .diagnostics
+            .ship
         }
     }
 
@@ -76,20 +75,117 @@ enum WorkbenchModule: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .dashboard: "Source index and project health"
-        case .resources: "ROMs, discs, archives"
-        case .maps: "Layouts, events, warps"
-        case .pokemon: "Species tables"
-        case .trainers: "Parties and AI flags"
-        case .items: "Prices and field effects"
-        case .encounters: "Wild slots"
-        case .scripts: "Event scripts"
-        case .text: "Message tables"
-        case .graphics: "Tilesets, palettes, assets"
-        case .build: "Builds, patches, playtests"
-        case .issues: "Validation queue"
+        case .dashboard: "Guided project hub"
+        case .resources: "Assets and source links"
+        case .maps: "Maps, events, warps"
+        case .pokemon: "Stats and learnsets"
+        case .trainers: "Parties and battle setup"
+        case .items: "Items and field data"
+        case .encounters: "Wild encounter tables"
+        case .scripts: "Event script readiness"
+        case .text: "Message sources"
+        case .graphics: "Tilesets and palettes"
+        case .build: "Readiness, patch, playtest"
+        case .issues: "Grouped triage"
         }
     }
+}
+
+enum MapWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
+    case overviewLayers
+    case paintCollision
+    case eventsScripts
+    case mapData
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overviewLayers: "Overview/Layers"
+        case .paintCollision: "Paint/Collision"
+        case .eventsScripts: "Events/Scripts"
+        case .mapData: "Map Data"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overviewLayers: "square.stack.3d.up"
+        case .paintCollision: "paintbrush.pointed"
+        case .eventsScripts: "point.3.connected.trianglepath.dotted"
+        case .mapData: "doc.text.magnifyingglass"
+        }
+    }
+
+    var accessibilityLabel: String {
+        "\(title) editor tab"
+    }
+}
+
+enum BuildWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
+    case build
+    case patch
+    case playtest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .build: "Build Readiness"
+        case .patch: "Patch Check"
+        case .playtest: "Playtest Handoff"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .build: "hammer"
+        case .patch: "doc.badge.gearshape"
+        case .playtest: "gamecontroller"
+        }
+    }
+}
+
+enum ResourceLibraryMode: String, CaseIterable, Identifiable, Hashable {
+    case assets
+    case entries
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .assets:
+            "Assets"
+        case .entries:
+            "Entries"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .assets:
+            "square.grid.3x3"
+        case .entries:
+            "externaldrive.connected.to.line.below"
+        }
+    }
+}
+
+enum WorkbenchSidebarSelection: Hashable {
+    case resourceAsset(ResourceAssetRowViewState.ID)
+    case resourceEntry(ResourceLibraryEntryViewState.ID)
+    case map(String)
+    case pokemon(String)
+    case trainer(String)
+    case scriptSource(String)
+    case scriptLabel(String)
+    case scriptTextBlock(String)
+    case record(WorkbenchModule, UUID)
+    case graphics(String)
+    case build(String)
+    case diagnostic(String)
+    case diagnosticBucket(DiagnosticSummaryBucket)
+    case guidedFlow(String)
 }
 
 enum ValidationState: String, Identifiable {
@@ -182,6 +278,14 @@ struct BuildStep: Identifiable {
     let status: ValidationState
     let detail: String
     let source: SourceLocation
+}
+
+struct BuildWorkflowActionViewState: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let isEnabled: Bool
+    let isPreviewLocked: Bool
 }
 
 enum BuildReportSection: String, CaseIterable, Identifiable {
@@ -375,6 +479,19 @@ struct PlaytestHandoffPlanViewState: Identifiable {
     let source: SourceLocation
 }
 
+struct PlaytestLaunchResultViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let statusLabel: String
+    let detail: String
+    let emulatorPath: String?
+    let romPath: String?
+    let command: String
+    let processID: String
+    let artifacts: [PlaytestArtifactViewState]
+    let source: SourceLocation
+}
+
 struct PlaytestArtifactViewState: Identifiable {
     let id: String
     let kind: String
@@ -455,6 +572,19 @@ struct BuildReportRow: Identifiable {
             status: playtest.status,
             source: playtest.source,
             tags: [playtest.emulator] + playtest.arguments
+        )
+    }
+
+    init(launchResult: PlaytestLaunchResultViewState) {
+        self.init(
+            id: "playtest-launch:\(launchResult.id)",
+            section: .playtest,
+            title: "mGBA launch",
+            subtitle: launchResult.processID,
+            detail: launchResult.detail,
+            status: launchResult.status,
+            source: launchResult.source,
+            tags: [launchResult.statusLabel, launchResult.command, launchResult.romPath ?? ""]
         )
     }
 
@@ -544,6 +674,7 @@ enum GraphicsReportSection: String, CaseIterable, Identifiable {
     case artifacts = "Artifacts"
     case palettes = "Palettes"
     case animations = "Animations"
+    case conversionPlans = "Conversion Plans"
     case diagnostics = "Diagnostics"
 
     var id: String { rawValue }
@@ -558,6 +689,8 @@ enum GraphicsReportSection: String, CaseIterable, Identifiable {
             "paintpalette"
         case .animations:
             "film.stack"
+        case .conversionPlans:
+            "wand.and.stars"
         case .diagnostics:
             "exclamationmark.triangle"
         }

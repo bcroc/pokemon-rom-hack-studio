@@ -4,28 +4,12 @@ struct StatusPill: View {
     let state: ValidationState
 
     var body: some View {
-        Label(state.rawValue, systemImage: imageName)
+        Label(state.rawValue, systemImage: state.statusSystemImage)
             .font(.caption.weight(.medium))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(tint.opacity(0.14), in: Capsule())
-            .foregroundStyle(tint)
-    }
-
-    private var imageName: String {
-        switch state {
-        case .valid: "checkmark.circle"
-        case .warning: "exclamationmark.triangle"
-        case .error: "xmark.octagon"
-        }
-    }
-
-    private var tint: Color {
-        switch state {
-        case .valid: .green
-        case .warning: .orange
-        case .error: .red
-        }
+            .background(state.statusTint.opacity(0.14), in: Capsule())
+            .foregroundStyle(state.statusTint)
     }
 }
 
@@ -42,16 +26,45 @@ struct DirtyPill: View {
     }
 }
 
-struct IssueCountBadge: View {
-    let count: Int
+struct DiagnosticStatusButton: View {
+    let summary: DiagnosticSummary
+    let action: () -> Void
 
     var body: some View {
-        Label("\(count)", systemImage: "exclamationmark.triangle")
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(Color.red.opacity(0.13), in: Capsule())
-            .foregroundStyle(.red)
-            .accessibilityLabel("\(count) issues")
+        Button(action: action) {
+            Label(summary.compactLabel, systemImage: summary.status.statusSystemImage)
+        }
+        .buttonStyle(.plain)
+        .help(summary.detail)
+        .accessibilityLabel("Diagnostics status: \(summary.compactLabel)")
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(summary.status.statusTint.opacity(0.12), in: Capsule())
+        .foregroundStyle(summary.status.statusTint)
+    }
+}
+
+private extension ValidationState {
+    var statusSystemImage: String {
+        switch self {
+        case .valid:
+            "checkmark.circle"
+        case .warning:
+            "exclamationmark.triangle"
+        case .error:
+            "xmark.octagon"
+        }
+    }
+
+    var statusTint: Color {
+        switch self {
+        case .valid:
+            .green
+        case .warning:
+            .orange
+        case .error:
+            .red
+        }
     }
 }

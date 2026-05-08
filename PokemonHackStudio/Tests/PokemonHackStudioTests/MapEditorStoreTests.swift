@@ -334,6 +334,240 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGuidedFlowsRouteToModulesAndPreserveResourceBacklinks() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        XCTAssertEqual(
+            store.guidedFlows.map(\.id),
+            ["maps-events", "pokemon-data", "trainer-battles", "resources-assets", "ship-preview", "diagnostics-triage"]
+        )
+
+        let mapFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "maps-events" })
+        let mapAssetAction = try XCTUnwrap(mapFlow.secondaryActions.first)
+        store.route(to: mapAssetAction)
+
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.resourceAssetCategory, "layouts")
+        XCTAssertEqual(store.searchText, "layout")
+
+        let pokemonFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "pokemon-data" })
+        store.route(to: pokemonFlow.primaryAction)
+
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+
+        let pokemonAssetAction = try XCTUnwrap(pokemonFlow.secondaryActions.first)
+        store.route(to: pokemonAssetAction)
+
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.searchText, "pokemon")
+        XCTAssertEqual(store.resourceAssetCategory, "graphics")
+
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let speciesAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "species" && $0.targetID == "SPECIES_TREECKO" })
+
+        store.navigateToAsset(speciesAsset)
+
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(store.selectedResourceAssetID, speciesAsset.id)
+
+        let shipFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "ship-preview" })
+        let patchAction = try XCTUnwrap(shipFlow.secondaryActions.first)
+        store.route(to: patchAction)
+
+        XCTAssertEqual(store.selection, .build)
+        XCTAssertEqual(store.selectedBuildWorkbenchTab, .patch)
+        XCTAssertEqual(store.searchText, "")
+
+        let diagnosticsFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "diagnostics-triage" })
+        store.selectedDiagnosticBucket = .generatedArtifacts
+        store.route(to: diagnosticsFlow.primaryAction)
+
+        XCTAssertEqual(store.selection, .issues)
+        XCTAssertEqual(store.selectedDiagnosticBucket, .blockingErrors)
+    }
+
+    @MainActor
+    func testSingleLeftPanelDefaultsAndStoreOwnedSelections() async throws {
+        let store = try await makeLoadedStore()
+
+        XCTAssertEqual(store.selectedResourceLibraryMode, .assets)
+        XCTAssertEqual(store.selectedMapWorkbenchTab, .overviewLayers)
+        XCTAssertEqual(store.selectedBuildWorkbenchTab, .build)
+        XCTAssertEqual(store.selectedDiagnosticBucket, .blockingErrors)
+        XCTAssertTrue(store.mapShowsPalette)
+        XCTAssertNil(store.mapViewportRequest)
+
+        store.selectedMapWorkbenchTab = .eventsScripts
+        store.mapShowsPalette = false
+        store.mapMetatileFilter = "grass"
+        store.mapViewportRequest = MapCanvasViewportRequest(centerX: 2, centerY: 3)
+
+        XCTAssertEqual(store.selectedMapWorkbenchTab, .eventsScripts)
+        XCTAssertFalse(store.mapShowsPalette)
+        XCTAssertEqual(store.mapMetatileFilter, "grass")
+        XCTAssertEqual(store.mapViewportRequest?.centerX, 2)
+        XCTAssertEqual(store.mapViewportRequest?.centerY, 3)
+
+        store.selectedBuildWorkbenchTab = .playtest
+        let playtestRow = try XCTUnwrap(store.filteredBuildRowsForSelectedTab.first)
+        store.requestBuildReportRowSelection(playtestRow.id)
+
+        XCTAssertEqual(store.selectedBuildReportRow?.id, playtestRow.id)
+
+        store.requestDiagnosticBucketSelection(.generatedArtifacts)
+        XCTAssertEqual(store.selectedDiagnosticBucket, .generatedArtifacts)
+        XCTAssertEqual(store.selectedDiagnosticRowID, store.diagnosticSummary.bucket(.generatedArtifacts).diagnostics.first?.id ?? "")
+    }
+
+    @MainActor
+    func testSidebarSearchFallbacksAndGenericRecordSelection() throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        let itemRows = store.records(for: .items)
+        let item = try XCTUnwrap(itemRows.first { $0.title == "ITEM_POTION" })
+        store.requestRecordSelection(item.id, module: .items)
+
+        XCTAssertEqual(store.selectedRecord(for: .items)?.title, "ITEM_POTION")
+
+        store.searchText = "no matching item"
+
+        XCTAssertTrue(store.records(for: .items).isEmpty)
+        XCTAssertNil(store.selectedRecord(for: .items))
+
+        store.searchText = "Potion"
+
+        XCTAssertEqual(store.selectedRecord(for: .items)?.title, "ITEM_POTION")
+    }
+
+    @MainActor
+    func testDashboardMapMetricUsesSourceIndexBeforeFullCatalogLoads() throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        XCTAssertEqual(store.records(for: .maps).count, 1)
+        XCTAssertEqual(store.dashboardMapMetric.value, "1")
+        XCTAssertNotEqual(store.dashboardMapMetric.detail, "Loading map catalog")
+    }
+
+    @MainActor
+    func testProjectOpenDefersScriptReadinessUntilScriptsSurfaceRequestsIt() throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        XCTAssertNil(store.selectedScriptReadinessReport)
+
+        store.selection = .scripts
+        store.refreshSelectedScriptReadinessReport()
+
+        let report = try XCTUnwrap(store.selectedScriptReadinessReport)
+        XCTAssertFalse(report.rows.isEmpty)
+    }
+
+    func testDiagnosticSummaryGroupsFindingsByTriageIntent() {
+        let rows = [
+            IndexedDiagnosticRow(
+                id: "blocking",
+                title: "MAP_PARSE_FAILED",
+                message: "Map JSON could not be parsed.",
+                severity: .error,
+                source: SourceLocation(path: "data/maps/Test/map.json", symbol: "MAP_TEST", line: 1)
+            ),
+            IndexedDiagnosticRow(
+                id: "source",
+                title: "SPECIES_FIELD_UNKNOWN",
+                message: "A species field needs review.",
+                severity: .warning,
+                source: SourceLocation(path: "src/data/pokemon/species_info.h", symbol: "SPECIES_TEST", line: 10)
+            ),
+            IndexedDiagnosticRow(
+                id: "health",
+                title: "TOOLCHAIN_TOOL_MISSING",
+                message: "make is not available.",
+                severity: .warning,
+                source: SourceLocation(path: "Makefile", symbol: "make", line: 1)
+            ),
+            IndexedDiagnosticRow(
+                id: "generated",
+                title: "BUILD_OUTPUT_MISSING",
+                message: "pokeemerald.gba was not found.",
+                severity: .warning,
+                source: SourceLocation(path: "pokeemerald.gba", symbol: "build", line: 1)
+            ),
+            IndexedDiagnosticRow(
+                id: "asset",
+                title: "GRAPHICS_PALETTE_MISSING",
+                message: "Palette asset is missing.",
+                severity: .warning,
+                source: SourceLocation(path: "graphics/pokemon/test/palette.pal", symbol: "palette", line: 1)
+            )
+        ]
+
+        let summary = DiagnosticSummary(diagnostics: rows)
+
+        XCTAssertEqual(summary.totalCount, 5)
+        XCTAssertEqual(summary.blockingErrorCount, 1)
+        XCTAssertEqual(summary.sourceWarningCount, 1)
+        XCTAssertEqual(summary.healthCount, 1)
+        XCTAssertEqual(summary.generatedArtifactCount, 1)
+        XCTAssertEqual(summary.optionalAssetCount, 1)
+        XCTAssertEqual(summary.status, .error)
+        XCTAssertTrue(summary.detail.contains("1 optional asset"))
+
+        let pluralSummary = DiagnosticSummary(diagnostics: rows + [
+            IndexedDiagnosticRow(
+                id: "asset-2",
+                title: "GRAPHICS_SPRITE_MISSING",
+                message: "Sprite asset is missing.",
+                severity: .warning,
+                source: SourceLocation(path: "graphics/pokemon/test/front.png", symbol: "front", line: 1)
+            )
+        ])
+        XCTAssertTrue(pluralSummary.detail.contains("2 optional assets"))
+    }
+
+    @MainActor
+    func testCatalogDefaultsPreferEditableContentRows() throws {
+        let pokemonRoot = try makePokemonProject()
+        let pokemonDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let pokemonSettings = WorkbenchUserSettings(defaults: pokemonDefaults)
+        pokemonSettings.includeDefaultDebugProjects = false
+        let pokemonStore = WorkbenchStore(userDefaults: pokemonDefaults, userSettings: pokemonSettings, autoLoadProjects: false)
+
+        pokemonStore.openProject(path: pokemonRoot.path)
+
+        XCTAssertEqual(pokemonStore.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(pokemonStore.selectedSpeciesDetail?.displayName, "Treecko")
+        XCTAssertTrue(pokemonStore.selectedSpeciesDetail?.isEditable == true)
+
+        let trainerRoot = try makeTrainerProject()
+        let trainerDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let trainerSettings = WorkbenchUserSettings(defaults: trainerDefaults)
+        trainerSettings.includeDefaultDebugProjects = false
+        let trainerStore = WorkbenchStore(userDefaults: trainerDefaults, userSettings: trainerSettings, autoLoadProjects: false)
+
+        trainerStore.openProject(path: trainerRoot.path)
+
+        XCTAssertEqual(trainerStore.selectedTrainerID, "TRAINER_TEST")
+        XCTAssertTrue(trainerStore.selectedTrainerDetail?.isEditable == true)
+    }
+
+    @MainActor
     func testProjectMenuTitlesDistinguishEditableAndReferenceRoots() throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -446,9 +680,10 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(needsBaseReport.rows.isEmpty)
         XCTAssertFalse(needsBaseReport.dryRunPlans.isEmpty)
 
-        store.requestBaseROMPath(gba.path)
+        store.requestBaseROMPath("  \(gba.path)  ")
 
         let matchedReport = try XCTUnwrap(store.selectedPatchManifestReport)
+        XCTAssertEqual(store.selectedBaseROMPath, gba.path)
         XCTAssertEqual(matchedReport.compatibilityLabel, "Base ROM matched")
         XCTAssertEqual(matchedReport.selectedBaseROM?.matchedCandidate, "rom.sha1")
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "pokeemerald.gba" })
@@ -477,6 +712,85 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNil(store.selectedBuildReport)
         XCTAssertTrue(store.filteredBuildReportRows.isEmpty)
         XCTAssertEqual(store.moduleStatus(for: .build), .warning)
+        XCTAssertTrue(store.fixtureBuildWorkflowActions.allSatisfy { !$0.isEnabled && $0.isPreviewLocked })
+    }
+
+    @MainActor
+    func testPlaytestLaunchUsesInjectedRunnerAndStoresResult() throws {
+        let root = try makeSourceIndexProject()
+        let rom = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: rom)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "mgba"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: emulator.path)
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: root.path)
+
+        XCTAssertTrue(store.selectedBuildReport?.playtest.isRunnable == true)
+        XCTAssertTrue(store.canLaunchSelectedPlaytest)
+        let actions = store.buildWorkflowActions(includePatchActions: true)
+        XCTAssertEqual(actions.first { $0.id == "open-playtest" }?.isEnabled, true)
+        XCTAssertEqual(actions.first { $0.id == "build-rom" }?.isEnabled, false)
+        XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isPreviewLocked, true)
+
+        var capturedRequest: PlaytestProcessRequest?
+        store.launchSelectedPlaytest(artifactRoot: root) { request in
+            capturedRequest = request
+            return 7331
+        }
+
+        let request = try XCTUnwrap(capturedRequest)
+        let result = try XCTUnwrap(store.selectedPlaytestLaunchResult)
+        XCTAssertEqual(request.executableURL.path, emulator.path)
+        XCTAssertEqual(request.arguments, [rom.path])
+        XCTAssertEqual(result.status, .valid)
+        XCTAssertEqual(result.processID, "PID 7331")
+        XCTAssertTrue(result.artifacts.contains { $0.kind == "runLog" && $0.path.hasSuffix("/run.log") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/run.log").path))
+    }
+
+    @MainActor
+    func testPlaytestLaunchGateBlocksMissingROMWithoutRunning() throws {
+        let root = try makeSourceIndexProject()
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "mgba"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: emulator.path)
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: root.path)
+
+        XCTAssertFalse(store.canLaunchSelectedPlaytest)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "open-playtest" }?.isEnabled, false)
+
+        var didRun = false
+        store.launchSelectedPlaytest(artifactRoot: root) { _ in
+            didRun = true
+            return 1
+        }
+
+        let result = try XCTUnwrap(store.selectedPlaytestLaunchResult)
+        XCTAssertFalse(didRun)
+        XCTAssertEqual(result.status, .warning)
+        XCTAssertEqual(result.statusLabel, "blocked")
     }
 
     @MainActor
@@ -582,6 +896,28 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.mapEditOperations, store.mapEditorSession.mapEditOperations)
         XCTAssertEqual(store.mapEditOperations.count, 1)
         XCTAssertTrue(store.undoneMapEditOperations.isEmpty)
+    }
+
+    @MainActor
+    func testDirtyMapNavigationGuardStillBlocksSidebarMapRows() async throws {
+        let store = try await makeLoadedStore()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+
+        store.requestMapSelection("MAP_ROUTE2")
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertNotNil(store.pendingMapNavigation)
+
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.mapEditorSession.isDirty)
     }
 
     @MainActor
@@ -1280,6 +1616,11 @@ final class MapEditorStoreTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func writeExecutable(_ text: String, to url: URL) throws {
+        try write(text, to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     private static func syntheticAssetRow(index: Int) -> ResourceAssetRowViewState {

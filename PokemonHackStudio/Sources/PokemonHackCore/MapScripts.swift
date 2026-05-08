@@ -47,6 +47,7 @@ public struct MapScriptLabelSpan: Codable, Equatable, Identifiable {
     public let bodyStartLine: Int
     public let bodyEndLine: Int
     public let body: String
+    public let lines: [ScriptLine]
 
     public init(
         label: String,
@@ -55,7 +56,8 @@ public struct MapScriptLabelSpan: Codable, Equatable, Identifiable {
         labelLine: Int,
         bodyStartLine: Int,
         bodyEndLine: Int,
-        body: String
+        body: String,
+        lines: [ScriptLine] = []
     ) {
         self.label = label
         self.sourcePath = sourcePath
@@ -64,6 +66,7 @@ public struct MapScriptLabelSpan: Codable, Equatable, Identifiable {
         self.bodyStartLine = bodyStartLine
         self.bodyEndLine = bodyEndLine
         self.body = body
+        self.lines = lines
     }
 }
 
@@ -286,7 +289,8 @@ public enum MapScriptIndexLoader {
                 labelLine: start.lineIndex + 1,
                 bodyStartLine: bodyStartIndex + 1,
                 bodyEndLine: bodyEndExclusive,
-                body: body
+                body: body,
+                lines: ScriptParser.parse(body: body, startLine: bodyStartIndex + 1)
             )
         }
     }

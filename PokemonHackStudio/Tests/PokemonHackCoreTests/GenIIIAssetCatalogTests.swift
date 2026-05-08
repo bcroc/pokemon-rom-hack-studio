@@ -74,14 +74,20 @@ final class GenIIIAssetCatalogTests: XCTestCase {
         temporaryDirectories.append(temp)
         let rom = temp.url.appendingPathComponent("Pokemon Emerald.gba")
         try writeGBA(title: "POKEMON EMER", gameCode: "BPEE", to: rom)
+        var data = try Data(contentsOf: rom)
+        data.append(contentsOf: repeatElement(UInt8(0), count: 0x104 - data.count))
+        data.replaceSubrange(0x100..<0x104, with: [0x80, 0x00, 0x00, 0x08])
+        try data.write(to: rom)
 
         let catalog = GenIIIAssetCatalogBuilder.build(path: rom.path)
 
         XCTAssertEqual(catalog.profile, .binaryROM)
-        XCTAssertEqual(catalog.assets.count, 1)
-        XCTAssertEqual(catalog.assets.first?.category, .rom)
-        XCTAssertEqual(catalog.assets.first?.status, .valid)
-        XCTAssertEqual(catalog.assets.first?.availability, .availableLocalInput)
+        let romAsset = try XCTUnwrap(catalog.assets.first { $0.category == .rom })
+        XCTAssertEqual(romAsset.status, .valid)
+        XCTAssertEqual(romAsset.availability, .availableLocalInput)
+        XCTAssertTrue(catalog.assets.contains { $0.category == .rom && $0.tags.contains("ROM Header") })
+        XCTAssertTrue(catalog.assets.contains { $0.category == .rom && $0.tags.contains("GBA Pointer") })
+        XCTAssertTrue(catalog.assets.contains { $0.category == .rom && $0.tags.contains("Free Space") })
     }
 
     func testUnsupportedInputReturnsDiagnosticInsteadOfThrowing() throws {

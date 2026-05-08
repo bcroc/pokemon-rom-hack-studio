@@ -116,19 +116,21 @@ The playtest lane starts as an external mGBA handoff and can later become an emb
 8. Unified Gen III resource library with GameCube disc/archive parser path.
 9. Source-first GBA asset catalog with fast cached Resources navigation across maps, layouts, scripts, text, species, trainers, items, moves, learnsets, evolutions, Pokedex, graphics, palettes, audio, generated outputs, and ROM metadata.
 
-## Broad Sweep Candidate Rows
+## Reference Follow-Up State
 
-After `PHS-T15`, the broad reference sweep maps cleanly into these candidate lanes. `PHS-T18` is already occupied by the completed Generation III resource-library lane, so new broad-sweep candidates start at `PHS-T19`.
+The first broad reference sweep rows are now implemented through `PHS-T25` and the app baseline has continued through `PHS-T40`. Keep this section as context, but use `docs/planning-and-progress.md` as the live workboard before choosing new work.
 
-| ID | Candidate | Reference Signal | Clean-Room First Step |
+| ID | State | Reference Signal | Result |
 | --- | --- | --- | --- |
-| `PHS-T19` | Moves And Learnset Source Graph | PoryMoves, pret repos, Expansion | Read-only move/learnset index with source spans, diagnostics, and cross-links to species. |
-| `PHS-T20` | Species Data Graph | Universal-GBA-Pokedex, PokeData, Expansion, PGE | Read-only species/evolution/Pokedex graph before form edits. |
-| `PHS-T21` | Live Script Readiness | Porylive, Poryscript, mGBA | Report whether a selected script/map/project is ready for a future live playtest loop. |
-| `PHS-T22` | Patch Manifest Workbench | RomPatcher.js, berry-fix, cfru-generator | Patch/base-ROM manifest model with checksums, compatibility notes, and no mutation by default. |
-| `PHS-T23` | Toolchain Health Matrix | agbcc, gba-tools, grit, libtonc, pret repos | External-tool/version/header diagnostics and generated-artifact explanations. |
-| `PHS-T24` | mGBA Playtest Bridge V2 | mGBA, Porylive | Stronger external emulator handoff, run logs, screenshots, and later headless smoke hooks. |
-| `PHS-T25` | All-In-One Related Data UX | PorySuite, HMA, PGE, PokeData | Cross-linked module navigation so species, moves, trainers, maps, scripts, and graphics feel like one workspace. |
+| `PHS-T19` | Done | PoryMoves, pret repos, Expansion | Move and learnset graph with source spans, diagnostics, CLI JSON, and Pokemon workbench consumption. |
+| `PHS-T20` | Done | Universal-GBA-Pokedex, PokeData, Expansion, PGE | Species/evolution/Pokedex/assets graph plus detailed Data > Pokemon surfaces. |
+| `PHS-T21` | Done | Porylive, Poryscript, mGBA | `script-readiness` report for selected map/script build and playtest prerequisites. |
+| `PHS-T22` | Done | RomPatcher.js, berry-fix, cfru-generator | Patch/base-ROM manifest model with checksums, compatibility notes, and dry-run plans. |
+| `PHS-T23` | Done | agbcc, gba-tools, grit, libtonc, pret repos | External-tool, ROM-header, graphics-conversion, and generated-artifact health matrix. |
+| `PHS-T24` | Done | mGBA, Porylive | Playtest handoff artifacts and later `PHS-T40` explicit external mGBA launch. |
+| `PHS-T25` | Done | PorySuite, HMA, PGE, PokeData | Cross-linked Resources navigation across maps, scripts, species, trainers, graphics, build rows, text, and items. |
+
+Current deferred rows include `PHS-T17` binary ROM graph, `PHS-T41` live Encounters module, `PHS-T42` structured script command editing, `PHS-T43` wild encounter row editing, and `PHS-T44` graphics import/conversion planning.
 
 ## Guardrails
 

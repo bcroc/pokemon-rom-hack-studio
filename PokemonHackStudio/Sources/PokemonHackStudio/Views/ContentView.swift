@@ -6,8 +6,8 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(selection: $store.selection, issueCount: store.issueCount)
-                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+            WorkbenchSidebarPanel(store: store)
+                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
         } detail: {
             ModuleDetailView(store: store)
         }
@@ -92,7 +92,9 @@ struct ContentView: View {
                 .labelStyle(.iconOnly)
                 .help("Show diagnostics")
 
-                IssueCountBadge(count: store.issueCount)
+                DiagnosticStatusButton(summary: store.diagnosticSummary) {
+                    store.selection = .issues
+                }
             }
         }
     }

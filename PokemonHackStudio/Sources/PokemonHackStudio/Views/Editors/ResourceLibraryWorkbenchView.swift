@@ -7,12 +7,11 @@ struct ResourceLibraryWorkbenchView: View {
     let assets: [ResourceAssetRowViewState]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
     @Binding var selectedAssetID: ResourceAssetRowViewState.ID?
+    @Binding var mode: ResourceLibraryMode
     @Binding var selectedCategory: String
     @Binding var sortMode: ResourceAssetSortMode
     let onLoadAssetCatalog: () -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
-
-    @State private var mode: ResourceLibraryMode = .assets
 
     @ViewBuilder
     var body: some View {
@@ -21,7 +20,7 @@ struct ResourceLibraryWorkbenchView: View {
                 let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
 
                 VStack(alignment: .leading, spacing: 0) {
-                    resourceToolbar(layoutMode: layoutMode)
+                    resourceMetrics(layoutMode: layoutMode)
 
                     switch mode {
                     case .assets:
@@ -47,7 +46,7 @@ struct ResourceLibraryWorkbenchView: View {
         }
     }
 
-    private func resourceToolbar(layoutMode: WorkbenchLayoutMode) -> some View {
+    private func resourceMetrics(layoutMode: WorkbenchLayoutMode) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: layoutMode.isCompact ? 145 : 170), spacing: 12)], spacing: 12) {
                 MetricCard(title: "Entries", value: "\(library?.entryCount ?? 0)", detail: "\(library?.parsedCount ?? 0) parsed")
@@ -55,45 +54,6 @@ struct ResourceLibraryWorkbenchView: View {
                 MetricCard(title: "GBA ROMs", value: "\(gbaROMCount)", detail: "Top-level inputs")
                 MetricCard(title: "Availability", value: "\(availabilityProblemCount)", detail: assetLoadStatus.label)
                 MetricCard(title: "Diagnostics", value: "\(diagnosticCount)", detail: "Library and assets")
-            }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: layoutMode.isCompact ? 150 : 170), spacing: 12)], alignment: .leading, spacing: 10) {
-                Picker("Resource Mode", selection: $mode) {
-                    ForEach(ResourceLibraryMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: layoutMode.isCompact ? .infinity : 240)
-
-                if mode == .assets {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Category")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Picker("Category", selection: $selectedCategory) {
-                            ForEach(categoryOptions, id: \.self) { category in
-                                Text(category).tag(category)
-                            }
-                        }
-                        .labelsHidden()
-                    }
-                    .frame(maxWidth: layoutMode.isCompact ? .infinity : 180)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Sort")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Picker("Sort", selection: $sortMode) {
-                            ForEach(ResourceAssetSortMode.allCases) { sort in
-                                Text(sort.title).tag(sort)
-                            }
-                        }
-                        .labelsHidden()
-                    }
-                    .frame(maxWidth: layoutMode.isCompact ? .infinity : 170)
-                }
             }
         }
         .padding(layoutMode.isCompact ? 14 : 24)
@@ -139,44 +99,9 @@ struct ResourceLibraryWorkbenchView: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 260)
             } else {
-                if layoutMode.isCompact {
-                    compactAssetList
-                } else {
-                    HSplitView {
-                        Table(assets, selection: $selectedAssetID) {
-                            TableColumn("Asset") { asset in
-                                HStack(spacing: 8) {
-                                    Image(systemName: iconName(for: asset.category))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 18)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(asset.title)
-                                            .lineLimit(1)
-                                        Text(asset.subtitle)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                            }
-                            TableColumn("Category", value: \.category)
-                            TableColumn("Kind", value: \.kind)
-                            TableColumn("Availability") { asset in
-                                Text(asset.availabilitySummary)
-                                    .foregroundStyle(asset.affectsResourceAvailability ? .orange : .secondary)
-                                    .lineLimit(1)
-                            }
-                            TableColumn("Path") { asset in
-                                Text(asset.path)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .frame(minWidth: 560)
-
-                        ResourceAssetDetailPane(asset: selectedAsset, onNavigate: onNavigateToAsset)
-                            .frame(minWidth: 260, idealWidth: 320)
-                    }
+                ScrollView {
+                    ResourceAssetDetailPane(asset: selectedAsset, onNavigate: onNavigateToAsset)
+                        .padding(layoutMode.isCompact ? 14 : 24)
                 }
             }
         }
@@ -272,31 +197,6 @@ struct ResourceLibraryWorkbenchView: View {
     }
 
     private static let allCategories = WorkbenchStore.allResourceAssetCategories
-}
-
-private enum ResourceLibraryMode: String, CaseIterable, Identifiable {
-    case assets
-    case entries
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .assets:
-            "Assets"
-        case .entries:
-            "Entries"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .assets:
-            "square.grid.3x3"
-        case .entries:
-            "externaldrive.connected.to.line.below"
-        }
-    }
 }
 
 private struct ResourceLibraryDetailRow: View {

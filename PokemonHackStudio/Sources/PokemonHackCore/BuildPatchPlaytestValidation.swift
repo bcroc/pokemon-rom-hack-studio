@@ -861,6 +861,73 @@ public struct PlaytestHandoffReport: Codable, Equatable {
     }
 }
 
+public enum PlaytestLaunchStatus: String, Codable, Equatable {
+    case launched
+    case blocked
+    case failed
+}
+
+public struct PlaytestProcessRequest: Equatable {
+    public let executableURL: URL
+    public let arguments: [String]
+    public let workingDirectoryURL: URL
+    public let standardOutputURL: URL
+    public let standardErrorURL: URL
+
+    public init(
+        executableURL: URL,
+        arguments: [String],
+        workingDirectoryURL: URL,
+        standardOutputURL: URL,
+        standardErrorURL: URL
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.workingDirectoryURL = workingDirectoryURL
+        self.standardOutputURL = standardOutputURL
+        self.standardErrorURL = standardErrorURL
+    }
+}
+
+public typealias PlaytestProcessRunner = (PlaytestProcessRequest) throws -> Int32
+
+public struct PlaytestLaunchResult: Codable, Equatable {
+    public let status: PlaytestLaunchStatus
+    public let mode: PlaytestMode
+    public let projectRootPath: String
+    public let emulatorPath: String?
+    public let romPath: String?
+    public let command: [String]
+    public let processID: Int32?
+    public let artifacts: [PlaytestSessionArtifact]
+    public let diagnostics: [Diagnostic]
+    public let launchedAt: Date?
+
+    public init(
+        status: PlaytestLaunchStatus,
+        mode: PlaytestMode,
+        projectRootPath: String,
+        emulatorPath: String?,
+        romPath: String?,
+        command: [String],
+        processID: Int32? = nil,
+        artifacts: [PlaytestSessionArtifact],
+        diagnostics: [Diagnostic],
+        launchedAt: Date? = nil
+    ) {
+        self.status = status
+        self.mode = mode
+        self.projectRootPath = projectRootPath
+        self.emulatorPath = emulatorPath
+        self.romPath = romPath
+        self.command = command
+        self.processID = processID
+        self.artifacts = artifacts
+        self.diagnostics = diagnostics
+        self.launchedAt = launchedAt
+    }
+}
+
 public enum PlaytestHandoffReportBuilder {
     public static func build(
         index: ProjectIndex,
@@ -966,6 +1033,274 @@ public enum PlaytestHandoffReportBuilder {
             exists: exists,
             sha1: sha1
         )
+    }
+}
+
+public enum PlaytestLauncher {
+    public static func launch(
+        index: ProjectIndex,
+        mode: PlaytestMode = .interactive,
+        artifactRoot: URL? = nil,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner,
+        now: () -> Date = Date.init
+    ) -> PlaytestLaunchResult {
+        let report = PlaytestHandoffReportBuilder.build(
+            index: index,
+            mode: mode,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
+        return launch(
+            report: report,
+            projectRoot: URL(fileURLWithPath: index.root.path),
+            artifactRoot: artifactRoot,
+            fileManager: fileManager,
+            processRunner: processRunner,
+            now: now
+        )
+    }
+
+    public static func launch(
+        report: PlaytestHandoffReport,
+        projectRoot: URL,
+        artifactRoot: URL? = nil,
+        fileManager: FileManager = .default,
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner,
+        now: () -> Date = Date.init
+    ) -> PlaytestLaunchResult {
+        let root = projectRoot.standardizedFileURL
+        let artifactRoot = (artifactRoot ?? root).standardizedFileURL
+        let artifacts = launchArtifacts(from: report, root: artifactRoot, fileManager: fileManager)
+        let romPath = report.romCandidate?.absolutePath
+        let executablePath = executablePath(for: report.emulator, fileManager: fileManager)
+        let command = executablePath.map { [$0] + report.session.arguments + [romPath].compactMap { $0 } } ?? []
+
+        guard report.isRunnable else {
+            return PlaytestLaunchResult(
+                status: .blocked,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .warning,
+                        code: "PLAYTEST_LAUNCH_BLOCKED",
+                        message: "Playtest launch was blocked because the handoff report is not runnable."
+                    )
+                ]
+            )
+        }
+
+        guard let executablePath else {
+            return PlaytestLaunchResult(
+                status: .blocked,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: report.emulator.resolvedPath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_EMULATOR_EXECUTABLE_MISSING",
+                        message: "mGBA was discovered, but no executable could be resolved for launch."
+                    )
+                ]
+            )
+        }
+
+        guard let romPath else {
+            return PlaytestLaunchResult(
+                status: .blocked,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: nil,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_ROM_CANDIDATE_MISSING",
+                        message: "No ROM path is available for mGBA launch."
+                    )
+                ]
+            )
+        }
+
+        guard
+            let stdoutURL = artifactURL(kind: .stdout, artifacts: artifacts, root: artifactRoot),
+            let stderrURL = artifactURL(kind: .stderr, artifacts: artifacts, root: artifactRoot),
+            let runLogURL = artifactURL(kind: .runLog, artifacts: artifacts, root: artifactRoot)
+        else {
+            return PlaytestLaunchResult(
+                status: .failed,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_ARTIFACT_PLAN_MISSING",
+                        message: "Playtest launch artifacts are incomplete."
+                    )
+                ]
+            )
+        }
+
+        do {
+            try fileManager.createDirectory(at: runLogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: stdoutURL)
+            try Data().write(to: stderrURL)
+
+            let request = PlaytestProcessRequest(
+                executableURL: URL(fileURLWithPath: executablePath),
+                arguments: report.session.arguments + [romPath],
+                workingDirectoryURL: root,
+                standardOutputURL: stdoutURL,
+                standardErrorURL: stderrURL
+            )
+            let processID = try processRunner(request)
+            let launchDate = now()
+            try runLog(
+                report: report,
+                executablePath: executablePath,
+                romPath: romPath,
+                rootPath: root.path,
+                processID: processID,
+                launchedAt: launchDate
+            ).write(to: runLogURL, atomically: true, encoding: .utf8)
+
+            return PlaytestLaunchResult(
+                status: .launched,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                processID: processID,
+                artifacts: launchArtifacts(from: report, root: artifactRoot, fileManager: fileManager),
+                diagnostics: report.diagnostics,
+                launchedAt: launchDate
+            )
+        } catch {
+            return PlaytestLaunchResult(
+                status: .failed,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: launchArtifacts(from: report, root: artifactRoot, fileManager: fileManager),
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_LAUNCH_FAILED",
+                        message: "mGBA launch failed: \(error.localizedDescription)"
+                    )
+                ]
+            )
+        }
+    }
+
+    public static func executablePath(
+        for emulator: ToolAvailability,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let resolvedPath = emulator.resolvedPath else {
+            return nil
+        }
+
+        let resolvedURL = URL(fileURLWithPath: resolvedPath)
+        if resolvedURL.pathExtension == "app" {
+            let executableURL = resolvedURL.appendingPathComponent("Contents/MacOS/mGBA")
+            guard fileManager.fileExists(atPath: executableURL.path),
+                  fileManager.isExecutableFile(atPath: executableURL.path) else {
+                return nil
+            }
+            return executableURL.path
+        }
+
+        guard fileManager.fileExists(atPath: resolvedURL.path),
+              fileManager.isExecutableFile(atPath: resolvedURL.path) else {
+            return nil
+        }
+        return resolvedURL.path
+    }
+
+    public static func defaultProcessRunner(_ request: PlaytestProcessRequest) throws -> Int32 {
+        let process = Process()
+        process.executableURL = request.executableURL
+        process.arguments = request.arguments
+        process.currentDirectoryURL = request.workingDirectoryURL
+
+        let stdoutHandle = try FileHandle(forWritingTo: request.standardOutputURL)
+        let stderrHandle = try FileHandle(forWritingTo: request.standardErrorURL)
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+        }
+
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
+        try process.run()
+        return process.processIdentifier
+    }
+
+    private static func launchArtifacts(
+        from report: PlaytestHandoffReport,
+        root: URL,
+        fileManager: FileManager
+    ) -> [PlaytestSessionArtifact] {
+        report.session.artifacts.map { artifact in
+            let url = root.appendingPathComponent(artifact.relativePath)
+            return PlaytestSessionArtifact(
+                kind: artifact.kind,
+                relativePath: artifact.relativePath,
+                isExpected: artifact.isExpected,
+                exists: fileManager.fileExists(atPath: url.path),
+                detail: artifact.detail
+            )
+        }
+    }
+
+    private static func artifactURL(
+        kind: PlaytestSessionArtifactKind,
+        artifacts: [PlaytestSessionArtifact],
+        root: URL
+    ) -> URL? {
+        artifacts.first { $0.kind == kind }.map { root.appendingPathComponent($0.relativePath) }
+    }
+
+    private static func runLog(
+        report: PlaytestHandoffReport,
+        executablePath: String,
+        romPath: String,
+        rootPath: String,
+        processID: Int32,
+        launchedAt: Date
+    ) -> String {
+        [
+            "launchedAt: \(ISO8601DateFormatter().string(from: launchedAt))",
+            "projectRoot: \(rootPath)",
+            "mode: \(report.mode.rawValue)",
+            "emulator: \(executablePath)",
+            "rom: \(romPath)",
+            "romSHA1: \(report.romCandidate?.sha1 ?? "unknown")",
+            "targetID: \(report.romCandidate?.targetID ?? "unknown")",
+            "processID: \(processID)",
+            "command: \(([executablePath] + report.session.arguments + [romPath]).joined(separator: " "))",
+            ""
+        ].joined(separator: "\n")
     }
 }
 

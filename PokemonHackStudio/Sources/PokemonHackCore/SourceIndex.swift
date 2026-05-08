@@ -10,6 +10,7 @@ public enum SourceIndexModule: String, Codable, Equatable, CaseIterable {
     case learnsets
     case evolutions
     case pokedex
+    case encounters
 }
 
 public struct SourceIndexFact: Codable, Equatable, Identifiable {
@@ -572,7 +573,10 @@ struct SourceIndexDescriptorSet {
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data"],
-                textRoots: ["data/text", "src/data/text", "data-de"]
+                textRoots: ["data/text", "src/data/text", "data-de"],
+                specialScanners: [
+                    .wildEncountersJSON("src/data/wild_encounters.json")
+                ]
             )
         case .pokefirered:
             SourceIndexDescriptorSet(
@@ -588,7 +592,10 @@ struct SourceIndexDescriptorSet {
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
-                textRoots: ["data/text", "src/data/text"]
+                textRoots: ["data/text", "src/data/text"],
+                specialScanners: [
+                    .wildEncountersJSON("src/data/wild_encounters.json")
+                ]
             )
         case .pokeemeraldExpansion:
             SourceIndexDescriptorSet(
@@ -608,7 +615,8 @@ struct SourceIndexDescriptorSet {
                 specialScanners: [
                     .levelUpLearnsetDirectory("src/data/pokemon/level_up_learnsets"),
                     .allLearnablesJSON("src/data/pokemon/all_learnables.json"),
-                    .speciesFamilySupplements("src/data/pokemon/species_info")
+                    .speciesFamilySupplements("src/data/pokemon/species_info"),
+                    .wildEncountersJSON("src/data/wild_encounters.json")
                 ]
             )
         case .pokeemerald:
@@ -625,7 +633,10 @@ struct SourceIndexDescriptorSet {
                 ],
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
-                textRoots: ["data/text", "src/data/text"]
+                textRoots: ["data/text", "src/data/text"],
+                specialScanners: [
+                    .wildEncountersJSON("src/data/wild_encounters.json")
+                ]
             )
         case .binaryROM, .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
             SourceIndexDescriptorSet(
@@ -642,6 +653,7 @@ enum SourceIndexSpecialScanner {
     case allLearnablesJSON(String)
     case levelUpLearnsetDirectory(String)
     case speciesFamilySupplements(String)
+    case wildEncountersJSON(String)
 
     func scan(root: URL, fileManager: FileManager) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
         switch self {
@@ -666,6 +678,11 @@ enum SourceIndexSpecialScanner {
                 records.append(contentsOf: SpeciesFamilySupplementScanner.records(in: text, relativePath: file))
             }
             return (records, [])
+        case .wildEncountersJSON(let relativePath):
+            let url = root.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: url.path) else { return ([], []) }
+            let text = try readText(at: url)
+            return try JSONSourceIndexScanner.encounterRecords(in: text, relativePath: relativePath)
         }
     }
 
@@ -772,6 +789,53 @@ private enum JSONSourceIndexScanner {
                 ],
                 preview: moves.prefix(12).joined(separator: "\n")
             )
+        }
+        return (records, [])
+    }
+
+    static func encounterRecords(in text: String, relativePath: String) throws -> (records: [SourceIndexRecord], diagnostics: [Diagnostic]) {
+        let data = Data(text.utf8)
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let groups = root["wild_encounter_groups"] as? [[String: Any]]
+        else {
+            return ([], [jsonDiagnostic("JSON_ENCOUNTERS_INDEX_UNREADABLE", "Could not read wild encounter JSON.", relativePath: relativePath)])
+        }
+
+        var records: [SourceIndexRecord] = []
+        for group in groups {
+            guard let encounters = group["encounters"] as? [[String: Any]] else { continue }
+            for encounter in encounters {
+                guard let mapName = encounter["map"] as? String else { continue }
+                let line = lineNumber(containing: mapName, in: text) ?? 1
+                
+                var facts: [SourceIndexFact] = []
+                if let baseLabel = encounter["base_label"] as? String {
+                    facts.append(SourceIndexFact(label: "Base Label", value: baseLabel))
+                }
+                
+                let types = ["land_mons", "water_mons", "rock_smash_mons", "fishing_mons"]
+                for type in types {
+                    if let typeData = encounter[type] as? [String: Any],
+                       let mons = typeData["mons"] as? [[Any]] {
+                        facts.append(SourceIndexFact(label: type.replacingOccurrences(of: "_", with: " ").capitalized, value: "\(mons.count) slots"))
+                    } else if let typeData = encounter[type] as? [String: Any],
+                              let mons = typeData["mons"] as? [[String: Any]] {
+                         facts.append(SourceIndexFact(label: type.replacingOccurrences(of: "_", with: " ").capitalized, value: "\(mons.count) slots"))
+                    }
+                }
+
+                records.append(SourceIndexRecord(
+                    id: "encounters:\(relativePath):\(mapName)",
+                    module: .encounters,
+                    title: mapName,
+                    subtitle: relativePath,
+                    sourceSpan: SourceSpan(relativePath: relativePath, startLine: line),
+                    tags: ["encounters", "wild", "map"],
+                    facts: facts,
+                    preview: jsonPreview(encounter)
+                ))
+            }
         }
         return (records, [])
     }

@@ -447,6 +447,39 @@ public enum GenIIIResourceRegistry {
             let sha1 = smallFileSHA1(url: url)
             let attributes = try? fileManager.attributesOfItem(atPath: url.path)
             let size = (attributes?[.size] as? NSNumber)?.uint64Value
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            let graph = BinaryROMGraphBuilder.build(path: url.path, data: data)
+            let headerItems = graph.headerFacts.map {
+                GenIIIResourceItem(
+                    id: "rom-header:\($0.key)",
+                    path: url.lastPathComponent,
+                    kind: $0.key,
+                    category: "ROM Header",
+                    offset: nil,
+                    size: nil,
+                    sha1: nil
+                )
+            }
+            let pointerItems = graph.pointerCandidates.prefix(16).map {
+                GenIIIResourceItem(
+                    id: "rom-pointer:\($0.sourceOffset)",
+                    path: String(format: "0x%06X -> 0x%06X", $0.sourceOffset, $0.targetOffset),
+                    kind: "pointer",
+                    category: "GBA Pointer",
+                    offset: UInt64($0.sourceOffset),
+                    size: 4
+                )
+            }
+            let freeSpaceItems = graph.freeSpaceRanges.prefix(16).map {
+                GenIIIResourceItem(
+                    id: "rom-free-space:\($0.offset)",
+                    path: String(format: "0x%06X", $0.offset),
+                    kind: String(format: "fill 0x%02X", $0.fillByte),
+                    category: "Free Space",
+                    offset: UInt64($0.offset),
+                    size: UInt64($0.length)
+                )
+            }
             return [
                 GenIIIResourceItem(
                     id: url.path,
@@ -457,7 +490,7 @@ public enum GenIIIResourceRegistry {
                     size: size,
                     sha1: sha1
                 )
-            ]
+            ] + headerItems + pointerItems + freeSpaceItems
         }
 
         let sourceItems = index.documents.map { document in

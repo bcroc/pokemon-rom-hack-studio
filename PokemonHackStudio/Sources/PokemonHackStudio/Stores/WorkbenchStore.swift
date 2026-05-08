@@ -68,10 +68,26 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedSpeciesID: String = ""
     @Published var selectedTrainerID: String = ""
     @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID?
+    @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = ""
+    @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
     @Published var scriptReadinessTargetMode: ScriptReadinessTargetMode = .map
     @Published var selectedScriptReadinessLabel: String = ""
+    @Published var selectedScriptSourceID: String = ""
+    @Published var selectedScriptLabelID: String = ""
+    @Published var selectedScriptTextBlockID: String = ""
+    @Published var selectedMapWorkbenchTab: MapWorkbenchTab = .overviewLayers
+    @Published var selectedBuildWorkbenchTab: BuildWorkbenchTab = .build
+    @Published var selectedBuildReportRowID: String = ""
+    @Published var selectedGraphicsReportRowID: String = ""
+    @Published var selectedDiagnosticBucket: DiagnosticSummaryBucket = .blockingErrors
+    @Published var selectedDiagnosticRowID: String = ""
+    @Published var selectedGuidedFlowID: String = ""
+    @Published var selectedRecordIDsByModule: [WorkbenchModule: UUID] = [:]
+    @Published var mapShowsPalette = true
+    @Published var mapMetatileFilter = ""
+    @Published var mapViewportRequest: MapCanvasViewportRequest?
     @Published var searchText = ""
     @Published var resourceAssetCategory = WorkbenchStore.allResourceAssetCategories
     @Published var resourceAssetSortMode: ResourceAssetSortMode = .category
@@ -96,6 +112,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var latestTrainerApplyResult: PokemonHackCore.TrainerApplyResult?
     @Published private var speciesDraftsByKey: [String: PokemonHackCore.SpeciesEditDraft] = [:]
     @Published private var trainerDraftsByKey: [String: PokemonHackCore.TrainerEditDraft] = [:]
+    @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
 
     let userSettings: WorkbenchUserSettings
     let targets: [BuildTarget]
@@ -105,6 +122,7 @@ final class WorkbenchStore: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let fileManager: FileManager
+    private let toolResolver: ToolAvailabilityResolver
     private let workspaceRoot: URL
     private var projectIndexesByID: [String: PokemonHackCore.ProjectIndex] = [:]
     private var sourceIndexesByID: [String: PokemonHackCore.ProjectSourceIndex] = [:]
@@ -133,11 +151,13 @@ final class WorkbenchStore: ObservableObject {
         userDefaults: UserDefaults = .standard,
         userSettings: WorkbenchUserSettings? = nil,
         fileManager: FileManager = .default,
+        toolResolver: @escaping ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
         autoLoadProjects: Bool = true
     ) {
         self.userDefaults = userDefaults
         self.userSettings = userSettings ?? WorkbenchUserSettings(defaults: userDefaults)
         self.fileManager = fileManager
+        self.toolResolver = toolResolver
         workspaceRoot = Self.inferredWorkspaceRoot()
         recentProjectRoots = userDefaults.stringArray(forKey: Self.recentRootsKey) ?? []
 
@@ -151,7 +171,9 @@ final class WorkbenchStore: ObservableObject {
         }
 
         if autoLoadProjects && self.userSettings.autoLoadProjects {
-            refreshProjectIndexes()
+            DispatchQueue.main.async { [weak self] in
+                self?.refreshProjectIndexes()
+            }
         }
     }
 
@@ -197,7 +219,9 @@ final class WorkbenchStore: ObservableObject {
         if let selected = catalog.species.first(where: { $0.speciesID == selectedSpeciesID }) {
             return selected
         }
-        return filteredSpeciesDetails.first ?? catalog.species.first
+        return Self.defaultEditableSpecies(in: filteredSpeciesDetails)
+            ?? Self.defaultEditableSpecies(in: catalog.species)
+            ?? catalog.species.first
     }
 
     var selectedSpeciesDraft: PokemonHackCore.SpeciesEditDraft? {
@@ -267,7 +291,9 @@ final class WorkbenchStore: ObservableObject {
         if let selected = catalog.trainers.first(where: { $0.trainerID == selectedTrainerID }) {
             return selected
         }
-        return filteredTrainerDetails.first ?? catalog.trainers.first
+        return Self.defaultEditableTrainer(in: filteredTrainerDetails)
+            ?? Self.defaultEditableTrainer(in: catalog.trainers)
+            ?? catalog.trainers.first
     }
 
     var selectedTrainerDraft: PokemonHackCore.TrainerEditDraft? {
@@ -332,6 +358,35 @@ final class WorkbenchStore: ObservableObject {
     var selectedRawBuildReport: BuildPatchPlaytestReportViewState? {
         guard let selectedIndexedProject else { return nil }
         return buildReportsByID[selectedIndexedProject.id]
+    }
+
+    var selectedPlaytestLaunchResult: PlaytestLaunchResultViewState? {
+        guard let selectedIndexedProject else { return nil }
+        return playtestLaunchResultsByID[selectedIndexedProject.id]
+    }
+
+    var canLaunchSelectedPlaytest: Bool {
+        selectedBuildReport?.playtest.isRunnable == true
+    }
+
+    func buildWorkflowActions(includePatchActions: Bool) -> [BuildWorkflowActionViewState] {
+        Self.buildWorkflowActions(
+            canLaunchPlaytest: canLaunchSelectedPlaytest,
+            includePatchActions: includePatchActions
+        )
+    }
+
+    var fixtureBuildWorkflowActions: [BuildWorkflowActionViewState] {
+        Self.buildWorkflowActions(canLaunchPlaytest: false, includePatchActions: false)
+            .map { action in
+                BuildWorkflowActionViewState(
+                    id: action.id,
+                    title: action.title,
+                    systemImage: action.systemImage,
+                    isEnabled: false,
+                    isPreviewLocked: true
+                )
+            }
     }
 
     var baseROMOptions: [BaseROMOptionViewState] {
@@ -538,6 +593,98 @@ final class WorkbenchStore: ObservableObject {
                 || block.sourcePath.localizedCaseInsensitiveContains(searchText)
                 || block.preview.localizedCaseInsensitiveContains(searchText)
         }
+    }
+
+    var selectedResourceAsset: ResourceAssetRowViewState? {
+        if let selectedResourceAssetID,
+           let selected = filteredResourceAssetRows.first(where: { $0.id == selectedResourceAssetID })
+        {
+            return selected
+        }
+        if let selectedResourceAssetID,
+           let selected = selectedAssetCatalog?.rows.first(where: { $0.id == selectedResourceAssetID })
+        {
+            return selected
+        }
+        return filteredResourceAssetRows.first ?? selectedAssetCatalog?.rows.first
+    }
+
+    var selectedResourceLibraryEntry: ResourceLibraryEntryViewState? {
+        if let selected = filteredResourceLibraryEntries.first(where: { $0.id == selectedResourceLibraryEntryID }) {
+            return selected
+        }
+        return filteredResourceLibraryEntries.first ?? resourceLibrary?.entries.first
+    }
+
+    var selectedScriptSource: PokemonHackCore.ScriptOutlineSource? {
+        if let selected = filteredScriptOutlineSources.first(where: { $0.id == selectedScriptSourceID }) {
+            return selected
+        }
+        return filteredScriptOutlineSources.first ?? selectedScriptOutline?.sources.first
+    }
+
+    var selectedScriptLabel: PokemonHackCore.ScriptOutlineLabel? {
+        if let selected = filteredScriptOutlineLabels.first(where: { $0.id == selectedScriptLabelID }) {
+            return selected
+        }
+        return filteredScriptOutlineLabels.first ?? selectedScriptOutline?.labels.first
+    }
+
+    var selectedScriptTextBlock: PokemonHackCore.ScriptTextBlock? {
+        if let selected = filteredScriptTextBlocks.first(where: { $0.id == selectedScriptTextBlockID }) {
+            return selected
+        }
+        return filteredScriptTextBlocks.first ?? selectedScriptOutline?.textBlocks.first
+    }
+
+    var filteredBuildRowsForSelectedTab: [BuildReportRow] {
+        switch selectedBuildWorkbenchTab {
+        case .build:
+            return filteredBuildReportRows.filter { $0.section != .diagnostics && $0.section != .patchManifest }
+        case .patch:
+            return filteredPatchManifestRows
+        case .playtest:
+            guard let selectedBuildReport else { return [] }
+            return [BuildReportRow(playtest: selectedBuildReport.playtest)]
+        }
+    }
+
+    var selectedBuildReportRow: BuildReportRow? {
+        if let selected = filteredBuildRowsForSelectedTab.first(where: { $0.id == selectedBuildReportRowID }) {
+            return selected
+        }
+        return filteredBuildRowsForSelectedTab.first
+    }
+
+    var selectedGraphicsReportRow: GraphicsReportRow? {
+        if let selected = filteredGraphicsReportRows.first(where: { $0.id == selectedGraphicsReportRowID }) {
+            return selected
+        }
+        return filteredGraphicsReportRows.first
+    }
+
+    var selectedDiagnosticBucketSummary: DiagnosticBucketSummary {
+        diagnosticSummary.bucket(selectedDiagnosticBucket)
+    }
+
+    var selectedDiagnosticRow: IndexedDiagnosticRow? {
+        if let selected = selectedDiagnosticBucketSummary.diagnostics.first(where: { $0.id == selectedDiagnosticRowID }) {
+            return selected
+        }
+        if let selected = selectedDiagnosticRows.first(where: { $0.id == selectedDiagnosticRowID }) {
+            return selected
+        }
+        return selectedDiagnosticBucketSummary.diagnostics.first ?? selectedDiagnosticRows.first
+    }
+
+    func selectedRecord(for module: WorkbenchModule) -> WorkbenchRecord? {
+        let moduleRecords = records(for: module)
+        if let selectedID = selectedRecordIDsByModule[module],
+           let selected = moduleRecords.first(where: { $0.id == selectedID })
+        {
+            return selected
+        }
+        return moduleRecords.first
     }
 
     func records(for module: WorkbenchModule) -> [WorkbenchRecord] {
@@ -771,6 +918,20 @@ final class WorkbenchStore: ObservableObject {
         .lowercased()
     }
 
+    private static func defaultEditableSpecies(in species: [PokemonHackCore.SpeciesDetail]) -> PokemonHackCore.SpeciesDetail? {
+        species.first { detail in
+            detail.isEditable && detail.speciesID != "SPECIES_NONE"
+        } ?? species.first { $0.isEditable }
+    }
+
+    private static func defaultEditableTrainer(in trainers: [PokemonHackCore.TrainerDetail]) -> PokemonHackCore.TrainerDetail? {
+        trainers.first { detail in
+            detail.isEditable
+                && detail.trainerID != "TRAINER_NONE"
+                && detail.trainerID != "TRAINER_NONE_0"
+        } ?? trainers.first { $0.isEditable }
+    }
+
     private func speciesDraftKey(projectID: String, speciesID: String) -> String {
         "\(projectID)::species::\(speciesID)"
     }
@@ -796,7 +957,7 @@ final class WorkbenchStore: ObservableObject {
                 ]
             )
         case .issues:
-            issueCount == 0 ? .valid : .warning
+            diagnosticSummary.status
         case .graphics:
             graphicsModuleStatus
         case .scripts:
@@ -888,6 +1049,8 @@ final class WorkbenchStore: ObservableObject {
             sourceModule = .trainers
         case .items:
             sourceModule = .items
+        case .encounters:
+            sourceModule = .encounters
         default:
             sourceModule = nil
         }
@@ -919,7 +1082,7 @@ final class WorkbenchStore: ObservableObject {
         var scriptOutlines: [String: PokemonHackCore.ProjectScriptOutline] = [:]
         var buildReports: [String: BuildPatchPlaytestReportViewState] = [:]
         var graphicsReports: [String: GraphicsDiagnosticsReportViewState] = [:]
-        var scriptReadinessReports: [String: ScriptReadinessReportViewState] = [:]
+        var retainedScriptReadinessReports: [String: ScriptReadinessReportViewState] = [:]
         var speciesCatalogs: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
         var trainerCatalogs: [String: PokemonHackCore.ProjectTrainerCatalog] = [:]
         var retainedAssetCatalogs: [String: ResourceAssetCatalogViewState] = [:]
@@ -944,8 +1107,8 @@ final class WorkbenchStore: ObservableObject {
                     sourceIndexes[summary.id] = sourceIndex
                 }
                 if userSettings.autoRefreshHealthOnProjectRefresh || buildReportsByID[summary.id] == nil {
-                    let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
-                    buildReports[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, buildReport: coreBuildReport)
+                    let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+                    buildReports[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
                 } else {
                     buildReports[summary.id] = buildReportsByID[summary.id]
                 }
@@ -964,11 +1127,8 @@ final class WorkbenchStore: ObservableObject {
                     retainedAssetCatalogs[summary.id] = cached
                     retainedFingerprints[summary.id] = fingerprint
                 }
-                if let readinessTarget = Self.defaultScriptReadinessTarget(for: index, fileManager: fileManager) {
-                    scriptReadinessReports[summary.id] = Self.scriptReadinessReport(
-                        from: ScriptReadinessReportBuilder.build(index: index, target: readinessTarget, fileManager: fileManager),
-                        project: summary
-                    )
+                if let cached = scriptReadinessReportsByID[summary.id] {
+                    retainedScriptReadinessReports[summary.id] = cached
                 }
             } catch {
                 continue
@@ -981,7 +1141,7 @@ final class WorkbenchStore: ObservableObject {
         scriptOutlinesByID = scriptOutlines
         buildReportsByID = buildReports
         graphicsReportsByID = graphicsReports
-        scriptReadinessReportsByID = scriptReadinessReports
+        scriptReadinessReportsByID = retainedScriptReadinessReports
         speciesCatalogsByID = speciesCatalogs
         trainerCatalogsByID = trainerCatalogs
         assetCatalogsByID = retainedAssetCatalogs
@@ -993,7 +1153,7 @@ final class WorkbenchStore: ObservableObject {
             resetPatchManifestReportForProjectChange()
         }
         refreshSelectedMapCatalog()
-        refreshSelectedScriptReadinessReport()
+        refreshSelectedScriptReadinessReportIfVisible()
         refreshSelectedSpeciesSelection()
         refreshSelectedTrainerSelection()
         updateAssetCatalogLoadStatusForSelection()
@@ -1015,6 +1175,7 @@ final class WorkbenchStore: ObservableObject {
             selectedProjectID = projectID
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
             resetPatchManifestReportForProjectChange()
+            resetSidebarSelectionsForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
             selectedResourceAssetID = nil
             pendingRelatedMapTargetID = nil
@@ -1060,6 +1221,50 @@ final class WorkbenchStore: ObservableObject {
         selectedResourceAssetID = assetID
     }
 
+    func requestResourceLibraryEntrySelection(_ entryID: ResourceLibraryEntryViewState.ID) {
+        selectedResourceLibraryEntryID = entryID
+    }
+
+    func requestScriptSourceSelection(_ sourceID: String) {
+        selectedScriptSourceID = sourceID
+    }
+
+    func requestScriptLabelSelection(_ labelID: String) {
+        selectedScriptLabelID = labelID
+        selectedScriptReadinessLabel = labelID
+        scriptReadinessTargetMode = .script
+        refreshSelectedScriptReadinessReport()
+    }
+
+    func requestScriptTextBlockSelection(_ textBlockID: String) {
+        selectedScriptTextBlockID = textBlockID
+    }
+
+    func requestRecordSelection(_ recordID: UUID, module: WorkbenchModule) {
+        selectedRecordIDsByModule[module] = recordID
+    }
+
+    func requestBuildReportRowSelection(_ rowID: String) {
+        selectedBuildReportRowID = rowID
+    }
+
+    func requestGraphicsReportRowSelection(_ rowID: String) {
+        selectedGraphicsReportRowID = rowID
+    }
+
+    func requestDiagnosticBucketSelection(_ bucket: DiagnosticSummaryBucket) {
+        selectedDiagnosticBucket = bucket
+        selectedDiagnosticRowID = diagnosticSummary.bucket(bucket).diagnostics.first?.id ?? ""
+    }
+
+    func requestDiagnosticRowSelection(_ rowID: String) {
+        selectedDiagnosticRowID = rowID
+    }
+
+    func requestGuidedFlowSelection(_ flowID: String) {
+        selectedGuidedFlowID = flowID
+    }
+
     func requestPatchPath(_ path: String) {
         selectedPatchPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         rawPatchManifestReport = nil
@@ -1079,6 +1284,20 @@ final class WorkbenchStore: ObservableObject {
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
         patchManifestLoadStatus = .idle
+    }
+
+    private func resetSidebarSelectionsForProjectChange() {
+        selectedResourceLibraryEntryID = ""
+        selectedScriptSourceID = ""
+        selectedScriptLabelID = ""
+        selectedScriptTextBlockID = ""
+        selectedBuildReportRowID = ""
+        selectedGraphicsReportRowID = ""
+        selectedDiagnosticBucket = .blockingErrors
+        selectedDiagnosticRowID = ""
+        selectedGuidedFlowID = ""
+        selectedRecordIDsByModule = [:]
+        mapViewportRequest = nil
     }
 
     func loadSelectedPatchManifestReport() {
@@ -1263,6 +1482,7 @@ final class WorkbenchStore: ObservableObject {
             selectedProjectID = projectID
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
             resetPatchManifestReportForProjectChange()
+            resetSidebarSelectionsForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
             resourceAssetRowsCache = nil
             refreshSelectedSpeciesSelection()
@@ -1298,8 +1518,8 @@ final class WorkbenchStore: ObservableObject {
                 sourceIndex = try? ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
                 sourceIndexesByID[summary.id] = sourceIndex
             }
-            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
-            buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, buildReport: coreBuildReport)
+            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+            buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
             graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
             speciesCatalogsByID[summary.id] = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
             trainerCatalogsByID[summary.id] = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager)
@@ -1309,14 +1529,7 @@ final class WorkbenchStore: ObservableObject {
             pendingRelatedMapTargetID = nil
             pendingResourceAssetFocus = nil
             resourceAssetRowsCache = nil
-            if let readinessTarget = Self.defaultScriptReadinessTarget(for: index, fileManager: fileManager) {
-                scriptReadinessReportsByID[summary.id] = Self.scriptReadinessReport(
-                    from: ScriptReadinessReportBuilder.build(index: index, target: readinessTarget, fileManager: fileManager),
-                    project: summary
-                )
-            } else {
-                scriptReadinessReportsByID.removeValue(forKey: summary.id)
-            }
+            scriptReadinessReportsByID.removeValue(forKey: summary.id)
             upsert(summary)
             rememberRecentRoot(standardizedPath)
             if userSettings.resourceAutoRefreshOnOpen {
@@ -1324,8 +1537,9 @@ final class WorkbenchStore: ObservableObject {
             }
             selectedProjectID = summary.id
             resetPatchManifestReportForProjectChange()
+            resetSidebarSelectionsForProjectChange()
             refreshSelectedMapCatalog()
-            refreshSelectedScriptReadinessReport()
+            refreshSelectedScriptReadinessReportIfVisible()
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
             latestSpeciesEditPlan = nil
@@ -1390,6 +1604,15 @@ final class WorkbenchStore: ObservableObject {
         selectedScriptReadinessReport = viewState
     }
 
+    private func refreshSelectedScriptReadinessReportIfVisible() {
+        guard selection == .scripts else {
+            selectedScriptReadinessReport = selectedIndexedProject.flatMap { scriptReadinessReportsByID[$0.id] }
+            return
+        }
+
+        refreshSelectedScriptReadinessReport()
+    }
+
     func loadSelectedSpeciesCatalogIfNeeded(force: Bool = false) {
         guard let selectedIndexedProject else {
             speciesCatalogLoadStatus = .idle
@@ -1435,7 +1658,9 @@ final class WorkbenchStore: ObservableObject {
         }
 
         if !catalog.species.contains(where: { $0.speciesID == selectedSpeciesID }) {
-            selectedSpeciesID = catalog.species.first?.speciesID ?? ""
+            selectedSpeciesID = Self.defaultEditableSpecies(in: catalog.species)?.speciesID
+                ?? catalog.species.first?.speciesID
+                ?? ""
         }
         speciesCatalogLoadStatus = .loaded(catalog.speciesCount)
     }
@@ -1562,7 +1787,9 @@ final class WorkbenchStore: ObservableObject {
         }
 
         if !catalog.trainers.contains(where: { $0.trainerID == selectedTrainerID }) {
-            selectedTrainerID = catalog.trainers.first?.trainerID ?? ""
+            selectedTrainerID = Self.defaultEditableTrainer(in: catalog.trainers)?.trainerID
+                ?? catalog.trainers.first?.trainerID
+                ?? ""
         }
         trainerCatalogLoadStatus = .loaded(catalog.trainerCount)
     }
@@ -1762,8 +1989,8 @@ final class WorkbenchStore: ObservableObject {
 
         for project in indexedProjects {
             guard let index = projectIndexesByID[project.id] else { continue }
-            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
-            buildReportsByID[project.id] = Self.buildReport(from: index, project: project, fileManager: fileManager, buildReport: coreBuildReport)
+            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+            buildReportsByID[project.id] = Self.buildReport(from: index, project: project, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
         }
     }
 
@@ -1794,6 +2021,29 @@ final class WorkbenchStore: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
+    }
+
+    func launchSelectedPlaytest(
+        artifactRoot: URL? = nil,
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner
+    ) {
+        guard let selectedIndexedProject,
+              let index = projectIndexesByID[selectedIndexedProject.id] else {
+            return
+        }
+
+        let result = PlaytestLauncher.launch(
+            index: index,
+            mode: .interactive,
+            artifactRoot: artifactRoot ?? workspaceRoot,
+            fileManager: fileManager,
+            toolResolver: toolResolver,
+            processRunner: processRunner
+        )
+        playtestLaunchResultsByID[selectedIndexedProject.id] = Self.playtestLaunchResult(
+            from: result,
+            rootPath: selectedIndexedProject.rootPath
+        )
     }
 
     func loadSelectedAssetCatalogIfNeeded(force: Bool = false) {
@@ -1911,14 +2161,14 @@ final class WorkbenchStore: ObservableObject {
                 }
                 mapCatalogStatus = .loaded(viewState.mapCount)
                 loadSelectedMapVisualDocument()
-                refreshSelectedScriptReadinessReport()
+                refreshSelectedScriptReadinessReportIfVisible()
             } catch {
                 guard let self, self.selectedIndexedProject?.id == projectID else { return }
                 selectedMapCatalog = nil
                 selectedMapID = ""
                 mapCatalogStatus = .failed(error.localizedDescription)
                 clearSelectedMapVisualDocument()
-                refreshSelectedScriptReadinessReport()
+                refreshSelectedScriptReadinessReportIfVisible()
             }
         }
     }
@@ -2293,16 +2543,18 @@ final class WorkbenchStore: ObservableObject {
         from index: PokemonHackCore.ProjectIndex,
         project: IndexedProjectSummary,
         fileManager: FileManager,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
         buildReport providedBuildReport: BuildValidationReport? = nil
     ) -> BuildPatchPlaytestReportViewState {
-        let buildReport = providedBuildReport ?? BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
-        let playtestReport = PlaytestHandoffReportBuilder.build(index: index, fileManager: fileManager)
+        let buildReport = providedBuildReport ?? BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+        let playtestReport = PlaytestHandoffReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
         let graphicsReport = index.editorModules.contains(.graphics)
             ? GraphicsDiagnosticsReportBuilder.build(index: index, fileManager: fileManager)
             : nil
         let healthReport = ToolchainHealthMatrixBuilder.build(
             index: index,
             fileManager: fileManager,
+            toolResolver: toolResolver,
             buildReport: buildReport,
             playtestReport: playtestReport,
             graphicsReport: graphicsReport
@@ -2379,6 +2631,8 @@ final class WorkbenchStore: ObservableObject {
             if let animation = tileset.animation {
                 rows.append(graphicsAnimationRow(animation, tilesetSymbol: tileset.symbol))
             }
+
+            rows.append(graphicsConversionPlanRow(tileset.conversionPlan))
         }
 
         rows.append(contentsOf: diagnostics.map { diagnostic in
@@ -2592,6 +2846,31 @@ final class WorkbenchStore: ObservableObject {
             status: .valid,
             source: SourceLocation(path: animation.relativePath, symbol: tilesetSymbol, line: 1),
             tags: [tilesetSymbol, animation.relativePath]
+        )
+    }
+
+    private static func graphicsConversionPlanRow(
+        _ plan: PokemonHackCore.GraphicsConversionPlan
+    ) -> GraphicsReportRow {
+        let status = plan.diagnostics.contains { $0.severity == .error }
+            ? ValidationState.error
+            : (plan.diagnostics.contains { $0.severity == .warning } ? .warning : .valid)
+        let provenance = plan.creditMetadataPaths.isEmpty
+            ? "Credit metadata needed"
+            : "Credit metadata: \(plan.creditMetadataPaths.joined(separator: ", "))"
+        let outputs = plan.expectedOutputs.isEmpty
+            ? "No generated outputs are currently inferred."
+            : "Expected outputs: \(plan.expectedOutputs.joined(separator: ", "))"
+
+        return GraphicsReportRow(
+            id: "conversion:\(plan.id)",
+            section: .conversionPlans,
+            title: "\(plan.tilesetSymbol) conversion preview",
+            subtitle: plan.targetKind,
+            detail: "\(provenance). \(plan.paletteFitSummary) \(outputs) \(plan.externalToolPlan)",
+            status: status,
+            source: SourceLocation(path: plan.sourcePaths.first ?? "data/tilesets", symbol: plan.tilesetSymbol, line: 1),
+            tags: [plan.tilesetSymbol, plan.targetKind, provenance, plan.paletteFitSummary, outputs, "preview only"]
         )
     }
 
@@ -3050,7 +3329,7 @@ final class WorkbenchStore: ObservableObject {
         let status = validationStatus(for: report.diagnostics.map(diagnostic(from:)))
         let romPath = report.romCandidate?.relativePath ?? report.romCandidate?.absolutePath
         let detail = report.isRunnable
-            ? "ROM output and emulator are available; launch remains an explicit disabled action."
+            ? "ROM output and emulator are available for explicit mGBA launch."
             : "Handoff is planned only; review ROM output and emulator readiness."
         let artifacts = report.session.artifacts.map { artifact in
             PlaytestArtifactViewState(
@@ -3072,6 +3351,50 @@ final class WorkbenchStore: ObservableObject {
             status: status,
             detail: detail,
             source: SourceLocation(path: romPath ?? rootPath, symbol: report.emulator.name, line: 1)
+        )
+    }
+
+    private static func playtestLaunchResult(
+        from result: PokemonHackCore.PlaytestLaunchResult,
+        rootPath: String
+    ) -> PlaytestLaunchResultViewState {
+        let status: ValidationState
+        let detail: String
+        switch result.status {
+        case .launched:
+            status = .valid
+            detail = "mGBA launched with process \(result.processID.map(String.init) ?? "unknown")."
+        case .blocked:
+            status = .warning
+            detail = result.diagnostics.last?.message ?? "mGBA launch is blocked by the current handoff report."
+        case .failed:
+            status = .error
+            detail = result.diagnostics.last?.message ?? "mGBA launch failed."
+        }
+
+        let artifacts = result.artifacts.map { artifact in
+            PlaytestArtifactViewState(
+                id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
+                kind: artifact.kind.rawValue,
+                path: artifact.relativePath,
+                detail: artifact.exists ? "\(artifact.detail) Created." : artifact.detail,
+                source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
+            )
+        }
+        let command = result.command.joined(separator: " ")
+        let sourcePath = result.romPath ?? result.emulatorPath ?? rootPath
+
+        return PlaytestLaunchResultViewState(
+            id: "playtest-launch:\(rootPath)",
+            status: status,
+            statusLabel: result.status.rawValue,
+            detail: detail,
+            emulatorPath: result.emulatorPath,
+            romPath: result.romPath,
+            command: command,
+            processID: result.processID.map { "PID \($0)" } ?? result.status.rawValue,
+            artifacts: artifacts,
+            source: SourceLocation(path: sourcePath, symbol: "mGBA", line: 1)
         )
     }
 
@@ -3354,6 +3677,8 @@ final class WorkbenchStore: ObservableObject {
             .trainers
         case .items:
             .items
+        case .encounters:
+            .encounters
         }
     }
 
@@ -3609,6 +3934,56 @@ final class WorkbenchStore: ObservableObject {
             notes.append("Shares scripts with \(sharedScriptsMap).")
         }
         return notes
+    }
+
+    private static func buildWorkflowActions(
+        canLaunchPlaytest: Bool,
+        includePatchActions: Bool
+    ) -> [BuildWorkflowActionViewState] {
+        var actions = [
+            BuildWorkflowActionViewState(
+                id: "build-rom",
+                title: "Build ROM",
+                systemImage: "hammer",
+                isEnabled: false,
+                isPreviewLocked: true
+            ),
+            BuildWorkflowActionViewState(
+                id: "open-playtest",
+                title: "Open Playtest",
+                systemImage: "play.fill",
+                isEnabled: canLaunchPlaytest,
+                isPreviewLocked: false
+            ),
+            BuildWorkflowActionViewState(
+                id: "validate-sources",
+                title: "Validate Sources",
+                systemImage: "checkmark.seal",
+                isEnabled: false,
+                isPreviewLocked: true
+            )
+        ]
+
+        if includePatchActions {
+            actions.append(contentsOf: [
+                BuildWorkflowActionViewState(
+                    id: "apply-patch",
+                    title: "Apply Patch",
+                    systemImage: "wand.and.stars",
+                    isEnabled: false,
+                    isPreviewLocked: true
+                ),
+                BuildWorkflowActionViewState(
+                    id: "export-rom",
+                    title: "Export ROM",
+                    systemImage: "square.and.arrow.down",
+                    isEnabled: false,
+                    isPreviewLocked: true
+                )
+            ])
+        }
+
+        return actions
     }
 }
 

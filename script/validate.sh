@@ -23,15 +23,30 @@ run swift test --package-path "$PACKAGE_DIR"
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli references --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli resources --json
 printf 'APS1' > "$PATCH_SMOKE_DIR/cleanroom.aps"
+mkdir -p "$PATCH_SMOKE_DIR/blocked-playtest/data/maps" "$PATCH_SMOKE_DIR/blocked-playtest/data/layouts" "$PATCH_SMOKE_DIR/blocked-playtest/include" "$PATCH_SMOKE_DIR/blocked-playtest/src" "$PATCH_SMOKE_DIR/blocked-playtest/graphics/pokenav"
+printf 'TITLE := POKEMON EMER\nGAME_CODE := BPEE\n' > "$PATCH_SMOKE_DIR/blocked-playtest/Makefile"
+printf '{"group_order":[]}\n' > "$PATCH_SMOKE_DIR/blocked-playtest/data/maps/map_groups.json"
+printf '{"layouts_table_label":"gMapLayouts","layouts":[]}\n' > "$PATCH_SMOKE_DIR/blocked-playtest/data/layouts/layouts.json"
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch "$PATCH_SMOKE_DIR/cleanroom.aps" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch-manifest "$PATCH_SMOKE_DIR/cleanroom.aps" --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$PATCH_SMOKE_DIR/blocked-playtest" --launch --json
 
 if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli inspect "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli validate "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch-manifest "$POKEEMERALD_DIR" "$PATCH_SMOKE_DIR/cleanroom.aps" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli resource-index "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli asset-index "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli pokemon-catalog "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli trainer-catalog "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli moves-graph "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli maps "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli map-visual "$POKEEMERALD_DIR" MAP_MAUVILLE_CITY --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli build "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$POKEEMERALD_DIR" --headless --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-outline "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-readiness "$POKEEMERALD_DIR" --map MAP_MAUVILLE_CITY --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKEEMERALD_DIR" --json
 else
