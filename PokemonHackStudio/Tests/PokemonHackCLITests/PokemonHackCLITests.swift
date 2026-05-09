@@ -58,6 +58,28 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["layeredTilesetDryRun"])
     }
 
+    func testPatchArtifactPlanCommandEmitsPreviewJSONWithoutWritingROM() throws {
+        let root = try makeEmeraldProject()
+        let patch = root.appendingPathComponent("cleanroom.aps")
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try Data("abc".utf8).write(to: baseROM)
+        try Data("APS1".utf8).write(to: patch)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["patch-artifact-plan", root.path, patch.path, "--base-rom", baseROM.path, "--json"])
+        )
+
+        XCTAssertEqual(result["isPreviewOnly"] as? Bool, true)
+        XCTAssertEqual(result["patchFormat"] as? String, "apsGBA")
+        XCTAssertEqual(result["expectedPatchedROMName"] as? String, "pokeemerald-cleanroom.gba")
+        XCTAssertEqual(result["outputPath"] as? String, ".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        XCTAssertNotNil(result["checksumExpectations"])
+        XCTAssertNotNil(result["headerPolicy"])
+        XCTAssertNotNil(result["mgbaLaunchPreview"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path))
+    }
+
     func testRomGraphCommandEmitsSemanticRuns() throws {
         let rom = try makeTestROM()
 
@@ -69,6 +91,21 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["semanticRuns"])
         XCTAssertNotNil(result["anchors"])
         XCTAssertNotNil(result["pointerCandidates"])
+    }
+
+    func testRomInspectCommandEmitsReadOnlyStandaloneReport() throws {
+        let rom = try makeTestROM()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["rom-inspect", rom.path, "--json"])
+        )
+
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertNotNil(result["projectIndex"])
+        XCTAssertNotNil(result["graph"])
+        XCTAssertNotNil(result["resourceEntry"])
+        XCTAssertNotNil(result["assetCatalog"])
+        XCTAssertNotNil(result["playtestReport"])
     }
 
     func testMoveCatalogCommandEmitsPreviewJSON() throws {
@@ -96,6 +133,20 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(result["itemCount"] as? Int, 1)
         XCTAssertNotNil(result["items"])
         XCTAssertNotNil(result["diagnostics"])
+    }
+
+    func testPokemonCompatibilityCommandEmitsPreviewJSON() throws {
+        let root = try makeItemCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["pokemon-compatibility", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeemerald")
+        XCTAssertNotNil(result["summary"])
+        let entries = try XCTUnwrap(result["entries"] as? [[String: Any]])
+        XCTAssertTrue(entries.contains { $0["surface"] as? String == "items" && $0["status"] as? String == "editable" })
+        XCTAssertTrue(entries.contains { $0["surface"] as? String == "cries" && $0["status"] as? String == "blocked" })
     }
 
     private func makeEmeraldProject() throws -> URL {

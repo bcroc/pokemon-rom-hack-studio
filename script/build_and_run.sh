@@ -9,6 +9,7 @@ PROJECT_DIR="$ROOT_DIR/PokemonHackStudio"
 PROJECT_FILE="$PROJECT_DIR/PokemonHackStudio.xcodeproj"
 BUILD_DIR="$ROOT_DIR/DerivedData/PokemonHackStudio"
 CONFIGURATION="Debug"
+DESTINATION="platform=macOS,arch=$(uname -m)"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
@@ -20,6 +21,7 @@ xcodebuild \
   -scheme "$APP_NAME" \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$BUILD_DIR" \
+  -destination "$DESTINATION" \
   build
 
 APP_BUNDLE="$BUILD_DIR/Build/Products/$CONFIGURATION/$APP_NAME.app"

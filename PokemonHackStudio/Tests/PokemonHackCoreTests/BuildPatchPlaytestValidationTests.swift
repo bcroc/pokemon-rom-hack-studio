@@ -192,9 +192,22 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(report.baseROMCandidates.first?.builtOutputPath, "pokeemerald.gba")
         XCTAssertEqual(report.baseROMCandidates.first?.builtOutputSHA1, "a9993e364706816aba3e25717850c26c9cd0d89d")
         XCTAssertTrue(report.baseROMCandidates.first?.exists ?? false)
+        XCTAssertTrue(report.artifactPlan.isPreviewOnly)
+        XCTAssertEqual(report.artifactPlan.selectedBaseROMPath, root.appendingPathComponent("pokeemerald.gba").path)
+        XCTAssertEqual(report.artifactPlan.patchFormat, .apsGBA)
+        XCTAssertEqual(report.artifactPlan.expectedPatchedROMName, "pokeemerald-cleanroom.gba")
+        XCTAssertEqual(report.artifactPlan.outputPath, ".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        XCTAssertEqual(report.artifactPlan.checksumExpectations.baseROMSHA1, "a9993e364706816aba3e25717850c26c9cd0d89d")
+        XCTAssertEqual(report.artifactPlan.checksumExpectations.expectedBaseROMSHA1, "a9993e364706816aba3e25717850c26c9cd0d89d")
+        XCTAssertEqual(report.artifactPlan.headerPolicy.mode, "preserve-selected-base-rom-header")
+        XCTAssertFalse(report.artifactPlan.headerPolicy.shouldRewriteHeader)
+        XCTAssertEqual(report.artifactPlan.mgbaLaunchPreview.outputROMPath, root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path)
+        XCTAssertFalse(report.artifactPlan.mgbaLaunchPreview.isLaunchEnabled)
         XCTAssertEqual(report.dryRunPlans.map(\.id), ["verify", "apply"])
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_BASE_ROM_MATCHED" })
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_ARTIFACT_PLAN_ONLY" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_MANIFEST_PLAN_ONLY" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: report.artifactPlan.absoluteOutputPath))
     }
 
     func testPatchManifestReportsSelectedBaseROMMismatch() throws {

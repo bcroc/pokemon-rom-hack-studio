@@ -722,6 +722,28 @@ final class MapEditorSession: ObservableObject {
     }
 
     @discardableResult
+    func stageMapLocalScriptHelperBody(label: String, sourcePath: String, body: String) -> Bool {
+        guard let scriptIndex = selectedMapVisualDocument?.scriptIndex,
+              let source = scriptIndex.source(path: sourcePath)
+        else {
+            return false
+        }
+        let diagnostics = ScriptAuthoringHelpers.validateMapLocalHelperStaging(
+            label: label,
+            sourcePath: sourcePath,
+            sourceRole: source.role,
+            sourceExists: source.exists
+        )
+        guard !diagnostics.contains(where: { $0.severity == .error }) else { return false }
+        guard scriptIndex.resolution(for: label).span?.sourcePath == sourcePath
+            || stagedMapScriptBodies[StagedMapScriptBody.key(label: label, sourcePath: sourcePath)]?.isNew == true
+        else {
+            return false
+        }
+        return updateScriptBody(label: label, sourcePath: sourcePath, body: body)
+    }
+
+    @discardableResult
     func createScriptLabel(label: String, sourcePath: String, body: String) -> Bool {
         guard MapScriptIndex.normalizedScriptLabel(label) != nil else { return false }
         let key = StagedMapScriptBody.key(label: label, sourcePath: sourcePath)

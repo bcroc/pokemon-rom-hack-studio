@@ -363,6 +363,8 @@ struct MapEventsPaneView: View {
             SourceLocationView(
                 source: SourceLocation(path: span.sourcePath, symbol: span.label, line: span.labelLine)
             )
+
+            scriptAuthoringHelpers(span: span)
             
             if span.sourceRole == .shared {
                 Label("Shared script source. Edits affect multiple maps.", systemImage: "exclamationmark.triangle")
@@ -424,6 +426,100 @@ struct MapEventsPaneView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func scriptAuthoringHelpers(span: MapScriptLabelSpan) -> some View {
+        if span.sourceRole == .mapLocal && MapScriptIndex.isEditableScriptPath(span.sourcePath) {
+            let currentBody = session.stagedScriptBody(label: span.label, sourcePath: span.sourcePath) ?? span.body
+            let awarenessDiagnostics = ScriptAuthoringHelpers.lineMarkerAndPoryswitchDiagnostics(
+                body: currentBody,
+                sourcePath: span.sourcePath
+            )
+            let shouldValidateMapscriptScaffold = span.label.localizedCaseInsensitiveContains("MapScripts")
+                || currentBody.contains("map_script")
+            let scaffoldDiagnostics = shouldValidateMapscriptScaffold
+                ? ScriptAuthoringHelpers.validateMapScriptScaffold(
+                    label: span.label,
+                    body: currentBody,
+                    existingLabels: Set(document.scriptIndex?.labels.map(\.label) ?? []),
+                    sourcePath: span.sourcePath
+                ).diagnostics
+                : []
+            let textPreview = ScriptAuthoringHelpers.textWrappingPreview(
+                label: "\(span.label)_Text",
+                text: selectedEvent.map(eventSubtitle) ?? span.label,
+                maxLineLength: 36,
+                sourcePath: span.sourcePath
+            )
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Button("Movement", systemImage: "figure.walk") {
+                        stageHelperBody(
+                            ScriptAuthoringHelpers.movementListPlan(
+                                label: span.label,
+                                movements: ["walk_down"],
+                                sourcePath: span.sourcePath
+                            ),
+                            span: span
+                        )
+                    }
+                    .font(.caption)
+                    .help("Stage a movement-list body through the map mutation preview")
+
+                    Button("Mart", systemImage: "cart") {
+                        stageHelperBody(
+                            ScriptAuthoringHelpers.martItemListPlan(
+                                label: span.label,
+                                items: ["ITEM_POTION"],
+                                sourcePath: span.sourcePath
+                            ),
+                            span: span
+                        )
+                    }
+                    .font(.caption)
+                    .help("Stage a mart item list through the map mutation preview")
+
+                    Button("Mapscript", systemImage: "list.bullet.rectangle") {
+                        stageHelperBody(
+                            ScriptHelperBodyPlan(
+                                label: span.label,
+                                body: "\tmap_script MAP_SCRIPT_ON_TRANSITION, \(span.label)_OnTransition\n\t.byte 0",
+                                diagnostics: ScriptAuthoringHelpers.validateMapScriptScaffold(
+                                    label: span.label,
+                                    body: "\tmap_script MAP_SCRIPT_ON_TRANSITION, \(span.label)_OnTransition\n\t.byte 0",
+                                    existingLabels: Set(document.scriptIndex?.labels.map(\.label) ?? []),
+                                    sourcePath: span.sourcePath
+                                ).diagnostics
+                            ),
+                            span: span
+                        )
+                    }
+                    .font(.caption)
+                    .help("Stage a mapscript scaffold through the map mutation preview")
+
+                    Spacer()
+
+                    Text("\(textPreview.lines.count) text lines")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .help(textPreview.bodyPreview)
+                }
+
+                let diagnostics = Array((awarenessDiagnostics + scaffoldDiagnostics).prefix(3))
+                if !diagnostics.isEmpty {
+                    diagnosticRows(diagnostics)
+                }
+            }
+            .padding(8)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func stageHelperBody(_ plan: ScriptHelperBodyPlan, span: MapScriptLabelSpan) {
+        guard !plan.diagnostics.contains(where: { $0.severity == .error }) else { return }
+        session.stageMapLocalScriptHelperBody(label: span.label, sourcePath: span.sourcePath, body: plan.body)
     }
 
     private func scriptLineRow(span: MapScriptLabelSpan, index: Int) -> some View {

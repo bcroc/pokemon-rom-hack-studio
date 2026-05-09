@@ -727,6 +727,95 @@ struct GraphicsReportRow: Identifiable {
     let tags: [String]
 }
 
+enum GraphicsImportPackagePlanLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No graphics import package loaded"
+        case .loading:
+            "Loading graphics import package"
+        case .loaded(let readiness):
+            "Graphics import plan loaded: \(readiness)"
+        case .failed(let message):
+            "Graphics import plan failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+struct GraphicsImportPackagePlanViewState: Identifiable {
+    let id: String
+    let projectRootPath: String
+    let packageRootPath: String
+    let packageTitle: String
+    let readiness: String
+    let status: ValidationState
+    let isPreviewOnly: Bool
+    let inventoryRows: [GraphicsImportInventoryRowViewState]
+    let creditMetadataRows: [GraphicsImportInventoryRowViewState]
+    let copyTargets: [GraphicsImportCopyTargetViewState]
+    let layeredDryRun: GraphicsImportLayeredDryRunViewState
+    let paletteFitPreviews: [GraphicsImportPaletteFitPreviewViewState]
+    let expectedOutputs: [String]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct GraphicsImportInventoryRowViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
+}
+
+struct GraphicsImportCopyTargetViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
+    let willOverwriteExistingSource: Bool
+}
+
+struct GraphicsImportLayeredDryRunViewState {
+    let title: String
+    let detail: String
+    let status: ValidationState
+    let detectedLayerPaths: [String]
+    let missingLayerNames: [String]
+    let attributesPath: String?
+    let animationFileCount: Int
+    let expectedGeneratedOutputs: [String]
+    let externalToolPlan: String
+}
+
+struct GraphicsImportPaletteFitPreviewViewState: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let tags: [String]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
 enum ProjectIndexLoadStatus: Equatable {
     case idle
     case loading
@@ -870,6 +959,35 @@ enum ResourceAssetCatalogLoadStatus: Equatable {
             count == 1 ? "1 asset loaded" : "\(count) assets loaded"
         case .failed(let message):
             "Asset catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum SourceGraphLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(recordCount: Int, labelCount: Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Source graph not loaded"
+        case .loading:
+            "Loading source graph"
+        case .loaded(let recordCount, let labelCount):
+            "\(recordCount) source records, \(labelCount) script labels"
+        case .failed(let message):
+            "Source graph failed: \(message)"
         }
     }
 

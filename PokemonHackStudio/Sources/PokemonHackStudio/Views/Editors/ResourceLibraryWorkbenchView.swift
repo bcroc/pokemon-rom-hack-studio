@@ -1,9 +1,11 @@
+import PokemonHackCore
 import SwiftUI
 
 struct ResourceLibraryWorkbenchView: View {
     let library: ResourceLibraryViewState?
     let entries: [ResourceLibraryEntryViewState]
     let assetCatalog: ResourceAssetCatalogViewState?
+    let romInspector: BinaryROMInspectorReport?
     let assets: [ResourceAssetRowViewState]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
     @Binding var selectedAssetID: ResourceAssetRowViewState.ID?
@@ -21,6 +23,9 @@ struct ResourceLibraryWorkbenchView: View {
 
                 VStack(alignment: .leading, spacing: 0) {
                     resourceMetrics(layoutMode: layoutMode)
+                    if let romInspector {
+                        romInspectorSummary(romInspector, layoutMode: layoutMode)
+                    }
 
                     switch mode {
                     case .assets:
@@ -58,6 +63,57 @@ struct ResourceLibraryWorkbenchView: View {
         }
         .padding(layoutMode.isCompact ? 14 : 24)
         .background(.regularMaterial)
+    }
+
+    private func romInspectorSummary(_ report: BinaryROMInspectorReport, layoutMode: WorkbenchLayoutMode) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "memorychip")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(report.graph.image.title ?? report.resourceEntry.title)
+                            .font(.headline)
+                            .lineLimit(1)
+                        StatusPill(state: report.diagnostics.contains { $0.severity == .error } ? .error : .valid)
+                        ResourceTag(text: report.isReadOnly ? "read-only" : report.projectIndex.writePolicy.rawValue)
+                    }
+
+                    Text("Standalone GBA ROM inspector")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Text(report.projectIndex.root.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+
+                Spacer(minLength: 12)
+            }
+
+            FactGrid(facts: romInspectorFacts(report))
+        }
+        .padding(layoutMode.isCompact ? 14 : 18)
+        .background(.thinMaterial)
+    }
+
+    private func romInspectorFacts(_ report: BinaryROMInspectorReport) -> [Fact] {
+        [
+            Fact(label: "Game Code", value: report.graph.image.gameCode ?? "Unavailable"),
+            Fact(label: "Size", value: "\(report.graph.image.size) bytes"),
+            Fact(label: "Pointers", value: "\(report.graph.pointerCandidates.count) accepted"),
+            Fact(label: "Rejected", value: "\(report.graph.rejectedPointerCandidates.count)"),
+            Fact(label: "Free Space", value: "\(report.graph.freeSpaceRanges.count) range(s)"),
+            Fact(label: "Assets", value: "\(report.assetCatalog.assetCount)"),
+            Fact(label: "Playtest", value: report.playtestReport.isRunnable ? "Runnable" : "Preview only"),
+            Fact(label: "Diagnostics", value: "\(report.diagnostics.count)")
+        ]
     }
 
     private func entryList(layoutMode: WorkbenchLayoutMode) -> some View {

@@ -36,6 +36,7 @@ struct ModuleDetailView: View {
                 library: store.resourceLibrary,
                 entries: store.filteredResourceLibraryEntries,
                 assetCatalog: store.selectedAssetCatalog,
+                romInspector: store.selectedROMInspectorReport,
                 assets: store.filteredResourceAssetRows,
                 assetLoadStatus: store.assetCatalogLoadStatus,
                 selectedAssetID: Binding(
@@ -163,8 +164,14 @@ struct ModuleDetailView: View {
                 labels: store.filteredScriptOutlineLabels,
                 textBlocks: store.filteredScriptTextBlocks
             )
+            .onAppear {
+                store.loadSelectedSourceGraphIfNeeded()
+            }
         case .text:
             TextEditorWorkbenchView(records: store.records(for: .text))
+                .onAppear {
+                    store.loadSelectedSourceGraphIfNeeded()
+                }
         case .graphics:
             graphicsWorkbenchView
         case .build:
@@ -180,11 +187,7 @@ struct ModuleDetailView: View {
     }
 
     private var graphicsWorkbenchView: some View {
-        GraphicsWorkbenchView(
-            indexedProject: store.selectedIndexedProject,
-            report: store.selectedGraphicsReport,
-            rows: store.filteredGraphicsReportRows
-        )
+        GraphicsWorkbenchView(store: store)
     }
 
     private var moduleStatus: ValidationState? {

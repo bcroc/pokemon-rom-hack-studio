@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BuildWorkbenchView: View {
     @ObservedObject var store: WorkbenchStore
@@ -393,7 +394,7 @@ struct BuildWorkbenchView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["ips", "bps", "ups", "aps"]
+        panel.allowedContentTypes = Self.contentTypes(for: ["ips", "bps", "ups", "aps"])
         if panel.runModal() == .OK, let url = panel.url {
             store.requestPatchPath(url.path)
             store.loadSelectedPatchManifestReport()
@@ -405,10 +406,14 @@ struct BuildWorkbenchView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["gba"]
+        panel.allowedContentTypes = Self.contentTypes(for: ["gba"])
         if panel.runModal() == .OK, let url = panel.url {
             store.requestBaseROMPath(url.path)
         }
+    }
+
+    private static func contentTypes(for filenameExtensions: [String]) -> [UTType] {
+        filenameExtensions.compactMap { UTType(filenameExtension: $0) }
     }
 
     private var fixtureBuild: some View {

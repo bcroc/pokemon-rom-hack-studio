@@ -368,6 +368,52 @@ final class MapEditorSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testScriptAuthoringHelperOutputStagesOnlyToMapLocalScriptBodies() throws {
+        let localSource = MapScriptSource(
+            path: "data/maps/Route1/scripts.inc",
+            role: .mapLocal,
+            exists: true,
+            text: "Route1_EventScript_NPC::\n\tend\n"
+        )
+        let sharedSource = MapScriptSource(
+            path: "data/maps/Shared/scripts.inc",
+            role: .shared,
+            exists: true,
+            text: "Route1_EventScript_Shared::\n\tend\n"
+        )
+        let scriptIndex = MapScriptIndex(
+            rootPath: "/tmp/PokemonHackStudioTests",
+            mapName: "Route1",
+            sources: [localSource, sharedSource],
+            labels: MapScriptIndexLoader.parseLabels(source: localSource) + MapScriptIndexLoader.parseLabels(source: sharedSource)
+        )
+        let session = MapEditorSession(document: makeDocument(scriptIndex: scriptIndex))
+        let helperPlan = ScriptAuthoringHelpers.movementListPlan(
+            label: "Route1_EventScript_NPC",
+            movements: ["walk_down"],
+            sourcePath: "data/maps/Route1/scripts.inc"
+        )
+
+        XCTAssertTrue(session.stageMapLocalScriptHelperBody(
+            label: helperPlan.label,
+            sourcePath: "data/maps/Route1/scripts.inc",
+            body: helperPlan.body
+        ))
+        XCTAssertEqual(session.stagedScriptBody(label: "Route1_EventScript_NPC", sourcePath: "data/maps/Route1/scripts.inc"), "\twalk_down\n\tstep_end")
+
+        XCTAssertFalse(session.stageMapLocalScriptHelperBody(
+            label: "Route1_EventScript_Shared",
+            sourcePath: "data/maps/Shared/scripts.inc",
+            body: "\twalk_left\n\tstep_end"
+        ))
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        XCTAssertEqual(plan.changes.map(\.path), ["data/maps/Route1/scripts.inc"])
+        XCTAssertTrue(plan.diagnostics.isEmpty, "\(plan.diagnostics.map(\.code))")
+        XCTAssertTrue(session.canApplySelectedMapMutationPlan)
+    }
+
+    @MainActor
     func testPreviewGatingHelpers() throws {
         let session = MapEditorSession(document: makeDocument())
 

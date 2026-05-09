@@ -12,6 +12,35 @@ private struct ResourceAssetRowsCache {
     let rows: [ResourceAssetRowViewState]
 }
 
+private struct SourceGraphLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let scriptOutline: PokemonHackCore.ProjectScriptOutline?
+    let sourceIndex: PokemonHackCore.ProjectSourceIndex
+}
+
+private struct SpeciesCatalogLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let catalog: PokemonHackCore.ProjectSpeciesCatalog
+}
+
+private struct TrainerCatalogLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let catalog: PokemonHackCore.ProjectTrainerCatalog
+}
+
+private struct MoveCatalogLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let sourceIndex: PokemonHackCore.ProjectSourceIndex
+    let speciesCatalog: PokemonHackCore.ProjectSpeciesCatalog?
+    let catalog: PokemonHackCore.ProjectMoveCatalog
+}
+
+private struct ItemCatalogLoadPayload: Codable {
+    let index: PokemonHackCore.ProjectIndex
+    let sourceIndex: PokemonHackCore.ProjectSourceIndex?
+    let catalog: PokemonHackCore.ProjectItemCatalog
+}
+
 private struct MapCatalogLoadPayload: Codable {
     let index: PokemonHackCore.ProjectIndex
     let catalog: PokemonHackCore.ProjectMapCatalog
@@ -85,6 +114,7 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedBuildWorkbenchTab: BuildWorkbenchTab = .build
     @Published var selectedBuildReportRowID: String = ""
     @Published var selectedGraphicsReportRowID: String = ""
+    @Published var selectedGraphicsImportPackagePath: String = ""
     @Published var selectedDiagnosticBucket: DiagnosticSummaryBucket = .blockingErrors
     @Published var selectedDiagnosticRowID: String = ""
     @Published var selectedGuidedFlowID: String = ""
@@ -105,6 +135,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var recentProjectRoots: [String]
     @Published private(set) var resourceLibrary: ResourceLibraryViewState?
     @Published private(set) var selectedScriptReadinessReport: ScriptReadinessReportViewState?
+    @Published private(set) var sourceGraphLoadStatus: SourceGraphLoadStatus = .idle
     @Published private(set) var assetCatalogLoadStatus: ResourceAssetCatalogLoadStatus = .idle
     @Published private(set) var speciesCatalogLoadStatus: SpeciesCatalogLoadStatus = .idle
     @Published private(set) var trainerCatalogLoadStatus: TrainerCatalogLoadStatus = .idle
@@ -112,6 +143,8 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var itemCatalogLoadStatus: ItemCatalogLoadStatus = .idle
     @Published private(set) var patchManifestLoadStatus: PatchManifestLoadStatus = .idle
     @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
+    @Published private(set) var graphicsImportPackagePlanStatus: GraphicsImportPackagePlanLoadStatus = .idle
+    @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
     @Published private(set) var latestSpeciesApplyResult: PokemonHackCore.SpeciesApplyResult?
     @Published private(set) var latestTrainerEditPlan: PokemonHackCore.TrainerEditPlan?
@@ -141,7 +174,9 @@ final class WorkbenchStore: ObservableObject {
     private var scriptOutlinesByID: [String: PokemonHackCore.ProjectScriptOutline] = [:]
     private var buildReportsByID: [String: BuildPatchPlaytestReportViewState] = [:]
     private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
+    private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
+    private var romInspectorReportsByID: [String: PokemonHackCore.BinaryROMInspectorReport] = [:]
     private var scriptReadinessReportsByID: [String: ScriptReadinessReportViewState] = [:]
     private var speciesCatalogsByID: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
     private var trainerCatalogsByID: [String: PokemonHackCore.ProjectTrainerCatalog] = [:]
@@ -150,6 +185,11 @@ final class WorkbenchStore: ObservableObject {
     private var itemCatalogsByID: [String: PokemonHackCore.ProjectItemCatalog] = [:]
     private var assetCatalogsByID: [String: ResourceAssetCatalogViewState] = [:]
     private var assetCatalogFingerprintsByID: [String: String] = [:]
+    private var sourceGraphTask: Task<Void, Never>?
+    private var speciesCatalogTask: Task<Void, Never>?
+    private var trainerCatalogTask: Task<Void, Never>?
+    private var moveCatalogTask: Task<Void, Never>?
+    private var itemCatalogTask: Task<Void, Never>?
     private var assetCatalogTask: Task<Void, Never>?
     private var mapCatalogTask: Task<Void, Never>?
     private var mapVisualTask: Task<Void, Never>?
@@ -157,7 +197,9 @@ final class WorkbenchStore: ObservableObject {
     private var resourceAssetRowsCache: ResourceAssetRowsCache?
     private var pendingRelatedMapTargetID: String?
     private var pendingResourceAssetFocus: String?
+    private var pendingScriptAssetTargetID: String?
     private var settingsCancellable: AnyCancellable?
+    private var projectLoadGeneration = 0
 
     private static let recentRootsKey = "PokemonHackStudio.recentProjectRoots"
     static let allResourceAssetCategories = "All"
@@ -614,6 +656,11 @@ final class WorkbenchStore: ObservableObject {
     var selectedAssetCatalog: ResourceAssetCatalogViewState? {
         guard let selectedIndexedProject else { return nil }
         return assetCatalogsByID[selectedIndexedProject.id]
+    }
+
+    var selectedROMInspectorReport: PokemonHackCore.BinaryROMInspectorReport? {
+        guard let selectedIndexedProject else { return nil }
+        return romInspectorReportsByID[selectedIndexedProject.id]
     }
 
     var selectedDiagnosticRows: [IndexedDiagnosticRow] {
@@ -1245,7 +1292,7 @@ final class WorkbenchStore: ObservableObject {
         } else {
             outlineStatus = Self.validationStatus(for: records(for: .scripts).map(\.validation))
         }
-        return Self.validationStatus(for: [outlineStatus, selectedScriptReadinessReport?.status ?? .valid])
+        return Self.validationStatus(for: [outlineStatus, sourceGraphLoadStatus.validationState, selectedScriptReadinessReport?.status ?? .valid])
     }
 
     private var speciesModuleStatus: ValidationState {
@@ -1312,14 +1359,52 @@ final class WorkbenchStore: ObservableObject {
             .map(Self.record(from:))
     }
 
+    private func prepareForSelectedProjectChange() {
+        projectLoadGeneration += 1
+        sourceGraphTask?.cancel()
+        speciesCatalogTask?.cancel()
+        trainerCatalogTask?.cancel()
+        moveCatalogTask?.cancel()
+        itemCatalogTask?.cancel()
+        assetCatalogTask?.cancel()
+        mapCatalogTask?.cancel()
+        mapVisualTask?.cancel()
+        pendingScriptAssetTargetID = nil
+        clearSelectedMapVisualDocument()
+        updateLazyLoadStatusesForSelection()
+    }
+
+    private func updateLazyLoadStatusesForSelection() {
+        updateSourceGraphLoadStatusForSelection()
+        updateAssetCatalogLoadStatusForSelection()
+        refreshSelectedSpeciesSelection()
+        refreshSelectedTrainerSelection()
+        refreshSelectedMoveSelection()
+        refreshSelectedItemSelection()
+    }
+
+    private func updateSourceGraphLoadStatusForSelection() {
+        guard let selectedIndexedProject else {
+            sourceGraphLoadStatus = .idle
+            return
+        }
+        if let sourceIndex = sourceIndexesByID[selectedIndexedProject.id] {
+            let labelCount = scriptOutlinesByID[selectedIndexedProject.id]?.labels.count ?? 0
+            sourceGraphLoadStatus = .loaded(recordCount: sourceIndex.records.count, labelCount: labelCount)
+        } else {
+            sourceGraphLoadStatus = .idle
+        }
+    }
+
     func refreshProjectIndexes() {
+        let previousProjectID = selectedProjectID
         projectIndexStatus = .loading
 
         let coreResourceLibrary = refreshResourceLibrary()
 
         let resourceRoots = coreResourceLibrary.entries
             .filter { entry in
-                entry.platform == .gbaSource
+                (entry.platform == .gbaSource || entry.platform == .gbaROM)
                     && !entry.path.isEmpty
                     && !Self.pathIsBundledAssetRoot(entry.path)
                     && (userSettings.includeReferenceRootsInResources || !Self.pathIsReferenceRoot(entry.path))
@@ -1329,16 +1414,10 @@ final class WorkbenchStore: ObservableObject {
         let roots = Self.uniquePaths(resourceRoots + defaultProjectRoots() + configuredRecentRoots)
         var summaries: [IndexedProjectSummary] = []
         var indexes: [String: PokemonHackCore.ProjectIndex] = [:]
-        var sourceIndexes: [String: PokemonHackCore.ProjectSourceIndex] = [:]
-        var scriptOutlines: [String: PokemonHackCore.ProjectScriptOutline] = [:]
         var buildReports: [String: BuildPatchPlaytestReportViewState] = [:]
         var graphicsReports: [String: GraphicsDiagnosticsReportViewState] = [:]
         var retainedScriptReadinessReports: [String: ScriptReadinessReportViewState] = [:]
-        var speciesCatalogs: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
-        var trainerCatalogs: [String: PokemonHackCore.ProjectTrainerCatalog] = [:]
-        var coreMoveCatalogs: [String: PokemonHackCore.ProjectMoveCatalog] = [:]
-        var moveCatalogs: [String: MoveCatalogViewState] = [:]
-        var itemCatalogs: [String: PokemonHackCore.ProjectItemCatalog] = [:]
+        var romInspectorReports: [String: PokemonHackCore.BinaryROMInspectorReport] = [:]
         var retainedAssetCatalogs: [String: ResourceAssetCatalogViewState] = [:]
         var retainedFingerprints: [String: String] = [:]
 
@@ -1350,15 +1429,9 @@ final class WorkbenchStore: ObservableObject {
                 let summary = Self.summary(from: index)
                 summaries.append(summary)
                 indexes[summary.id] = index
-                let scriptOutline = try? ProjectScriptOutlineLoader.load(from: index, fileManager: fileManager)
-                let sourceIndex: PokemonHackCore.ProjectSourceIndex?
-                if let scriptOutline {
-                    scriptOutlines[summary.id] = scriptOutline
-                    sourceIndex = try? ProjectSourceIndexLoader.load(from: index, scriptOutline: scriptOutline, fileManager: fileManager)
-                    sourceIndexes[summary.id] = sourceIndex
-                } else {
-                    sourceIndex = try? ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
-                    sourceIndexes[summary.id] = sourceIndex
+                if index.profile == .binaryROM,
+                   let report = try? BinaryROMInspectorReportBuilder.build(path: root, fileManager: fileManager, toolResolver: toolResolver) {
+                    romInspectorReports[summary.id] = report
                 }
                 if userSettings.autoRefreshHealthOnProjectRefresh || buildReportsByID[summary.id] == nil {
                     let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
@@ -1367,28 +1440,6 @@ final class WorkbenchStore: ObservableObject {
                     buildReports[summary.id] = buildReportsByID[summary.id]
                 }
                 graphicsReports[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
-                let speciesCatalog = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
-                if let speciesCatalog {
-                    speciesCatalogs[summary.id] = speciesCatalog
-                }
-                if let trainerCatalog = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager) {
-                    trainerCatalogs[summary.id] = trainerCatalog
-                }
-                if
-                    let sourceIndex,
-                    let moveCatalog = try? ProjectMoveCatalogBuilder.build(
-                        index: index,
-                        sourceIndex: sourceIndex,
-                        speciesCatalog: speciesCatalog,
-                        fileManager: fileManager
-                    )
-                {
-                    coreMoveCatalogs[summary.id] = moveCatalog
-                    moveCatalogs[summary.id] = Self.moveCatalog(from: moveCatalog, project: summary)
-                }
-                if let itemCatalog = try? ProjectItemCatalogBuilder.build(index: index, sourceIndex: sourceIndex, fileManager: fileManager) {
-                    itemCatalogs[summary.id] = itemCatalog
-                }
                 let fingerprint = Self.assetCatalogFingerprint(rootPath: summary.rootPath, fileManager: fileManager)
                 if
                     assetCatalogFingerprintsByID[summary.id] == fingerprint,
@@ -1407,16 +1458,17 @@ final class WorkbenchStore: ObservableObject {
 
         indexedProjects = summaries
         projectIndexesByID = indexes
-        sourceIndexesByID = sourceIndexes
-        scriptOutlinesByID = scriptOutlines
+        sourceIndexesByID = sourceIndexesByID.filter { indexes.keys.contains($0.key) }
+        scriptOutlinesByID = scriptOutlinesByID.filter { indexes.keys.contains($0.key) }
         buildReportsByID = buildReports
         graphicsReportsByID = graphicsReports
         scriptReadinessReportsByID = retainedScriptReadinessReports
-        speciesCatalogsByID = speciesCatalogs
-        trainerCatalogsByID = trainerCatalogs
-        coreMoveCatalogsByID = coreMoveCatalogs
-        moveCatalogsByID = moveCatalogs
-        itemCatalogsByID = itemCatalogs
+        speciesCatalogsByID = speciesCatalogsByID.filter { indexes.keys.contains($0.key) }
+        trainerCatalogsByID = trainerCatalogsByID.filter { indexes.keys.contains($0.key) }
+        coreMoveCatalogsByID = coreMoveCatalogsByID.filter { indexes.keys.contains($0.key) }
+        moveCatalogsByID = moveCatalogsByID.filter { indexes.keys.contains($0.key) }
+        itemCatalogsByID = itemCatalogsByID.filter { indexes.keys.contains($0.key) }
+        romInspectorReportsByID = romInspectorReports
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
         mapVisualSharedCacheDataByID = [:]
@@ -1424,6 +1476,12 @@ final class WorkbenchStore: ObservableObject {
         if !summaries.contains(where: { $0.id == selectedProjectID }) {
             selectedProjectID = summaries.first?.id ?? ""
             resetPatchManifestReportForProjectChange()
+            resetGraphicsImportPackagePlanForProjectChange()
+        }
+        if previousProjectID != selectedProjectID {
+            prepareForSelectedProjectChange()
+        } else {
+            updateLazyLoadStatusesForSelection()
         }
         refreshSelectedMapCatalog()
         refreshSelectedScriptReadinessReportIfVisible()
@@ -1448,8 +1506,10 @@ final class WorkbenchStore: ObservableObject {
             pendingMapNavigation = .project(projectID)
         } else {
             selectedProjectID = projectID
+            prepareForSelectedProjectChange()
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
             resetPatchManifestReportForProjectChange()
+            resetGraphicsImportPackagePlanForProjectChange()
             resetSidebarSelectionsForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
             selectedResourceAssetID = nil
@@ -1551,6 +1611,13 @@ final class WorkbenchStore: ObservableObject {
         selectedGraphicsReportRowID = rowID
     }
 
+    func requestGraphicsImportPackagePath(_ path: String) {
+        selectedGraphicsImportPackagePath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        rawGraphicsImportPackagePlan = nil
+        selectedGraphicsImportPackagePlan = nil
+        graphicsImportPackagePlanStatus = selectedGraphicsImportPackagePath.isEmpty ? .idle : .idle
+    }
+
     func requestDiagnosticBucketSelection(_ bucket: DiagnosticSummaryBucket) {
         selectedDiagnosticBucket = bucket
         selectedDiagnosticRowID = diagnosticSummary.bucket(bucket).diagnostics.first?.id ?? ""
@@ -1585,6 +1652,12 @@ final class WorkbenchStore: ObservableObject {
         patchManifestLoadStatus = .idle
     }
 
+    private func resetGraphicsImportPackagePlanForProjectChange() {
+        rawGraphicsImportPackagePlan = nil
+        selectedGraphicsImportPackagePlan = nil
+        graphicsImportPackagePlanStatus = .idle
+    }
+
     private func resetSidebarSelectionsForProjectChange() {
         selectedResourceLibraryEntryID = ""
         selectedScriptSourceID = ""
@@ -1600,6 +1673,9 @@ final class WorkbenchStore: ObservableObject {
         latestMoveApplyResult = nil
         latestItemEditPlan = nil
         latestItemApplyResult = nil
+        rawGraphicsImportPackagePlan = nil
+        selectedGraphicsImportPackagePlan = nil
+        graphicsImportPackagePlanStatus = .idle
         mapViewportRequest = nil
     }
 
@@ -1631,6 +1707,42 @@ final class WorkbenchStore: ObservableObject {
             rawPatchManifestReport = nil
             selectedPatchManifestReport = nil
             patchManifestLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func loadSelectedGraphicsImportPackagePlan() {
+        guard !selectedGraphicsImportPackagePath.isEmpty else {
+            rawGraphicsImportPackagePlan = nil
+            selectedGraphicsImportPackagePlan = nil
+            graphicsImportPackagePlanStatus = .idle
+            return
+        }
+
+        guard let selectedIndexedProject else {
+            rawGraphicsImportPackagePlan = nil
+            selectedGraphicsImportPackagePlan = nil
+            graphicsImportPackagePlanStatus = .failed("Open a supported project before loading a graphics package.")
+            return
+        }
+
+        graphicsImportPackagePlanStatus = .loading
+
+        do {
+            let plan = try GraphicsImportPackagePlanBuilder.build(
+                projectPath: selectedIndexedProject.rootPath,
+                packagePath: selectedGraphicsImportPackagePath,
+                fileManager: fileManager
+            )
+            rawGraphicsImportPackagePlan = plan
+            selectedGraphicsImportPackagePlan = Self.graphicsImportPackagePlanViewState(
+                from: plan,
+                rootPath: selectedIndexedProject.rootPath
+            )
+            graphicsImportPackagePlanStatus = .loaded(selectedGraphicsImportPackagePlan?.readiness ?? plan.readiness.rawValue)
+        } catch {
+            rawGraphicsImportPackagePlan = nil
+            selectedGraphicsImportPackagePlan = nil
+            graphicsImportPackagePlanStatus = .failed(error.localizedDescription)
         }
     }
 
@@ -1693,6 +1805,9 @@ final class WorkbenchStore: ObservableObject {
         if let label = Self.scriptReadinessLabel(for: targetID, outline: selectedScriptOutline) {
             selectedScriptReadinessLabel = label
             refreshSelectedScriptReadinessReport()
+        } else {
+            pendingScriptAssetTargetID = targetID
+            loadSelectedSourceGraphIfNeeded()
         }
     }
 
@@ -1702,6 +1817,7 @@ final class WorkbenchStore: ObservableObject {
         if selectedSpeciesCatalog == nil {
             loadSelectedSpeciesCatalogIfNeeded()
         }
+        requestSpeciesSelection(targetID)
         if selectedSpeciesCatalog?.species.contains(where: { $0.speciesID == targetID }) == true {
             requestSpeciesSelection(targetID)
         }
@@ -1713,6 +1829,7 @@ final class WorkbenchStore: ObservableObject {
         if selectedTrainerCatalog == nil {
             loadSelectedTrainerCatalogIfNeeded()
         }
+        requestTrainerSelection(targetID)
         if selectedTrainerCatalog?.trainers.contains(where: { $0.trainerID == targetID }) == true {
             requestTrainerSelection(targetID)
         }
@@ -1724,6 +1841,7 @@ final class WorkbenchStore: ObservableObject {
         if selectedMoveCatalog == nil {
             loadSelectedMoveCatalogIfNeeded()
         }
+        requestMoveSelection(targetID)
         if selectedMoveCatalog?.moves.contains(where: { $0.moveID == targetID }) == true {
             requestMoveSelection(targetID)
         }
@@ -1796,8 +1914,10 @@ final class WorkbenchStore: ObservableObject {
         switch pendingMapNavigation {
         case .project(let projectID):
             selectedProjectID = projectID
+            prepareForSelectedProjectChange()
             selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
             resetPatchManifestReportForProjectChange()
+            resetGraphicsImportPackagePlanForProjectChange()
             resetSidebarSelectionsForProjectChange()
             resourceAssetCategory = Self.allResourceAssetCategories
             resourceAssetRowsCache = nil
@@ -1828,43 +1948,21 @@ final class WorkbenchStore: ObservableObject {
             let index = try GameAdapterRegistry.index(path: standardizedPath, fileManager: fileManager)
             let summary = Self.summary(from: index)
             projectIndexesByID[summary.id] = index
-            let scriptOutline = try? ProjectScriptOutlineLoader.load(from: index, fileManager: fileManager)
-            let sourceIndex: PokemonHackCore.ProjectSourceIndex?
-            if let scriptOutline {
-                scriptOutlinesByID[summary.id] = scriptOutline
-                sourceIndex = try? ProjectSourceIndexLoader.load(from: index, scriptOutline: scriptOutline, fileManager: fileManager)
-                sourceIndexesByID[summary.id] = sourceIndex
+            if index.profile == .binaryROM {
+                romInspectorReportsByID[summary.id] = try? BinaryROMInspectorReportBuilder.build(path: standardizedPath, fileManager: fileManager, toolResolver: toolResolver)
             } else {
-                scriptOutlinesByID.removeValue(forKey: summary.id)
-                sourceIndex = try? ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
-                sourceIndexesByID[summary.id] = sourceIndex
+                romInspectorReportsByID.removeValue(forKey: summary.id)
             }
             let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
             buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
             graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
-            let speciesCatalog = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
-            speciesCatalogsByID[summary.id] = speciesCatalog
-            trainerCatalogsByID[summary.id] = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager)
-            if
-                let sourceIndex,
-                let moveCatalog = try? ProjectMoveCatalogBuilder.build(
-                    index: index,
-                    sourceIndex: sourceIndex,
-                    speciesCatalog: speciesCatalog,
-                    fileManager: fileManager
-                )
-            {
-                coreMoveCatalogsByID[summary.id] = moveCatalog
-                moveCatalogsByID[summary.id] = Self.moveCatalog(from: moveCatalog, project: summary)
-            } else {
-                coreMoveCatalogsByID.removeValue(forKey: summary.id)
-                moveCatalogsByID.removeValue(forKey: summary.id)
-            }
-            if let itemCatalog = try? ProjectItemCatalogBuilder.build(index: index, sourceIndex: sourceIndex, fileManager: fileManager) {
-                itemCatalogsByID[summary.id] = itemCatalog
-            } else {
-                itemCatalogsByID.removeValue(forKey: summary.id)
-            }
+            sourceIndexesByID.removeValue(forKey: summary.id)
+            scriptOutlinesByID.removeValue(forKey: summary.id)
+            speciesCatalogsByID.removeValue(forKey: summary.id)
+            trainerCatalogsByID.removeValue(forKey: summary.id)
+            coreMoveCatalogsByID.removeValue(forKey: summary.id)
+            moveCatalogsByID.removeValue(forKey: summary.id)
+            itemCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogFingerprintsByID.removeValue(forKey: summary.id)
             selectedResourceAssetID = nil
@@ -1878,7 +1976,9 @@ final class WorkbenchStore: ObservableObject {
                 refreshResourceLibrary()
             }
             selectedProjectID = summary.id
+            prepareForSelectedProjectChange()
             resetPatchManifestReportForProjectChange()
+            resetGraphicsImportPackagePlanForProjectChange()
             resetSidebarSelectionsForProjectChange()
             refreshSelectedMapCatalog()
             refreshSelectedScriptReadinessReportIfVisible()
@@ -1906,6 +2006,80 @@ final class WorkbenchStore: ObservableObject {
             selectedScriptReadinessLabel = selectedScriptOutline?.labels.first?.label ?? ""
         }
         refreshSelectedScriptReadinessReport()
+    }
+
+    func loadSelectedSourceGraphIfNeeded(force: Bool = false) {
+        guard let selectedIndexedProject else {
+            sourceGraphLoadStatus = .idle
+            return
+        }
+        if !force,
+           sourceIndexesByID[selectedIndexedProject.id] != nil,
+           scriptOutlinesByID[selectedIndexedProject.id] != nil
+        {
+            updateSourceGraphLoadStatusForSelection()
+            return
+        }
+
+        sourceGraphTask?.cancel()
+        sourceGraphLoadStatus = .loading
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let generation = projectLoadGeneration
+
+        sourceGraphTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let scriptOutline = try? ProjectScriptOutlineLoader.load(from: index, fileManager: .default)
+                    let sourceIndex: ProjectSourceIndex
+                    if let scriptOutline {
+                        sourceIndex = try ProjectSourceIndexLoader.load(from: index, scriptOutline: scriptOutline, fileManager: .default)
+                    } else {
+                        sourceIndex = try ProjectSourceIndexLoader.load(from: index, fileManager: .default)
+                    }
+                    return try JSONEncoder().encode(
+                        SourceGraphLoadPayload(
+                            index: index,
+                            scriptOutline: scriptOutline,
+                            sourceIndex: sourceIndex
+                        )
+                    )
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(SourceGraphLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+
+                projectIndexesByID[projectID] = payload.index
+                sourceIndexesByID[projectID] = payload.sourceIndex
+                if let scriptOutline = payload.scriptOutline {
+                    scriptOutlinesByID[projectID] = scriptOutline
+                    if let pendingScriptAssetTargetID,
+                       let label = Self.scriptReadinessLabel(for: pendingScriptAssetTargetID, outline: scriptOutline) {
+                        self.pendingScriptAssetTargetID = nil
+                        selectedScriptReadinessLabel = label
+                    } else if selectedScriptReadinessLabel.isEmpty {
+                        selectedScriptReadinessLabel = scriptOutline.labels.first?.label ?? ""
+                    }
+                } else {
+                    scriptOutlinesByID.removeValue(forKey: projectID)
+                }
+                sourceGraphLoadStatus = .loaded(
+                    recordCount: payload.sourceIndex.records.count,
+                    labelCount: payload.scriptOutline?.labels.count ?? 0
+                )
+                refreshSelectedScriptReadinessReportIfVisible()
+            } catch {
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+                sourceGraphLoadStatus = .failed(error.localizedDescription)
+            }
+        }
     }
 
     func requestScriptReadinessMapSelection(_ mapID: String) {
@@ -1969,22 +2143,37 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
+        speciesCatalogTask?.cancel()
         speciesCatalogLoadStatus = .loading
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
-            }
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let generation = projectLoadGeneration
 
-            let catalog = try ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
-            speciesCatalogsByID[selectedIndexedProject.id] = catalog
-            speciesCatalogLoadStatus = .loaded(catalog.speciesCount)
-            refreshSelectedSpeciesSelection()
-        } catch {
-            speciesCatalogLoadStatus = .failed(error.localizedDescription)
+        speciesCatalogTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let catalog = try ProjectSpeciesCatalogBuilder.build(index: index, fileManager: .default)
+                    return try JSONEncoder().encode(SpeciesCatalogLoadPayload(index: index, catalog: catalog))
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(SpeciesCatalogLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+
+                projectIndexesByID[projectID] = payload.index
+                speciesCatalogsByID[projectID] = payload.catalog
+                speciesCatalogLoadStatus = .loaded(payload.catalog.speciesCount)
+                refreshSelectedSpeciesSelection()
+            } catch {
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+                speciesCatalogLoadStatus = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -2021,38 +2210,72 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
+        moveCatalogTask?.cancel()
         moveCatalogLoadStatus = .loading
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
-            }
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let projectSummary = selectedIndexedProject
+        let retainedSourceIndexData = sourceIndexesByID[projectID].flatMap { try? JSONEncoder().encode($0) }
+        let retainedSpeciesCatalogData = speciesCatalogsByID[projectID].flatMap { try? JSONEncoder().encode($0) }
+        let generation = projectLoadGeneration
 
-            let sourceIndex: PokemonHackCore.ProjectSourceIndex
-            if let retainedSourceIndex = sourceIndexesByID[selectedIndexedProject.id] {
-                sourceIndex = retainedSourceIndex
-            } else {
-                sourceIndex = try ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
-                sourceIndexesByID[selectedIndexedProject.id] = sourceIndex
-            }
+        moveCatalogTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let sourceIndex: ProjectSourceIndex
+                    if let retainedSourceIndexData {
+                        sourceIndex = try JSONDecoder().decode(ProjectSourceIndex.self, from: retainedSourceIndexData)
+                    } else {
+                        sourceIndex = try ProjectSourceIndexLoader.load(from: index, fileManager: .default)
+                    }
+                    let speciesCatalog: ProjectSpeciesCatalog
+                    if let retainedSpeciesCatalogData {
+                        speciesCatalog = try JSONDecoder().decode(ProjectSpeciesCatalog.self, from: retainedSpeciesCatalogData)
+                    } else {
+                        speciesCatalog = try ProjectSpeciesCatalogBuilder.build(index: index, fileManager: .default)
+                    }
+                    let catalog = try ProjectMoveCatalogBuilder.build(
+                        index: index,
+                        sourceIndex: sourceIndex,
+                        speciesCatalog: speciesCatalog,
+                        fileManager: .default
+                    )
+                    return try JSONEncoder().encode(
+                        MoveCatalogLoadPayload(
+                            index: index,
+                            sourceIndex: sourceIndex,
+                            speciesCatalog: speciesCatalog,
+                            catalog: catalog
+                        )
+                    )
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(MoveCatalogLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
 
-            let speciesCatalog = speciesCatalogsByID[selectedIndexedProject.id]
-            let coreCatalog = try ProjectMoveCatalogBuilder.build(
-                index: index,
-                sourceIndex: sourceIndex,
-                speciesCatalog: speciesCatalog,
-                fileManager: fileManager
-            )
-            let catalog = Self.moveCatalog(from: coreCatalog, project: selectedIndexedProject)
-            coreMoveCatalogsByID[selectedIndexedProject.id] = coreCatalog
-            moveCatalogsByID[selectedIndexedProject.id] = catalog
-            moveCatalogLoadStatus = .loaded(catalog.moveCount)
-            refreshSelectedMoveSelection()
-        } catch {
-            moveCatalogLoadStatus = .failed(error.localizedDescription)
+                let catalog = Self.moveCatalog(from: payload.catalog, project: projectSummary)
+                projectIndexesByID[projectID] = payload.index
+                sourceIndexesByID[projectID] = payload.sourceIndex
+                if let speciesCatalog = payload.speciesCatalog {
+                    speciesCatalogsByID[projectID] = speciesCatalog
+                    speciesCatalogLoadStatus = .loaded(speciesCatalog.speciesCount)
+                }
+                coreMoveCatalogsByID[projectID] = payload.catalog
+                moveCatalogsByID[projectID] = catalog
+                updateSourceGraphLoadStatusForSelection()
+                moveCatalogLoadStatus = .loaded(catalog.moveCount)
+                refreshSelectedMoveSelection()
+            } catch {
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+                moveCatalogLoadStatus = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -2089,23 +2312,48 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
+        itemCatalogTask?.cancel()
         itemCatalogLoadStatus = .loading
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
-            }
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let retainedSourceIndexData = sourceIndexesByID[projectID].flatMap { try? JSONEncoder().encode($0) }
+        let generation = projectLoadGeneration
 
-            let sourceIndex = sourceIndexesByID[selectedIndexedProject.id]
-            let catalog = try ProjectItemCatalogBuilder.build(index: index, sourceIndex: sourceIndex, fileManager: fileManager)
-            itemCatalogsByID[selectedIndexedProject.id] = catalog
-            itemCatalogLoadStatus = .loaded(catalog.itemCount)
-            refreshSelectedItemSelection()
-        } catch {
-            itemCatalogLoadStatus = .failed(error.localizedDescription)
+        itemCatalogTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let sourceIndex: ProjectSourceIndex?
+                    if let retainedSourceIndexData {
+                        sourceIndex = try JSONDecoder().decode(ProjectSourceIndex.self, from: retainedSourceIndexData)
+                    } else {
+                        sourceIndex = try? ProjectSourceIndexLoader.load(from: index, fileManager: .default)
+                    }
+                    let catalog = try ProjectItemCatalogBuilder.build(index: index, sourceIndex: sourceIndex, fileManager: .default)
+                    return try JSONEncoder().encode(ItemCatalogLoadPayload(index: index, sourceIndex: sourceIndex, catalog: catalog))
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(ItemCatalogLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+
+                projectIndexesByID[projectID] = payload.index
+                if let sourceIndex = payload.sourceIndex {
+                    sourceIndexesByID[projectID] = sourceIndex
+                    updateSourceGraphLoadStatusForSelection()
+                }
+                itemCatalogsByID[projectID] = payload.catalog
+                itemCatalogLoadStatus = .loaded(payload.catalog.itemCount)
+                refreshSelectedItemSelection()
+            } catch {
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+                itemCatalogLoadStatus = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -2373,22 +2621,37 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
+        trainerCatalogTask?.cancel()
         trainerCatalogLoadStatus = .loading
-        do {
-            let index: PokemonHackCore.ProjectIndex
-            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
-                index = retainedIndex
-            } else {
-                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
-                projectIndexesByID[selectedIndexedProject.id] = index
-            }
+        let projectID = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let generation = projectLoadGeneration
 
-            let catalog = try ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager)
-            trainerCatalogsByID[selectedIndexedProject.id] = catalog
-            trainerCatalogLoadStatus = .loaded(catalog.trainerCount)
-            refreshSelectedTrainerSelection()
-        } catch {
-            trainerCatalogLoadStatus = .failed(error.localizedDescription)
+        trainerCatalogTask = Task { @MainActor [weak self] in
+            do {
+                let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let catalog = try ProjectTrainerCatalogBuilder.build(index: index, fileManager: .default)
+                    return try JSONEncoder().encode(TrainerCatalogLoadPayload(index: index, catalog: catalog))
+                }.value
+                guard !Task.isCancelled else { return }
+                let payload = try JSONDecoder().decode(TrainerCatalogLoadPayload.self, from: payloadData)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+
+                projectIndexesByID[projectID] = payload.index
+                trainerCatalogsByID[projectID] = payload.catalog
+                trainerCatalogLoadStatus = .loaded(payload.catalog.trainerCount)
+                refreshSelectedTrainerSelection()
+            } catch {
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
+                trainerCatalogLoadStatus = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -2684,6 +2947,16 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func copyGraphicsImportPackagePlanJSONToPasteboard() {
+        guard let rawGraphicsImportPackagePlan else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawGraphicsImportPackagePlan), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
     func launchSelectedPlaytest(
         artifactRoot: URL? = nil,
         processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner
@@ -2729,6 +3002,7 @@ final class WorkbenchStore: ObservableObject {
         let projectID = project.id
         let rootPath = project.rootPath
         let projectSummary = project
+        let generation = projectLoadGeneration
 
         assetCatalogTask = Task { @MainActor [weak self] in
             do {
@@ -2738,7 +3012,10 @@ final class WorkbenchStore: ObservableObject {
                 }.value
                 guard !Task.isCancelled else { return }
                 let catalog = try JSONDecoder().decode(GenIIIAssetCatalog.self, from: data)
-                guard let self, self.selectedIndexedProject?.id == projectID else { return }
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
                 let viewState = Self.assetCatalogViewState(from: catalog, project: projectSummary)
                 assetCatalogsByID[projectID] = viewState
                 assetCatalogFingerprintsByID[projectID] = fingerprint
@@ -2746,7 +3023,10 @@ final class WorkbenchStore: ObservableObject {
                 resolvePendingResourceAssetFocusIfNeeded()
                 assetCatalogLoadStatus = .loaded(viewState.assetCount)
             } catch {
-                guard let self, self.selectedIndexedProject?.id == projectID else { return }
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
                 assetCatalogLoadStatus = .failed(error.localizedDescription)
             }
         }
@@ -2792,6 +3072,7 @@ final class WorkbenchStore: ObservableObject {
         let projectID = selectedIndexedProject.id
         let rootPath = selectedIndexedProject.rootPath
         let projectSummary = selectedIndexedProject
+        let generation = projectLoadGeneration
 
         mapCatalogTask = Task { @MainActor [weak self] in
             do {
@@ -2802,7 +3083,10 @@ final class WorkbenchStore: ObservableObject {
                 }.value
                 guard !Task.isCancelled else { return }
                 let payload = try JSONDecoder().decode(MapCatalogLoadPayload.self, from: payloadData)
-                guard let self, self.selectedIndexedProject?.id == projectID else { return }
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
 
                 projectIndexesByID[projectID] = payload.index
                 mapVisualSharedCacheDataByID.removeValue(forKey: projectID)
@@ -2824,7 +3108,10 @@ final class WorkbenchStore: ObservableObject {
                 loadSelectedMapVisualDocument()
                 refreshSelectedScriptReadinessReportIfVisible()
             } catch {
-                guard let self, self.selectedIndexedProject?.id == projectID else { return }
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedIndexedProject?.id == projectID
+                else { return }
                 selectedMapCatalog = nil
                 selectedMapID = ""
                 mapCatalogStatus = .failed(error.localizedDescription)
@@ -2851,6 +3138,7 @@ final class WorkbenchStore: ObservableObject {
         let rootPath = selectedIndexedProject.rootPath
         let mapID = selectedMapID
         let cachedSharedCacheData = mapVisualSharedCacheDataByID[projectID]
+        let generation = projectLoadGeneration
 
         mapVisualTask = Task { @MainActor [weak self] in
             do {
@@ -2868,6 +3156,7 @@ final class WorkbenchStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let payload = try JSONDecoder().decode(MapVisualLoadPayload.self, from: payloadData)
                 guard let self,
+                      self.projectLoadGeneration == generation,
                       self.selectedIndexedProject?.id == projectID,
                       self.selectedMapID == mapID
                 else { return }
@@ -2878,6 +3167,7 @@ final class WorkbenchStore: ObservableObject {
                 mapVisualStatus = .loaded(payload.document.mapName)
             } catch {
                 guard let self,
+                      self.projectLoadGeneration == generation,
                       self.selectedIndexedProject?.id == projectID,
                       self.selectedMapID == mapID
                 else { return }
@@ -3535,6 +3825,160 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func graphicsImportPackagePlanViewState(
+        from plan: PokemonHackCore.GraphicsImportPackagePlan,
+        rootPath: String
+    ) -> GraphicsImportPackagePlanViewState {
+        let diagnostics = plan.diagnostics.map {
+            diagnostic(from: $0, rootPath: plan.packageRoot.path)
+        }
+        let status = validationStatus(for: diagnostics.map(\.severity))
+        let inventory = plan.sourceFiles.map(graphicsImportInventoryRow)
+        let creditRows = inventory.filter { row in
+            row.tags.contains(PokemonHackCore.GraphicsImportSourceKind.creditMetadata.rawValue)
+        }
+        let copyTargets = plan.copyPlan.map(graphicsImportCopyTargetRow)
+        let layeredDryRun = graphicsImportLayeredDryRunViewState(from: plan.layeredTilesetDryRun)
+        let palettePreviews = plan.paletteFitPreviews.map { preview in
+            graphicsImportPaletteFitPreviewViewState(from: preview, packageRootPath: plan.packageRoot.path)
+        }
+
+        return GraphicsImportPackagePlanViewState(
+            id: plan.packageRoot.path,
+            projectRootPath: plan.projectRoot.path.isEmpty ? rootPath : plan.projectRoot.path,
+            packageRootPath: plan.packageRoot.path,
+            packageTitle: plan.packageTitle,
+            readiness: plan.readiness.rawValue,
+            status: status,
+            isPreviewOnly: plan.isPreviewOnly,
+            inventoryRows: inventory,
+            creditMetadataRows: creditRows,
+            copyTargets: copyTargets,
+            layeredDryRun: layeredDryRun,
+            paletteFitPreviews: palettePreviews,
+            expectedOutputs: plan.layeredTilesetDryRun.expectedGeneratedOutputs,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func graphicsImportInventoryRow(
+        from file: PokemonHackCore.GraphicsImportSourceFile
+    ) -> GraphicsImportInventoryRowViewState {
+        let kindTitle = graphicsImportSourceKindTitle(file.kind)
+        let checksum = "sha1 \(file.sha1.prefix(8))"
+        var details = ["\(file.sizeBytes) bytes", checksum]
+        if let png = file.png {
+            let paletteCount = png.paletteColorCount.map { "\($0) indexed colors" } ?? "no PLTE chunk"
+            details.append("PNG \(png.width)x\(png.height), bit \(png.bitDepth), color type \(png.colorType), \(paletteCount)")
+        }
+        if let palette = file.palette {
+            details.append("\(palette.format), \(palette.colorCount) colors, \(palette.gbaPrecisionLossCount) precision-loss colors")
+        }
+        let status: ValidationState = file.kind == .unsupported ? .warning : .valid
+        return GraphicsImportInventoryRowViewState(
+            id: file.relativePath,
+            title: URL(fileURLWithPath: file.relativePath).lastPathComponent,
+            subtitle: kindTitle,
+            detail: details.joined(separator: "; "),
+            status: status,
+            source: SourceLocation(path: file.relativePath, symbol: kindTitle, line: 1),
+            tags: [file.relativePath, file.kind.rawValue, kindTitle, checksum]
+        )
+    }
+
+    private static func graphicsImportCopyTargetRow(
+        from copyPlan: PokemonHackCore.GraphicsImportCopyPlan
+    ) -> GraphicsImportCopyTargetViewState {
+        let overwrite = copyPlan.willOverwriteExistingSource
+        return GraphicsImportCopyTargetViewState(
+            id: copyPlan.id,
+            title: copyPlan.destinationRelativePath,
+            subtitle: copyPlan.sourceRelativePath,
+            detail: overwrite ? "Would overwrite an existing project source path." : "Would copy into a new project source path.",
+            status: overwrite ? .warning : .valid,
+            source: SourceLocation(path: copyPlan.destinationRelativePath, symbol: "Copy Target", line: 1),
+            tags: [
+                copyPlan.sourceRelativePath,
+                copyPlan.destinationRelativePath,
+                overwrite ? "overwrite" : "new"
+            ],
+            willOverwriteExistingSource: overwrite
+        )
+    }
+
+    private static func graphicsImportLayeredDryRunViewState(
+        from dryRun: PokemonHackCore.GraphicsLayeredTilesetDryRun
+    ) -> GraphicsImportLayeredDryRunViewState {
+        let status: ValidationState = dryRun.missingLayerNames.isEmpty ? .valid : .warning
+        let detected = dryRun.detectedLayerPaths.isEmpty
+            ? "No layered PNGs detected"
+            : "\(dryRun.detectedLayerPaths.count) layered PNG(s) detected"
+        let missing = dryRun.missingLayerNames.isEmpty
+            ? "all top/middle/bottom layers present"
+            : "missing \(dryRun.missingLayerNames.joined(separator: ", "))"
+        let attributes = dryRun.attributesPath.map { "attributes \($0)" } ?? "attributes not found"
+        return GraphicsImportLayeredDryRunViewState(
+            title: "Layered tileset dry run",
+            detail: "\(detected); \(missing); \(attributes); \(dryRun.animationFileCount) animation file(s).",
+            status: status,
+            detectedLayerPaths: dryRun.detectedLayerPaths,
+            missingLayerNames: dryRun.missingLayerNames,
+            attributesPath: dryRun.attributesPath,
+            animationFileCount: dryRun.animationFileCount,
+            expectedGeneratedOutputs: dryRun.expectedGeneratedOutputs,
+            externalToolPlan: dryRun.externalToolPlan
+        )
+    }
+
+    private static func graphicsImportPaletteFitPreviewViewState(
+        from preview: PokemonHackCore.GraphicsPaletteFitPreview,
+        packageRootPath: String
+    ) -> GraphicsImportPaletteFitPreviewViewState {
+        let diagnostics = preview.diagnostics.map {
+            diagnostic(from: $0, rootPath: packageRootPath)
+        }
+        let status = preview.isReadyFor4bpp
+            ? validationStatus(for: diagnostics.map(\.severity))
+            : .warning
+        return GraphicsImportPaletteFitPreviewViewState(
+            id: preview.id,
+            title: preview.sourceRelativePath,
+            detail: "\(preview.colorSummary). \(preview.transparencySummary) \(preview.precisionSummary) \(preview.nearestPaletteSummary)",
+            status: status,
+            source: SourceLocation(path: preview.sourceRelativePath, symbol: "Palette Fit", line: 1),
+            tags: [
+                preview.sourceRelativePath,
+                preview.colorSummary,
+                preview.transparencySummary,
+                preview.precisionSummary,
+                preview.nearestPaletteSummary,
+                preview.isReadyFor4bpp ? "ready" : "needs review"
+            ],
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func graphicsImportSourceKindTitle(_ kind: PokemonHackCore.GraphicsImportSourceKind) -> String {
+        switch kind {
+        case .tileImage:
+            "Tile image"
+        case .palette:
+            "Palette"
+        case .layeredTileImage:
+            "Layered tile image"
+        case .attributes:
+            "Attributes"
+        case .animation:
+            "Animation"
+        case .creditMetadata:
+            "Credit metadata"
+        case .designSource:
+            "Design source"
+        case .unsupported:
+            "Unsupported"
+        }
+    }
+
     private static func resourceLibraryViewState(
         from library: PokemonHackCore.GenIIIResourceLibrary
     ) -> ResourceLibraryViewState {
@@ -4126,6 +4570,7 @@ final class WorkbenchStore: ObservableObject {
                 tags: [candidate.sha1Summary, candidate.source.path]
             )
         })
+        rows.append(contentsOf: patchArtifactPlanRows(from: report.artifactPlan, patchSourcePath: patchSourcePath))
         rows.append(contentsOf: dryRuns.map { plan in
             BuildReportRow(
                 id: "patch:dry-run:\(plan.id)",
@@ -4154,6 +4599,71 @@ final class WorkbenchStore: ObservableObject {
             diagnostics: diagnostics,
             rows: rows
         )
+    }
+
+    private static func patchArtifactPlanRows(
+        from plan: PokemonHackCore.PatchArtifactPlan,
+        patchSourcePath: String
+    ) -> [BuildReportRow] {
+        let checksum = plan.checksumExpectations
+        let baseSHA1 = checksum.baseROMSHA1.map { "base sha1 \($0.prefix(8))" } ?? "base sha1 unavailable"
+        let expectedBase = checksum.expectedBaseROMSHA1.map { "expected \($0.prefix(8))" } ?? "expected base unknown"
+        let targetSize = checksum.targetSizeBytes.map { "target size \($0) bytes" } ?? "target size unknown"
+        let embedded = checksum.patchHasEmbeddedChecksums ? "embedded patch checksums" : "no embedded patch checksums"
+        let launch = plan.mgbaLaunchPreview
+        let launchCommand = launch.command.joined(separator: " ")
+        let launchDetail = [
+            launch.disabledReason ?? "Launch preview is disabled.",
+            "Command preview: \(launchCommand)."
+        ].joined(separator: " ")
+
+        return [
+            BuildReportRow(
+                id: "patch:artifact:output",
+                section: .patchManifest,
+                title: "Output artifact plan",
+                subtitle: "\(plan.expectedPatchedROMName) · \(plan.patchFormat.rawValue.uppercased())",
+                detail: "Preview-only output path \(plan.outputPath); apply/export writes remain disabled.",
+                status: .warning,
+                source: SourceLocation(path: plan.absoluteOutputPath, symbol: plan.expectedPatchedROMName, line: 1),
+                tags: [plan.outputPath, plan.absoluteOutputPath, plan.patchFormat.rawValue, patchSourcePath]
+            ),
+            BuildReportRow(
+                id: "patch:artifact:checksums",
+                section: .patchManifest,
+                title: "Checksum expectations",
+                subtitle: "\(baseSHA1); \(expectedBase)",
+                detail: "\(embedded); \(targetSize). \(checksum.policy)",
+                status: checksum.baseROMSHA1 == nil ? .warning : .valid,
+                source: SourceLocation(path: plan.selectedBaseROMPath ?? patchSourcePath, symbol: "checksums", line: 1),
+                tags: [
+                    checksum.baseROMSHA1 ?? "",
+                    checksum.expectedBaseROMSHA1 ?? "",
+                    checksum.matchedCandidateRelativePath ?? "",
+                    checksum.policy
+                ]
+            ),
+            BuildReportRow(
+                id: "patch:artifact:header-policy",
+                section: .patchManifest,
+                title: "Header policy",
+                subtitle: plan.headerPolicy.mode,
+                detail: plan.headerPolicy.detail,
+                status: plan.headerPolicy.shouldRewriteHeader ? .warning : .valid,
+                source: SourceLocation(path: plan.selectedBaseROMPath ?? patchSourcePath, symbol: "rom-header", line: 1),
+                tags: [plan.headerPolicy.mode, plan.headerPolicy.detail]
+            ),
+            BuildReportRow(
+                id: "patch:artifact:mgba-preview",
+                section: .patchManifest,
+                title: "mGBA launch preview",
+                subtitle: launch.isLaunchEnabled ? "Launch enabled" : "Launch disabled",
+                detail: launchDetail,
+                status: launch.isLaunchEnabled ? .valid : .warning,
+                source: SourceLocation(path: launch.outputROMPath, symbol: launch.emulatorName, line: 1),
+                tags: [launch.outputROMPath, launch.emulatorPath ?? "", launchCommand]
+            )
+        ]
     }
 
     private static func selectedBaseROMViewState(

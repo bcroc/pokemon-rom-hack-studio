@@ -187,6 +187,40 @@ final class CoreScaffoldingTests: XCTestCase {
         XCTAssertTrue(graph.diagnostics.contains { $0.code == "BINARY_ROM_POINTER_CANDIDATES_REJECTED" })
     }
 
+    func testBinaryROMInspectorReportComposesStandaloneReadOnlySurfaces() throws {
+        let temp = try CoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("standalone.gba")
+        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x80
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        try Data(bytes).write(to: rom)
+
+        let report = try BinaryROMInspectorReportBuilder.build(
+            path: rom.path,
+            toolResolver: { tool in
+                ToolAvailability(name: tool, isAvailable: true, resolvedPath: "/usr/local/bin/mgba")
+            }
+        )
+
+        XCTAssertTrue(report.isReadOnly)
+        XCTAssertEqual(report.projectIndex.profile, .binaryROM)
+        XCTAssertEqual(report.projectIndex.writePolicy, .mutationPlanOnly)
+        XCTAssertEqual(report.graph.image.gameCode, "BPEE")
+        XCTAssertEqual(report.resourceEntry.platform, .gbaROM)
+        XCTAssertEqual(report.assetCatalog.profile, .binaryROM)
+        XCTAssertTrue(report.assetCatalog.assets.contains { $0.category == .rom && $0.kind == "Game Code" })
+        XCTAssertEqual(report.playtestReport.romCandidate?.absolutePath, rom.path)
+        XCTAssertTrue(report.playtestReport.isRunnable)
+        XCTAssertFalse(report.diagnostics.contains { $0.code == "BUILD_TARGETS_EMPTY" })
+    }
+
     func testMapGroupIndexRoundTripsWithoutLosingGroups() throws {
         let json = Data(
             """

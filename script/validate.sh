@@ -38,6 +38,7 @@ run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli patch-manifest
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$PATCH_SMOKE_DIR/blocked-playtest" --launch --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-import-plan "$PATCH_SMOKE_DIR/blocked-playtest" "$PATCH_SMOKE_DIR/graphics-pack" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-graph "$PATCH_SMOKE_DIR/test.gba" --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-inspect "$PATCH_SMOKE_DIR/test.gba" --json
 
 if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli inspect "$POKEEMERALD_DIR" --json

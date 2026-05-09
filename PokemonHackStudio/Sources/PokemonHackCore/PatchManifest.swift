@@ -74,12 +74,117 @@ public struct PatchSelectedBaseROM: Codable, Equatable {
     }
 }
 
+public struct PatchArtifactChecksumExpectations: Codable, Equatable {
+    public let baseROMSHA1: String?
+    public let expectedBaseROMSHA1: String?
+    public let matchedCandidateRelativePath: String?
+    public let patchHasEmbeddedChecksums: Bool
+    public let expectedPatchedROMSHA1: String?
+    public let targetSizeBytes: UInt64?
+    public let policy: String
+
+    public init(
+        baseROMSHA1: String?,
+        expectedBaseROMSHA1: String?,
+        matchedCandidateRelativePath: String?,
+        patchHasEmbeddedChecksums: Bool,
+        expectedPatchedROMSHA1: String? = nil,
+        targetSizeBytes: UInt64?,
+        policy: String
+    ) {
+        self.baseROMSHA1 = baseROMSHA1
+        self.expectedBaseROMSHA1 = expectedBaseROMSHA1
+        self.matchedCandidateRelativePath = matchedCandidateRelativePath
+        self.patchHasEmbeddedChecksums = patchHasEmbeddedChecksums
+        self.expectedPatchedROMSHA1 = expectedPatchedROMSHA1
+        self.targetSizeBytes = targetSizeBytes
+        self.policy = policy
+    }
+}
+
+public struct PatchArtifactHeaderPolicy: Codable, Equatable {
+    public let mode: String
+    public let detail: String
+    public let shouldRewriteHeader: Bool
+
+    public init(mode: String, detail: String, shouldRewriteHeader: Bool) {
+        self.mode = mode
+        self.detail = detail
+        self.shouldRewriteHeader = shouldRewriteHeader
+    }
+}
+
+public struct PatchArtifactLaunchPreview: Codable, Equatable {
+    public let emulatorName: String
+    public let emulatorPath: String?
+    public let outputROMPath: String
+    public let command: [String]
+    public let isLaunchEnabled: Bool
+    public let disabledReason: String?
+
+    public init(
+        emulatorName: String,
+        emulatorPath: String?,
+        outputROMPath: String,
+        command: [String],
+        isLaunchEnabled: Bool,
+        disabledReason: String?
+    ) {
+        self.emulatorName = emulatorName
+        self.emulatorPath = emulatorPath
+        self.outputROMPath = outputROMPath
+        self.command = command
+        self.isLaunchEnabled = isLaunchEnabled
+        self.disabledReason = disabledReason
+    }
+}
+
+public struct PatchArtifactPlan: Codable, Equatable, Identifiable {
+    public var id: String { absoluteOutputPath }
+
+    public let isPreviewOnly: Bool
+    public let selectedBaseROMPath: String?
+    public let patchFormat: PatchFormatID
+    public let outputPath: String
+    public let absoluteOutputPath: String
+    public let checksumExpectations: PatchArtifactChecksumExpectations
+    public let headerPolicy: PatchArtifactHeaderPolicy
+    public let expectedPatchedROMName: String
+    public let mgbaLaunchPreview: PatchArtifactLaunchPreview
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        isPreviewOnly: Bool,
+        selectedBaseROMPath: String?,
+        patchFormat: PatchFormatID,
+        outputPath: String,
+        absoluteOutputPath: String,
+        checksumExpectations: PatchArtifactChecksumExpectations,
+        headerPolicy: PatchArtifactHeaderPolicy,
+        expectedPatchedROMName: String,
+        mgbaLaunchPreview: PatchArtifactLaunchPreview,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.isPreviewOnly = isPreviewOnly
+        self.selectedBaseROMPath = selectedBaseROMPath
+        self.patchFormat = patchFormat
+        self.outputPath = outputPath
+        self.absoluteOutputPath = absoluteOutputPath
+        self.checksumExpectations = checksumExpectations
+        self.headerPolicy = headerPolicy
+        self.expectedPatchedROMName = expectedPatchedROMName
+        self.mgbaLaunchPreview = mgbaLaunchPreview
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct PatchManifestReport: Codable, Equatable {
     public let patch: PatchValidationReport
     public let projectRoot: String?
     public let baseROMCandidates: [PatchBaseROMCandidate]
     public let selectedBaseROM: PatchSelectedBaseROM?
     public let compatibilityStatus: PatchManifestCompatibilityStatus
+    public let artifactPlan: PatchArtifactPlan
     public let dryRunPlans: [PatchManifestDryRunPlan]
     public let diagnostics: [Diagnostic]
 
@@ -89,6 +194,7 @@ public struct PatchManifestReport: Codable, Equatable {
         baseROMCandidates: [PatchBaseROMCandidate],
         selectedBaseROM: PatchSelectedBaseROM? = nil,
         compatibilityStatus: PatchManifestCompatibilityStatus,
+        artifactPlan: PatchArtifactPlan,
         dryRunPlans: [PatchManifestDryRunPlan],
         diagnostics: [Diagnostic]
     ) {
@@ -97,6 +203,7 @@ public struct PatchManifestReport: Codable, Equatable {
         self.baseROMCandidates = baseROMCandidates
         self.selectedBaseROM = selectedBaseROM
         self.compatibilityStatus = compatibilityStatus
+        self.artifactPlan = artifactPlan
         self.dryRunPlans = dryRunPlans
         self.diagnostics = diagnostics
     }
@@ -107,7 +214,8 @@ public enum PatchManifestBuilder {
         patchPath: String,
         projectPath: String? = nil,
         baseROMPath: String? = nil,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
     ) throws -> PatchManifestReport {
         let patch = PatchValidationReportBuilder.validate(path: patchPath, fileManager: fileManager)
         var candidates: [PatchBaseROMCandidate] = []
@@ -131,17 +239,27 @@ public enum PatchManifestBuilder {
         diagnostics.append(contentsOf: selectedBaseROMDiagnostics(selectedBaseROM, candidates: candidates))
 
         let compatibility = compatibilityStatus(patch: patch, selectedBaseROM: selectedBaseROM, candidates: candidates)
+        let artifactPlan = artifactPlan(
+            patch: patch,
+            selectedBaseROM: selectedBaseROM,
+            candidates: candidates,
+            projectRoot: projectRoot,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
         let dryRuns = dryRunPlans(
             patch: patch,
             selectedBaseROM: selectedBaseROM,
             candidates: candidates,
-            compatibility: compatibility
+            compatibility: compatibility,
+            artifactPlan: artifactPlan
         )
+        diagnostics.append(contentsOf: artifactPlan.diagnostics)
         diagnostics.append(
             Diagnostic(
                 severity: .info,
                 code: "PATCH_MANIFEST_PLAN_ONLY",
-                message: "Patch manifests model base ROM compatibility and dry-run steps without applying or creating patches."
+                message: "Patch manifests model base ROM compatibility, output artifact plans, and dry-run steps without applying or creating patches."
             )
         )
 
@@ -151,6 +269,7 @@ public enum PatchManifestBuilder {
             baseROMCandidates: candidates,
             selectedBaseROM: selectedBaseROM,
             compatibilityStatus: compatibility,
+            artifactPlan: artifactPlan,
             dryRunPlans: dryRuns,
             diagnostics: diagnostics
         )
@@ -200,7 +319,8 @@ public enum PatchManifestBuilder {
         patch: PatchValidationReport,
         selectedBaseROM: PatchSelectedBaseROM?,
         candidates: [PatchBaseROMCandidate],
-        compatibility: PatchManifestCompatibilityStatus
+        compatibility: PatchManifestCompatibilityStatus,
+        artifactPlan: PatchArtifactPlan
     ) -> [PatchManifestDryRunPlan] {
         let baseROMStep = selectedBaseROM.map { selected in
             selected.exists
@@ -226,6 +346,8 @@ public enum PatchManifestBuilder {
                 steps: [
                     "Select a user-provided base ROM.",
                     "Check base ROM SHA1 against \(candidates.count) candidate(s).",
+                    "Plan output artifact \(artifactPlan.outputPath) as \(artifactPlan.patchFormat.rawValue.uppercased()).",
+                    "Keep ROM header policy at \(artifactPlan.headerPolicy.mode).",
                     "Keep apply/export disabled in this preview-only pass."
                 ],
                 diagnostics: compatibility == .invalidPatch
@@ -264,6 +386,85 @@ public enum PatchManifestBuilder {
             sha1: sha1,
             matchedCandidateRelativePath: matchedCandidate?.relativePath,
             matchedCandidateBuiltOutputPath: matchedCandidate?.builtOutputPath
+        )
+    }
+
+    private static func artifactPlan(
+        patch: PatchValidationReport,
+        selectedBaseROM: PatchSelectedBaseROM?,
+        candidates: [PatchBaseROMCandidate],
+        projectRoot: String?,
+        fileManager: FileManager,
+        toolResolver: ToolAvailabilityResolver
+    ) -> PatchArtifactPlan {
+        let patchURL = URL(fileURLWithPath: patch.path ?? "patch").standardizedFileURL
+        let patchStem = sanitizedArtifactComponent(patchURL.deletingPathExtension().lastPathComponent, fallback: "patch")
+        let baseStem = selectedBaseROM
+            .map { sanitizedArtifactComponent(URL(fileURLWithPath: $0.absolutePath).deletingPathExtension().lastPathComponent, fallback: "base") }
+            ?? "selected-base"
+        let expectedPatchedROMName = "\(baseStem)-\(patchStem).gba"
+        let outputPath = ".pokemonhackstudio/patches/\(expectedPatchedROMName)"
+        let outputRoot = projectRoot.map { URL(fileURLWithPath: $0) }
+            ?? patchURL.deletingLastPathComponent()
+        let absoluteOutputPath = outputRoot.appendingPathComponent(outputPath).standardizedFileURL.path
+        let matchedCandidate = selectedBaseROM?.matchedCandidateRelativePath.flatMap { matchedPath in
+            candidates.first { $0.relativePath == matchedPath }
+        }
+        let expectedBaseSHA1 = matchedCandidate?.expectedSHA1 ?? matchedCandidate?.builtOutputSHA1
+        let patchSummary = patch.summary
+        var diagnostics: [Diagnostic] = [
+            Diagnostic(
+                severity: .info,
+                code: "PATCH_ARTIFACT_PLAN_ONLY",
+                message: "Patch artifact output is planned at \(absoluteOutputPath); no patched ROM is written."
+            )
+        ]
+        if fileManager.fileExists(atPath: absoluteOutputPath) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "PATCH_ARTIFACT_OUTPUT_EXISTS",
+                    message: "Planned patched ROM output already exists at \(absoluteOutputPath); preview will not overwrite it."
+                )
+            )
+        }
+
+        let checksumExpectations = PatchArtifactChecksumExpectations(
+            baseROMSHA1: selectedBaseROM?.sha1,
+            expectedBaseROMSHA1: expectedBaseSHA1,
+            matchedCandidateRelativePath: selectedBaseROM?.matchedCandidateRelativePath,
+            patchHasEmbeddedChecksums: patchSummary?.hasEmbeddedChecksums == true,
+            expectedPatchedROMSHA1: nil,
+            targetSizeBytes: patchSummary?.targetSize,
+            policy: "Verify the selected base ROM SHA1 before apply; compute patched ROM SHA1 only after an explicit future export."
+        )
+        let headerPolicy = PatchArtifactHeaderPolicy(
+            mode: "preserve-selected-base-rom-header",
+            detail: "The planned apply/export flow preserves base ROM header bytes and does not rewrite title, game code, maker code, or header checksum.",
+            shouldRewriteHeader: false
+        )
+        let emulator = toolResolver("mgba")
+        let launchTool = emulator.resolvedPath ?? emulator.name
+        let launchPreview = PatchArtifactLaunchPreview(
+            emulatorName: emulator.name,
+            emulatorPath: emulator.resolvedPath,
+            outputROMPath: absoluteOutputPath,
+            command: [launchTool, absoluteOutputPath],
+            isLaunchEnabled: false,
+            disabledReason: "Patched ROM export is disabled; mGBA launch remains a preview until the artifact exists."
+        )
+
+        return PatchArtifactPlan(
+            isPreviewOnly: true,
+            selectedBaseROMPath: selectedBaseROM?.absolutePath,
+            patchFormat: patchSummary?.format ?? .unknown,
+            outputPath: outputPath,
+            absoluteOutputPath: absoluteOutputPath,
+            checksumExpectations: checksumExpectations,
+            headerPolicy: headerPolicy,
+            expectedPatchedROMName: expectedPatchedROMName,
+            mgbaLaunchPreview: launchPreview,
+            diagnostics: diagnostics
         )
     }
 
@@ -339,5 +540,14 @@ public enum PatchManifestBuilder {
             }
         }
         return url.standardizedFileURL
+    }
+
+    private static func sanitizedArtifactComponent(_ value: String, fallback: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = value.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let sanitized = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+        return sanitized.isEmpty ? fallback : sanitized
     }
 }

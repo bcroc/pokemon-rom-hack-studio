@@ -12,12 +12,17 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSourceIndexRecordsReplaceFixturesForDataAndScriptModules() throws {
+    func testSourceIndexRecordsReplaceFixturesForDataAndScriptModules() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        XCTAssertNil(store.selectedSourceIndex)
+        XCTAssertEqual(store.sourceGraphLoadStatus, .idle)
+
+        store.loadSelectedSourceGraphIfNeeded()
+        try await waitForSelectedSourceGraph(store)
 
         let script = try XCTUnwrap(store.records(for: .scripts).first { $0.title == "Test_EventScript" })
         let text = try XCTUnwrap(store.records(for: .text).first { $0.title == "gText_Test" })
@@ -36,7 +41,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testTrainerCatalogLoadsSelectionAndFilteringIntoStore() throws {
+    func testTrainerCatalogLoadsSelectionAndFilteringIntoStore() async throws {
         let root = try makeTrainerProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let settings = WorkbenchUserSettings(defaults: defaults)
@@ -44,8 +49,12 @@ final class MapEditorStoreTests: XCTestCase {
         let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        XCTAssertNil(store.selectedTrainerCatalog)
+        XCTAssertEqual(store.trainerCatalogLoadStatus, .idle)
 
-        let catalog = try XCTUnwrap(store.selectedTrainerCatalog)
+        store.loadSelectedTrainerCatalogIfNeeded()
+        let catalog = try await waitForSelectedTrainerCatalog(store)
+
         XCTAssertEqual(catalog.trainerCount, 2)
         XCTAssertEqual(store.trainerCatalogLoadStatus, .loaded(2))
         XCTAssertEqual(store.selectedTrainerID, "TRAINER_TEST")
@@ -58,7 +67,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testTrainerDraftPreviewContextApplyAndDiscardFlow() throws {
+    func testTrainerDraftPreviewContextApplyAndDiscardFlow() async throws {
         let root = try makeTrainerProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let settings = WorkbenchUserSettings(defaults: defaults)
@@ -66,6 +75,8 @@ final class MapEditorStoreTests: XCTestCase {
         let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        store.loadSelectedTrainerCatalogIfNeeded()
+        try await waitForSelectedTrainerCatalog(store)
         store.requestTrainerSelection("TRAINER_BOSS")
 
         var draft = try XCTUnwrap(store.selectedTrainerDraft)
@@ -123,7 +134,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSpeciesDraftPreviewContextApplyAndDiscardFlow() throws {
+    func testSpeciesDraftPreviewContextApplyAndDiscardFlow() async throws {
         let root = try makePokemonProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let settings = WorkbenchUserSettings(defaults: defaults)
@@ -131,6 +142,8 @@ final class MapEditorStoreTests: XCTestCase {
         let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
         store.requestSpeciesSelection("SPECIES_TREECKO")
 
         XCTAssertEqual(store.speciesCatalogLoadStatus, .loaded(2))
@@ -311,6 +324,7 @@ final class MapEditorStoreTests: XCTestCase {
         let scriptSourceAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "scripts" && $0.targetID == "data/scripts/test.inc" })
 
         store.navigateToAsset(scriptSourceAsset)
+        try await waitForSelectedSourceGraph(store)
 
         XCTAssertEqual(store.selection, .scripts)
         XCTAssertEqual(store.searchText, "data/scripts/test.inc")
@@ -320,6 +334,7 @@ final class MapEditorStoreTests: XCTestCase {
 
         let speciesAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "species" && $0.targetID == "SPECIES_TREECKO" })
         store.navigateToAsset(speciesAsset)
+        try await waitForSelectedSpeciesCatalog(store)
 
         XCTAssertEqual(store.selection, .pokemon)
         XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
@@ -356,6 +371,8 @@ final class MapEditorStoreTests: XCTestCase {
 
         let pokemonFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "pokemon-data" })
         store.route(to: pokemonFlow.primaryAction)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
 
         XCTAssertEqual(store.selection, .pokemon)
         XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
@@ -371,6 +388,7 @@ final class MapEditorStoreTests: XCTestCase {
         let speciesAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "species" && $0.targetID == "SPECIES_TREECKO" })
 
         store.navigateToAsset(speciesAsset)
+        try await waitForSelectedSpeciesCatalog(store)
 
         XCTAssertEqual(store.selection, .pokemon)
         XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
@@ -426,12 +444,14 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testSidebarSearchFallbacksAndGenericRecordSelection() throws {
+    func testSidebarSearchFallbacksAndGenericRecordSelection() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        store.loadSelectedSourceGraphIfNeeded()
+        try await waitForSelectedSourceGraph(store)
 
         let itemRows = store.records(for: .items)
         let item = try XCTUnwrap(itemRows.first { $0.title == "ITEM_POTION" })
@@ -450,12 +470,14 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testDashboardMapMetricUsesSourceIndexBeforeFullCatalogLoads() throws {
+    func testDashboardMapMetricUsesSourceIndexBeforeFullCatalogLoads() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        store.loadSelectedSourceGraphIfNeeded()
+        try await waitForSelectedSourceGraph(store)
 
         XCTAssertEqual(store.records(for: .maps).count, 1)
         XCTAssertEqual(store.dashboardMapMetric.value, "1")
@@ -477,6 +499,65 @@ final class MapEditorStoreTests: XCTestCase {
 
         let report = try XCTUnwrap(store.selectedScriptReadinessReport)
         XCTAssertFalse(report.rows.isEmpty)
+    }
+
+    @MainActor
+    func testProjectOpenDefersHeavyCatalogsUntilRequested() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        XCTAssertNotNil(store.selectedIndexedProject)
+        XCTAssertNotNil(store.selectedBuildReport)
+        XCTAssertNotNil(store.selectedGraphicsReport)
+        XCTAssertNil(store.selectedSourceIndex)
+        XCTAssertNil(store.selectedScriptOutline)
+        XCTAssertNil(store.selectedSpeciesCatalog)
+        XCTAssertNil(store.selectedTrainerCatalog)
+        XCTAssertNil(store.selectedMoveCatalog)
+        XCTAssertNil(store.selectedItemCatalog)
+        XCTAssertNil(store.selectedAssetCatalog)
+        XCTAssertEqual(store.sourceGraphLoadStatus, .idle)
+        XCTAssertEqual(store.speciesCatalogLoadStatus, .idle)
+        XCTAssertEqual(store.trainerCatalogLoadStatus, .idle)
+        XCTAssertEqual(store.moveCatalogLoadStatus, .idle)
+        XCTAssertEqual(store.itemCatalogLoadStatus, .idle)
+        XCTAssertEqual(store.assetCatalogLoadStatus, .idle)
+
+        store.loadSelectedSourceGraphIfNeeded()
+        try await waitForSelectedSourceGraph(store)
+        XCTAssertNotNil(store.selectedScriptOutline)
+
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+
+        store.loadSelectedTrainerCatalogIfNeeded()
+        try await waitForSelectedTrainerCatalog(store)
+
+        store.loadSelectedMoveCatalogIfNeeded()
+        try await waitForSelectedMoveCatalog(store)
+
+        store.loadSelectedItemCatalogIfNeeded()
+        try await waitForSelectedItemCatalog(store)
+    }
+
+    @MainActor
+    func testStaleSourceGraphLoadDoesNotOverwriteNewlySelectedProject() async throws {
+        let firstRoot = try makeSourceIndexProject()
+        let secondRoot = try makeTrainerProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: firstRoot.path)
+        store.loadSelectedSourceGraphIfNeeded()
+        store.openProject(path: secondRoot.path)
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertNotEqual(store.selectedSourceIndex?.root.path, firstRoot.path)
     }
 
     func testDiagnosticSummaryGroupsFindingsByTriageIntent() {
@@ -542,7 +623,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testCatalogDefaultsPreferEditableContentRows() throws {
+    func testCatalogDefaultsPreferEditableContentRows() async throws {
         let pokemonRoot = try makePokemonProject()
         let pokemonDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let pokemonSettings = WorkbenchUserSettings(defaults: pokemonDefaults)
@@ -550,6 +631,8 @@ final class MapEditorStoreTests: XCTestCase {
         let pokemonStore = WorkbenchStore(userDefaults: pokemonDefaults, userSettings: pokemonSettings, autoLoadProjects: false)
 
         pokemonStore.openProject(path: pokemonRoot.path)
+        pokemonStore.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(pokemonStore)
 
         XCTAssertEqual(pokemonStore.selectedSpeciesID, "SPECIES_TREECKO")
         XCTAssertEqual(pokemonStore.selectedSpeciesDetail?.displayName, "Treecko")
@@ -562,6 +645,8 @@ final class MapEditorStoreTests: XCTestCase {
         let trainerStore = WorkbenchStore(userDefaults: trainerDefaults, userSettings: trainerSettings, autoLoadProjects: false)
 
         trainerStore.openProject(path: trainerRoot.path)
+        trainerStore.loadSelectedTrainerCatalogIfNeeded()
+        try await waitForSelectedTrainerCatalog(trainerStore)
 
         XCTAssertEqual(trainerStore.selectedTrainerID, "TRAINER_TEST")
         XCTAssertTrue(trainerStore.selectedTrainerDetail?.isEditable == true)
@@ -687,6 +772,10 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(matchedReport.compatibilityLabel, "Base ROM matched")
         XCTAssertEqual(matchedReport.selectedBaseROM?.matchedCandidate, "rom.sha1")
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "pokeemerald.gba" })
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Output artifact plan" && $0.detail.contains("apply/export writes remain disabled") })
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Checksum expectations" && $0.subtitle.contains("base sha1 a9993e36") })
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Header policy" && $0.subtitle == "preserve-selected-base-rom-header" })
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "mGBA launch preview" && $0.subtitle == "Launch disabled" })
 
         store.requestBaseROMPath(wrongGBA.path)
 
@@ -705,6 +794,62 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGraphicsImportPackagePlanLoadsPreviewRowsAndCopiesJSON() throws {
+        let root = try makeSourceIndexProject()
+        let packageTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(packageTemp)
+        let package = packageTemp.url.appendingPathComponent("Town Package")
+        try write("Credits: local clean-room fixture\n", to: package.appendingPathComponent("README.md"))
+        try write(Data("top".utf8), to: package.appendingPathComponent("layers/top.png"))
+        try write(Data("middle".utf8), to: package.appendingPathComponent("layers/middle.png"))
+        try write("metatile,behavior\n0,0\n", to: package.appendingPathComponent("attributes.csv"))
+        try write(
+            """
+            JASC-PAL
+            0100
+            2
+            0 0 0
+            248 248 248
+            """,
+            to: package.appendingPathComponent("palettes/main.pal")
+        )
+        try write(
+            Data("existing".utf8),
+            to: root.appendingPathComponent("data/tilesets/imports/town-package/layers/top.png")
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.requestGraphicsImportPackagePath("  \(package.path)  ")
+        store.loadSelectedGraphicsImportPackagePlan()
+
+        let plan = try XCTUnwrap(store.selectedGraphicsImportPackagePlan)
+        XCTAssertEqual(store.selectedGraphicsImportPackagePath, package.path)
+        XCTAssertEqual(plan.packageTitle, "Town Package")
+        XCTAssertEqual(plan.readiness, "ready")
+        XCTAssertTrue(plan.isPreviewOnly)
+        XCTAssertEqual(plan.inventoryRows.count, 5)
+        XCTAssertEqual(plan.creditMetadataRows.map(\.id), ["README.md"])
+        XCTAssertEqual(plan.copyTargets.count, 5)
+        XCTAssertTrue(plan.copyTargets.contains { $0.willOverwriteExistingSource && $0.title == "data/tilesets/imports/town-package/layers/top.png" })
+        XCTAssertEqual(plan.layeredDryRun.detectedLayerPaths, ["layers/middle.png", "layers/top.png"])
+        XCTAssertEqual(plan.layeredDryRun.missingLayerNames, ["bottom"])
+        XCTAssertEqual(plan.expectedOutputs.count, 4)
+        XCTAssertEqual(plan.paletteFitPreviews.map(\.id), ["palettes/main.pal"])
+        XCTAssertTrue(plan.diagnostics.contains { $0.title == "GRAPHICS_IMPORT_DESTINATION_EXISTS" && $0.severity == .warning })
+
+        store.copyGraphicsImportPackagePlanJSONToPasteboard()
+
+        let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(object?["packageTitle"] as? String, "Town Package")
+        XCTAssertEqual(object?["isPreviewOnly"] as? Bool, true)
+        XCTAssertNotNil(object?["copyPlan"])
+    }
+
+    @MainActor
     func testBuildReportFixtureFallbackWithoutLoadedProject() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
@@ -713,6 +858,42 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.filteredBuildReportRows.isEmpty)
         XCTAssertEqual(store.moduleStatus(for: .build), .warning)
         XCTAssertTrue(store.fixtureBuildWorkflowActions.allSatisfy { !$0.isEnabled && $0.isPreviewLocked })
+    }
+
+    @MainActor
+    func testStandaloneGBAROMOpensReadOnlyInspectorProject() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("standalone.gba")
+        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x80
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        try Data(bytes).write(to: rom)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                ToolAvailability(name: tool, isAvailable: true, resolvedPath: "/usr/local/bin/mgba")
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: rom.path)
+
+        let project = try XCTUnwrap(store.selectedIndexedProject)
+        let report = try XCTUnwrap(store.selectedROMInspectorReport)
+        XCTAssertEqual(project.profile, "binaryROM")
+        XCTAssertEqual(project.originLabel, "Local Input")
+        XCTAssertEqual(project.writePolicy, "mutationPlanOnly")
+        XCTAssertEqual(report.graph.image.gameCode, "BPEE")
+        XCTAssertTrue(report.resourceEntry.items.contains { $0.category == "GBA Pointer" })
+        XCTAssertTrue(report.playtestReport.isRunnable)
     }
 
     @MainActor
@@ -1055,6 +1236,81 @@ final class MapEditorStoreTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         throw StoreTestError.assetCatalogTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedSourceGraph(_ store: WorkbenchStore) async throws -> ProjectSourceIndex {
+        for _ in 0..<100 {
+            if let sourceIndex = store.selectedSourceIndex {
+                return sourceIndex
+            }
+            if case .failed(let message) = store.sourceGraphLoadStatus {
+                throw StoreTestError.sourceGraphFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.sourceGraphTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedSpeciesCatalog(_ store: WorkbenchStore) async throws -> ProjectSpeciesCatalog {
+        for _ in 0..<100 {
+            if let catalog = store.selectedSpeciesCatalog {
+                return catalog
+            }
+            if case .failed(let message) = store.speciesCatalogLoadStatus {
+                throw StoreTestError.speciesCatalogFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.speciesCatalogTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedTrainerCatalog(_ store: WorkbenchStore) async throws -> ProjectTrainerCatalog {
+        for _ in 0..<100 {
+            if let catalog = store.selectedTrainerCatalog {
+                return catalog
+            }
+            if case .failed(let message) = store.trainerCatalogLoadStatus {
+                throw StoreTestError.trainerCatalogFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.trainerCatalogTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedMoveCatalog(_ store: WorkbenchStore) async throws -> MoveCatalogViewState {
+        for _ in 0..<100 {
+            if let catalog = store.selectedMoveCatalog {
+                return catalog
+            }
+            if case .failed(let message) = store.moveCatalogLoadStatus {
+                throw StoreTestError.moveCatalogFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.moveCatalogTimedOut
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitForSelectedItemCatalog(_ store: WorkbenchStore) async throws -> ProjectItemCatalog {
+        for _ in 0..<100 {
+            if let catalog = store.selectedItemCatalog {
+                return catalog
+            }
+            if case .failed(let message) = store.itemCatalogLoadStatus {
+                throw StoreTestError.itemCatalogFailed(message)
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.itemCatalogTimedOut
     }
 
     private func makeVisualProject() throws -> URL {
@@ -1671,6 +1927,16 @@ private final class MapEditorStoreTemporaryDirectory {
 private enum StoreTestError: Error {
     case assetCatalogFailed(String)
     case assetCatalogTimedOut
+    case sourceGraphFailed(String)
+    case sourceGraphTimedOut
+    case speciesCatalogFailed(String)
+    case speciesCatalogTimedOut
+    case trainerCatalogFailed(String)
+    case trainerCatalogTimedOut
+    case moveCatalogFailed(String)
+    case moveCatalogTimedOut
+    case itemCatalogFailed(String)
+    case itemCatalogTimedOut
     case mapCatalogFailed(String)
     case mapCatalogTimedOut
     case mapVisualFailed(String)
