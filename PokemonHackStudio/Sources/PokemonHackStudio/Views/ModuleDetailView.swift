@@ -91,6 +91,25 @@ struct ModuleDetailView: View {
             )
         case .items:
             CatalogEditorView(title: "Items", records: store.records(for: .items))
+        case .moves:
+            PokemonMovesWorkbenchView(
+                catalog: store.selectedMoveCatalog,
+                moves: store.filteredMoveDetails,
+                selectedMoveID: Binding(
+                    get: { store.selectedMoveID },
+                    set: { store.requestMoveSelection($0) }
+                ),
+                selectedMove: store.selectedMoveDetail,
+                loadStatus: store.moveCatalogLoadStatus,
+                filter: Binding(
+                    get: { store.selectedMoveWorkbenchFilter },
+                    set: { store.selectedMoveWorkbenchFilter = $0 }
+                ),
+                fallbackRecords: store.records(for: .moves),
+                onLoadCatalog: {
+                    store.loadSelectedMoveCatalogIfNeeded()
+                }
+            )
         case .pokemon:
             PokemonSpeciesWorkbenchView(
                 catalog: store.selectedSpeciesCatalog,
@@ -169,6 +188,8 @@ struct ModuleDetailView: View {
             speciesInspectorContext
         case .trainers:
             trainerInspectorContext
+        case .moves:
+            moveInspectorContext
         default:
             recordsInspectorContext(module: store.selection)
         }
@@ -590,6 +611,52 @@ struct ModuleDetailView: View {
             ],
             sources: trainerSources(trainer),
             diagnostics: trainer.diagnostics.prefix(10).map(sourceInspectorDiagnostic(from:))
+        )
+    }
+
+    private var moveInspectorContext: SourceInspectorContext {
+        guard let catalog = store.selectedMoveCatalog else {
+            return SourceInspectorContext(
+                title: WorkbenchModule.moves.title,
+                subtitle: store.moveCatalogLoadStatus.label,
+                systemImage: WorkbenchModule.moves.systemImage,
+                status: store.moveCatalogLoadStatus.validationState,
+                facts: [],
+                sources: [],
+                diagnostics: []
+            )
+        }
+
+        guard let move = store.selectedMoveDetail else {
+            return SourceInspectorContext(
+                title: WorkbenchModule.moves.title,
+                subtitle: "\(catalog.moveCount) moves",
+                systemImage: WorkbenchModule.moves.systemImage,
+                status: store.moduleStatus(for: .moves),
+                facts: [
+                    SourceInspectorFact(label: "Moves", value: "\(catalog.moveCount)"),
+                    SourceInspectorFact(label: "Learnsets", value: "\(catalog.learnsetEntryCount)")
+                ],
+                sources: [],
+                diagnostics: catalog.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
+            )
+        }
+
+        return SourceInspectorContext(
+            title: move.displayName,
+            subtitle: move.moveID,
+            systemImage: WorkbenchModule.moves.systemImage,
+            status: move.status,
+            facts: [
+                SourceInspectorFact(label: "TM/HM", value: "\(move.tmhmLearners.count)"),
+                SourceInspectorFact(label: "Tutor", value: "\(move.tutorLearners.count)"),
+                SourceInspectorFact(label: "Learned By", value: "\(move.learnedBy.count)"),
+                SourceInspectorFact(label: "Diagnostics", value: "\(move.diagnostics.count)")
+            ],
+            sources: [
+                SourceInspectorSource(title: "Move Definition", source: move.source, status: move.status)
+            ],
+            diagnostics: move.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
         )
     }
 

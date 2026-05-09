@@ -67,6 +67,8 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedMapID: String = ""
     @Published var selectedSpeciesID: String = ""
     @Published var selectedTrainerID: String = ""
+    @Published var selectedMoveID: String = ""
+    @Published var selectedMoveWorkbenchFilter: MoveWorkbenchFilter = .all
     @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID?
     @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = ""
     @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets
@@ -104,6 +106,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var assetCatalogLoadStatus: ResourceAssetCatalogLoadStatus = .idle
     @Published private(set) var speciesCatalogLoadStatus: SpeciesCatalogLoadStatus = .idle
     @Published private(set) var trainerCatalogLoadStatus: TrainerCatalogLoadStatus = .idle
+    @Published private(set) var moveCatalogLoadStatus: MoveCatalogLoadStatus = .idle
     @Published private(set) var patchManifestLoadStatus: PatchManifestLoadStatus = .idle
     @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
@@ -133,6 +136,7 @@ final class WorkbenchStore: ObservableObject {
     private var scriptReadinessReportsByID: [String: ScriptReadinessReportViewState] = [:]
     private var speciesCatalogsByID: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
     private var trainerCatalogsByID: [String: PokemonHackCore.ProjectTrainerCatalog] = [:]
+    private var moveCatalogsByID: [String: MoveCatalogViewState] = [:]
     private var assetCatalogsByID: [String: ResourceAssetCatalogViewState] = [:]
     private var assetCatalogFingerprintsByID: [String: String] = [:]
     private var assetCatalogTask: Task<Void, Never>?
@@ -203,6 +207,39 @@ final class WorkbenchStore: ObservableObject {
     var selectedTrainerCatalog: PokemonHackCore.ProjectTrainerCatalog? {
         guard let selectedIndexedProject else { return nil }
         return trainerCatalogsByID[selectedIndexedProject.id]
+    }
+
+    var selectedMoveCatalog: MoveCatalogViewState? {
+        guard let selectedIndexedProject else { return nil }
+        return moveCatalogsByID[selectedIndexedProject.id]
+    }
+
+    var filteredMoveDetails: [MoveDetailViewState] {
+        guard let catalog = selectedMoveCatalog else { return [] }
+        let filteredByMode: [MoveDetailViewState]
+        switch selectedMoveWorkbenchFilter {
+        case .all:
+            filteredByMode = catalog.moves
+        case .tmhm:
+            filteredByMode = catalog.moves.filter { !$0.tmhmLearners.isEmpty }
+        case .tutor:
+            filteredByMode = catalog.moves.filter { !$0.tutorLearners.isEmpty }
+        case .learnedBy:
+            filteredByMode = catalog.moves.filter { $0.learnerCount > 0 }
+        case .diagnostics:
+            filteredByMode = catalog.moves.filter { !$0.diagnostics.isEmpty }
+        }
+        guard !searchText.isEmpty else { return filteredByMode }
+        let needle = searchText.lowercased()
+        return filteredByMode.filter { $0.searchBlob.contains(needle) }
+    }
+
+    var selectedMoveDetail: MoveDetailViewState? {
+        guard let catalog = selectedMoveCatalog else { return nil }
+        if let selected = filteredMoveDetails.first(where: { $0.moveID == selectedMoveID }) {
+            return selected
+        }
+        return filteredMoveDetails.first ?? catalog.moves.first
     }
 
     var filteredSpeciesDetails: [PokemonHackCore.SpeciesDetail] {
@@ -423,6 +460,7 @@ final class WorkbenchStore: ObservableObject {
         let trainerDiagnostics = selectedTrainerCatalog?.diagnostics.map {
             Self.diagnostic(from: $0, rootPath: selectedIndexedProject.rootPath)
         } ?? []
+        let moveDiagnostics = selectedMoveCatalog?.diagnostics ?? []
         let resourceDiagnostics = resourceLibrary?.allDiagnostics ?? []
         let assetDiagnostics = selectedAssetCatalog?.diagnostics ?? []
         return selectedIndexedProject.diagnostics
@@ -433,6 +471,7 @@ final class WorkbenchStore: ObservableObject {
             + graphicsDiagnostics
             + speciesDiagnostics
             + trainerDiagnostics
+            + moveDiagnostics
             + resourceDiagnostics
             + assetDiagnostics
     }
@@ -966,6 +1005,8 @@ final class WorkbenchStore: ObservableObject {
             speciesModuleStatus
         case .trainers:
             trainerModuleStatus
+        case .moves:
+            moveModuleStatus
         default:
             Self.validationStatus(for: records(for: module).map(\.validation))
         }
@@ -1035,6 +1076,15 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private var moveModuleStatus: ValidationState {
+        guard let catalog = selectedMoveCatalog else {
+            return Self.validationStatus(for: records(for: .moves).map(\.validation) + [moveCatalogLoadStatus.validationState])
+        }
+        return Self.validationStatus(
+            for: [catalog.status, moveCatalogLoadStatus.validationState]
+        )
+    }
+
     private func liveRecords(for module: WorkbenchModule) -> [WorkbenchRecord]? {
         guard let selectedSourceIndex else { return nil }
         let sourceModule: SourceIndexModule?
@@ -1045,6 +1095,8 @@ final class WorkbenchStore: ObservableObject {
             sourceModule = .text
         case .pokemon:
             sourceModule = .pokemon
+        case .moves:
+            sourceModule = .moves
         case .trainers:
             sourceModule = .trainers
         case .items:
@@ -1085,6 +1137,7 @@ final class WorkbenchStore: ObservableObject {
         var retainedScriptReadinessReports: [String: ScriptReadinessReportViewState] = [:]
         var speciesCatalogs: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
         var trainerCatalogs: [String: PokemonHackCore.ProjectTrainerCatalog] = [:]
+        var moveCatalogs: [String: MoveCatalogViewState] = [:]
         var retainedAssetCatalogs: [String: ResourceAssetCatalogViewState] = [:]
         var retainedFingerprints: [String: String] = [:]
 
@@ -1113,11 +1166,23 @@ final class WorkbenchStore: ObservableObject {
                     buildReports[summary.id] = buildReportsByID[summary.id]
                 }
                 graphicsReports[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
-                if let speciesCatalog = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager) {
+                let speciesCatalog = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
+                if let speciesCatalog {
                     speciesCatalogs[summary.id] = speciesCatalog
                 }
                 if let trainerCatalog = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager) {
                     trainerCatalogs[summary.id] = trainerCatalog
+                }
+                if
+                    let sourceIndex,
+                    let moveCatalog = try? ProjectMoveCatalogBuilder.build(
+                        index: index,
+                        sourceIndex: sourceIndex,
+                        speciesCatalog: speciesCatalog,
+                        fileManager: fileManager
+                    )
+                {
+                    moveCatalogs[summary.id] = Self.moveCatalog(from: moveCatalog, project: summary)
                 }
                 let fingerprint = Self.assetCatalogFingerprint(rootPath: summary.rootPath, fileManager: fileManager)
                 if
@@ -1144,6 +1209,7 @@ final class WorkbenchStore: ObservableObject {
         scriptReadinessReportsByID = retainedScriptReadinessReports
         speciesCatalogsByID = speciesCatalogs
         trainerCatalogsByID = trainerCatalogs
+        moveCatalogsByID = moveCatalogs
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
         mapVisualSharedCacheDataByID = [:]
@@ -1156,6 +1222,7 @@ final class WorkbenchStore: ObservableObject {
         refreshSelectedScriptReadinessReportIfVisible()
         refreshSelectedSpeciesSelection()
         refreshSelectedTrainerSelection()
+        refreshSelectedMoveSelection()
         updateAssetCatalogLoadStatusForSelection()
         if userSettings.autoLoadAssetCatalog {
             loadSelectedAssetCatalogIfNeeded()
@@ -1183,6 +1250,7 @@ final class WorkbenchStore: ObservableObject {
             resourceAssetRowsCache = nil
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
+            refreshSelectedMoveSelection()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
@@ -1215,6 +1283,11 @@ final class WorkbenchStore: ObservableObject {
         selectedTrainerID = trainerID
         latestTrainerEditPlan = nil
         latestTrainerApplyResult = nil
+    }
+
+    func requestMoveSelection(_ moveID: String) {
+        guard moveID != selectedMoveID else { return }
+        selectedMoveID = moveID
     }
 
     func requestResourceAssetSelection(_ assetID: ResourceAssetRowViewState.ID?) {
@@ -1344,6 +1417,8 @@ final class WorkbenchStore: ObservableObject {
             navigateToPokemonAssetTarget(asset.targetID)
         case .trainers:
             navigateToTrainerAssetTarget(asset.targetID)
+        case .moves:
+            navigateToMoveAssetTarget(asset.targetID ?? asset.path)
         case .graphics, .build, .text, .items:
             searchText = asset.targetID ?? asset.path
         default:
@@ -1410,6 +1485,17 @@ final class WorkbenchStore: ObservableObject {
         }
         if selectedTrainerCatalog?.trainers.contains(where: { $0.trainerID == targetID }) == true {
             requestTrainerSelection(targetID)
+        }
+    }
+
+    private func navigateToMoveAssetTarget(_ targetID: String?) {
+        guard let targetID, !targetID.isEmpty else { return }
+        searchText = targetID
+        if selectedMoveCatalog == nil {
+            loadSelectedMoveCatalogIfNeeded()
+        }
+        if selectedMoveCatalog?.moves.contains(where: { $0.moveID == targetID }) == true {
+            requestMoveSelection(targetID)
         }
     }
 
@@ -1487,6 +1573,7 @@ final class WorkbenchStore: ObservableObject {
             resourceAssetRowsCache = nil
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
+            refreshSelectedMoveSelection()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
@@ -1521,8 +1608,22 @@ final class WorkbenchStore: ObservableObject {
             let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
             buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
             graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
-            speciesCatalogsByID[summary.id] = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
+            let speciesCatalog = try? ProjectSpeciesCatalogBuilder.build(index: index, fileManager: fileManager)
+            speciesCatalogsByID[summary.id] = speciesCatalog
             trainerCatalogsByID[summary.id] = try? ProjectTrainerCatalogBuilder.build(index: index, fileManager: fileManager)
+            if
+                let sourceIndex,
+                let moveCatalog = try? ProjectMoveCatalogBuilder.build(
+                    index: index,
+                    sourceIndex: sourceIndex,
+                    speciesCatalog: speciesCatalog,
+                    fileManager: fileManager
+                )
+            {
+                moveCatalogsByID[summary.id] = Self.moveCatalog(from: moveCatalog, project: summary)
+            } else {
+                moveCatalogsByID.removeValue(forKey: summary.id)
+            }
             assetCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogFingerprintsByID.removeValue(forKey: summary.id)
             selectedResourceAssetID = nil
@@ -1542,6 +1643,7 @@ final class WorkbenchStore: ObservableObject {
             refreshSelectedScriptReadinessReportIfVisible()
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
+            refreshSelectedMoveSelection()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
@@ -1663,6 +1765,71 @@ final class WorkbenchStore: ObservableObject {
                 ?? ""
         }
         speciesCatalogLoadStatus = .loaded(catalog.speciesCount)
+    }
+
+    func loadSelectedMoveCatalogIfNeeded(force: Bool = false) {
+        guard let selectedIndexedProject else {
+            moveCatalogLoadStatus = .idle
+            selectedMoveID = ""
+            return
+        }
+        if !force, let catalog = moveCatalogsByID[selectedIndexedProject.id] {
+            moveCatalogLoadStatus = .loaded(catalog.moveCount)
+            refreshSelectedMoveSelection()
+            return
+        }
+
+        moveCatalogLoadStatus = .loading
+        do {
+            let index: PokemonHackCore.ProjectIndex
+            if let retainedIndex = projectIndexesByID[selectedIndexedProject.id] {
+                index = retainedIndex
+            } else {
+                index = try GameAdapterRegistry.index(path: selectedIndexedProject.rootPath, fileManager: fileManager)
+                projectIndexesByID[selectedIndexedProject.id] = index
+            }
+
+            let sourceIndex: PokemonHackCore.ProjectSourceIndex
+            if let retainedSourceIndex = sourceIndexesByID[selectedIndexedProject.id] {
+                sourceIndex = retainedSourceIndex
+            } else {
+                sourceIndex = try ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
+                sourceIndexesByID[selectedIndexedProject.id] = sourceIndex
+            }
+
+            let speciesCatalog = speciesCatalogsByID[selectedIndexedProject.id]
+            let coreCatalog = try ProjectMoveCatalogBuilder.build(
+                index: index,
+                sourceIndex: sourceIndex,
+                speciesCatalog: speciesCatalog,
+                fileManager: fileManager
+            )
+            let catalog = Self.moveCatalog(from: coreCatalog, project: selectedIndexedProject)
+            moveCatalogsByID[selectedIndexedProject.id] = catalog
+            moveCatalogLoadStatus = .loaded(catalog.moveCount)
+            refreshSelectedMoveSelection()
+        } catch {
+            moveCatalogLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    private func refreshSelectedMoveSelection() {
+        guard let selectedIndexedProject else {
+            moveCatalogLoadStatus = .idle
+            selectedMoveID = ""
+            return
+        }
+
+        guard let catalog = moveCatalogsByID[selectedIndexedProject.id] else {
+            moveCatalogLoadStatus = .idle
+            selectedMoveID = ""
+            return
+        }
+
+        if !catalog.moves.contains(where: { $0.moveID == selectedMoveID }) {
+            selectedMoveID = catalog.moves.first?.moveID ?? ""
+        }
+        moveCatalogLoadStatus = .loaded(catalog.moveCount)
     }
 
     func updateSelectedSpeciesDraft(_ draft: PokemonHackCore.SpeciesEditDraft) {
@@ -3640,6 +3807,195 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func moveCatalog(
+        from catalog: PokemonHackCore.ProjectMoveCatalog,
+        project: IndexedProjectSummary
+    ) -> MoveCatalogViewState {
+        let rootPath = project.rootPath
+
+        let moves = catalog.moves.map { move in
+            let diagnostics = move.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+            let battleFacts = move.facts
+                .filter { !["Index", "Lines"].contains($0.label) }
+                .map { Fact(label: displayFactLabel($0.label), value: $0.value) }
+            let facts = moveFacts(
+                ordinal: move.ordinal,
+                flags: move.flags,
+                sourceSpan: move.sourceSpan,
+                battleFacts: battleFacts
+            )
+            let source = SourceLocation(
+                path: move.sourceSpan.relativePath,
+                symbol: move.moveID,
+                line: move.sourceSpan.startLine
+            )
+            let tmhmLearners = move.machineMemberships.flatMap(machineLearnerRows)
+            let tutorLearners = move.tutorMemberships.flatMap(tutorLearnerRows)
+            let learnedBy = move.learnedBy
+                .filter { $0.bucket != .tmhm && $0.bucket != .tutor }
+                .map(learnsetLearnerRow)
+            let searchBlob = (
+                [
+                    move.moveID,
+                    move.displayName,
+                    move.sourceSpan.relativePath,
+                    move.sourcePreview ?? ""
+                ]
+                + move.flags
+                + facts.flatMap { [$0.label, $0.value] }
+                + tmhmLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
+                + tutorLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
+                + learnedBy.flatMap { [$0.speciesID, $0.detail, $0.bucketTitle, $0.source.path] }
+                + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
+            )
+            .joined(separator: " ")
+            .lowercased()
+
+            return MoveDetailViewState(
+                id: move.moveID,
+                moveID: move.moveID,
+                displayName: move.displayName,
+                status: validationStatus(for: diagnostics.map(\.severity)),
+                facts: facts,
+                battleFacts: battleFacts,
+                source: source,
+                sourcePreview: move.sourcePreview,
+                tmhmLearners: tmhmLearners,
+                tutorLearners: tutorLearners,
+                learnedBy: learnedBy,
+                diagnostics: diagnostics,
+                searchBlob: searchBlob
+            )
+        }
+
+        let diagnostics = catalog.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        return MoveCatalogViewState(
+            id: "moves:\(project.id)",
+            projectTitle: project.title,
+            rootPath: project.rootPath,
+            profile: catalog.profile.rawValue,
+            status: validationStatus(for: moves.map(\.status) + diagnostics.map(\.severity)),
+            moveCount: catalog.summary.moveCount,
+            learnsetEntryCount: catalog.summary.learnsetReferenceCount,
+            tmhmMoveCount: catalog.summary.machineMoveCount,
+            tutorMoveCount: catalog.summary.tutorMoveCount,
+            moves: moves.sorted { $0.moveID < $1.moveID },
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func machineLearnerRows(_ membership: PokemonHackCore.MoveMachineMembership) -> [MoveLearnerRowViewState] {
+        membership.eligibleSpeciesIDs.map { speciesID in
+            membershipRow(
+                id: "\(membership.id):\(speciesID)",
+                speciesID: speciesID,
+                bucket: .tmhm,
+                detail: membership.token,
+                span: membership.learnsetSourceSpans.first ?? membership.sourceSpan
+            )
+        }
+    }
+
+    private static func tutorLearnerRows(_ membership: PokemonHackCore.MoveTutorMembership) -> [MoveLearnerRowViewState] {
+        membership.eligibleSpeciesIDs.map { speciesID in
+            membershipRow(
+                id: "\(membership.id):\(speciesID)",
+                speciesID: speciesID,
+                bucket: .tutor,
+                detail: membership.tutorSymbol,
+                span: membership.learnsetSourceSpans.first ?? membership.sourceSpan
+            )
+        }
+    }
+
+    private static func learnsetLearnerRow(_ membership: PokemonHackCore.MoveLearnsetMembership) -> MoveLearnerRowViewState {
+        let levelDetail = membership.level.map { "Level \($0)" }
+        return membershipRow(
+            id: membership.id,
+            speciesID: membership.speciesID,
+            bucket: membership.bucket,
+            detail: levelDetail ?? membership.bucket.rawValue,
+            span: membership.sourceSpan
+        )
+    }
+
+    private static func membershipRow(
+        id: String,
+        speciesID: String?,
+        bucket: PokemonHackCore.LearnsetBucket,
+        detail: String,
+        span: PokemonHackCore.SourceSpan?
+    ) -> MoveLearnerRowViewState {
+        let title = speciesID ?? "All species"
+        return MoveLearnerRowViewState(
+            id: id,
+            speciesID: title,
+            bucket: bucket,
+            detail: detail,
+            source: SourceLocation(
+                path: span?.relativePath ?? "source unavailable",
+                symbol: speciesID ?? title,
+                line: span?.startLine ?? 1
+            )
+        )
+    }
+
+    private static func moveFacts(
+        ordinal: Int?,
+        flags: [String],
+        sourceSpan: PokemonHackCore.SourceSpan,
+        battleFacts: [Fact]
+    ) -> [Fact] {
+        var facts = battleFacts
+        if let ordinal {
+            facts.insert(Fact(label: "Index", value: "\(ordinal)"), at: 0)
+        }
+        if !flags.isEmpty {
+            facts.append(Fact(label: "Flags", value: flags.joined(separator: ", ")))
+        }
+        facts.append(Fact(label: "Lines", value: "\(sourceSpan.startLine)-\(sourceSpan.endLine)"))
+        return facts
+    }
+
+    private static func battleFacts(
+        effect: String?,
+        power: String?,
+        type: String?,
+        accuracy: String?,
+        pp: String?,
+        secondaryEffectChance: String?,
+        target: String?,
+        priority: String?
+    ) -> [Fact] {
+        [
+            ("Effect", effect),
+            ("Power", power),
+            ("Type", type),
+            ("Accuracy", accuracy),
+            ("PP", pp),
+            ("Secondary Effect", secondaryEffectChance),
+            ("Target", target),
+            ("Priority", priority)
+        ].compactMap { label, value in
+            value.map { Fact(label: label, value: $0) }
+        }
+    }
+
+    private static func displayFactLabel(_ label: String) -> String {
+        switch label {
+        case "pp":
+            "PP"
+        case "tmhm":
+            "TM/HM"
+        default:
+            label
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "secondaryEffectChance", with: "Secondary Effect")
+                .replacingOccurrences(of: "base", with: "Base ")
+                .capitalized
+        }
+    }
+
     private static func record(from record: PokemonHackCore.SourceIndexRecord) -> WorkbenchRecord {
         let diagnostics = record.diagnostics
         let validation = validationStatus(for: diagnostics.map { diagnostic(from: $0) })
@@ -3671,8 +4027,10 @@ final class WorkbenchStore: ObservableObject {
             .scripts
         case .text:
             .text
-        case .pokemon, .moves, .learnsets, .evolutions, .pokedex:
+        case .pokemon, .learnsets, .evolutions, .pokedex:
             .pokemon
+        case .moves:
+            .moves
         case .trainers:
             .trainers
         case .items:
@@ -3690,8 +4048,10 @@ final class WorkbenchStore: ObservableObject {
             .scripts
         case .graphics:
             .graphics
-        case .pokemon, .moves:
+        case .pokemon:
             .pokemon
+        case .moves:
+            .moves
         case .trainers:
             .trainers
         case .items:

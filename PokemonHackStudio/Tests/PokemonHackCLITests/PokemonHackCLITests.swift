@@ -71,6 +71,21 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["pointerCandidates"])
     }
 
+    func testMoveCatalogCommandEmitsPreviewJSON() throws {
+        let root = try makeMoveCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["move-catalog", root.path, "--json"])
+        )
+
+        XCTAssertNotNil(result["summary"])
+        XCTAssertNotNil(result["moves"])
+        XCTAssertNotNil(result["machineMemberships"])
+        XCTAssertNotNil(result["tutorMemberships"])
+        XCTAssertNotNil(result["learnsetMemberships"])
+        XCTAssertNotNil(result["diagnostics"])
+    }
+
     private func makeEmeraldProject() throws -> URL {
         let root = try makeTemporaryDirectory()
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -104,6 +119,82 @@ final class PokemonHackCLITests: XCTestCase {
         bytes[0x103] = 0x08
         try Data(bytes).write(to: rom)
         return rom
+    }
+
+    private func makeMoveCatalogProject() throws -> URL {
+        let root = try makeEmeraldProject()
+        try write(
+            """
+            static const struct BattleMove gBattleMoves[] =
+            {
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/battle_moves.h")
+        )
+        try write(
+            """
+            static const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40,
+                    .baseAttack = 45,
+                    .baseDefense = 35,
+                    .baseSpeed = 70,
+                    .baseSpAttack = 65,
+                    .baseSpDefense = 55,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write(
+            """
+            static const u16 sTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_END
+            };
+
+            const u16 *const gLevelUpLearnsets[] =
+            {
+                [SPECIES_TREECKO] = sTreeckoLevelUpLearnset,
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h")
+        )
+        try write(
+            """
+            static const u32 gTMHMLearnsets[] =
+            {
+                [SPECIES_TREECKO] = TMHM(TM01_POUND),
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        )
+        try write(
+            """
+            #define ITEM_TM01_POUND 1
+
+            """,
+            to: root.appendingPathComponent("include/constants/items.h")
+        )
+        return root
     }
 
     private func write(_ text: String, to url: URL) throws {

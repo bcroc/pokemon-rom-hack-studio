@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The completed baseline now includes `PHS-T17A` semantic binary ROM graph reporting and `PHS-T44` preview-only graphics import/conversion planning. The next recommended source-data candidate is `PHS-T47`.
+No implementation row is currently active. The completed baseline now includes `PHS-T47` read-only Moves catalog, CLI `move-catalog`, and first-class Moves workbench on top of the existing move graph and species learnset editor.
 
 ## Active Board
 
@@ -52,7 +52,7 @@ No implementation row is currently active. The completed baseline now includes `
 | PHS-T42 | Done | Structured Script Command Editing | Promoted map-local script editing to a structured command list with editable argument fields, source gates for shared/generated files, and a ScriptParser. |
 | PHS-T43 | Done | Wild Encounter Row Editing | Add row-based wild encounter edits with order preservation, capacity warnings, source hash checks, preview diffs, backups, and explicit apply. |
 | PHS-T44 | Done | Graphics Import And Conversion Plans | `graphics-import-plan <project> <package> --json` now previews local package provenance, copy targets, layered tileset dry runs, palette-fit diagnostics, and generated-output expectations; Graphics app actions are relabeled as plan-only and no import/convert/apply path writes source or invokes external tools. |
-| PHS-T47 | Candidate | Moves, TM/HM, And Tutor Workbench | Add a first-class Moves workbench and `move-catalog` surface for move definitions, machine/tutor membership, source spans, compatibility diagnostics, and future mutation plans, building on the existing read-only move graph and species learnset editor. |
+| PHS-T47 | Done | Moves, TM/HM, And Tutor Workbench | First-class read-only Moves workbench and CLI `move-catalog` now expose move definitions, machine/tutor membership, source spans, compatibility diagnostics, and learnset summaries on top of the existing move graph and species learnset editor. |
 
 ## Recent Progress
 
@@ -499,3 +499,11 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make validate` (expanded CLI smokes now include synthetic `graphics-import-plan`, synthetic `rom-graph`, and repo-local `pokeemerald` `graphics-import-plan`)
   - `make verify` (regenerated Xcode project, built/signed app, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
   - Source-write posture: `graphics-import-plan` and `rom-graph` are report-only; graphics Import/Convert/Apply controls remain disabled, no external conversion tools are invoked, and no binary ROM mutation/repoint/export path was added.
+- `PHS-T47`:
+  - `swift test --package-path PokemonHackStudio --filter PokemonMoveCatalogTests` (2 tests; read-only move details, TM/HM inversion, tutor memberships, missing-source diagnostics, duplicate constants, unresolved references, and `MOVE_NONE` exclusion covered)
+  - `swift test --package-path PokemonHackStudio --filter PokemonHackCLITests/testMoveCatalogCommandEmitsPreviewJSON`
+  - `make test` (129 tests; passed)
+  - `make validate` (expanded CLI smokes now include `move-catalog` for repo-local `pokeemerald`, repo-local `pokefirered`, and ignored `references/pokeruby`)
+  - `make verify` (regenerated Xcode project, built/signed app, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - `git diff --check`
+  - Source-write posture: `move-catalog` and the Moves workbench are read-only; no move definition edit, TM/HM rewrite, tutor rewrite, export, apply, backup, or mutation-plan path was added.

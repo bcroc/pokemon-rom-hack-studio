@@ -48,6 +48,7 @@ if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli pokemon-catalog "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli trainer-catalog "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli moves-graph "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli move-catalog "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli maps "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli map-visual "$POKEEMERALD_DIR" MAP_MAUVILLE_CITY --json
@@ -65,6 +66,7 @@ fi
 if [[ -d "$POKEFIRERED_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli asset-index "$POKEFIRERED_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli moves-graph "$POKEFIRERED_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli move-catalog "$POKEFIRERED_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKEFIRERED_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-readiness "$POKEFIRERED_DIR" --script PalletTown_EventScript_TryReadySignLady --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKEFIRERED_DIR" --json
@@ -77,6 +79,7 @@ if [[ -d "$POKERUBY_REFERENCE_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli source-index "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli asset-index "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli moves-graph "$POKERUBY_REFERENCE_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli move-catalog "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKERUBY_REFERENCE_DIR" --json
 else

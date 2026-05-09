@@ -58,6 +58,8 @@ extension WorkbenchStore {
             loadSelectedSpeciesCatalogIfNeeded()
         case .trainers:
             loadSelectedTrainerCatalogIfNeeded()
+        case .moves:
+            loadSelectedMoveCatalogIfNeeded()
         case .resources:
             resourceAssetCategory = action.resourceAssetCategory ?? Self.allResourceAssetCategories
             loadSelectedAssetCatalogIfNeeded()

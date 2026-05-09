@@ -94,6 +94,8 @@ struct WorkbenchSidebarPanel: View {
             pokemonNavigation
         case .trainers:
             trainersNavigation
+        case .moves:
+            movesNavigation
         case .scripts:
             scriptsNavigation
         case .text, .items, .encounters:
@@ -140,6 +142,8 @@ struct WorkbenchSidebarPanel: View {
                 apply: store.applySelectedTrainerMutationPlan,
                 discard: store.discardTrainerEdits
             )
+        case .moves:
+            movesTools
         default:
             sidebarSection("Tools", systemImage: "wrench.and.screwdriver") {
                 Text("Context tools appear here when the selected module exposes preview or edit controls.")
@@ -162,6 +166,8 @@ struct WorkbenchSidebarPanel: View {
             speciesProperties
         case .trainers:
             trainerProperties
+        case .moves:
+            movesProperties
         case .scripts:
             scriptProperties
         case .text, .items, .encounters:
@@ -307,6 +313,26 @@ struct WorkbenchSidebarPanel: View {
                 ) {
                     store.requestTrainerSelection(trainer.trainerID)
                 }
+            }
+        }
+    }
+
+    private var movesNavigation: some View {
+        sidebarSection("Moves", systemImage: WorkbenchModule.moves.systemImage) {
+            sidebarRows(store.filteredMoveDetails, limit: 260) { move in
+                sidebarButton(
+                    id: move.moveID,
+                    title: move.displayName,
+                    subtitle: "\(move.moveID) · \(move.learnerCount) learners",
+                    systemImage: WorkbenchModule.moves.systemImage,
+                    isSelected: store.selectedMoveDetail?.moveID == move.moveID
+                ) {
+                    store.requestMoveSelection(move.moveID)
+                }
+            }
+
+            if store.selectedMoveCatalog == nil {
+                emptySidebarText(store.moveCatalogLoadStatus.label)
             }
         }
     }
@@ -551,6 +577,29 @@ struct WorkbenchSidebarPanel: View {
         }
     }
 
+    private var movesTools: some View {
+        sidebarSection("Moves", systemImage: WorkbenchModule.moves.systemImage) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("Filter", selection: $store.selectedMoveWorkbenchFilter) {
+                    ForEach(MoveWorkbenchFilter.allCases) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                HStack {
+                    sidebarMetric("Moves", "\(store.selectedMoveCatalog?.moveCount ?? 0)")
+                    sidebarMetric("Visible", "\(store.filteredMoveDetails.count)")
+                    sidebarMetric("Issues", "\(store.selectedMoveCatalog?.diagnostics.count ?? 0)")
+                }
+
+                Text("Read-only source graph")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var buildTools: some View {
         sidebarSection("Ship Tools", systemImage: "hammer") {
             VStack(alignment: .leading, spacing: 10) {
@@ -750,6 +799,23 @@ struct WorkbenchSidebarPanel: View {
                 SourceLocationView(source: SourceLocation(path: trainer.sourceSpan.relativePath, symbol: trainer.trainerID, line: trainer.sourceSpan.startLine))
             } else {
                 emptySidebarText(store.trainerCatalogLoadStatus.label)
+            }
+        }
+    }
+
+    private var movesProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let move = store.selectedMoveDetail {
+                propertyHeader(move.displayName, subtitle: move.moveID, systemImage: WorkbenchModule.moves.systemImage, status: move.status)
+                propertyFacts([
+                    Fact(label: "TM/HM", value: "\(move.tmhmLearners.count)"),
+                    Fact(label: "Tutor", value: "\(move.tutorLearners.count)"),
+                    Fact(label: "Learned By", value: "\(move.learnedBy.count)"),
+                    Fact(label: "Diagnostics", value: "\(move.diagnostics.count)")
+                ])
+                SourceLocationView(source: move.source)
+            } else {
+                emptySidebarText(store.moveCatalogLoadStatus.label)
             }
         }
     }
@@ -1025,7 +1091,9 @@ struct WorkbenchSidebarPanel: View {
             "curlybraces"
         case "text":
             "text.quote"
-        case "species", "moves", "learnsets", "evolutions", "pokedex":
+        case "moves":
+            "bolt"
+        case "species", "learnsets", "evolutions", "pokedex":
             "sparkles"
         case "trainers":
             "person.2"

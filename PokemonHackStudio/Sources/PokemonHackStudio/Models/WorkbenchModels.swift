@@ -16,7 +16,7 @@ enum WorkbenchModuleGroup: String, CaseIterable, Identifiable, Hashable {
         case .create:
             [.maps, .pokemon, .trainers, .scripts]
         case .dataAssets:
-            [.resources, .graphics, .items, .encounters, .text]
+            [.resources, .graphics, .moves, .items, .encounters, .text]
         case .ship:
             [.build, .issues]
         }
@@ -29,6 +29,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
     case maps = "Maps"
     case pokemon = "Pokemon"
     case trainers = "Trainers"
+    case moves = "Moves"
     case items = "Items"
     case encounters = "Encounters"
     case scripts = "Scripts"
@@ -47,7 +48,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
             .workspace
         case .maps, .pokemon, .trainers, .scripts:
             .create
-        case .resources, .graphics, .items, .encounters, .text:
+        case .resources, .graphics, .moves, .items, .encounters, .text:
             .dataAssets
         case .build:
             .ship
@@ -63,6 +64,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
         case .maps: "map"
         case .pokemon: "sparkles"
         case .trainers: "person.2"
+        case .moves: "bolt"
         case .items: "shippingbox"
         case .encounters: "leaf"
         case .scripts: "curlybraces"
@@ -80,6 +82,7 @@ enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
         case .maps: "Maps, events, warps"
         case .pokemon: "Stats and learnsets"
         case .trainers: "Parties and battle setup"
+        case .moves: "Battle moves and learnability"
         case .items: "Items and field data"
         case .encounters: "Wild encounter tables"
         case .scripts: "Event script readiness"
@@ -959,6 +962,104 @@ enum ResourceAssetSortMode: String, CaseIterable, Identifiable {
             "Status"
         case .availability:
             "Availability"
+        }
+    }
+}
+
+enum MoveCatalogLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Move catalog not loaded"
+        case .loading:
+            "Loading move catalog"
+        case .loaded(let count):
+            count == 1 ? "1 move loaded" : "\(count) moves loaded"
+        case .failed(let message):
+            "Move catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum MoveWorkbenchFilter: String, CaseIterable, Identifiable, Hashable {
+    case all = "All"
+    case tmhm = "TM/HM"
+    case tutor = "Tutor"
+    case learnedBy = "Learned By"
+    case diagnostics = "Diagnostics"
+
+    var id: String { rawValue }
+}
+
+struct MoveCatalogViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let status: ValidationState
+    let moveCount: Int
+    let learnsetEntryCount: Int
+    let tmhmMoveCount: Int
+    let tutorMoveCount: Int
+    let moves: [MoveDetailViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct MoveDetailViewState: Identifiable {
+    let id: String
+    let moveID: String
+    let displayName: String
+    let status: ValidationState
+    let facts: [Fact]
+    let battleFacts: [Fact]
+    let source: SourceLocation
+    let sourcePreview: String?
+    let tmhmLearners: [MoveLearnerRowViewState]
+    let tutorLearners: [MoveLearnerRowViewState]
+    let learnedBy: [MoveLearnerRowViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let searchBlob: String
+
+    var learnerCount: Int {
+        tmhmLearners.count + tutorLearners.count + learnedBy.count
+    }
+}
+
+struct MoveLearnerRowViewState: Identifiable {
+    let id: String
+    let speciesID: String
+    let bucket: LearnsetBucket
+    let detail: String
+    let source: SourceLocation
+
+    var bucketTitle: String {
+        switch bucket {
+        case .levelUp:
+            "Level Up"
+        case .tmhm:
+            "TM/HM"
+        case .tutor:
+            "Tutor"
+        case .egg:
+            "Egg"
+        case .allLearnables:
+            "All Learnables"
+        case .other:
+            "Other"
         }
     }
 }
