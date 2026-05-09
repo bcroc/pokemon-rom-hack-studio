@@ -136,6 +136,141 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertFalse(encoded.isEmpty)
     }
 
+    func testMoveMutationPlannerPatchesTopLevelFieldsThenAppliesWithBackupAndReloads() throws {
+        let root = try temporaryRoot()
+        try makeBattleMovesProject(at: root)
+        let catalog = try liveMoveCatalog(root: root)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+        draft.power = 55
+        draft.accuracy = 95
+        draft.pp = 30
+        draft.secondaryEffectChance = 10
+        draft.target = "MOVE_TARGET_BOTH"
+        draft.priority = 1
+        draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
+
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/battle_moves.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable, "\(plan.applyability.diagnostics)")
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".power = 55"))
+        XCTAssertTrue(preview.contains(".accuracy = 95"))
+        XCTAssertTrue(preview.contains(".flags = FLAG_MAGIC_COAT_AFFECTED | FLAG_PROTECT_AFFECTED"))
+        XCTAssertTrue(preview.contains(".unknownField = KEEP_ME"))
+
+        let result = try MoveMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+
+        let editedText = try String(contentsOf: root.appendingPathComponent("src/data/battle_moves.h"), encoding: .utf8)
+        XCTAssertTrue(editedText.contains(".power = 55"))
+        XCTAssertTrue(editedText.contains(".unknownField = KEEP_ME"))
+        XCTAssertTrue(editedText.contains("[MOVE_GROWL]"))
+
+        let reloaded = try liveMoveCatalog(root: root)
+        let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertEqual(edited.facts.first { $0.label == "power" }?.value, "55")
+        XCTAssertEqual(edited.flags, ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"])
+        let reloadedDraft = try XCTUnwrap(MoveEditDraft(detail: edited))
+        XCTAssertEqual(reloadedDraft.target, "MOVE_TARGET_BOTH")
+        XCTAssertEqual(reloadedDraft.priority, 1)
+    }
+
+    func testMoveMutationPlannerRendersZeroFlagsAndBlocksNoOp() throws {
+        let root = try temporaryRoot()
+        try makeBattleMovesProject(at: root)
+        let catalog = try liveMoveCatalog(root: root)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        let originalDraft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+
+        let noOp = MoveMutationPlanner.plan(catalog: catalog, draft: originalDraft)
+        XCTAssertTrue(noOp.changes.isEmpty)
+        XCTAssertFalse(noOp.isApplyable)
+        XCTAssertTrue(noOp.diagnostics.contains { $0.code == "MOVE_PLAN_NO_CHANGES" })
+
+        var draft = originalDraft
+        draft.flags = []
+        let flagPlan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(flagPlan.changes.count, 1)
+        XCTAssertTrue(flagPlan.changes.first?.textPreview?.contains(".flags = 0") == true)
+    }
+
+    func testMoveMutationPlannerBlocksChangedSourceHash() throws {
+        let root = try temporaryRoot()
+        try makeBattleMovesProject(at: root)
+        let catalog = try liveMoveCatalog(root: root)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+        draft.power = 60
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        try "changed\n".write(to: root.appendingPathComponent("src/data/battle_moves.h"), atomically: true, encoding: .utf8)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "MOVE_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "MOVE_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testMoveMutationPlannerBlocksUnsupportedAndInvalidCases() throws {
+        let root = try temporaryRoot()
+        try makeBattleMovesProject(at: root)
+        let catalog = try liveMoveCatalog(root: root)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+
+        var invalidDraft = draft
+        invalidDraft.power = -1
+        invalidDraft.accuracy = 101
+        invalidDraft.priority = 200
+        let invalidPlan = MoveMutationPlanner.plan(catalog: catalog, draft: invalidDraft)
+        XCTAssertTrue(invalidPlan.changes.isEmpty)
+        XCTAssertTrue(invalidPlan.diagnostics.contains { $0.code == "MOVE_NUMERIC_RANGE_INVALID" })
+
+        let sentinelDraft = MoveEditDraft(
+            moveID: "MOVE_NONE",
+            effect: "EFFECT_NONE",
+            power: 0,
+            type: "TYPE_NORMAL",
+            accuracy: 0,
+            pp: 0,
+            secondaryEffectChance: 0,
+            target: "MOVE_TARGET_SELECTED",
+            priority: 0,
+            flags: []
+        )
+        let sentinelPlan = MoveMutationPlanner.plan(catalog: catalog, draft: sentinelDraft)
+        XCTAssertTrue(sentinelPlan.diagnostics.contains { $0.code == "MOVE_PLAN_SENTINEL_UNSUPPORTED" })
+
+        let unsupportedCatalog = ProjectMoveCatalog(
+            root: catalog.root,
+            profile: .pokeemeraldExpansion,
+            adapterID: catalog.adapterID,
+            adapterName: catalog.adapterName,
+            summary: catalog.summary,
+            moves: catalog.moves
+        )
+        let unsupportedPlan = MoveMutationPlanner.plan(catalog: unsupportedCatalog, draft: draft)
+        XCTAssertTrue(unsupportedPlan.diagnostics.contains { $0.code == "MOVE_PLAN_UNSUPPORTED_PROFILE" })
+
+        try makeBattleMovesProject(at: root, flagsExpression: "FLAG_MAKES_CONTACT | MOVE_FLAG_ALIAS(FLAG_PROTECT_AFFECTED)")
+        let nonSimpleCatalog = try liveMoveCatalog(root: root)
+        let nonSimpleTackle = try XCTUnwrap(nonSimpleCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        draft = try XCTUnwrap(MoveEditDraft(detail: nonSimpleTackle))
+        draft.power = 70
+        let nonSimplePlan = MoveMutationPlanner.plan(catalog: nonSimpleCatalog, draft: draft)
+        XCTAssertTrue(nonSimplePlan.changes.isEmpty)
+        XCTAssertTrue(nonSimplePlan.diagnostics.contains { $0.code == "MOVE_FLAGS_UNSUPPORTED_EXPRESSION" })
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("src/data/battle_moves.h"))
+        let missingSourcePlan = MoveMutationPlanner.plan(catalog: catalog, draft: invalidSourceEditDraft(from: tackle))
+        XCTAssertTrue(missingSourcePlan.changes.isEmpty)
+        XCTAssertTrue(missingSourcePlan.diagnostics.contains { $0.code == "MOVE_SOURCE_MISSING" })
+    }
+
     func testMoveCatalogReportsMissingMoveAndTutorTables() throws {
         let root = try temporaryRoot()
         let sourceIndex = ProjectSourceIndex(
@@ -167,10 +302,99 @@ final class PokemonMoveCatalogTests: XCTestCase {
         return root
     }
 
-    private func projectIndex(root: URL) -> ProjectIndex {
+    private func makeBattleMovesProject(at root: URL, flagsExpression: String = "FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED") throws {
+        try write(
+            """
+            #define MOVE_NONE 0
+            #define MOVE_TACKLE 1
+            #define MOVE_GROWL 2
+
+            """,
+            to: root.appendingPathComponent("include/constants/moves.h")
+        )
+        try write(
+            """
+            const struct BattleMove gBattleMoves[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                },
+                [MOVE_TACKLE] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = \(flagsExpression),
+                    .unknownField = KEEP_ME,
+                },
+                [MOVE_GROWL] =
+                {
+                    .effect = EFFECT_ATTACK_DOWN,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 40,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_BOTH,
+                    .priority = 0,
+                    .flags = FLAG_PROTECT_AFFECTED,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/battle_moves.h")
+        )
+    }
+
+    private func liveMoveCatalog(root: URL, profile: GameProfile = .pokeemerald) throws -> ProjectMoveCatalog {
+        let index = projectIndex(root: root, profile: profile)
+        let sourceIndex = try ProjectSourceIndexLoader.load(
+            from: index,
+            scriptOutline: ProjectScriptOutline(
+                root: index.root,
+                profile: index.profile,
+                adapterID: index.adapterID,
+                adapterName: index.adapterName,
+                sources: [],
+                labels: [],
+                textBlocks: []
+            )
+        )
+        return try ProjectMoveCatalogBuilder.build(
+            index: index,
+            sourceIndex: sourceIndex,
+            speciesCatalog: emptySpeciesCatalog(root: root, profile: profile)
+        )
+    }
+
+    private func emptySpeciesCatalog(root: URL, profile: GameProfile = .pokeemerald) -> ProjectSpeciesCatalog {
+        ProjectSpeciesCatalog(
+            root: SourceLocation(path: root.path, exists: true),
+            profile: profile,
+            adapterID: "test.moves",
+            adapterName: "Move Fixture",
+            species: []
+        )
+    }
+
+    private func projectIndex(root: URL, profile: GameProfile = .pokeemerald) -> ProjectIndex {
         ProjectIndex(
             root: SourceLocation(path: root.path, exists: true),
-            profile: .pokeemerald,
+            profile: profile,
             adapterID: "test.moves",
             adapterName: "Move Fixture",
             editorModules: [.pokemon, .moves],
@@ -195,6 +419,23 @@ final class PokemonMoveCatalogTests: XCTestCase {
             facts: facts ?? [SourceIndexFact(label: "Index", value: "\(ordinal)")],
             preview: "[\(moveID)] = { .effect = EFFECT_HIT }"
         )
+    }
+
+    private func invalidSourceEditDraft(from detail: MoveDetail) -> MoveEditDraft {
+        var draft = MoveEditDraft(detail: detail) ?? MoveEditDraft(
+            moveID: detail.moveID,
+            effect: "EFFECT_HIT",
+            power: 40,
+            type: "TYPE_NORMAL",
+            accuracy: 100,
+            pp: 35,
+            secondaryEffectChance: 0,
+            target: "MOVE_TARGET_SELECTED",
+            priority: 0,
+            flags: []
+        )
+        draft.power += 1
+        return draft
     }
 
     private func write(_ text: String, to url: URL) throws {

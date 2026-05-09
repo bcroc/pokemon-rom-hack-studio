@@ -86,6 +86,18 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["diagnostics"])
     }
 
+    func testItemCatalogCommandEmitsEditableJSON() throws {
+        let root = try makeItemCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["item-catalog", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["itemCount"] as? Int, 1)
+        XCTAssertNotNil(result["items"])
+        XCTAssertNotNil(result["diagnostics"])
+    }
+
     private func makeEmeraldProject() throws -> URL {
         let root = try makeTemporaryDirectory()
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -193,6 +205,35 @@ final class PokemonHackCLITests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("include/constants/items.h")
+        )
+        return root
+    }
+
+    private func makeItemCatalogProject() throws -> URL {
+        let root = try makeEmeraldProject()
+        try write(
+            """
+            const struct Item gItems[] =
+            {
+                [ITEM_POTION] =
+                {
+                    .name = _("POTION"),
+                    .itemId = ITEM_POTION,
+                    .price = 300,
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 0,
+                    .description = sPotionDesc,
+                    .pocket = POCKET_ITEMS,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = ITEM_B_USE_MEDICINE,
+                    .battleUseFunc = ItemUseInBattle_Medicine,
+                    .secondaryId = 0,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
         )
         return root
     }

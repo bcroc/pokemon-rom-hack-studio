@@ -50,7 +50,7 @@ struct WorkbenchSidebarPanel: View {
                 HStack(spacing: 8) {
                     sidebarMetric("Projects", "\(store.indexedProjects.count)")
                     sidebarMetric("Issues", "\(store.issueCount)")
-                    sidebarMetric("Dirty", store.hasStagedMapEdits ? "Yes" : "No")
+                    sidebarMetric("Dirty", store.hasStagedEdits ? "Yes" : "No")
                 }
             }
         }
@@ -98,7 +98,9 @@ struct WorkbenchSidebarPanel: View {
             movesNavigation
         case .scripts:
             scriptsNavigation
-        case .text, .items, .encounters:
+        case .items:
+            itemsNavigation
+        case .text, .encounters:
             genericRecordNavigation(module: store.selection)
         case .graphics:
             graphicsNavigation
@@ -143,7 +145,27 @@ struct WorkbenchSidebarPanel: View {
                 discard: store.discardTrainerEdits
             )
         case .moves:
-            movesTools
+            mutationTools(
+                title: "Move Mutation",
+                isDirty: store.selectedMoveIsDirty,
+                canPreview: store.canPreviewSelectedMoveMutationPlan,
+                canApply: store.canApplySelectedMoveMutationPlan,
+                canDiscard: store.canDiscardMoveEdits,
+                preview: store.previewSelectedMoveMutationPlan,
+                apply: store.applySelectedMoveMutationPlan,
+                discard: store.discardMoveEdits
+            )
+        case .items:
+            mutationTools(
+                title: "Item Mutation",
+                isDirty: store.selectedItemIsDirty,
+                canPreview: store.canPreviewSelectedItemMutationPlan,
+                canApply: store.canApplySelectedItemMutationPlan,
+                canDiscard: store.canDiscardItemEdits,
+                preview: store.previewSelectedItemMutationPlan,
+                apply: store.applySelectedItemMutationPlan,
+                discard: store.discardItemEdits
+            )
         default:
             sidebarSection("Tools", systemImage: "wrench.and.screwdriver") {
                 Text("Context tools appear here when the selected module exposes preview or edit controls.")
@@ -170,7 +192,9 @@ struct WorkbenchSidebarPanel: View {
             movesProperties
         case .scripts:
             scriptProperties
-        case .text, .items, .encounters:
+        case .items:
+            itemsProperties
+        case .text, .encounters:
             genericRecordProperties(module: store.selection)
         case .graphics:
             graphicsProperties
@@ -333,6 +357,26 @@ struct WorkbenchSidebarPanel: View {
 
             if store.selectedMoveCatalog == nil {
                 emptySidebarText(store.moveCatalogLoadStatus.label)
+            }
+        }
+    }
+
+    private var itemsNavigation: some View {
+        sidebarSection("Items", systemImage: WorkbenchModule.items.systemImage) {
+            sidebarRows(store.filteredItemDetails, limit: 260) { item in
+                sidebarButton(
+                    id: item.itemID,
+                    title: item.displayName,
+                    subtitle: item.itemID,
+                    systemImage: item.isEditable ? "pencil" : "lock",
+                    isSelected: store.selectedItemDetail?.itemID == item.itemID
+                ) {
+                    store.requestItemSelection(item.itemID)
+                }
+            }
+
+            if store.selectedItemCatalog == nil {
+                emptySidebarText(store.itemCatalogLoadStatus.label)
             }
         }
     }
@@ -811,11 +855,29 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "TM/HM", value: "\(move.tmhmLearners.count)"),
                     Fact(label: "Tutor", value: "\(move.tutorLearners.count)"),
                     Fact(label: "Learned By", value: "\(move.learnedBy.count)"),
+                    Fact(label: "Editable", value: move.isEditable ? "Yes" : "No"),
+                    Fact(label: "Dirty", value: store.selectedMoveIsDirty ? "Yes" : "No"),
                     Fact(label: "Diagnostics", value: "\(move.diagnostics.count)")
                 ])
                 SourceLocationView(source: move.source)
             } else {
                 emptySidebarText(store.moveCatalogLoadStatus.label)
+            }
+        }
+    }
+
+    private var itemsProperties: some View {
+        sidebarSection("Properties", systemImage: "info.circle") {
+            if let item = store.selectedItemDetail {
+                propertyHeader(item.displayName, subtitle: item.itemID, systemImage: WorkbenchModule.items.systemImage, status: item.status)
+                propertyFacts([
+                    Fact(label: "Editable", value: item.isEditable ? "Yes" : "No"),
+                    Fact(label: "Dirty", value: store.selectedItemIsDirty ? "Yes" : "No"),
+                    Fact(label: "Diagnostics", value: "\(item.diagnostics.count)")
+                ] + item.facts.prefix(4))
+                SourceLocationView(source: item.source)
+            } else {
+                emptySidebarText(store.itemCatalogLoadStatus.label)
             }
         }
     }

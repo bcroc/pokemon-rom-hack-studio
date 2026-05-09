@@ -90,7 +90,27 @@ struct ModuleDetailView: View {
                 onUpdateDraft: store.updateSelectedTrainerDraft
             )
         case .items:
-            CatalogEditorView(title: "Items", records: store.records(for: .items))
+            PokemonItemsWorkbenchView(
+                catalog: store.selectedItemCatalogView,
+                items: store.filteredItemDetails,
+                selectedItemID: Binding(
+                    get: { store.selectedItemID },
+                    set: { store.requestItemSelection($0) }
+                ),
+                selectedItem: store.selectedItemDetail,
+                draft: store.selectedItemDraft,
+                isDirty: store.selectedItemIsDirty,
+                loadStatus: store.itemCatalogLoadStatus,
+                filter: Binding(
+                    get: { store.selectedItemWorkbenchFilter },
+                    set: { store.selectedItemWorkbenchFilter = $0 }
+                ),
+                fallbackRecords: store.records(for: .items),
+                onLoadCatalog: {
+                    store.loadSelectedItemCatalogIfNeeded()
+                },
+                onUpdateDraft: store.updateSelectedItemDraft
+            )
         case .moves:
             PokemonMovesWorkbenchView(
                 catalog: store.selectedMoveCatalog,
@@ -100,6 +120,8 @@ struct ModuleDetailView: View {
                     set: { store.requestMoveSelection($0) }
                 ),
                 selectedMove: store.selectedMoveDetail,
+                draft: store.selectedMoveDraft,
+                isDirty: store.selectedMoveIsDirty,
                 loadStatus: store.moveCatalogLoadStatus,
                 filter: Binding(
                     get: { store.selectedMoveWorkbenchFilter },
@@ -108,7 +130,8 @@ struct ModuleDetailView: View {
                 fallbackRecords: store.records(for: .moves),
                 onLoadCatalog: {
                     store.loadSelectedMoveCatalogIfNeeded()
-                }
+                },
+                onUpdateDraft: store.updateSelectedMoveDraft
             )
         case .pokemon:
             PokemonSpeciesWorkbenchView(
@@ -196,7 +219,7 @@ struct ModuleDetailView: View {
     }
 
     private var shellInspectorContext: SourceInspectorContext? {
-        nil
+        sourceInspectorContext
     }
 
     private var mutationPlanContext: MutationPlanPanelContext? {
@@ -225,6 +248,28 @@ struct ModuleDetailView: View {
                 previewBlockedReason: store.trainerPreviewBlockedReason,
                 applyBlockedReason: store.trainerApplyBlockedReason
             )
+        case .moves:
+            MutationPlanPanelContext.move(
+                plan: store.latestMoveEditPlan,
+                result: store.latestMoveApplyResult,
+                isDirty: store.selectedMoveIsDirty,
+                canPreview: store.canPreviewSelectedMoveMutationPlan,
+                canApply: store.canApplySelectedMoveMutationPlan,
+                canDiscard: store.canDiscardMoveEdits,
+                previewBlockedReason: store.movePreviewBlockedReason,
+                applyBlockedReason: store.moveApplyBlockedReason
+            )
+        case .items:
+            MutationPlanPanelContext.item(
+                plan: store.latestItemEditPlan,
+                result: store.latestItemApplyResult,
+                isDirty: store.selectedItemIsDirty,
+                canPreview: store.canPreviewSelectedItemMutationPlan,
+                canApply: store.canApplySelectedItemMutationPlan,
+                canDiscard: store.canDiscardItemEdits,
+                previewBlockedReason: store.itemPreviewBlockedReason,
+                applyBlockedReason: store.itemApplyBlockedReason
+            )
         default:
             nil
         }
@@ -236,6 +281,10 @@ struct ModuleDetailView: View {
             store.previewSelectedSpeciesMutationPlan()
         case .trainers:
             store.previewSelectedTrainerMutationPlan()
+        case .moves:
+            store.previewSelectedMoveMutationPlan()
+        case .items:
+            store.previewSelectedItemMutationPlan()
         default:
             store.previewSelectedMapMutationPlan()
         }
@@ -247,6 +296,10 @@ struct ModuleDetailView: View {
             store.applySelectedSpeciesMutationPlan()
         case .trainers:
             store.applySelectedTrainerMutationPlan()
+        case .moves:
+            store.applySelectedMoveMutationPlan()
+        case .items:
+            store.applySelectedItemMutationPlan()
         default:
             store.applySelectedMapMutationPlan()
         }
@@ -258,6 +311,10 @@ struct ModuleDetailView: View {
             store.discardSpeciesEdits()
         case .trainers:
             store.discardTrainerEdits()
+        case .moves:
+            store.discardMoveEdits()
+        case .items:
+            store.discardItemEdits()
         default:
             store.discardMapEdits()
         }

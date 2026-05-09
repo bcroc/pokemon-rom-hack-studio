@@ -380,6 +380,86 @@ extension MutationPlanPanelContext {
         )
     }
 
+    @MainActor
+    static func move(
+        plan: MoveEditPlan?,
+        result: MoveApplyResult?,
+        isDirty: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        previewBlockedReason: String?,
+        applyBlockedReason: String?
+    ) -> MutationPlanPanelContext? {
+        guard isDirty || plan != nil || result != nil else {
+            return nil
+        }
+
+        let planDiagnostics = plan?.diagnostics ?? []
+        let applyDiagnostics = result?.diagnostics ?? []
+        let diagnostics = (planDiagnostics + applyDiagnostics).map { MutationPlanDiagnosticRow(diagnostic: $0) }
+        let status = Self.status(
+            diagnostics: diagnostics,
+            isApplyReady: canApply,
+            hasAppliedChanges: !(result?.appliedChanges.isEmpty ?? true)
+        )
+
+        return MutationPlanPanelContext(
+            title: plan?.mutationPlan.title ?? "Move Mutation Plan",
+            summary: Self.editSummary(kind: "Move", planSummary: plan?.mutationPlan.summary, appliedCount: result?.appliedChanges.count, hasApplyDiagnostics: !(result?.diagnostics.isEmpty ?? true), isDirty: isDirty),
+            status: status,
+            operationCount: isDirty ? 1 : 0,
+            changes: (plan?.changes ?? []).map { MutationPlanChangeRow(change: $0) },
+            appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
+            diagnostics: diagnostics,
+            canPreview: canPreview,
+            canApply: canApply,
+            canDiscard: canDiscard,
+            previewBlockedReason: previewBlockedReason,
+            applyBlockedReason: applyBlockedReason
+        )
+    }
+
+    @MainActor
+    static func item(
+        plan: ItemEditPlan?,
+        result: ItemApplyResult?,
+        isDirty: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        previewBlockedReason: String?,
+        applyBlockedReason: String?
+    ) -> MutationPlanPanelContext? {
+        guard isDirty || plan != nil || result != nil else {
+            return nil
+        }
+
+        let planDiagnostics = plan?.diagnostics ?? []
+        let applyDiagnostics = result?.diagnostics ?? []
+        let diagnostics = (planDiagnostics + applyDiagnostics).map { MutationPlanDiagnosticRow(diagnostic: $0) }
+        let status = Self.status(
+            diagnostics: diagnostics,
+            isApplyReady: canApply,
+            hasAppliedChanges: !(result?.appliedChanges.isEmpty ?? true)
+        )
+
+        return MutationPlanPanelContext(
+            title: plan?.mutationPlan.title ?? "Item Mutation Plan",
+            summary: Self.editSummary(kind: "Item", planSummary: plan?.mutationPlan.summary, appliedCount: result?.appliedChanges.count, hasApplyDiagnostics: !(result?.diagnostics.isEmpty ?? true), isDirty: isDirty),
+            status: status,
+            operationCount: isDirty ? 1 : 0,
+            changes: (plan?.changes ?? []).map { MutationPlanChangeRow(change: $0) },
+            appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
+            diagnostics: diagnostics,
+            canPreview: canPreview,
+            canApply: canApply,
+            canDiscard: canDiscard,
+            previewBlockedReason: previewBlockedReason,
+            applyBlockedReason: applyBlockedReason
+        )
+    }
+
     private static func status(
         diagnostics: [MutationPlanDiagnosticRow],
         isApplyReady: Bool,
@@ -464,6 +544,32 @@ extension MutationPlanPanelContext {
 
         return "No Pokemon edits are staged."
     }
+
+    private static func editSummary(
+        kind: String,
+        planSummary: String?,
+        appliedCount: Int?,
+        hasApplyDiagnostics: Bool,
+        isDirty: Bool
+    ) -> String {
+        if let appliedCount, appliedCount > 0 {
+            return "Applied \(appliedCount) \(kind.lowercased()) source file change(s); backups are recorded for review."
+        }
+
+        if hasApplyDiagnostics {
+            return "\(kind) apply is blocked until the reported diagnostics are resolved."
+        }
+
+        if let planSummary {
+            return planSummary
+        }
+
+        if isDirty {
+            return "\(kind) edits are staged locally and waiting for source mutation preview."
+        }
+
+        return "No \(kind.lowercased()) edits are staged."
+    }
 }
 
 private extension MutationPlanChangeRow {
@@ -487,6 +593,20 @@ private extension MutationPlanChangeRow {
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
     }
+
+    init(change: MoveEditFileChange) {
+        id = change.id
+        path = change.path
+        summary = change.summary
+        detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+    }
+
+    init(change: ItemEditFileChange) {
+        id = change.id
+        path = change.path
+        summary = change.summary
+        detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+    }
 }
 
 private extension MutationPlanAppliedChangeRow {
@@ -505,6 +625,20 @@ private extension MutationPlanAppliedChangeRow {
     }
 
     init(change: AppliedSpeciesFileChange) {
+        id = change.id
+        path = change.path
+        backupPath = change.backupPath
+        byteCount = change.byteCount
+    }
+
+    init(change: AppliedMoveFileChange) {
+        id = change.id
+        path = change.path
+        backupPath = change.backupPath
+        byteCount = change.byteCount
+    }
+
+    init(change: AppliedItemFileChange) {
         id = change.id
         path = change.path
         backupPath = change.backupPath

@@ -995,6 +995,35 @@ enum MoveCatalogLoadStatus: Equatable {
     }
 }
 
+enum ItemCatalogLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Item catalog not loaded"
+        case .loading:
+            "Loading item catalog"
+        case .loaded(let count):
+            count == 1 ? "1 item loaded" : "\(count) items loaded"
+        case .failed(let message):
+            "Item catalog failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
 enum MoveWorkbenchFilter: String, CaseIterable, Identifiable, Hashable {
     case all = "All"
     case tmhm = "TM/HM"
@@ -1028,6 +1057,7 @@ struct MoveDetailViewState: Identifiable {
     let battleFacts: [Fact]
     let source: SourceLocation
     let sourcePreview: String?
+    let isEditable: Bool
     let tmhmLearners: [MoveLearnerRowViewState]
     let tutorLearners: [MoveLearnerRowViewState]
     let learnedBy: [MoveLearnerRowViewState]
@@ -1037,6 +1067,39 @@ struct MoveDetailViewState: Identifiable {
     var learnerCount: Int {
         tmhmLearners.count + tutorLearners.count + learnedBy.count
     }
+}
+
+enum ItemWorkbenchFilter: String, CaseIterable, Identifiable, Hashable {
+    case all = "All"
+    case editable = "Editable"
+    case diagnostics = "Diagnostics"
+
+    var id: String { rawValue }
+}
+
+struct ItemCatalogViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let status: ValidationState
+    let itemCount: Int
+    let editableCount: Int
+    let items: [ItemDetailViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct ItemDetailViewState: Identifiable {
+    let id: String
+    let itemID: String
+    let displayName: String
+    let status: ValidationState
+    let facts: [Fact]
+    let source: SourceLocation
+    let sourcePreview: String?
+    let isEditable: Bool
+    let diagnostics: [IndexedDiagnosticRow]
+    let searchBlob: String
 }
 
 struct MoveLearnerRowViewState: Identifiable {

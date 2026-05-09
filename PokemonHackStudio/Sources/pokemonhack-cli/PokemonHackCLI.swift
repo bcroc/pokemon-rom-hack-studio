@@ -33,6 +33,8 @@ struct PokemonHackCLI {
             return try movesGraph(arguments: Array(arguments.dropFirst()))
         case "move-catalog":
             return try moveCatalog(arguments: Array(arguments.dropFirst()))
+        case "item-catalog":
+            return try itemCatalog(arguments: Array(arguments.dropFirst()))
         case "species-graph":
             return try speciesGraph(arguments: Array(arguments.dropFirst()))
         case "resources":
@@ -143,6 +145,13 @@ struct PokemonHackCLI {
             throw CLIError.usage
         }
         return try encode(ProjectMoveCatalogBuilder.build(path: path))
+    }
+
+    private static func itemCatalog(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(ProjectItemCatalogBuilder.build(path: path))
     }
 
     private static func speciesGraph(arguments: [String]) throws -> String {
@@ -359,7 +368,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

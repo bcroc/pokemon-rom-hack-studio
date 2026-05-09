@@ -1,3 +1,4 @@
+import PokemonHackCore
 import SwiftUI
 
 struct PokemonMovesWorkbenchView: View {
@@ -5,10 +6,13 @@ struct PokemonMovesWorkbenchView: View {
     let moves: [MoveDetailViewState]
     @Binding var selectedMoveID: String
     let selectedMove: MoveDetailViewState?
+    let draft: MoveEditDraft?
+    let isDirty: Bool
     let loadStatus: MoveCatalogLoadStatus
     @Binding var filter: MoveWorkbenchFilter
     let fallbackRecords: [WorkbenchRecord]
     let onLoadCatalog: () -> Void
+    let onUpdateDraft: (MoveEditDraft) -> Void
 
     var body: some View {
         Group {
@@ -176,6 +180,15 @@ struct PokemonMovesWorkbenchView: View {
                 FactGrid(facts: move.battleFacts.isEmpty ? move.facts : move.battleFacts)
             }
 
+            if let draft {
+                editSection(draft)
+            } else {
+                EditorSection(title: "Editing") {
+                    Text("This move source shape is read-only.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             learnerSection(title: "TM/HM", rows: move.tmhmLearners)
             learnerSection(title: "Tutor", rows: move.tutorLearners)
             learnerSection(title: "Learned By", rows: move.learnedBy)
@@ -201,6 +214,88 @@ struct PokemonMovesWorkbenchView: View {
             }
         }
         .padding(24)
+    }
+
+    private func editSection(_ draft: MoveEditDraft) -> some View {
+        EditorSection(title: isDirty ? "Battle Data Edited" : "Battle Data") {
+            VStack(alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], alignment: .leading, spacing: 12) {
+                    moveTextField("Effect", text: draftStringBinding(\.effect))
+                    moveIntegerField("Power", value: draftIntBinding(\.power), range: 0...255)
+                    moveTextField("Type", text: draftStringBinding(\.type))
+                    moveIntegerField("Accuracy", value: draftIntBinding(\.accuracy), range: 0...100)
+                    moveIntegerField("PP", value: draftIntBinding(\.pp), range: 0...255)
+                    moveIntegerField("Secondary %", value: draftIntBinding(\.secondaryEffectChance), range: 0...100)
+                    moveTextField("Target", text: draftStringBinding(\.target))
+                    moveIntegerField("Priority", value: draftIntBinding(\.priority), range: -128...127)
+                }
+
+                Divider()
+
+                TextField("Flags", text: flagsBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+            }
+        }
+    }
+
+    private func moveTextField(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField(title, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+
+    private func moveIntegerField(_ title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Stepper(value: value, in: range) {
+                Text("\(value.wrappedValue)")
+                    .font(.system(.body, design: .monospaced))
+            }
+        }
+    }
+
+    private func draftStringBinding(_ keyPath: WritableKeyPath<MoveEditDraft, String>) -> Binding<String> {
+        Binding(
+            get: { draft?[keyPath: keyPath] ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft[keyPath: keyPath] = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
+    private func draftIntBinding(_ keyPath: WritableKeyPath<MoveEditDraft, Int>) -> Binding<Int> {
+        Binding(
+            get: { draft?[keyPath: keyPath] ?? 0 },
+            set: { value in
+                guard var draft else { return }
+                draft[keyPath: keyPath] = value
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
+    private var flagsBinding: Binding<String> {
+        Binding(
+            get: { draft?.flags.joined(separator: " | ") ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft.flags = value
+                    .split(separator: "|")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                onUpdateDraft(draft)
+            }
+        )
     }
 
     private func learnerSection(title: String, rows: [MoveLearnerRowViewState]) -> some View {

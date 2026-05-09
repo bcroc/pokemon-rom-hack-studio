@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The completed baseline now includes `PHS-T47` read-only Moves catalog, CLI `move-catalog`, and first-class Moves workbench on top of the existing move graph and species learnset editor.
+No implementation row is currently active. The completed baseline now includes `PHS-T48A/B/C` editable Moves and Items workbenches: classic Emerald/FireRed move battle rows and Emerald item rows can be previewed, applied with backups, discarded, and reloaded through mutation-plan gates.
 
 ## Active Board
 
@@ -53,6 +53,7 @@ No implementation row is currently active. The completed baseline now includes `
 | PHS-T43 | Done | Wild Encounter Row Editing | Add row-based wild encounter edits with order preservation, capacity warnings, source hash checks, preview diffs, backups, and explicit apply. |
 | PHS-T44 | Done | Graphics Import And Conversion Plans | `graphics-import-plan <project> <package> --json` now previews local package provenance, copy targets, layered tileset dry runs, palette-fit diagnostics, and generated-output expectations; Graphics app actions are relabeled as plan-only and no import/convert/apply path writes source or invokes external tools. |
 | PHS-T47 | Done | Moves, TM/HM, And Tutor Workbench | First-class read-only Moves workbench and CLI `move-catalog` now expose move definitions, machine/tutor membership, source spans, compatibility diagnostics, and learnset summaries on top of the existing move graph and species learnset editor. |
+| PHS-T48A/B/C | Done | Editable Moves And Items Workbenches | Shared mutation-plan plumbing now covers Moves and Items; classic `gBattleMoves` rows in Emerald/FireRed and Emerald `gItems` rows are editable with source hashes, previews, backups, diagnostics, explicit apply, discard, reload, CLI `item-catalog`, and first-class app workbenches. Constant creation/reordering, TM/HM/tutor compatibility edits, item identity changes, and description-text rewrites remain follow-up rows. |
 
 ## Recent Progress
 
@@ -93,6 +94,7 @@ No implementation row is currently active. The completed baseline now includes `
 - `PHS-T40` added explicit mGBA launch as the next playtest step: `playtest --headless --json` remains report-only, `playtest --launch --json` uses the report-selected runnable ROM and direct `.app` executable resolution, the Build/Patch/Playtest UI exposes the same launch gate/result state, and only ignored playtest logs are written.
 - Stub/incomplete-surface cleanup after `PHS-T40` made the visible Build/Patch/Playtest Open Playtest button call the app-store launch path, locked no-project fixture actions, routed typed Base ROM paths through the store refresh path, aligned capability flags with real support, documented the GameCube ProjectIndex cap, expanded `make validate` CLI smokes, refreshed stale AGENTS/README/reference docs, and added explicit Candidate rows for the known deferred surfaces.
 - `PHS-T17` / `PHS-T44` reference follow-through promoted the remaining candidate surfaces into concrete preview reports: binary ROMs now expose semantic runs, anchors, accepted/rejected pointers, and free-space rows through Resources plus CLI `rom-graph`; graphics import packages now produce non-mutating provenance, copy-target, layered tileset, palette-fit, and external conversion dry-run plans through CLI `graphics-import-plan`.
+- `PHS-T48A/B/C` upgraded Moves and Items from catalog-only surfaces into editable workbenches: Moves now draft, preview, apply, discard, and reload supported classic battle fields; Items now has a dedicated catalog, CLI `item-catalog`, editable Emerald row fields, read-only diagnostics for unsupported profiles, and app-wide dirty/mutation/source-inspector integration.
 - Dev-loop timing captured during `PHS-T36`: warm direct `map-visual` CLI smokes remained fast (`pokeemerald` `MAP_PETALBURG_CITY` in 0.15s; `pokefirered` `MAP_BATTLE_COLOSSEUM_2P` in 0.12s), while `make validate` took 37.84s and `make verify` took 17.71s with the Xcode bundle phase still copying 2 local source projects every build. `PHS-T39` later replaced that recopy with an unchanged-bundle reuse path.
 - `PHS-T25` made related-data navigation app-visible without inventing a new graph UI: Resources row actions now focus the target module and row/search context for maps, layouts, scripts, source paths, Pokemon/trainer data, graphics, generated build outputs, text, and items; store-owned resource selection supports backlinks from other modules; and Data > Pokemon now links evolution targets plus species assets back into existing workbench surfaces.
 - `PHS-T14` finished the Build/Patch/Playtest preview workflow: `patch-manifest` accepts `--base-rom`, reports selected base ROM path/SHA1/size/candidate match, distinguishes base ROM mismatch, and the app now has a Patch tab with safe patch/base ROM selectors, project/resource base ROM options, manifest/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON while keeping apply/export/build/run disabled.
@@ -507,3 +509,12 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make verify` (regenerated Xcode project, built/signed app, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
   - `git diff --check`
   - Source-write posture: `move-catalog` and the Moves workbench are read-only; no move definition edit, TM/HM rewrite, tutor rewrite, export, apply, backup, or mutation-plan path was added.
+- `PHS-T48A/B/C`:
+  - Baseline preservation: committed completed `PHS-T47` read-only Moves baseline as `0461056` before starting the editable wave.
+  - `swift test --package-path PokemonHackStudio --filter 'PokemonMoveCatalogTests|PokemonItemCatalogTests|PokemonHackCLITests/testItemCatalogCommandEmitsEditableJSON'` (13 tests; passed)
+  - `cd PokemonHackStudio && xcodegen generate && xcodebuild -quiet -project PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath ../DerivedData/PokemonHackStudio -destination 'platform=macOS' build` (passed)
+  - `make test` (140 tests; passed)
+  - `make validate` (expanded CLI smokes now include `item-catalog` for repo-local `pokeemerald`, repo-local `pokefirered`, and ignored `references/pokeruby`)
+  - `make verify` (regenerated Xcode project, built/signed app, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - `xcodebuild ... test` note: the app-hosted test invocation launched `PokemonHackStudio.app` and did not return useful test output, so it was interrupted and replaced with the successful app build plus `make verify` proof above.
+  - Source-write posture: move and item writes now exist only through draft -> preview -> explicit apply mutation plans with source hash/size checks, backups, diagnostics, and reload-after-apply. TM/HM/tutor compatibility edits, move/item identity changes, new/reordered constants, item description text, FireRed JSON items, Ruby positional rows, and Expansion `ItemInfo` remain read-only or diagnostic-only.
