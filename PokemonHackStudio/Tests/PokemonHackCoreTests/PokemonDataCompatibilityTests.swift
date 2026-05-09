@@ -8,38 +8,51 @@ final class PokemonDataCompatibilityTests: XCTestCase {
 
         let report = try PokemonDataCompatibilityReportBuilder.build(path: root.path)
 
+        assertNoCompletedRowRecommendations(in: report)
         XCTAssertEqual(entry(.species, in: report).status, .editable)
         XCTAssertEqual(entry(.moves, in: report).status, .editable)
-        XCTAssertEqual(entry(.levelUpLearnsets, in: report).status, .editable)
-        XCTAssertEqual(entry(.tmhmLearnsets, in: report).status, .editable)
-        XCTAssertEqual(entry(.eggMoves, in: report).status, .editable)
+        let levelUp = entry(.levelUpLearnsets, in: report)
+        let tmhm = entry(.tmhmLearnsets, in: report)
+        let eggMoves = entry(.eggMoves, in: report)
+        XCTAssertEqual(levelUp.status, .editable)
+        XCTAssertNil(levelUp.recommendedFutureRow)
+        XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertNil(tmhm.recommendedFutureRow)
+        XCTAssertEqual(eggMoves.status, .editable)
+        XCTAssertNil(eggMoves.recommendedFutureRow)
         let items = entry(.items, in: report)
         XCTAssertEqual(items.status, .editable)
         XCTAssertEqual(items.sourcePath, "src/data/items.h")
         XCTAssertEqual(items.tableSymbol, "gItems")
         XCTAssertEqual(items.editableCount, 1)
-        XCTAssertTrue(items.unsupportedFields.contains("description text rewrites"))
+        XCTAssertFalse(items.unsupportedFields.contains("description text rewrites"))
     }
 
-    func testClassicFireRedReportMarksPokemonAndMovesEditableButItemsReadOnly() throws {
+    func testClassicFireRedReportMarksPokemonMovesAndItemDescriptionsEditable() throws {
         let root = try temporaryRoot()
         try makeClassicProject(at: root, profile: .pokefirered)
 
         let report = try PokemonDataCompatibilityReportBuilder.build(path: root.path)
 
+        assertNoCompletedRowRecommendations(in: report)
         XCTAssertEqual(entry(.species, in: report).status, .editable)
         XCTAssertEqual(entry(.moves, in: report).status, .editable)
-        XCTAssertEqual(entry(.levelUpLearnsets, in: report).status, .editable)
-        XCTAssertEqual(entry(.tmhmLearnsets, in: report).status, .editable)
+        let levelUp = entry(.levelUpLearnsets, in: report)
+        let tmhm = entry(.tmhmLearnsets, in: report)
+        XCTAssertEqual(levelUp.status, .editable)
+        XCTAssertNil(levelUp.recommendedFutureRow)
+        XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertNil(tmhm.recommendedFutureRow)
         let items = entry(.items, in: report)
-        XCTAssertEqual(items.status, .readOnly)
-        XCTAssertEqual(items.sourcePath, "src/data/items.json")
-        XCTAssertEqual(items.tableSymbol, "items")
+        XCTAssertEqual(items.status, .editable)
+        XCTAssertEqual(items.sourcePath, "src/data/items.h")
+        XCTAssertEqual(items.tableSymbol, "gItems")
         XCTAssertEqual(items.indexedCount, 1)
-        XCTAssertEqual(items.editableCount, 0)
-        XCTAssertTrue(items.blockedReason?.contains("FireRed item data") == true)
-        XCTAssertTrue(items.unsupportedFields.contains("FireRed JSON item rewrites"))
-        XCTAssertEqual(items.recommendedFutureRow, "PHS-T50")
+        XCTAssertEqual(items.editableCount, 1)
+        XCTAssertNil(items.blockedReason)
+        XCTAssertTrue(items.unsupportedFields.contains("FireRed row-field rewrites"))
+        XCTAssertFalse(items.unsupportedFields.contains("description text rewrites"))
+        XCTAssertEqual(items.recommendedFutureRow, "PHS-T57")
     }
 
     func testRubyAndExpansionItemsReportReadOnlyBlockedShapes() throws {
@@ -52,12 +65,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             sourceIndex: sourceIndex(profile: .pokeemeraldExpansion, itemPath: "src/data/items.h")
         )
 
+        assertNoCompletedRowRecommendations(in: ruby)
+        assertNoCompletedRowRecommendations(in: expansion)
         let rubyItems = entry(.items, in: ruby)
         XCTAssertEqual(rubyItems.status, .readOnly)
         XCTAssertEqual(rubyItems.sourcePath, "src/data/items_en.h")
         XCTAssertEqual(rubyItems.tableSymbol, "gItems")
         XCTAssertTrue(rubyItems.blockedReason?.contains("Ruby/Sapphire positional") == true)
         XCTAssertTrue(rubyItems.unsupportedFields.contains("Ruby/Sapphire positional gItems rewrites"))
+        XCTAssertEqual(rubyItems.recommendedFutureRow, "PHS-T57")
 
         let expansionItems = entry(.items, in: expansion)
         XCTAssertEqual(expansionItems.status, .readOnly)
@@ -65,6 +81,16 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(expansionItems.tableSymbol, "gItemsInfo")
         XCTAssertTrue(expansionItems.blockedReason?.contains("Expansion ItemInfo") == true)
         XCTAssertTrue(expansionItems.unsupportedFields.contains("Expansion ItemInfo rewrites"))
+        XCTAssertEqual(expansionItems.recommendedFutureRow, "PHS-T57")
+    }
+
+    private func assertNoCompletedRowRecommendations(
+        in report: PokemonDataCompatibilityReport,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let staleRows = report.entries.compactMap(\.recommendedFutureRow).filter { $0 == "PHS-T50" || $0 == "PHS-T51" }
+        XCTAssertTrue(staleRows.isEmpty, "Completed rows should not appear as future guidance: \(staleRows)", file: file, line: line)
     }
 
     private func entry(
@@ -216,9 +242,27 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         if profile == .pokefirered {
             try write(
                 """
-                {"items":[{"itemId":"ITEM_POTION","english":"POTION","price":300,"pocket":"POCKET_ITEMS","type":"ITEM_USE_PARTY_MENU"}]}
+                const u8 gItemDescription_ITEM_POTION[] = _(\"Restores HP.\");
+                const struct Item gItems[] = {
+                    {
+                        .name = _(\"POTION\"),
+                        .itemId = ITEM_POTION,
+                        .price = 300,
+                        .holdEffect = HOLD_EFFECT_NONE,
+                        .holdEffectParam = 20,
+                        .description = gItemDescription_ITEM_POTION,
+                        .importance = 0,
+                        .registrability = 0,
+                        .pocket = POCKET_ITEMS,
+                        .type = ITEM_TYPE_PARTY_MENU,
+                        .fieldUseFunc = FieldUseFunc_Medicine,
+                        .battleUsage = 0,
+                        .battleUseFunc = NULL,
+                        .secondaryId = 0,
+                    },
+                };
                 """,
-                to: root.appendingPathComponent("src/data/items.json")
+                to: root.appendingPathComponent("src/data/items.h")
             )
             return
         }

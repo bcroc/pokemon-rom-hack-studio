@@ -658,6 +658,16 @@ struct WorkbenchSidebarPanel: View {
                             store.launchSelectedPlaytest()
                         }
                         .disabled(!action.isEnabled)
+                    } else if action.id == "capture-screenshot" {
+                        Button(action.title, systemImage: action.systemImage) {
+                            store.captureSelectedPlaytest(kind: .screenshot)
+                        }
+                        .disabled(!action.isEnabled)
+                    } else if action.id == "capture-savestate" {
+                        Button(action.title, systemImage: action.systemImage) {
+                            store.captureSelectedPlaytest(kind: .saveState)
+                        }
+                        .disabled(!action.isEnabled)
                     } else {
                         Button(action.title, systemImage: "lock") {}
                             .disabled(true)

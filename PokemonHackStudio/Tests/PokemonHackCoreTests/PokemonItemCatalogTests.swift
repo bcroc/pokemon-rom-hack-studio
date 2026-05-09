@@ -4,18 +4,21 @@ import XCTest
 final class PokemonItemCatalogTests: XCTestCase {
     func testEmeraldItemCatalogPlansAppliesBacksUpAndReloads() throws {
         let root = try temporaryRoot()
-        try makeEmeraldProject(at: root)
+        try makeEmeraldProject(at: root, descriptionText: "Restores HP.")
 
         let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemerald))
         let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
         XCTAssertEqual(potion.name, "POTION")
         XCTAssertEqual(potion.price, "300")
         XCTAssertEqual(potion.descriptionSymbol, "sPotionDesc")
+        XCTAssertEqual(potion.descriptionText, "Restores HP.")
         XCTAssertTrue(potion.isEditable)
+        XCTAssertTrue(potion.isDescriptionEditable)
 
         var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
         draft.name = "SUPER POTION"
         draft.price = "700"
+        draft.descriptionText = "Restores HP by\n60 points."
         draft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
         draft.holdEffectParam = "60"
         draft.pocket = "POCKET_MEDICINE"
@@ -26,14 +29,15 @@ final class PokemonItemCatalogTests: XCTestCase {
         draft.battleUseFunc = "ItemUseInBattle_Medicine"
 
         let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
-        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h", "src/data/text/item_descriptions.h"])
         XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
         XCTAssertTrue(plan.isApplyable)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(#".name = _("SUPER POTION")"#) == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".price = 700") == true)
+        XCTAssertTrue(plan.changes.last?.textPreview?.contains(#""Restores HP by""#) == true)
 
         let result = try ItemMutationApplier.apply(plan: plan)
-        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertEqual(result.appliedChanges.count, 2)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
 
         let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemerald))
@@ -48,13 +52,10 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.secondaryId, "ITEM_SUPER_POTION")
         XCTAssertEqual(edited.fieldUseFunc, "ItemUseOutOfBattle_Medicine")
         XCTAssertEqual(edited.battleUseFunc, "ItemUseInBattle_Medicine")
+        XCTAssertEqual(edited.descriptionText, "Restores HP by\n60 points.")
     }
 
     func testReadOnlyProfilesReportDiagnosticsWithoutCrashing() throws {
-        let fireRed = try ProjectItemCatalogBuilder.build(
-            index: projectIndex(root: try temporaryRoot(), profile: .pokefirered),
-            sourceIndex: sourceIndex(profile: .pokefirered, path: "src/data/items.json", tags: ["item", "json"])
-        )
         let ruby = try ProjectItemCatalogBuilder.build(
             index: projectIndex(root: try temporaryRoot(), profile: .pokeruby),
             sourceIndex: sourceIndex(profile: .pokeruby, path: "src/data/items_en.h", tags: ["item", "positional"])
@@ -64,7 +65,7 @@ final class PokemonItemCatalogTests: XCTestCase {
             sourceIndex: sourceIndex(profile: .pokeemeraldExpansion, path: "src/data/items.h", tags: ["item", "bracketed"])
         )
 
-        for catalog in [fireRed, ruby, expansion] {
+        for catalog in [ruby, expansion] {
             XCTAssertEqual(catalog.items.first?.itemID, "ITEM_POTION")
             XCTAssertFalse(catalog.items.first?.isEditable ?? true)
             XCTAssertTrue(catalog.diagnostics.contains { $0.code == "ITEM_CATALOG_READ_ONLY_PROFILE" })
@@ -76,6 +77,39 @@ final class PokemonItemCatalogTests: XCTestCase {
             XCTAssertTrue(blocked.diagnostics.contains { $0.code == "ITEM_PLAN_READ_ONLY_PROFILE" })
             XCTAssertTrue(blocked.changes.isEmpty)
         }
+    }
+
+    func testFireRedItemDescriptionPlansAppliesWithoutRowEditing() throws {
+        let root = try temporaryRoot()
+        try makeFireRedProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokefirered))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertFalse(potion.isEditable)
+        XCTAssertTrue(potion.isDescriptionEditable)
+        XCTAssertEqual(potion.descriptionSymbol, "gItemDescription_ITEM_POTION")
+        XCTAssertEqual(potion.descriptionText, "A spray medicine.\nIt restores HP.")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        XCTAssertNil(draft.price)
+        draft.descriptionText = "A compact medicine.\nIt restores 20 HP."
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("gItemDescription_ITEM_POTION") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(#""A compact medicine.""#) == true)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokefirered))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertFalse(edited.isEditable)
+        XCTAssertTrue(edited.isDescriptionEditable)
+        XCTAssertEqual(edited.price, "300")
+        XCTAssertEqual(edited.descriptionText, "A compact medicine.\nIt restores 20 HP.")
     }
 
     func testItemIdMismatchBlocksEditing() throws {
@@ -162,12 +196,11 @@ final class PokemonItemCatalogTests: XCTestCase {
 
     private func makeEmeraldProject(
         at root: URL,
-        itemId: String = "ITEM_POTION"
+        itemId: String = "ITEM_POTION",
+        descriptionText: String? = nil
     ) throws {
         try write(
             """
-            const u8 sPotionDesc[] = _(\"Restores HP.\");
-
             const struct Item gItems[] =
             {
                 [ITEM_NONE] =
@@ -200,6 +233,45 @@ final class PokemonItemCatalogTests: XCTestCase {
                     .fieldUseFunc = ItemUseOutOfBattle_Medicine,
                     .battleUsage = ITEM_B_USE_MEDICINE,
                     .battleUseFunc = ItemUseInBattle_Medicine,
+                    .secondaryId = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
+        )
+        if let descriptionText {
+            let lines = descriptionText.components(separatedBy: "\n")
+                .map { #"    "\#($0)""# }
+                .joined(separator: "\n")
+            try write(
+                """
+                static const u8 sPotionDesc[] = _(
+                \(lines));
+                """,
+                to: root.appendingPathComponent("src/data/text/item_descriptions.h")
+            )
+        }
+    }
+
+    private func makeFireRedProject(at root: URL) throws {
+        try write(
+            """
+            const u8 gItemDescription_ITEM_POTION[] = _(\"A spray medicine.\\nIt restores HP.\");
+            const struct Item gItems[] = {
+                {
+                    .name = _(\"POTION\"),
+                    .itemId = ITEM_POTION,
+                    .price = 300,
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 20,
+                    .description = gItemDescription_ITEM_POTION,
+                    .importance = 0,
+                    .registrability = 0,
+                    .pocket = POCKET_ITEMS,
+                    .type = ITEM_TYPE_PARTY_MENU,
+                    .fieldUseFunc = FieldUseFunc_Medicine,
+                    .battleUsage = 0,
+                    .battleUseFunc = NULL,
                     .secondaryId = 0,
                 },
             };

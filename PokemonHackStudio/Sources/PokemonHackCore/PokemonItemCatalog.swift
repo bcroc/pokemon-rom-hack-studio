@@ -45,6 +45,8 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
     public let fieldUseFunc: String?
     public let battleUseFunc: String?
     public let descriptionSymbol: String?
+    public let descriptionText: String?
+    public let isDescriptionEditable: Bool
     public let diagnostics: [Diagnostic]
     public let isEditable: Bool
 
@@ -64,6 +66,8 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         fieldUseFunc: String? = nil,
         battleUseFunc: String? = nil,
         descriptionSymbol: String? = nil,
+        descriptionText: String? = nil,
+        isDescriptionEditable: Bool = false,
         diagnostics: [Diagnostic] = [],
         isEditable: Bool = false
     ) {
@@ -82,6 +86,8 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
         self.descriptionSymbol = descriptionSymbol
+        self.descriptionText = descriptionText
+        self.isDescriptionEditable = isDescriptionEditable
         self.diagnostics = diagnostics
         self.isEditable = isEditable
     }
@@ -99,6 +105,7 @@ public struct ItemEditDraft: Codable, Equatable {
     public var secondaryId: String?
     public var fieldUseFunc: String?
     public var battleUseFunc: String?
+    public var descriptionText: String?
 
     public init(
         itemID: String,
@@ -111,7 +118,8 @@ public struct ItemEditDraft: Codable, Equatable {
         battleUsage: String? = nil,
         secondaryId: String? = nil,
         fieldUseFunc: String? = nil,
-        battleUseFunc: String? = nil
+        battleUseFunc: String? = nil,
+        descriptionText: String? = nil
     ) {
         self.itemID = itemID
         self.name = name
@@ -124,22 +132,24 @@ public struct ItemEditDraft: Codable, Equatable {
         self.secondaryId = secondaryId
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
+        self.descriptionText = descriptionText
     }
 
     public init?(detail: ItemDetail) {
-        guard detail.isEditable else { return nil }
+        guard detail.isEditable || detail.isDescriptionEditable else { return nil }
         self.init(
             itemID: detail.itemID,
-            name: detail.name,
-            price: detail.price,
-            holdEffect: detail.holdEffect,
-            holdEffectParam: detail.holdEffectParam,
-            pocket: detail.pocket,
-            type: detail.type,
-            battleUsage: detail.battleUsage,
-            secondaryId: detail.secondaryId,
-            fieldUseFunc: detail.fieldUseFunc,
-            battleUseFunc: detail.battleUseFunc
+            name: detail.isEditable ? detail.name : nil,
+            price: detail.isEditable ? detail.price : nil,
+            holdEffect: detail.isEditable ? detail.holdEffect : nil,
+            holdEffectParam: detail.isEditable ? detail.holdEffectParam : nil,
+            pocket: detail.isEditable ? detail.pocket : nil,
+            type: detail.isEditable ? detail.type : nil,
+            battleUsage: detail.isEditable ? detail.battleUsage : nil,
+            secondaryId: detail.isEditable ? detail.secondaryId : nil,
+            fieldUseFunc: detail.isEditable ? detail.fieldUseFunc : nil,
+            battleUseFunc: detail.isEditable ? detail.battleUseFunc : nil,
+            descriptionText: detail.descriptionText
         )
     }
 }
@@ -280,14 +290,14 @@ public enum ProjectItemCatalogBuilder {
             )
         }
 
-        if descriptor.supportsEditing {
-            return try editableEmeraldCatalog(index: index, descriptor: descriptor, root: root, fileManager: fileManager)
+        if descriptor.supportsItemCatalogParsing {
+            return try sourceBackedCatalog(index: index, descriptor: descriptor, root: root, fileManager: fileManager)
         }
 
         return readOnlyCatalog(index: index, descriptor: descriptor, sourceIndex: sourceIndex, fileManager: fileManager)
     }
 
-    private static func editableEmeraldCatalog(
+    private static func sourceBackedCatalog(
         index: ProjectIndex,
         descriptor: ItemCatalogDescriptor,
         root: URL,
@@ -301,6 +311,7 @@ public enum ProjectItemCatalogBuilder {
         }
 
         let text = try readText(path)
+        let descriptions = readDescriptionTexts(descriptor: descriptor, root: root, fileManager: fileManager)
         let parsed = CInitializerParser.tableEntries(
             in: text,
             descriptor: CInitializerTableDescriptor(
@@ -308,6 +319,7 @@ public enum ProjectItemCatalogBuilder {
                 relativePath: descriptor.itemPath,
                 tableSymbol: descriptor.tableSymbol,
                 entryStyle: descriptor.entryStyle,
+                idField: descriptor.idField,
                 knownFields: itemFields,
                 warnsOnUnknownFields: true
             )
@@ -315,7 +327,7 @@ public enum ProjectItemCatalogBuilder {
         diagnostics.append(contentsOf: parsed.diagnostics)
         let items = parsed.entries.compactMap { entry -> ItemDetail? in
             guard entry.symbol.hasPrefix("ITEM_") else { return nil }
-            return detail(from: entry, descriptor: descriptor)
+            return detail(from: entry, descriptor: descriptor, descriptions: descriptions)
         }
         diagnostics.append(contentsOf: items.flatMap(\.diagnostics))
         return ProjectItemCatalog(
@@ -354,6 +366,8 @@ public enum ProjectItemCatalogBuilder {
                 fieldUseFunc: fact("fieldUseFunc", in: record.facts),
                 battleUseFunc: fact("battleUseFunc", in: record.facts),
                 descriptionSymbol: fact("description", in: record.facts),
+                descriptionText: nil,
+                isDescriptionEditable: false,
                 diagnostics: record.diagnostics + [readOnly],
                 isEditable: false
             )
@@ -368,9 +382,14 @@ public enum ProjectItemCatalogBuilder {
         )
     }
 
-    private static func detail(from entry: CInitializerEntry, descriptor: ItemCatalogDescriptor) -> ItemDetail {
+    private static func detail(
+        from entry: CInitializerEntry,
+        descriptor: ItemCatalogDescriptor,
+        descriptions: [String: ItemDescriptionText]
+    ) -> ItemDetail {
         let fields = entry.fields
         let name = unwrappedTextMacro(compact(fields["name"]))
+        let descriptionSymbol = compact(fields["description"])
         let diagnostics = editabilityDiagnostics(entry: entry, descriptor: descriptor)
         return ItemDetail(
             itemID: entry.symbol,
@@ -387,14 +406,16 @@ public enum ProjectItemCatalogBuilder {
             secondaryId: compact(fields["secondaryId"]),
             fieldUseFunc: compact(fields["fieldUseFunc"]),
             battleUseFunc: compact(fields["battleUseFunc"]),
-            descriptionSymbol: compact(fields["description"]),
+            descriptionSymbol: descriptionSymbol,
+            descriptionText: descriptionSymbol.flatMap { descriptions[$0]?.text },
+            isDescriptionEditable: descriptor.supportsDescriptionEditing && descriptionSymbol.flatMap { descriptions[$0] } != nil,
             diagnostics: diagnostics,
-            isEditable: descriptor.supportsEditing && diagnostics.allSatisfy { $0.severity != .error }
+            isEditable: descriptor.supportsRowEditing && diagnostics.allSatisfy { $0.severity != .error }
         )
     }
 
     private static func editabilityDiagnostics(entry: CInitializerEntry, descriptor: ItemCatalogDescriptor) -> [Diagnostic] {
-        guard descriptor.supportsEditing else {
+        guard descriptor.supportsRowEditing || descriptor.supportsDescriptionEditing else {
             return [readOnlyDiagnostic(profile: descriptor.profile, span: entry.span)]
         }
         guard !entry.fields.isEmpty else {
@@ -420,6 +441,17 @@ public enum ProjectItemCatalogBuilder {
         return []
     }
 
+    private static func readDescriptionTexts(
+        descriptor: ItemCatalogDescriptor,
+        root: URL,
+        fileManager: FileManager
+    ) -> [String: ItemDescriptionText] {
+        guard let path = descriptor.descriptionPath else { return [:] }
+        let url = root.appendingPathComponent(path)
+        guard fileManager.fileExists(atPath: url.path), let text = try? readText(url) else { return [:] }
+        return ItemDescriptionScanner.descriptions(in: text, relativePath: path)
+    }
+
     private static func fact(_ label: String, in facts: [SourceIndexFact]) -> String? {
         facts.first { $0.label == label }?.value
     }
@@ -441,12 +473,14 @@ public enum ItemMutationPlanner {
         fileManager: FileManager = .default
     ) -> ItemEditPlan {
         let root = URL(fileURLWithPath: catalog.root.path).standardizedFileURL
-        guard let descriptor = ItemCatalogDescriptor.descriptor(for: catalog.profile), descriptor.supportsEditing else {
+        guard let descriptor = ItemCatalogDescriptor.descriptor(for: catalog.profile),
+              descriptor.supportsRowEditing || descriptor.supportsDescriptionEditing
+        else {
             return blockedPlan(
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald src/data/items.h gItems entries.")
+                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald item rows and supported Emerald/FireRed item descriptions.")
                 ]
             )
         }
@@ -464,7 +498,12 @@ public enum ItemMutationPlanner {
         var changes: [ItemEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            if let change = rewriteChange(root: root, path: descriptor.itemPath, item: item, draft: draft, diagnostics: &diagnostics) {
+            if descriptor.supportsRowEditing,
+               let change = rewriteChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
+            {
+                changes.append(change)
+            }
+            if let change = rewriteDescriptionChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics) {
                 changes.append(change)
             }
         }
@@ -510,7 +549,7 @@ public enum ItemMutationPlanner {
 
     private static func plannerDiagnostics(item: ItemDetail, draft: ItemEditDraft) -> [Diagnostic] {
         var diagnostics = item.diagnostics.filter { $0.severity == .error }
-        guard item.isEditable else {
+        guard item.isEditable || item.isDescriptionEditable else {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_NOT_EDITABLE", message: "\(item.itemID) is read-only until its source diagnostics are resolved.", span: item.sourceSpan))
             return diagnostics
         }
@@ -522,11 +561,12 @@ public enum ItemMutationPlanner {
 
     private static func rewriteChange(
         root: URL,
-        path: String,
+        descriptor: ItemCatalogDescriptor,
         item: ItemDetail,
         draft: ItemEditDraft,
         diagnostics: inout [Diagnostic]
     ) -> ItemEditFileChange? {
+        let path = descriptor.itemPath
         let url = root.appendingPathComponent(path)
         guard let originalText = try? readText(url), let originalData = originalText.data(using: .utf8) else {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_PLAN_SOURCE_UNREADABLE", message: "Item source file could not be read before planning: \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
@@ -534,7 +574,7 @@ public enum ItemMutationPlanner {
         }
         let parsed = CInitializerParser.tableEntries(
             in: originalText,
-            descriptor: CInitializerTableDescriptor(module: .items, relativePath: path, tableSymbol: "gItems", entryStyle: .bracketed)
+            descriptor: CInitializerTableDescriptor(module: .items, relativePath: path, tableSymbol: descriptor.tableSymbol, entryStyle: descriptor.entryStyle, idField: descriptor.idField)
         )
         guard let entry = parsed.entries.first(where: { $0.symbol == item.itemID }) else {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_PLAN_TARGET_MISSING", message: "Item \(item.itemID) is not present in \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
@@ -553,6 +593,46 @@ public enum ItemMutationPlanner {
         return ItemEditFileChange(
             path: path,
             summary: "Update item source block",
+            originalByteCount: originalData.count,
+            originalSHA1: pokemonHackSHA1Hex(originalData),
+            newByteCount: newData.count,
+            newData: newData,
+            textPreview: replacement
+        )
+    }
+
+    private static func rewriteDescriptionChange(
+        root: URL,
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) -> ItemEditFileChange? {
+        guard let draftText = draft.descriptionText, draftText != item.descriptionText else { return nil }
+        guard let path = descriptor.descriptionPath, let symbol = item.descriptionSymbol else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_SOURCE_MISSING", message: "Item \(item.itemID) does not have a description symbol that can be rewritten.", span: item.sourceSpan))
+            return nil
+        }
+        let url = root.appendingPathComponent(path)
+        guard let originalText = try? readText(url), let originalData = originalText.data(using: .utf8) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_SOURCE_UNREADABLE", message: "Item description source file could not be read before planning: \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+            return nil
+        }
+        guard let description = ItemDescriptionScanner.descriptions(in: originalText, relativePath: path)[symbol] else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_SYMBOL_MISSING", message: "Description symbol \(symbol) was not found in \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+            return nil
+        }
+        let replacement = renderDescriptionDeclaration(symbol: symbol, text: draftText, usesStatic: description.usesStatic)
+        let mutableText = NSMutableString(string: originalText)
+        mutableText.replaceCharacters(
+            in: NSRange(location: description.startOffset, length: description.endOffset - description.startOffset),
+            with: replacement
+        )
+        let newText = mutableText as String
+        guard newText != originalText, let newData = newText.data(using: .utf8) else { return nil }
+        return ItemEditFileChange(
+            path: path,
+            summary: "Update item description text",
             originalByteCount: originalData.count,
             originalSHA1: pokemonHackSHA1Hex(originalData),
             newByteCount: newData.count,
@@ -688,24 +768,40 @@ private enum ItemEditApplySafety {
 private struct ItemCatalogDescriptor {
     let profile: GameProfile
     let itemPath: String
+    let descriptionPath: String?
     let tableSymbol: String
     let entryStyle: CInitializerEntryStyle
-    let supportsEditing: Bool
+    let idField: String?
+    let supportsRowEditing: Bool
+    let supportsDescriptionEditing: Bool
+
+    var supportsItemCatalogParsing: Bool {
+        supportsRowEditing || supportsDescriptionEditing
+    }
 
     static func descriptor(for profile: GameProfile) -> ItemCatalogDescriptor? {
         switch profile {
         case .pokeemerald:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .bracketed, supportsEditing: true)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/text/item_descriptions.h", tableSymbol: "gItems", entryStyle: .bracketed, idField: nil, supportsRowEditing: true, supportsDescriptionEditing: true)
         case .pokefirered:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.json", tableSymbol: "items", entryStyle: .positional, supportsEditing: false)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: false, supportsDescriptionEditing: true)
         case .pokeruby:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", tableSymbol: "gItems", entryStyle: .positional, supportsEditing: false)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", descriptionPath: nil, tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: false, supportsDescriptionEditing: false)
         case .pokeemeraldExpansion:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", tableSymbol: "gItemsInfo", entryStyle: .bracketed, supportsEditing: false)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: nil, tableSymbol: "gItemsInfo", entryStyle: .bracketed, idField: nil, supportsRowEditing: false, supportsDescriptionEditing: false)
         default:
             nil
         }
     }
+}
+
+private struct ItemDescriptionText {
+    let symbol: String
+    let text: String
+    let span: SourceSpan
+    let startOffset: Int
+    let endOffset: Int
+    let usesStatic: Bool
 }
 
 private struct ItemFieldChange {
@@ -853,6 +949,71 @@ private enum ItemFieldPatcher {
     }
 }
 
+private enum ItemDescriptionScanner {
+    static func descriptions(in text: String, relativePath: String) -> [String: ItemDescriptionText] {
+        let pattern = #"(static\s+)?const\s+u8\s+([A-Za-z_][A-Za-z0-9_]*)\[\]\s*=\s*_\(\s*((?:"(?:\\.|[^"])*"\s*)+)\);"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return [:]
+        }
+        let nsText = text as NSString
+        var result: [String: ItemDescriptionText] = [:]
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            guard match.numberOfRanges >= 4 else { continue }
+            let symbol = nsText.substring(with: match.range(at: 2))
+            let literalBlock = nsText.substring(with: match.range(at: 3))
+            let description = quotedStrings(in: literalBlock)
+                .map(unescapeCString)
+                .joined(separator: "\n")
+            let fullRange = match.range(at: 0)
+            result[symbol] = ItemDescriptionText(
+                symbol: symbol,
+                text: description,
+                span: SourceSpan(
+                    relativePath: relativePath,
+                    startLine: lineNumber(forUTF16Offset: fullRange.location, in: text),
+                    endLine: lineNumber(forUTF16Offset: fullRange.location + fullRange.length, in: text)
+                ),
+                startOffset: fullRange.location,
+                endOffset: fullRange.location + fullRange.length,
+                usesStatic: match.range(at: 1).location != NSNotFound
+            )
+        }
+        return result
+    }
+
+    private static func quotedStrings(in text: String) -> [String] {
+        let characters = Array(text)
+        var strings: [String] = []
+        var index = 0
+        while index < characters.count {
+            guard characters[index] == "\"" else {
+                index += 1
+                continue
+            }
+            index += 1
+            var value = ""
+            while index < characters.count {
+                let character = characters[index]
+                if character == "\\" {
+                    value.append(character)
+                    index += 1
+                    if index < characters.count {
+                        value.append(characters[index])
+                    }
+                } else if character == "\"" {
+                    break
+                } else {
+                    value.append(character)
+                }
+                index += 1
+            }
+            strings.append(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            index += 1
+        }
+        return strings
+    }
+}
+
 private enum ItemScannerState: Equatable {
     case normal
     case lineComment
@@ -872,7 +1033,7 @@ private func readOnlyDiagnostic(profile: GameProfile, span: SourceSpan?) -> Diag
     Diagnostic(
         severity: .warning,
         code: "ITEM_CATALOG_READ_ONLY_PROFILE",
-        message: "Item editing is currently read-only for \(profile.rawValue); only classic Emerald bracketed gItems rows are applyable.",
+        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald rows plus Emerald/FireRed item description text.",
         span: span
     )
 }
@@ -937,6 +1098,7 @@ private func escapeCString(_ value: String) -> String {
     value
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
 }
 
 private func unescapeCString(_ value: String) -> String {
@@ -970,6 +1132,26 @@ private func regexMatches(_ pattern: String, in text: String) -> [[String]] {
             guard range.location != NSNotFound else { return "" }
             return nsText.substring(with: range)
         }
+    }
+}
+
+private func renderDescriptionDeclaration(symbol: String, text: String, usesStatic: Bool) -> String {
+    let prefix = usesStatic ? "static const u8" : "const u8"
+    let lines = text.components(separatedBy: "\n")
+    if lines.count <= 1 {
+        return "\(prefix) \(symbol)[] = _(\"" + escapeCString(text) + "\");"
+    }
+    let body = lines
+        .map { "    \"\(escapeCString($0))\"" }
+        .joined(separator: "\n")
+    return "\(prefix) \(symbol)[] = _(\n\(body));"
+}
+
+private func lineNumber(forUTF16Offset offset: Int, in text: String) -> Int {
+    let clamped = max(0, min(offset, (text as NSString).length))
+    let prefix = (text as NSString).substring(to: clamped)
+    return prefix.reduce(1) { count, character in
+        character == "\n" ? count + 1 : count
     }
 }
 

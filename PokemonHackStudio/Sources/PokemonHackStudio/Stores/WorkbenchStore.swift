@@ -158,6 +158,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private var moveDraftsByKey: [String: PokemonHackCore.MoveEditDraft] = [:]
     @Published private var itemDraftsByKey: [String: PokemonHackCore.ItemEditDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
+    @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
 
     let userSettings: WorkbenchUserSettings
     let targets: [BuildTarget]
@@ -614,6 +615,11 @@ final class WorkbenchStore: ObservableObject {
     var selectedPlaytestLaunchResult: PlaytestLaunchResultViewState? {
         guard let selectedIndexedProject else { return nil }
         return playtestLaunchResultsByID[selectedIndexedProject.id]
+    }
+
+    var selectedPlaytestCaptureResult: PlaytestCaptureResultViewState? {
+        guard let selectedIndexedProject else { return nil }
+        return playtestCaptureResultsByID[selectedIndexedProject.id]
     }
 
     var canLaunchSelectedPlaytest: Bool {
@@ -1528,14 +1534,8 @@ final class WorkbenchStore: ObservableObject {
             latestMoveApplyResult = nil
             latestItemEditPlan = nil
             latestItemApplyResult = nil
-            latestMoveEditPlan = nil
-            latestMoveApplyResult = nil
-            latestItemEditPlan = nil
-            latestItemApplyResult = nil
             updateAssetCatalogLoadStatusForSelection()
-            if selection == .resources || userSettings.autoLoadAssetCatalog {
-                loadSelectedAssetCatalogIfNeeded()
-            }
+            loadSelectedModuleDataIfNeeded()
         }
     }
 
@@ -1668,6 +1668,7 @@ final class WorkbenchStore: ObservableObject {
         selectedDiagnosticBucket = .blockingErrors
         selectedDiagnosticRowID = ""
         selectedGuidedFlowID = ""
+        selectedScriptReadinessLabel = ""
         selectedRecordIDsByModule = [:]
         latestMoveEditPlan = nil
         latestMoveApplyResult = nil
@@ -1933,9 +1934,7 @@ final class WorkbenchStore: ObservableObject {
             latestItemEditPlan = nil
             latestItemApplyResult = nil
             updateAssetCatalogLoadStatusForSelection()
-            if selection == .resources || userSettings.autoLoadAssetCatalog {
-                loadSelectedAssetCatalogIfNeeded()
-            }
+            loadSelectedModuleDataIfNeeded()
         case .map(let mapID):
             selectedMapID = mapID
         }
@@ -1991,12 +1990,35 @@ final class WorkbenchStore: ObservableObject {
             latestTrainerEditPlan = nil
             latestTrainerApplyResult = nil
             updateAssetCatalogLoadStatusForSelection()
-            if selection == .resources || userSettings.autoLoadAssetCatalog {
-                loadSelectedAssetCatalogIfNeeded()
-            }
+            loadSelectedModuleDataIfNeeded()
             projectIndexStatus = .loaded(indexedProjects.count)
         } catch {
             projectIndexStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func loadSelectedModuleDataIfNeeded() {
+        switch selection {
+        case .resources:
+            loadSelectedAssetCatalogIfNeeded()
+        case .maps:
+            loadSelectedMapCatalogIfNeeded()
+            loadSelectedMapVisualDocumentIfNeeded()
+        case .scripts:
+            loadSelectedSourceGraphIfNeeded()
+            refreshSelectedScriptReadinessReport()
+        case .text:
+            loadSelectedSourceGraphIfNeeded()
+        case .pokemon:
+            loadSelectedSpeciesCatalogIfNeeded()
+        case .trainers:
+            loadSelectedTrainerCatalogIfNeeded()
+        case .moves:
+            loadSelectedMoveCatalogIfNeeded()
+        case .items:
+            loadSelectedItemCatalogIfNeeded()
+        case .dashboard, .build, .graphics, .issues, .encounters:
+            break
         }
     }
 
@@ -2975,6 +2997,31 @@ final class WorkbenchStore: ObservableObject {
             processRunner: processRunner
         )
         playtestLaunchResultsByID[selectedIndexedProject.id] = Self.playtestLaunchResult(
+            from: result,
+            rootPath: selectedIndexedProject.rootPath
+        )
+    }
+
+    func captureSelectedPlaytest(
+        kind: PlaytestCaptureKind,
+        artifactRoot: URL? = nil,
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner
+    ) {
+        guard let selectedIndexedProject,
+              let index = projectIndexesByID[selectedIndexedProject.id] else {
+            return
+        }
+
+        let result = PlaytestLauncher.capture(
+            index: index,
+            kind: kind,
+            mode: .interactive,
+            artifactRoot: artifactRoot ?? workspaceRoot,
+            fileManager: fileManager,
+            toolResolver: toolResolver,
+            processRunner: processRunner
+        )
+        playtestCaptureResultsByID[selectedIndexedProject.id] = Self.playtestCaptureResult(
             from: result,
             rootPath: selectedIndexedProject.rootPath
         )
@@ -4503,6 +4550,51 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func playtestCaptureResult(
+        from result: PokemonHackCore.PlaytestCaptureResult,
+        rootPath: String
+    ) -> PlaytestCaptureResultViewState {
+        let status: ValidationState
+        let detail: String
+        switch result.status {
+        case .launched:
+            status = .valid
+            detail = "mGBA \(result.captureKind.rawValue) capture launched with process \(result.processID.map(String.init) ?? "unknown")."
+        case .blocked:
+            status = .warning
+            detail = result.diagnostics.last?.message ?? "mGBA capture is blocked by the current handoff report."
+        case .failed:
+            status = .error
+            detail = result.diagnostics.last?.message ?? "mGBA capture failed."
+        }
+
+        let artifacts = result.artifacts.map { artifact in
+            PlaytestArtifactViewState(
+                id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
+                kind: artifact.kind.rawValue,
+                path: artifact.relativePath,
+                detail: artifact.exists ? "\(artifact.detail) Created." : artifact.detail,
+                source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
+            )
+        }
+        let command = result.command.joined(separator: " ")
+        let sourcePath = result.romPath ?? result.emulatorPath ?? rootPath
+
+        return PlaytestCaptureResultViewState(
+            id: "playtest-capture:\(rootPath)",
+            title: result.captureKind == .screenshot ? "mGBA screenshot capture" : "mGBA savestate capture",
+            status: status,
+            statusLabel: result.status.rawValue,
+            detail: detail,
+            emulatorPath: result.emulatorPath,
+            romPath: result.romPath,
+            command: command,
+            processID: result.processID.map { "PID \($0)" } ?? result.status.rawValue,
+            artifacts: artifacts,
+            source: SourceLocation(path: sourcePath, symbol: "mGBA", line: 1)
+        )
+    }
+
     private static func patchManifestReportViewState(
         from report: PokemonHackCore.PatchManifestReport,
         patchPath: String,
@@ -4617,7 +4709,7 @@ final class WorkbenchStore: ObservableObject {
             "Command preview: \(launchCommand)."
         ].joined(separator: " ")
 
-        return [
+        var rows = [
             BuildReportRow(
                 id: "patch:artifact:output",
                 section: .patchManifest,
@@ -4664,6 +4756,74 @@ final class WorkbenchStore: ObservableObject {
                 tags: [launch.outputROMPath, launch.emulatorPath ?? "", launchCommand]
             )
         ]
+        if let diff = plan.binaryDiffPreview {
+            let blockedReasons = diff.applyExportState.reasons.joined(separator: " ")
+            rows.append(
+                BuildReportRow(
+                    id: "patch:binary-diff:summary",
+                    section: .patchManifest,
+                    title: "Binary ROM diff preview",
+                    subtitle: "\(diff.previewedChangeCount) change preview(s); \(diff.changedByteCount) byte(s)",
+                    detail: "\(diff.patchFormat.rawValue.uppercased()) preview is read-only. \(blockedReasons)",
+                    status: diff.changes.isEmpty ? .warning : .valid,
+                    source: SourceLocation(path: diff.baseROMPath ?? patchSourcePath, symbol: "binary-diff", line: 1),
+                    tags: [diff.patchFormat.rawValue, "\(diff.changedByteCount)", blockedReasons]
+                )
+            )
+            rows.append(contentsOf: diff.changes.prefix(8).map { change in
+                BuildReportRow(
+                    id: "patch:binary-diff:change:\(change.id)",
+                    section: .patchManifest,
+                    title: String(format: "ROM bytes 0x%06X", change.offset),
+                    subtitle: "\(change.kind.rawValue) · \(change.length) byte(s)",
+                    detail: "\(change.detail) Original: \(change.originalPreviewHex ?? "unavailable"); patched: \(change.patchedPreviewHex ?? "unavailable").",
+                    status: .valid,
+                    source: SourceLocation(path: diff.baseROMPath ?? patchSourcePath, symbol: "byte-span", line: 1),
+                    tags: [change.detail, change.originalPreviewHex ?? "", change.patchedPreviewHex ?? ""]
+                )
+            })
+            rows.append(contentsOf: diff.freeSpaceSuitability.prefix(5).map { suitability in
+                BuildReportRow(
+                    id: "patch:binary-diff:free-space:\(suitability.id)",
+                    section: .patchManifest,
+                    title: String(format: "Free space 0x%06X", suitability.freeSpaceOffset),
+                    subtitle: suitability.isSuitable ? "Suitable" : "Too small",
+                    detail: suitability.detail,
+                    status: suitability.isSuitable ? .valid : .warning,
+                    source: SourceLocation(path: diff.baseROMPath ?? patchSourcePath, symbol: "free-space", line: 1),
+                    tags: [suitability.detail]
+                )
+            })
+            rows.append(contentsOf: diff.pointerRepointPlans.prefix(8).map { repoint in
+                BuildReportRow(
+                    id: "patch:binary-diff:repoint:\(repoint.id)",
+                    section: .patchManifest,
+                    title: String(format: "Pointer repoint 0x%06X", repoint.pointerSourceOffset),
+                    subtitle: String(format: "0x%06X -> 0x%06X", repoint.oldTargetOffset, repoint.plannedTargetOffset),
+                    detail: "\(repoint.detail) Planned raw value: \(String(format: "0x%08X", repoint.plannedRawValue)).",
+                    status: .warning,
+                    source: SourceLocation(path: diff.baseROMPath ?? patchSourcePath, symbol: "pointer-repoint", line: 1),
+                    tags: [repoint.detail]
+                )
+            })
+            rows.append(
+                BuildReportRow(
+                    id: "patch:binary-diff:manifest",
+                    section: .patchManifest,
+                    title: "Backup/export manifest",
+                    subtitle: diff.backupExportManifest.patchedROMSHA1.map { "patched sha1 \($0.prefix(8))" } ?? "patched sha1 unavailable",
+                    detail: "\(diff.backupExportManifest.detail) Backup: \(diff.backupExportManifest.backupPath ?? "not planned"); manifest: \(diff.backupExportManifest.manifestPath).",
+                    status: .warning,
+                    source: SourceLocation(path: diff.backupExportManifest.manifestPath, symbol: "export-manifest", line: 1),
+                    tags: [
+                        diff.backupExportManifest.outputPath,
+                        diff.backupExportManifest.backupPath ?? "",
+                        diff.backupExportManifest.manifestPath
+                    ]
+                )
+            )
+        }
+        return rows
     }
 
     private static func selectedBaseROMViewState(
@@ -4904,7 +5064,8 @@ final class WorkbenchStore: ObservableObject {
                     item.displayName,
                     item.sourceSpan.relativePath,
                     item.sourcePreview ?? "",
-                    item.descriptionSymbol ?? ""
+                    item.descriptionSymbol ?? "",
+                    item.descriptionText ?? ""
                 ]
                 + facts.flatMap { [$0.label, $0.value] }
                 + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
@@ -4920,6 +5081,8 @@ final class WorkbenchStore: ObservableObject {
                 source: source,
                 sourcePreview: item.sourcePreview,
                 isEditable: item.isEditable,
+                isDescriptionEditable: item.isDescriptionEditable,
+                descriptionText: item.descriptionText,
                 diagnostics: diagnostics,
                 searchBlob: searchBlob
             )
@@ -4951,6 +5114,7 @@ final class WorkbenchStore: ObservableObject {
             ("Battle Func", item.battleUseFunc),
             ("Secondary", item.secondaryId),
             ("Description", item.descriptionSymbol),
+            ("Description Text", item.descriptionText),
             ("Editable", item.isEditable ? "Yes" : "No")
         ].compactMap { label, value in
             value.map { Fact(label: label, value: $0) }
@@ -5385,6 +5549,20 @@ final class WorkbenchStore: ObservableObject {
                 id: "open-playtest",
                 title: "Open Playtest",
                 systemImage: "play.fill",
+                isEnabled: canLaunchPlaytest,
+                isPreviewLocked: false
+            ),
+            BuildWorkflowActionViewState(
+                id: "capture-screenshot",
+                title: "Capture Screenshot",
+                systemImage: "camera",
+                isEnabled: canLaunchPlaytest,
+                isPreviewLocked: false
+            ),
+            BuildWorkflowActionViewState(
+                id: "capture-savestate",
+                title: "Capture Savestate",
+                systemImage: "memories",
                 isEnabled: canLaunchPlaytest,
                 isPreviewLocked: false
             ),

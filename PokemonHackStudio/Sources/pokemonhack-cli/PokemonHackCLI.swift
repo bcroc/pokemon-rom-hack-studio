@@ -73,6 +73,8 @@ struct PokemonHackCLI {
             return try patchManifest(arguments: Array(arguments.dropFirst()))
         case "patch-artifact-plan":
             return try patchArtifactPlan(arguments: Array(arguments.dropFirst()))
+        case "rom-diff-preview":
+            return try romDiffPreview(arguments: Array(arguments.dropFirst()))
         case "build":
             return try build(arguments: Array(arguments.dropFirst()))
         case "playtest":
@@ -338,23 +340,66 @@ struct PokemonHackCLI {
     }
 
     private static func patchArtifactPlan(arguments: [String]) throws -> String {
-        guard
-            arguments.count == 5,
-            let project = arguments.first,
-            arguments[2] == "--base-rom",
-            arguments.last == "--json"
-        else {
+        guard arguments.last == "--json" else {
             throw CLIError.usage
         }
 
-        let patch = arguments[1]
-        let baseROMPath = arguments[3]
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard let baseROMPath else {
+            throw CLIError.usage
+        }
+        if positionals.count == 1, let patch = positionals.first {
+            let report = try PatchManifestBuilder.build(
+                patchPath: patch,
+                baseROMPath: baseROMPath
+            )
+            return try encode(report.artifactPlan)
+        }
+        guard positionals.count == 2, let project = positionals.first, let patch = positionals.dropFirst().first else {
+            throw CLIError.usage
+        }
         let report = try PatchManifestBuilder.build(
             patchPath: patch,
             projectPath: project,
             baseROMPath: baseROMPath
         )
         return try encode(report.artifactPlan)
+    }
+
+    private static func romDiffPreview(arguments: [String]) throws -> String {
+        guard
+            arguments.count == 4,
+            let patch = arguments.first,
+            arguments[1] == "--base-rom",
+            arguments.last == "--json"
+        else {
+            throw CLIError.usage
+        }
+
+        return try encode(
+            PatchManifestBuilder.binaryDiffPreview(
+                patchPath: patch,
+                baseROMPath: arguments[2]
+            )
+        )
     }
 
     private static func build(arguments: [String]) throws -> String {
@@ -377,6 +422,24 @@ struct PokemonHackCLI {
             return try encode(
                 PlaytestLauncher.launch(
                     index: index,
+                    mode: .interactive,
+                    artifactRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                )
+            )
+        case "--screenshot":
+            return try encode(
+                PlaytestLauncher.capture(
+                    index: index,
+                    kind: .screenshot,
+                    mode: .interactive,
+                    artifactRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                )
+            )
+        case "--savestate":
+            return try encode(
+                PlaytestLauncher.capture(
+                    index: index,
+                    kind: .saveState,
                     mode: .interactive,
                     artifactRoot: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 )
@@ -408,7 +471,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

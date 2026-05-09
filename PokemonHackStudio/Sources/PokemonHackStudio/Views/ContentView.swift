@@ -14,9 +14,7 @@ struct ContentView: View {
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search sources")
         .onChange(of: store.selectedProjectID) { _, _ in
             store.refreshSelectedMapCatalog()
-            if store.selection == .maps {
-                store.loadSelectedMapCatalogIfNeeded()
-            }
+            store.loadSelectedModuleDataIfNeeded()
         }
         .confirmationDialog(
             store.pendingMapNavigation?.title ?? "Staged map edits",

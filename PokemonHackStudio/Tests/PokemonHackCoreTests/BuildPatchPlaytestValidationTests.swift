@@ -203,11 +203,59 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(report.artifactPlan.headerPolicy.shouldRewriteHeader)
         XCTAssertEqual(report.artifactPlan.mgbaLaunchPreview.outputROMPath, root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path)
         XCTAssertFalse(report.artifactPlan.mgbaLaunchPreview.isLaunchEnabled)
+        XCTAssertEqual(report.artifactPlan.binaryDiffPreview?.patchFormat, .apsGBA)
+        XCTAssertEqual(report.artifactPlan.binaryDiffPreview?.applyExportState.canApply, false)
+        XCTAssertEqual(report.artifactPlan.binaryDiffPreview?.backupExportManifest.outputPath, report.artifactPlan.absoluteOutputPath)
         XCTAssertEqual(report.dryRunPlans.map(\.id), ["verify", "apply"])
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_BASE_ROM_MATCHED" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_ARTIFACT_PLAN_ONLY" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_MANIFEST_PLAN_ONLY" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: report.artifactPlan.absoluteOutputPath))
+    }
+
+    func testPatchManifestBuildsReadonlyBinaryDiffFreeSpaceAndRepointPreview() throws {
+        let root = try makeTemporaryRoot()
+        var bytes = [UInt8](repeating: 0xFF, count: 0x240)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x20
+        bytes[0x101] = 0x01
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        bytes[0x120] = 0x11
+        bytes[0x121] = 0x22
+        bytes[0x122] = 0x33
+        bytes[0x123] = 0x44
+        let baseROM = root.appendingPathComponent("standalone.gba")
+        try write(Data(bytes), to: baseROM)
+
+        let ips = Data("PATCH".utf8)
+            + Data([0x00, 0x01, 0x20, 0x00, 0x04, 0xAA, 0xBB, 0xCC, 0xDD])
+            + Data("EOF".utf8)
+        let patch = root.appendingPathComponent("change.ips")
+        try write(ips, to: patch)
+
+        let preview = PatchManifestBuilder.binaryDiffPreview(
+            patchPath: patch.path,
+            baseROMPath: baseROM.path,
+            outputPath: root.appendingPathComponent("out.gba").path
+        )
+
+        XCTAssertTrue(preview.isPreviewOnly)
+        XCTAssertEqual(preview.patchFormat, .ips)
+        XCTAssertEqual(preview.previewedChangeCount, 1)
+        XCTAssertEqual(preview.changedByteCount, 4)
+        XCTAssertEqual(preview.changes.first?.offset, 0x120)
+        XCTAssertEqual(preview.changes.first?.originalPreviewHex, "11 22 33 44")
+        XCTAssertEqual(preview.changes.first?.patchedPreviewHex, "AA BB CC DD")
+        XCTAssertTrue(preview.freeSpaceSuitability.contains { $0.isSuitable })
+        XCTAssertTrue(preview.pointerRepointPlans.contains { $0.pointerSourceOffset == 0x100 && $0.oldTargetOffset == 0x120 })
+        XCTAssertEqual(preview.applyExportState.canApply, false)
+        XCTAssertEqual(preview.applyExportState.canExport, false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preview.backupExportManifest.outputPath))
+        XCTAssertTrue(preview.diagnostics.contains { $0.code == "PATCH_BINARY_DIFF_PREVIEW_ONLY" })
     }
 
     func testPatchManifestReportsSelectedBaseROMMismatch() throws {
@@ -344,6 +392,115 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(runLog.contains("targetID: emerald-build"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/stdout.log").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/stderr.log").path))
+    }
+
+    func testPlaytestCaptureStartsRunnableROMWithScriptAndWritesScreenshotArtifacts() throws {
+        let root = try makeTemporaryRoot()
+        let output = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: output)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        var capturedRequest: PlaytestProcessRequest?
+        let capturedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        let result = PlaytestLauncher.capture(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            kind: .screenshot,
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { request in
+                capturedRequest = request
+                let scriptPath = try XCTUnwrap(request.arguments.dropFirst().first)
+                let script = try String(contentsOfFile: scriptPath, encoding: .utf8)
+                XCTAssertTrue(script.contains("emu:screenshot(target)"))
+                try write(Data("png".utf8), to: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/screenshot.png"))
+                return 5252
+            },
+            now: { capturedAt }
+        )
+
+        let request = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(result.status, .launched)
+        XCTAssertEqual(result.captureKind, .screenshot)
+        XCTAssertEqual(result.processID, 5252)
+        XCTAssertEqual(result.command, [emulator.path, "--script", root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/screenshot-capture.lua").path, output.path])
+        XCTAssertEqual(request.executableURL.path, emulator.path)
+        XCTAssertEqual(request.arguments, ["--script", root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/screenshot-capture.lua").path, output.path])
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .screenshot && $0.exists })
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .runLog && $0.relativePath.hasSuffix("/screenshot-capture.log") && $0.exists })
+
+        let runLogURL = root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/screenshot-capture.log")
+        let runLog = try String(contentsOf: runLogURL, encoding: .utf8)
+        XCTAssertTrue(runLog.contains("captureKind: screenshot"))
+        XCTAssertTrue(runLog.contains("processID: 5252"))
+    }
+
+    func testPlaytestCaptureStartsRunnableROMWithScriptAndWritesSavestateArtifacts() throws {
+        let root = try makeTemporaryRoot()
+        let output = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: output)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        var capturedRequest: PlaytestProcessRequest?
+        let result = PlaytestLauncher.capture(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            kind: .saveState,
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { request in
+                capturedRequest = request
+                let scriptPath = try XCTUnwrap(request.arguments.dropFirst().first)
+                let script = try String(contentsOfFile: scriptPath, encoding: .utf8)
+                XCTAssertTrue(script.contains("emu:saveStateFile(target)"))
+                try write(Data("state".utf8), to: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate.ss0"))
+                return 5353
+            }
+        )
+
+        let request = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(result.status, .launched)
+        XCTAssertEqual(result.captureKind, .saveState)
+        XCTAssertEqual(request.arguments, ["--script", root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate-capture.lua").path, output.path])
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .saveState && $0.relativePath.hasSuffix("/savestate.ss0") && $0.exists })
+        XCTAssertTrue(result.artifacts.contains { $0.kind == .runLog && $0.relativePath.hasSuffix("/savestate-capture.log") && $0.exists })
+    }
+
+    func testPlaytestCaptureBlocksMissingROMWithoutRunningProcess() throws {
+        let root = try makeTemporaryRoot()
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+        var didRun = false
+
+        let result = PlaytestLauncher.capture(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            kind: .screenshot,
+            mode: .interactive,
+            toolResolver: availableTools(["mgba": emulator.path]),
+            processRunner: { _ in
+                didRun = true
+                return 1
+            }
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertFalse(didRun)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PLAYTEST_CAPTURE_BLOCKED" })
     }
 
     func testPlaytestLauncherBlocksMissingROMWithoutRunningProcess() throws {

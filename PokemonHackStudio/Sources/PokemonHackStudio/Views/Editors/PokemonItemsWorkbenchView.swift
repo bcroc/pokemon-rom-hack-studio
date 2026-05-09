@@ -141,7 +141,7 @@ struct PokemonItemsWorkbenchView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Text(item.isEditable ? "Editable" : "Read-only")
+                    Text(item.isEditable ? "Editable" : (item.isDescriptionEditable ? "Description editable" : "Read-only"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -180,7 +180,7 @@ struct PokemonItemsWorkbenchView: View {
             }
 
             if let draft {
-                editSection(draft)
+                editSection(draft, item: item)
             } else {
                 EditorSection(title: "Editing") {
                     Text("This item source shape is read-only.")
@@ -211,19 +211,30 @@ struct PokemonItemsWorkbenchView: View {
         .padding(24)
     }
 
-    private func editSection(_ draft: ItemEditDraft) -> some View {
+    private func editSection(_ draft: ItemEditDraft, item: ItemDetailViewState) -> some View {
         EditorSection(title: isDirty ? "Item Data Edited" : "Item Data") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], alignment: .leading, spacing: 12) {
-                itemTextField("Name", text: draftOptionalStringBinding(\.name))
-                itemTextField("Price", text: draftOptionalStringBinding(\.price))
-                itemTextField("Hold Effect", text: draftOptionalStringBinding(\.holdEffect))
-                itemTextField("Hold Param", text: draftOptionalStringBinding(\.holdEffectParam))
-                itemTextField("Pocket", text: draftOptionalStringBinding(\.pocket))
-                itemTextField("Type", text: draftOptionalStringBinding(\.type))
-                itemTextField("Battle Use", text: draftOptionalStringBinding(\.battleUsage))
-                itemTextField("Secondary", text: draftOptionalStringBinding(\.secondaryId))
-                itemTextField("Field Func", text: draftOptionalStringBinding(\.fieldUseFunc))
-                itemTextField("Battle Func", text: draftOptionalStringBinding(\.battleUseFunc))
+            VStack(alignment: .leading, spacing: 14) {
+                if item.isEditable {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], alignment: .leading, spacing: 12) {
+                        itemTextField("Name", text: draftOptionalStringBinding(\.name))
+                        itemTextField("Price", text: draftOptionalStringBinding(\.price))
+                        itemTextField("Hold Effect", text: draftOptionalStringBinding(\.holdEffect))
+                        itemTextField("Hold Param", text: draftOptionalStringBinding(\.holdEffectParam))
+                        itemTextField("Pocket", text: draftOptionalStringBinding(\.pocket))
+                        itemTextField("Type", text: draftOptionalStringBinding(\.type))
+                        itemTextField("Battle Use", text: draftOptionalStringBinding(\.battleUsage))
+                        itemTextField("Secondary", text: draftOptionalStringBinding(\.secondaryId))
+                        itemTextField("Field Func", text: draftOptionalStringBinding(\.fieldUseFunc))
+                        itemTextField("Battle Func", text: draftOptionalStringBinding(\.battleUseFunc))
+                    }
+                } else {
+                    Text("Only description text is editable for this profile.")
+                        .foregroundStyle(.secondary)
+                }
+
+                if item.isDescriptionEditable {
+                    descriptionEditor(text: draftDescriptionBinding)
+                }
             }
         }
     }
@@ -249,6 +260,37 @@ struct PokemonItemsWorkbenchView: View {
                 onUpdateDraft(draft)
             }
         )
+    }
+
+    private var draftDescriptionBinding: Binding<String> {
+        Binding(
+            get: { draft?.descriptionText ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft.descriptionText = value
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
+    private func descriptionEditor(text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Description Text")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 92)
+                .scrollContentBackground(.hidden)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.22))
+                )
+        }
     }
 
     private func diagnosticRow(_ diagnostic: IndexedDiagnosticRow) -> some View {

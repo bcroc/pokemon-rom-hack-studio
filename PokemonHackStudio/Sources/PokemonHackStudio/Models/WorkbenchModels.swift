@@ -495,6 +495,20 @@ struct PlaytestLaunchResultViewState: Identifiable {
     let source: SourceLocation
 }
 
+struct PlaytestCaptureResultViewState: Identifiable {
+    let id: String
+    let title: String
+    let status: ValidationState
+    let statusLabel: String
+    let detail: String
+    let emulatorPath: String?
+    let romPath: String?
+    let command: String
+    let processID: String
+    let artifacts: [PlaytestArtifactViewState]
+    let source: SourceLocation
+}
+
 struct PlaytestArtifactViewState: Identifiable {
     let id: String
     let kind: String
@@ -588,6 +602,19 @@ struct BuildReportRow: Identifiable {
             status: launchResult.status,
             source: launchResult.source,
             tags: [launchResult.statusLabel, launchResult.command, launchResult.romPath ?? ""]
+        )
+    }
+
+    init(captureResult: PlaytestCaptureResultViewState) {
+        self.init(
+            id: "playtest-capture:\(captureResult.id)",
+            section: .playtest,
+            title: captureResult.title,
+            subtitle: captureResult.processID,
+            detail: captureResult.detail,
+            status: captureResult.status,
+            source: captureResult.source,
+            tags: [captureResult.statusLabel, captureResult.command, captureResult.romPath ?? ""]
         )
     }
 
@@ -1216,6 +1243,8 @@ struct ItemDetailViewState: Identifiable {
     let source: SourceLocation
     let sourcePreview: String?
     let isEditable: Bool
+    let isDescriptionEditable: Bool
+    let descriptionText: String?
     let diagnostics: [IndexedDiagnosticRow]
     let searchBlob: String
 }

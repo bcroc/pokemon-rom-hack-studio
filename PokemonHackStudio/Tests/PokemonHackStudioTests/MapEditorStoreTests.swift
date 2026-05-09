@@ -560,6 +560,73 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNotEqual(store.selectedSourceIndex?.root.path, firstRoot.path)
     }
 
+    @MainActor
+    func testActivePokemonCatalogReloadsAfterProjectChangeWithoutViewReappearing() async throws {
+        let firstRoot = try makeSourceIndexProject()
+        let secondRoot = try makeSourceIndexProject()
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TORCHIC] = { .baseHP = 45 },
+            };
+            """,
+            to: secondRoot.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: firstRoot.path)
+        let firstProjectID = try XCTUnwrap(store.selectedIndexedProject?.id)
+        store.selection = .pokemon
+        store.loadSelectedModuleDataIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+
+        store.openProject(path: secondRoot.path)
+        try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TORCHIC")
+
+        store.requestProjectSelection(firstProjectID)
+        try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, firstRoot.path)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+    }
+
+    @MainActor
+    func testActiveScriptsSourceGraphReloadsAfterProjectChangeWithoutViewReappearing() async throws {
+        let firstRoot = try makeSourceIndexProject()
+        let secondRoot = try makeSourceIndexProject()
+        try write(
+            """
+            Other_EventScript::
+                lock
+                msgbox gText_Test
+                release
+                end
+            """,
+            to: secondRoot.appendingPathComponent("data/scripts/test.inc")
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: firstRoot.path)
+        store.selection = .scripts
+        store.requestScriptReadinessMode(.script)
+        store.loadSelectedModuleDataIfNeeded()
+        try await waitForSelectedSourceGraph(store)
+        XCTAssertTrue(store.selectedScriptOutline?.labels.contains { $0.label == "Test_EventScript" } == true)
+
+        store.openProject(path: secondRoot.path)
+        try await waitForSelectedSourceGraph(store)
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertTrue(store.selectedScriptOutline?.labels.contains { $0.label == "Other_EventScript" } == true)
+        XCTAssertFalse(store.selectedScriptOutline?.labels.contains { $0.label == "Test_EventScript" } == true)
+        XCTAssertEqual(store.selectedScriptReadinessLabel, "Other_EventScript")
+    }
+
     func testDiagnosticSummaryGroupsFindingsByTriageIntent() {
         let rows = [
             IndexedDiagnosticRow(
@@ -921,6 +988,8 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.canLaunchSelectedPlaytest)
         let actions = store.buildWorkflowActions(includePatchActions: true)
         XCTAssertEqual(actions.first { $0.id == "open-playtest" }?.isEnabled, true)
+        XCTAssertEqual(actions.first { $0.id == "capture-screenshot" }?.isEnabled, true)
+        XCTAssertEqual(actions.first { $0.id == "capture-savestate" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "build-rom" }?.isEnabled, false)
         XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isPreviewLocked, true)
 
@@ -938,6 +1007,45 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(result.processID, "PID 7331")
         XCTAssertTrue(result.artifacts.contains { $0.kind == "runLog" && $0.path.hasSuffix("/run.log") })
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/run.log").path))
+    }
+
+    @MainActor
+    func testPlaytestCaptureUsesInjectedRunnerAndStoresResult() throws {
+        let root = try makeSourceIndexProject()
+        let rom = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: rom)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "mgba"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: emulator.path)
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: root.path)
+
+        var capturedRequest: PlaytestProcessRequest?
+        store.captureSelectedPlaytest(kind: .saveState, artifactRoot: root) { request in
+            capturedRequest = request
+            try write(Data("state".utf8), to: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate.ss0"))
+            return 7444
+        }
+
+        let request = try XCTUnwrap(capturedRequest)
+        let result = try XCTUnwrap(store.selectedPlaytestCaptureResult)
+        XCTAssertEqual(request.executableURL.path, emulator.path)
+        XCTAssertEqual(request.arguments, ["--script", root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate-capture.lua").path, rom.path])
+        XCTAssertEqual(result.status, .valid)
+        XCTAssertEqual(result.processID, "PID 7444")
+        XCTAssertEqual(result.title, "mGBA savestate capture")
+        XCTAssertTrue(result.artifacts.contains { $0.kind == "saveState" && $0.path.hasSuffix("/savestate.ss0") && $0.detail.contains("Created") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate-capture.log").path))
     }
 
     @MainActor
@@ -961,6 +1069,8 @@ final class MapEditorStoreTests: XCTestCase {
 
         XCTAssertFalse(store.canLaunchSelectedPlaytest)
         XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "open-playtest" }?.isEnabled, false)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "capture-screenshot" }?.isEnabled, false)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "capture-savestate" }?.isEnabled, false)
 
         var didRun = false
         store.launchSelectedPlaytest(artifactRoot: root) { _ in

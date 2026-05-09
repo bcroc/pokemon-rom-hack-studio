@@ -29,6 +29,22 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(launch["status"] as? String, "blocked")
         XCTAssertNil(launch["processID"] as? Int)
         XCTAssertNotNil(launch["artifacts"])
+
+        let screenshot = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["playtest", root.path, "--screenshot", "--json"])
+        )
+        XCTAssertEqual(screenshot["mode"] as? String, "interactive")
+        XCTAssertEqual(screenshot["captureKind"] as? String, "screenshot")
+        XCTAssertEqual(screenshot["status"] as? String, "blocked")
+        XCTAssertNotNil(screenshot["artifacts"])
+
+        let savestate = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["playtest", root.path, "--savestate", "--json"])
+        )
+        XCTAssertEqual(savestate["mode"] as? String, "interactive")
+        XCTAssertEqual(savestate["captureKind"] as? String, "saveState")
+        XCTAssertEqual(savestate["status"] as? String, "blocked")
+        XCTAssertNotNil(savestate["artifacts"])
     }
 
     func testPlaytestUnknownModeThrowsUsage() throws {
@@ -77,7 +93,31 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["checksumExpectations"])
         XCTAssertNotNil(result["headerPolicy"])
         XCTAssertNotNil(result["mgbaLaunchPreview"])
+        XCTAssertNotNil(result["binaryDiffPreview"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path))
+    }
+
+    func testRomDiffPreviewCommandEmitsStandaloneReadonlyPreview() throws {
+        let rom = try makeTestROM()
+        let patch = rom.deletingLastPathComponent().appendingPathComponent("change.ips")
+        let ips = Data("PATCH".utf8)
+            + Data([0x00, 0x01, 0x10, 0x00, 0x02, 0xAA, 0xBB])
+            + Data("EOF".utf8)
+        try ips.write(to: patch)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["rom-diff-preview", patch.path, "--base-rom", rom.path, "--json"])
+        )
+
+        XCTAssertEqual(result["isPreviewOnly"] as? Bool, true)
+        XCTAssertEqual(result["patchFormat"] as? String, "ips")
+        XCTAssertEqual(result["previewedChangeCount"] as? Int, 1)
+        XCTAssertEqual(result["changedByteCount"] as? Int, 2)
+        XCTAssertNotNil(result["changes"])
+        XCTAssertNotNil(result["freeSpaceSuitability"])
+        XCTAssertNotNil(result["pointerRepointPlans"])
+        XCTAssertNotNil(result["backupExportManifest"])
+        XCTAssertNotNil(result["applyExportState"])
     }
 
     func testRomGraphCommandEmitsSemanticRuns() throws {

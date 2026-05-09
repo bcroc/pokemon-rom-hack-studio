@@ -274,6 +274,17 @@ struct BuildWorkbenchView: View {
                 }
             }
 
+            if let captureResult = store.selectedPlaytestCaptureResult {
+                EditorSection(title: "Capture Result") {
+                    VStack(spacing: 10) {
+                        BuildReportRowView(row: BuildReportRow(captureResult: captureResult))
+                        ForEach(captureResult.artifacts) { artifact in
+                            PlaytestArtifactRow(artifact: artifact)
+                        }
+                    }
+                }
+            }
+
             workflowActions(includePatchActions: false)
         }
     }
@@ -351,7 +362,7 @@ struct BuildWorkbenchView: View {
                     Spacer()
                 }
 
-                Text("Open Playtest launches a runnable report-selected ROM in mGBA. Build, validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
+                Text("Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Build, validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -363,6 +374,16 @@ struct BuildWorkbenchView: View {
         if action.id == "open-playtest" {
             Button(action.title, systemImage: action.systemImage) {
                 store.launchSelectedPlaytest()
+            }
+            .disabled(!action.isEnabled)
+        } else if action.id == "capture-screenshot" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.captureSelectedPlaytest(kind: .screenshot)
+            }
+            .disabled(!action.isEnabled)
+        } else if action.id == "capture-savestate" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.captureSelectedPlaytest(kind: .saveState)
             }
             .disabled(!action.isEnabled)
         } else {

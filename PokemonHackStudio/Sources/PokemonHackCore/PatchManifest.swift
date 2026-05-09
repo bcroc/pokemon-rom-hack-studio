@@ -139,6 +139,170 @@ public struct PatchArtifactLaunchPreview: Codable, Equatable {
     }
 }
 
+public enum PatchBinaryDiffChangeKind: String, Codable, Equatable {
+    case bytes
+    case runLength
+    case metadataOnly
+}
+
+public struct PatchBinaryDiffChange: Codable, Equatable, Identifiable {
+    public var id: String { "\(kind.rawValue):\(offset):\(length)" }
+
+    public let offset: UInt32
+    public let length: UInt32
+    public let kind: PatchBinaryDiffChangeKind
+    public let originalPreviewHex: String?
+    public let patchedPreviewHex: String?
+    public let detail: String
+
+    public init(
+        offset: UInt32,
+        length: UInt32,
+        kind: PatchBinaryDiffChangeKind,
+        originalPreviewHex: String?,
+        patchedPreviewHex: String?,
+        detail: String
+    ) {
+        self.offset = offset
+        self.length = length
+        self.kind = kind
+        self.originalPreviewHex = originalPreviewHex
+        self.patchedPreviewHex = patchedPreviewHex
+        self.detail = detail
+    }
+}
+
+public struct PatchFreeSpaceSuitability: Codable, Equatable, Identifiable {
+    public var id: String { "\(freeSpaceOffset):\(requiredBytes)" }
+
+    public let freeSpaceOffset: UInt32
+    public let freeSpaceLength: UInt32
+    public let requiredBytes: UInt32
+    public let isSuitable: Bool
+    public let detail: String
+
+    public init(
+        freeSpaceOffset: UInt32,
+        freeSpaceLength: UInt32,
+        requiredBytes: UInt32,
+        isSuitable: Bool,
+        detail: String
+    ) {
+        self.freeSpaceOffset = freeSpaceOffset
+        self.freeSpaceLength = freeSpaceLength
+        self.requiredBytes = requiredBytes
+        self.isSuitable = isSuitable
+        self.detail = detail
+    }
+}
+
+public struct PatchPointerRepointPlan: Codable, Equatable, Identifiable {
+    public var id: String { "\(pointerSourceOffset):\(oldTargetOffset):\(plannedTargetOffset)" }
+
+    public let pointerSourceOffset: UInt32
+    public let oldTargetOffset: UInt32
+    public let plannedTargetOffset: UInt32
+    public let oldRawValue: UInt32
+    public let plannedRawValue: UInt32
+    public let detail: String
+
+    public init(
+        pointerSourceOffset: UInt32,
+        oldTargetOffset: UInt32,
+        plannedTargetOffset: UInt32,
+        oldRawValue: UInt32,
+        plannedRawValue: UInt32,
+        detail: String
+    ) {
+        self.pointerSourceOffset = pointerSourceOffset
+        self.oldTargetOffset = oldTargetOffset
+        self.plannedTargetOffset = plannedTargetOffset
+        self.oldRawValue = oldRawValue
+        self.plannedRawValue = plannedRawValue
+        self.detail = detail
+    }
+}
+
+public struct PatchBackupExportManifest: Codable, Equatable {
+    public let backupPath: String?
+    public let outputPath: String
+    public let manifestPath: String
+    public let baseROMSHA1: String?
+    public let patchedROMSHA1: String?
+    public let detail: String
+
+    public init(
+        backupPath: String?,
+        outputPath: String,
+        manifestPath: String,
+        baseROMSHA1: String?,
+        patchedROMSHA1: String?,
+        detail: String
+    ) {
+        self.backupPath = backupPath
+        self.outputPath = outputPath
+        self.manifestPath = manifestPath
+        self.baseROMSHA1 = baseROMSHA1
+        self.patchedROMSHA1 = patchedROMSHA1
+        self.detail = detail
+    }
+}
+
+public struct PatchApplyExportState: Codable, Equatable {
+    public let canApply: Bool
+    public let canExport: Bool
+    public let reasons: [String]
+
+    public init(canApply: Bool, canExport: Bool, reasons: [String]) {
+        self.canApply = canApply
+        self.canExport = canExport
+        self.reasons = reasons
+    }
+}
+
+public struct PatchBinaryDiffPreview: Codable, Equatable {
+    public let isPreviewOnly: Bool
+    public let patchFormat: PatchFormatID
+    public let baseROMPath: String?
+    public let baseROMSizeBytes: UInt64?
+    public let previewedChangeCount: Int
+    public let changedByteCount: UInt64
+    public let changes: [PatchBinaryDiffChange]
+    public let freeSpaceSuitability: [PatchFreeSpaceSuitability]
+    public let pointerRepointPlans: [PatchPointerRepointPlan]
+    public let backupExportManifest: PatchBackupExportManifest
+    public let applyExportState: PatchApplyExportState
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        isPreviewOnly: Bool,
+        patchFormat: PatchFormatID,
+        baseROMPath: String?,
+        baseROMSizeBytes: UInt64?,
+        previewedChangeCount: Int,
+        changedByteCount: UInt64,
+        changes: [PatchBinaryDiffChange],
+        freeSpaceSuitability: [PatchFreeSpaceSuitability],
+        pointerRepointPlans: [PatchPointerRepointPlan],
+        backupExportManifest: PatchBackupExportManifest,
+        applyExportState: PatchApplyExportState,
+        diagnostics: [Diagnostic]
+    ) {
+        self.isPreviewOnly = isPreviewOnly
+        self.patchFormat = patchFormat
+        self.baseROMPath = baseROMPath
+        self.baseROMSizeBytes = baseROMSizeBytes
+        self.previewedChangeCount = previewedChangeCount
+        self.changedByteCount = changedByteCount
+        self.changes = changes
+        self.freeSpaceSuitability = freeSpaceSuitability
+        self.pointerRepointPlans = pointerRepointPlans
+        self.backupExportManifest = backupExportManifest
+        self.applyExportState = applyExportState
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct PatchArtifactPlan: Codable, Equatable, Identifiable {
     public var id: String { absoluteOutputPath }
 
@@ -151,6 +315,7 @@ public struct PatchArtifactPlan: Codable, Equatable, Identifiable {
     public let headerPolicy: PatchArtifactHeaderPolicy
     public let expectedPatchedROMName: String
     public let mgbaLaunchPreview: PatchArtifactLaunchPreview
+    public let binaryDiffPreview: PatchBinaryDiffPreview?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -163,6 +328,7 @@ public struct PatchArtifactPlan: Codable, Equatable, Identifiable {
         headerPolicy: PatchArtifactHeaderPolicy,
         expectedPatchedROMName: String,
         mgbaLaunchPreview: PatchArtifactLaunchPreview,
+        binaryDiffPreview: PatchBinaryDiffPreview? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.isPreviewOnly = isPreviewOnly
@@ -174,6 +340,7 @@ public struct PatchArtifactPlan: Codable, Equatable, Identifiable {
         self.headerPolicy = headerPolicy
         self.expectedPatchedROMName = expectedPatchedROMName
         self.mgbaLaunchPreview = mgbaLaunchPreview
+        self.binaryDiffPreview = binaryDiffPreview
         self.diagnostics = diagnostics
     }
 }
@@ -453,6 +620,13 @@ public enum PatchManifestBuilder {
             isLaunchEnabled: false,
             disabledReason: "Patched ROM export is disabled; mGBA launch remains a preview until the artifact exists."
         )
+        let diffPreview = binaryDiffPreview(
+            patch: patch,
+            selectedBaseROM: selectedBaseROM,
+            outputPath: absoluteOutputPath,
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: diffPreview.diagnostics)
 
         return PatchArtifactPlan(
             isPreviewOnly: true,
@@ -464,8 +638,245 @@ public enum PatchManifestBuilder {
             headerPolicy: headerPolicy,
             expectedPatchedROMName: expectedPatchedROMName,
             mgbaLaunchPreview: launchPreview,
+            binaryDiffPreview: diffPreview,
             diagnostics: diagnostics
         )
+    }
+
+    public static func binaryDiffPreview(
+        patchPath: String,
+        baseROMPath: String,
+        outputPath: String? = nil,
+        fileManager: FileManager = .default
+    ) -> PatchBinaryDiffPreview {
+        let patch = PatchValidationReportBuilder.validate(path: patchPath, fileManager: fileManager)
+        let selectedBaseROM = selectedBaseROMReport(
+            from: baseROMPath,
+            projectRoot: nil,
+            candidates: [],
+            fileManager: fileManager
+        )
+        let patchURL = URL(fileURLWithPath: patch.path ?? patchPath).standardizedFileURL
+        let fallbackOutputPath = patchURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".pokemonhackstudio/patches/\(patchURL.deletingPathExtension().lastPathComponent)-preview.gba")
+            .standardizedFileURL
+            .path
+        return binaryDiffPreview(
+            patch: patch,
+            selectedBaseROM: selectedBaseROM,
+            outputPath: outputPath ?? fallbackOutputPath,
+            fileManager: fileManager
+        )
+    }
+
+    private static func binaryDiffPreview(
+        patch: PatchValidationReport,
+        selectedBaseROM: PatchSelectedBaseROM?,
+        outputPath: String,
+        fileManager: FileManager
+    ) -> PatchBinaryDiffPreview {
+        let format = patch.summary?.format ?? .unknown
+        let manifest = PatchBackupExportManifest(
+            backupPath: selectedBaseROM?.absolutePath.appending(".bak"),
+            outputPath: outputPath,
+            manifestPath: outputPath.appending(".manifest.json"),
+            baseROMSHA1: selectedBaseROM?.sha1,
+            patchedROMSHA1: nil,
+            detail: "Backup, patched ROM, and manifest paths are planned only; no files are written."
+        )
+        let blockedState = PatchApplyExportState(
+            canApply: false,
+            canExport: false,
+            reasons: [
+                "Binary patch apply/export is intentionally disabled in this preview.",
+                "Pointer rewrites and free-space use are mutation plans only.",
+                "Patched ROM checksums are unavailable until a future explicit export flow."
+            ]
+        )
+        var diagnostics = patch.diagnostics
+        guard patch.isValid else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "PATCH_BINARY_DIFF_BLOCKED_INVALID_PATCH", message: "Binary diff preview is blocked because the patch metadata is invalid."))
+            return PatchBinaryDiffPreview(
+                isPreviewOnly: true,
+                patchFormat: format,
+                baseROMPath: selectedBaseROM?.absolutePath,
+                baseROMSizeBytes: selectedBaseROM?.sizeBytes,
+                previewedChangeCount: 0,
+                changedByteCount: 0,
+                changes: [],
+                freeSpaceSuitability: [],
+                pointerRepointPlans: [],
+                backupExportManifest: manifest,
+                applyExportState: blockedState,
+                diagnostics: diagnostics
+            )
+        }
+        guard let selectedBaseROM, selectedBaseROM.exists, let baseData = try? Data(contentsOf: URL(fileURLWithPath: selectedBaseROM.absolutePath)) else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "PATCH_BINARY_DIFF_BASE_ROM_REQUIRED", message: "Select a readable base ROM to preview byte diffs, free-space suitability, and pointer repoint plans."))
+            return PatchBinaryDiffPreview(
+                isPreviewOnly: true,
+                patchFormat: format,
+                baseROMPath: selectedBaseROM?.absolutePath,
+                baseROMSizeBytes: selectedBaseROM?.sizeBytes,
+                previewedChangeCount: 0,
+                changedByteCount: 0,
+                changes: [],
+                freeSpaceSuitability: [],
+                pointerRepointPlans: [],
+                backupExportManifest: manifest,
+                applyExportState: blockedState,
+                diagnostics: diagnostics
+            )
+        }
+
+        let records: [IPSDiffRecord]
+        if format == .ips, let patchPath = patch.path, let patchData = try? Data(contentsOf: URL(fileURLWithPath: patchPath)) {
+            do {
+                records = try parseIPSDiffRecords(data: patchData)
+            } catch {
+                diagnostics.append(Diagnostic(severity: .warning, code: "PATCH_BINARY_DIFF_PARSE_FAILED", message: "IPS byte diff preview could not be parsed: \(error.localizedDescription)"))
+                records = []
+            }
+        } else {
+            records = []
+            diagnostics.append(Diagnostic(severity: .info, code: "PATCH_BINARY_DIFF_METADATA_ONLY", message: "\(format.rawValue.uppercased()) patches currently expose metadata-only binary diff previews; apply/export remains blocked."))
+        }
+
+        let graph = BinaryROMGraphBuilder.build(path: selectedBaseROM.absolutePath, data: baseData)
+        let changes = records.prefix(64).map { record in
+            PatchBinaryDiffChange(
+                offset: record.offset,
+                length: record.length,
+                kind: record.isRunLength ? .runLength : .bytes,
+                originalPreviewHex: hexPreview(data: baseData, offset: Int(record.offset), length: Int(record.length)),
+                patchedPreviewHex: hexPreview(bytes: record.previewBytes),
+                detail: String(format: "Would replace 0x%06X...0x%06X; preview only.", record.offset, record.offset + max(record.length, 1) - 1)
+            )
+        }
+        let changedBytes = records.reduce(UInt64(0)) { $0 + UInt64($1.length) }
+        let requiredBytes = records.map(\.length).max() ?? UInt32(patch.summary?.targetSize ?? 0)
+        let suitability = graph.freeSpaceRanges.prefix(16).map { range in
+            PatchFreeSpaceSuitability(
+                freeSpaceOffset: range.offset,
+                freeSpaceLength: range.length,
+                requiredBytes: requiredBytes,
+                isSuitable: requiredBytes > 0 && range.length >= requiredBytes,
+                detail: requiredBytes == 0
+                    ? "No concrete byte-span requirement is available for this patch format."
+                    : String(format: "Free space 0x%06X has %u byte(s); largest previewed change requires %u byte(s).", range.offset, range.length, requiredBytes)
+            )
+        }
+        let repoints = pointerRepointPlans(
+            changes: changes,
+            freeSpace: graph.freeSpaceRanges,
+            pointers: graph.pointerCandidates
+        )
+
+        diagnostics.append(Diagnostic(severity: .info, code: "PATCH_BINARY_DIFF_PREVIEW_ONLY", message: "Binary diff, free-space, pointer-repoint, backup, and export outputs are previews only; no ROM bytes are changed."))
+        if records.count > changes.count {
+            diagnostics.append(Diagnostic(severity: .info, code: "PATCH_BINARY_DIFF_PREVIEW_TRUNCATED", message: "Showing \(changes.count) of \(records.count) parsed byte change(s)."))
+        }
+        if requiredBytes > 0, !suitability.contains(where: \.isSuitable) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "PATCH_FREE_SPACE_NO_SUITABLE_RANGE", message: "No previewed free-space range can fit the largest planned byte span."))
+        }
+
+        return PatchBinaryDiffPreview(
+            isPreviewOnly: true,
+            patchFormat: format,
+            baseROMPath: selectedBaseROM.absolutePath,
+            baseROMSizeBytes: selectedBaseROM.sizeBytes ?? UInt64(baseData.count),
+            previewedChangeCount: changes.count,
+            changedByteCount: changedBytes,
+            changes: changes,
+            freeSpaceSuitability: suitability,
+            pointerRepointPlans: repoints,
+            backupExportManifest: manifest,
+            applyExportState: blockedState,
+            diagnostics: diagnostics
+        )
+    }
+
+    private struct IPSDiffRecord {
+        let offset: UInt32
+        let length: UInt32
+        let previewBytes: [UInt8]
+        let isRunLength: Bool
+    }
+
+    private static func parseIPSDiffRecords(data: Data) throws -> [IPSDiffRecord] {
+        var cursor = ByteCursor(data: data)
+        _ = try cursor.readBytes(count: 5)
+        var records: [IPSDiffRecord] = []
+
+        while !cursor.isAtEnd {
+            let offset = try cursor.readUInt24BE()
+            if offset == 0x454F46 { break }
+            let size = try cursor.readUInt16BE()
+            if size == 0 {
+                let runLength = try cursor.readUInt16BE()
+                let byte = try cursor.readUInt8()
+                records.append(
+                    IPSDiffRecord(
+                        offset: offset,
+                        length: UInt32(runLength),
+                        previewBytes: Array(repeating: byte, count: min(Int(runLength), 16)),
+                        isRunLength: true
+                    )
+                )
+            } else {
+                let bytes = try cursor.readBytes(count: Int(size))
+                records.append(
+                    IPSDiffRecord(
+                        offset: offset,
+                        length: UInt32(size),
+                        previewBytes: Array(bytes.prefix(16)),
+                        isRunLength: false
+                    )
+                )
+            }
+        }
+
+        return records
+    }
+
+    private static func pointerRepointPlans(
+        changes: [PatchBinaryDiffChange],
+        freeSpace: [BinaryROMRange],
+        pointers: [BinaryROMPointerCandidate]
+    ) -> [PatchPointerRepointPlan] {
+        var plans: [PatchPointerRepointPlan] = []
+        for change in changes {
+            guard let targetRange = freeSpace.first(where: { $0.length >= change.length }) else { continue }
+            let end = change.offset + change.length
+            for pointer in pointers where pointer.targetOffset >= change.offset && pointer.targetOffset < end {
+                let delta = pointer.targetOffset - change.offset
+                let plannedTarget = targetRange.offset + delta
+                let plannedRaw = 0x0800_0000 + plannedTarget
+                plans.append(
+                    PatchPointerRepointPlan(
+                        pointerSourceOffset: pointer.sourceOffset,
+                        oldTargetOffset: pointer.targetOffset,
+                        plannedTargetOffset: plannedTarget,
+                        oldRawValue: pointer.rawValue,
+                        plannedRawValue: plannedRaw,
+                        detail: String(format: "Would repoint 0x%06X from 0x%06X to free-space target 0x%06X.", pointer.sourceOffset, pointer.targetOffset, plannedTarget)
+                    )
+                )
+            }
+        }
+        return Array(plans.prefix(64))
+    }
+
+    private static func hexPreview(data: Data, offset: Int, length: Int) -> String? {
+        guard offset >= 0, offset < data.count, length > 0 else { return nil }
+        let end = min(data.count, offset + length, offset + 16)
+        return hexPreview(bytes: Array(data[offset..<end]))
+    }
+
+    private static func hexPreview(bytes: [UInt8]) -> String? {
+        guard !bytes.isEmpty else { return nil }
+        return bytes.map { String(format: "%02X", $0) }.joined(separator: " ")
     }
 
     private static func selectedBaseROMDiagnostics(

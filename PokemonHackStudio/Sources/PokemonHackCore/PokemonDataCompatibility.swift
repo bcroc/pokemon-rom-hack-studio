@@ -206,8 +206,9 @@ public enum PokemonDataCompatibilityReportBuilder {
         sourceIndex: ProjectSourceIndex
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: .items, profile: index.profile)
-        let indexed = catalog?.itemCount ?? recordCount(.items, in: sourceIndex)
-        let editable = catalog?.items.filter(\.isEditable).count ?? 0
+        let sourceIndexed = recordCount(.items, in: sourceIndex)
+        let indexed = max(catalog?.itemCount ?? 0, sourceIndexed)
+        let editable = catalog?.items.filter { $0.isEditable || $0.isDescriptionEditable }.count ?? 0
         return entry(
             surface: .items,
             index: index,
@@ -248,7 +249,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: indexed,
             editableCount: editable,
             unsupportedFields: learnsetUnsupportedFields(surface: surface, profile: index.profile),
-            recommendedFutureRow: "PHS-T50"
+            recommendedFutureRow: editable > 0 ? nil : "PHS-T57"
         )
     }
 
@@ -267,7 +268,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: indexed,
             editableCount: 0,
             unsupportedFields: ["evolution method edits", "target species edits", "parameter edits", "evolution row insertion/reordering"],
-            recommendedFutureRow: "PHS-T50"
+            recommendedFutureRow: "PHS-T57"
         )
     }
 
@@ -286,7 +287,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: indexed,
             editableCount: 0,
             unsupportedFields: ["category text edits", "height/weight edits", "description text rewrites", "national dex identity changes"],
-            recommendedFutureRow: "PHS-T50"
+            recommendedFutureRow: "PHS-T57"
         )
     }
 
@@ -298,7 +299,6 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: assetCatalog.assetCount,
             editableCount: 0,
             unsupportedFields: ["sprite import", "palette conversion", "icon/footprint rewrites", "cry asset sync"],
-            recommendedFutureRow: "PHS-T51",
             diagnostics: assetCatalog.diagnostics
         )
     }
@@ -316,8 +316,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: count,
             editableCount: 0,
             unsupportedFields: ["cry table indexing", "audio import/export", "sample conversion"],
-            blockedReason: count == 0 ? "No known cry source path was detected for this fixture/profile." : nil,
-            recommendedFutureRow: "PHS-T51"
+            blockedReason: count == 0 ? "No known cry source path was detected for this fixture/profile." : nil
         )
     }
 
@@ -337,7 +336,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             editableCount: 0,
             unsupportedFields: ["form table editing", "form graphics sync", "generated family supplement apply"],
             blockedReason: count == 0 ? "No form supplement or form change table was detected for this fixture/profile." : nil,
-            recommendedFutureRow: "PHS-T51"
+            recommendedFutureRow: "PHS-T57"
         )
     }
 
@@ -436,9 +435,9 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeemerald, .pokefirered:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/base_stats.h", tableSymbol: "gBaseStats", supportsEditing: false, readOnlyReason: "Ruby/Sapphire species rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/base_stats.h", tableSymbol: "gBaseStats", supportsEditing: false, readOnlyReason: "Ruby/Sapphire species rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", supportsEditing: false, readOnlyReason: "Expansion species data includes generated/family supplement shapes that are read-only in this row.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", supportsEditing: false, readOnlyReason: "Expansion species data includes generated/family supplement shapes that are read-only in this row.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
@@ -447,9 +446,9 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeemerald, .pokefirered:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", supportsEditing: false, readOnlyReason: "Ruby/Sapphire move rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", supportsEditing: false, readOnlyReason: "Ruby/Sapphire move rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: false, readOnlyReason: "Expansion gMovesInfo rows use a separate schema and are read-only in this row.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: false, readOnlyReason: "Expansion gMovesInfo rows use a separate schema and are read-only in this row.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
@@ -458,56 +457,57 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeemerald:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokefirered:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.json", tableSymbol: "items", supportsEditing: false, readOnlyReason: "FireRed item data is indexed from JSON/positional shapes, but item apply is not supported yet.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: "PHS-T57")
         case .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: false, readOnlyReason: "Ruby/Sapphire positional item rows are read-only until positional rewrites are planned.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: false, readOnlyReason: "Ruby/Sapphire positional item rows are read-only until positional rewrites are planned.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItemsInfo", supportsEditing: false, readOnlyReason: "Expansion ItemInfo rows are indexed but blocked from apply until the schema is modeled.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItemsInfo", supportsEditing: false, readOnlyReason: "Expansion ItemInfo rows are indexed but blocked from apply until the schema is modeled.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
     case .levelUpLearnsets:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/level_up_learnsets.h", tableSymbol: "gLevelUpLearnsets", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "Learnset edits are currently tied to classic species mutation plans.", recommendedFutureRow: "PHS-T50")
+            let supportsEditing = supportsSpeciesEditing(profile)
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/level_up_learnsets.h", tableSymbol: "gLevelUpLearnsets", supportsEditing: supportsEditing, readOnlyReason: "Learnset edits are currently tied to classic species mutation plans.", recommendedFutureRow: supportsEditing ? nil : "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/level_up_learnsets", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Expansion directory learnsets are indexed but read-only until generated/family layouts are modeled.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/level_up_learnsets", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Expansion directory learnsets are indexed but read-only until generated/family layouts are modeled.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
     case .tmhmLearnsets:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "TM/HM compatibility edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T50")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "TM/HM compatibility edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T57")
     case .eggMoves:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "Egg move edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T50")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "Egg move edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T57")
     case .evolutions:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/evolution.h", emeraldTable: "gEvolutionTable", fireRedTable: "gEvolutionTable", rubyTable: "gEvolutionTable", expansionTable: "gEvolutionTable", supportsEditing: false, readOnlyReason: "Evolution rows are indexed for navigation only in this row.", futureRow: "PHS-T50")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/evolution.h", emeraldTable: "gEvolutionTable", fireRedTable: "gEvolutionTable", rubyTable: "gEvolutionTable", expansionTable: "gEvolutionTable", supportsEditing: false, readOnlyReason: "Evolution rows are indexed for navigation only in this row.", futureRow: "PHS-T57")
     case .pokedex:
         switch profile {
         case .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", recommendedFutureRow: "PHS-T50")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", recommendedFutureRow: "PHS-T57")
         default:
-            return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/pokedex_entries.h", emeraldTable: "gPokedexEntries", fireRedTable: "gPokedexEntries", rubyTable: "gPokedexEntries", expansionTable: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", futureRow: "PHS-T50")
+            return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/pokedex_entries.h", emeraldTable: "gPokedexEntries", fireRedTable: "gPokedexEntries", rubyTable: "gPokedexEntries", expansionTable: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", futureRow: "PHS-T57")
         }
     case .assets:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "graphics/pokemon", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Pokemon assets are indexed as read-only source links.", recommendedFutureRow: "PHS-T51")
+            return PokemonDataSurfaceDescriptor(sourcePath: "graphics/pokemon", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Pokemon assets are indexed as read-only source links.", recommendedFutureRow: nil)
         default:
             return nil
         }
     case .cries:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Cry assets are not structurally indexed or editable yet.", recommendedFutureRow: "PHS-T51")
+            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Cry assets are not structurally indexed or editable yet.", recommendedFutureRow: nil)
         default:
             return nil
         }
     case .forms:
         switch profile {
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/form_change_tables.h", tableSymbol: "sFormChangeTable", supportsEditing: false, readOnlyReason: "Expansion form data is detected when present but not editable yet.", recommendedFutureRow: "PHS-T51")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/form_change_tables.h", tableSymbol: "sFormChangeTable", supportsEditing: false, readOnlyReason: "Expansion form data is detected when present but not editable yet.", recommendedFutureRow: "PHS-T57")
         case .pokeemerald, .pokefirered, .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Classic form-specific tables are not present in the indexed fixture/profile.", recommendedFutureRow: "PHS-T51")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Classic form-specific tables are not present in the indexed fixture/profile.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
@@ -527,9 +527,9 @@ private func pokemonTableDescriptor(
 ) -> PokemonDataSurfaceDescriptor? {
     switch profile {
     case .pokeemerald:
-        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: emeraldTable, supportsEditing: supportsEditing, readOnlyReason: supportsEditing ? nil : readOnlyReason, recommendedFutureRow: futureRow)
+        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: emeraldTable, supportsEditing: supportsEditing, readOnlyReason: supportsEditing ? nil : readOnlyReason, recommendedFutureRow: supportsEditing ? nil : futureRow)
     case .pokefirered:
-        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: fireRedTable, supportsEditing: supportsEditing, readOnlyReason: supportsEditing ? nil : readOnlyReason, recommendedFutureRow: futureRow)
+        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: fireRedTable, supportsEditing: supportsEditing, readOnlyReason: supportsEditing ? nil : readOnlyReason, recommendedFutureRow: supportsEditing ? nil : futureRow)
     case .pokeruby:
         return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: rubyTable, supportsEditing: false, readOnlyReason: readOnlyReason, recommendedFutureRow: futureRow)
     case .pokeemeraldExpansion:
@@ -565,9 +565,9 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
 private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     switch profile {
     case .pokeemerald:
-        return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits"]
+        return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokefirered:
-        return ["FireRed JSON item rewrites", "item identity changes", "description text rewrites"]
+        return ["FireRed row-field rewrites", "item identity changes"]
     case .pokeruby:
         return ["Ruby/Sapphire positional gItems rewrites", "item identity changes", "description text rewrites"]
     case .pokeemeraldExpansion:

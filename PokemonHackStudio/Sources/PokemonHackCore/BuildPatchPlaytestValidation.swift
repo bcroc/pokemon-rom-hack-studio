@@ -867,6 +867,47 @@ public enum PlaytestLaunchStatus: String, Codable, Equatable {
     case failed
 }
 
+public enum PlaytestCaptureKind: String, Codable, Equatable, CaseIterable {
+    case screenshot
+    case saveState
+
+    fileprivate var artifactKind: PlaytestSessionArtifactKind {
+        switch self {
+        case .screenshot:
+            return .screenshot
+        case .saveState:
+            return .saveState
+        }
+    }
+
+    fileprivate var fileName: String {
+        switch self {
+        case .screenshot:
+            return "screenshot.png"
+        case .saveState:
+            return "savestate.ss0"
+        }
+    }
+
+    fileprivate var logPrefix: String {
+        switch self {
+        case .screenshot:
+            return "screenshot"
+        case .saveState:
+            return "savestate"
+        }
+    }
+
+    fileprivate var detail: String {
+        switch self {
+        case .screenshot:
+            return "Screenshot captured by the playtest bridge."
+        case .saveState:
+            return "Savestate captured by the playtest bridge."
+        }
+    }
+}
+
 public struct PlaytestProcessRequest: Equatable {
     public let executableURL: URL
     public let arguments: [String]
@@ -925,6 +966,46 @@ public struct PlaytestLaunchResult: Codable, Equatable {
         self.artifacts = artifacts
         self.diagnostics = diagnostics
         self.launchedAt = launchedAt
+    }
+}
+
+public struct PlaytestCaptureResult: Codable, Equatable {
+    public let status: PlaytestLaunchStatus
+    public let captureKind: PlaytestCaptureKind
+    public let mode: PlaytestMode
+    public let projectRootPath: String
+    public let emulatorPath: String?
+    public let romPath: String?
+    public let command: [String]
+    public let processID: Int32?
+    public let artifacts: [PlaytestSessionArtifact]
+    public let diagnostics: [Diagnostic]
+    public let capturedAt: Date?
+
+    public init(
+        status: PlaytestLaunchStatus,
+        captureKind: PlaytestCaptureKind,
+        mode: PlaytestMode,
+        projectRootPath: String,
+        emulatorPath: String?,
+        romPath: String?,
+        command: [String],
+        processID: Int32? = nil,
+        artifacts: [PlaytestSessionArtifact],
+        diagnostics: [Diagnostic],
+        capturedAt: Date? = nil
+    ) {
+        self.status = status
+        self.captureKind = captureKind
+        self.mode = mode
+        self.projectRootPath = projectRootPath
+        self.emulatorPath = emulatorPath
+        self.romPath = romPath
+        self.command = command
+        self.processID = processID
+        self.artifacts = artifacts
+        self.diagnostics = diagnostics
+        self.capturedAt = capturedAt
     }
 }
 
@@ -1212,6 +1293,196 @@ public enum PlaytestLauncher {
         }
     }
 
+    public static func capture(
+        index: ProjectIndex,
+        kind: PlaytestCaptureKind,
+        mode: PlaytestMode = .interactive,
+        artifactRoot: URL? = nil,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner,
+        now: () -> Date = Date.init
+    ) -> PlaytestCaptureResult {
+        let report = PlaytestHandoffReportBuilder.build(
+            index: index,
+            mode: mode,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
+        return capture(
+            report: report,
+            kind: kind,
+            projectRoot: URL(fileURLWithPath: index.root.path),
+            artifactRoot: artifactRoot,
+            fileManager: fileManager,
+            processRunner: processRunner,
+            now: now
+        )
+    }
+
+    public static func capture(
+        report: PlaytestHandoffReport,
+        kind: PlaytestCaptureKind,
+        projectRoot: URL,
+        artifactRoot: URL? = nil,
+        fileManager: FileManager = .default,
+        processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner,
+        now: () -> Date = Date.init
+    ) -> PlaytestCaptureResult {
+        let root = projectRoot.standardizedFileURL
+        let artifactRoot = (artifactRoot ?? root).standardizedFileURL
+        let artifacts = captureArtifacts(kind: kind, from: report, root: artifactRoot, fileManager: fileManager)
+        let romPath = report.romCandidate?.absolutePath
+        let executablePath = executablePath(for: report.emulator, fileManager: fileManager)
+        let scriptURL = captureScriptURL(kind: kind, from: report, root: artifactRoot)
+        let command = executablePath.map { [$0, "--script", scriptURL.path] + report.session.arguments + [romPath].compactMap { $0 } } ?? []
+
+        guard report.isRunnable else {
+            return PlaytestCaptureResult(
+                status: .blocked,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .warning,
+                        code: "PLAYTEST_CAPTURE_BLOCKED",
+                        message: "Playtest \(kind.rawValue) capture was blocked because the handoff report is not runnable."
+                    )
+                ]
+            )
+        }
+
+        guard let executablePath else {
+            return PlaytestCaptureResult(
+                status: .blocked,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: report.emulator.resolvedPath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_EMULATOR_EXECUTABLE_MISSING",
+                        message: "mGBA was discovered, but no executable could be resolved for capture."
+                    )
+                ]
+            )
+        }
+
+        guard let romPath else {
+            return PlaytestCaptureResult(
+                status: .blocked,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: nil,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_ROM_CANDIDATE_MISSING",
+                        message: "No ROM path is available for mGBA capture."
+                    )
+                ]
+            )
+        }
+
+        guard
+            let stdoutURL = artifactURL(kind: .stdout, artifacts: artifacts, root: artifactRoot),
+            let stderrURL = artifactURL(kind: .stderr, artifacts: artifacts, root: artifactRoot),
+            let runLogURL = artifactURL(kind: .runLog, artifacts: artifacts, root: artifactRoot),
+            let captureURL = artifactURL(kind: kind.artifactKind, artifacts: artifacts, root: artifactRoot)
+        else {
+            return PlaytestCaptureResult(
+                status: .failed,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: artifacts,
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_CAPTURE_ARTIFACT_PLAN_MISSING",
+                        message: "Playtest capture artifacts are incomplete."
+                    )
+                ]
+            )
+        }
+
+        do {
+            try fileManager.createDirectory(at: runLogURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: stdoutURL)
+            try Data().write(to: stderrURL)
+            try captureScript(kind: kind, targetURL: captureURL).write(to: scriptURL, atomically: true, encoding: .utf8)
+
+            let request = PlaytestProcessRequest(
+                executableURL: URL(fileURLWithPath: executablePath),
+                arguments: ["--script", scriptURL.path] + report.session.arguments + [romPath],
+                workingDirectoryURL: root,
+                standardOutputURL: stdoutURL,
+                standardErrorURL: stderrURL
+            )
+            let processID = try processRunner(request)
+            let captureDate = now()
+            try captureLog(
+                report: report,
+                kind: kind,
+                executablePath: executablePath,
+                romPath: romPath,
+                scriptPath: scriptURL.path,
+                capturePath: captureURL.path,
+                rootPath: root.path,
+                processID: processID,
+                capturedAt: captureDate
+            ).write(to: runLogURL, atomically: true, encoding: .utf8)
+
+            return PlaytestCaptureResult(
+                status: .launched,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                processID: processID,
+                artifacts: captureArtifacts(kind: kind, from: report, root: artifactRoot, fileManager: fileManager),
+                diagnostics: report.diagnostics,
+                capturedAt: captureDate
+            )
+        } catch {
+            return PlaytestCaptureResult(
+                status: .failed,
+                captureKind: kind,
+                mode: report.mode,
+                projectRootPath: root.path,
+                emulatorPath: executablePath,
+                romPath: romPath,
+                command: command,
+                artifacts: captureArtifacts(kind: kind, from: report, root: artifactRoot, fileManager: fileManager),
+                diagnostics: report.diagnostics + [
+                    diagnostic(
+                        severity: .error,
+                        code: "PLAYTEST_CAPTURE_FAILED",
+                        message: "mGBA \(kind.rawValue) capture failed: \(error.localizedDescription)"
+                    )
+                ]
+            )
+        }
+    }
+
     public static func executablePath(
         for emulator: ToolAvailability,
         fileManager: FileManager = .default
@@ -1273,6 +1544,75 @@ public enum PlaytestLauncher {
         }
     }
 
+    private static func captureArtifacts(
+        kind: PlaytestCaptureKind,
+        from report: PlaytestHandoffReport,
+        root: URL,
+        fileManager: FileManager
+    ) -> [PlaytestSessionArtifact] {
+        let artifactRoot = playtestArtifactRoot(from: report)
+        let planned = [
+            PlaytestSessionArtifact(kind: .runLog, relativePath: "\(artifactRoot)/\(kind.logPrefix)-capture.log", detail: "External emulator \(kind.rawValue) capture log."),
+            PlaytestSessionArtifact(kind: .stdout, relativePath: "\(artifactRoot)/\(kind.logPrefix)-stdout.log", detail: "Captured emulator standard output for \(kind.rawValue) capture."),
+            PlaytestSessionArtifact(kind: .stderr, relativePath: "\(artifactRoot)/\(kind.logPrefix)-stderr.log", detail: "Captured emulator standard error for \(kind.rawValue) capture."),
+            PlaytestSessionArtifact(kind: kind.artifactKind, relativePath: "\(artifactRoot)/\(kind.fileName)", detail: kind.detail)
+        ]
+
+        return planned.map { artifact in
+            let url = root.appendingPathComponent(artifact.relativePath)
+            return PlaytestSessionArtifact(
+                kind: artifact.kind,
+                relativePath: artifact.relativePath,
+                isExpected: artifact.isExpected,
+                exists: fileManager.fileExists(atPath: url.path),
+                detail: artifact.detail
+            )
+        }
+    }
+
+    private static func playtestArtifactRoot(from report: PlaytestHandoffReport) -> String {
+        let stem = report.romCandidate?.relativePath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "playtest"
+        return ".pokemonhackstudio/playtests/\(stem)"
+    }
+
+    private static func captureScriptURL(kind: PlaytestCaptureKind, from report: PlaytestHandoffReport, root: URL) -> URL {
+        root.appendingPathComponent(playtestArtifactRoot(from: report)).appendingPathComponent("\(kind.logPrefix)-capture.lua")
+    }
+
+    private static func captureScript(kind: PlaytestCaptureKind, targetURL: URL) -> String {
+        let method: String
+        switch kind {
+        case .screenshot:
+            method = "emu:screenshot(target)"
+        case .saveState:
+            method = "emu:saveStateFile(target)"
+        }
+
+        return """
+        local target = "\(luaStringLiteralContent(targetURL.path))"
+        local frames = 0
+        local didCapture = false
+
+        callbacks:add("frame", function()
+          frames = frames + 1
+          if didCapture or frames < 30 then
+            return
+          end
+          didCapture = true
+          \(method)
+        end)
+
+        """
+    }
+
+    private static func luaStringLiteralContent(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+
     private static func artifactURL(
         kind: PlaytestSessionArtifactKind,
         artifacts: [PlaytestSessionArtifact],
@@ -1299,6 +1639,34 @@ public enum PlaytestLauncher {
             "targetID: \(report.romCandidate?.targetID ?? "unknown")",
             "processID: \(processID)",
             "command: \(([executablePath] + report.session.arguments + [romPath]).joined(separator: " "))",
+            ""
+        ].joined(separator: "\n")
+    }
+
+    private static func captureLog(
+        report: PlaytestHandoffReport,
+        kind: PlaytestCaptureKind,
+        executablePath: String,
+        romPath: String,
+        scriptPath: String,
+        capturePath: String,
+        rootPath: String,
+        processID: Int32,
+        capturedAt: Date
+    ) -> String {
+        [
+            "capturedAt: \(ISO8601DateFormatter().string(from: capturedAt))",
+            "captureKind: \(kind.rawValue)",
+            "projectRoot: \(rootPath)",
+            "mode: \(report.mode.rawValue)",
+            "emulator: \(executablePath)",
+            "rom: \(romPath)",
+            "romSHA1: \(report.romCandidate?.sha1 ?? "unknown")",
+            "targetID: \(report.romCandidate?.targetID ?? "unknown")",
+            "script: \(scriptPath)",
+            "artifact: \(capturePath)",
+            "processID: \(processID)",
+            "command: \(([executablePath, "--script", scriptPath] + report.session.arguments + [romPath]).joined(separator: " "))",
             ""
         ].joined(separator: "\n")
     }
