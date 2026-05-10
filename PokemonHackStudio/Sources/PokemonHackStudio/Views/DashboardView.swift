@@ -20,6 +20,7 @@ struct DashboardView: View {
     @ViewBuilder
     private func indexedDashboard(_ project: IndexedProjectSummary) -> some View {
         projectHeader(project)
+        workspaceSaveSection
         workflowHub
         diagnosticsHub
 
@@ -31,6 +32,53 @@ struct DashboardView: View {
             VStack(spacing: 10) {
                 ForEach(project.sourceSurfaces.prefix(6)) { surface in
                     IndexedSourceSurfaceRow(surface: surface)
+                }
+            }
+        }
+    }
+
+    private var workspaceSaveSection: some View {
+        EditorSection(title: "Workspace Saves") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    StatusPill(state: store.workspacePersistenceError == nil ? .valid : .error)
+                    Text(store.workspacePersistenceError ?? store.workspacePersistenceStatus)
+                        .font(.callout)
+                        .foregroundStyle(store.workspacePersistenceError == nil ? Color.secondary : Color.red)
+                    Spacer()
+                    Text(store.workspaceAutosavePending ? "Autosave pending" : store.workspaceLastSavedLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                    MetricCard(title: "Current Drafts", value: "\(store.currentDraftCount)", detail: "Unsourced workspace state")
+                    MetricCard(title: "Saved Drafts", value: "\(store.savedDraftCount)", detail: "Ignored local snapshot")
+                    MetricCard(title: "Save Location", value: ".pokemonhackstudio", detail: "Project-local")
+                }
+
+                HStack(spacing: 8) {
+                    Button("Save Project", systemImage: "square.and.arrow.down") {
+                        store.saveProjectWorkspace()
+                    }
+                    .disabled(!store.canSaveProjectWorkspace)
+
+                    Button("Save Drafts", systemImage: "tray.and.arrow.down") {
+                        store.saveDraftsNow()
+                    }
+                    .disabled(!store.canSaveProjectWorkspace)
+
+                    Button("Reload", systemImage: "arrow.counterclockwise") {
+                        store.loadSavedWorkspaceForSelectedProject()
+                    }
+                    .disabled(!store.canSaveProjectWorkspace)
+
+                    Button("Discard Drafts", systemImage: "trash") {
+                        store.discardSavedDrafts()
+                    }
+                    .disabled(!store.canSaveProjectWorkspace || (store.currentDraftCount == 0 && store.savedDraftCount == 0))
+
+                    Spacer()
                 }
             }
         }

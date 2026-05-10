@@ -457,7 +457,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeemerald:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokefirered:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: false, readOnlyReason: "Ruby/Sapphire positional item rows are read-only until positional rewrites are planned.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
@@ -567,7 +567,7 @@ private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     case .pokeemerald:
         return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokefirered:
-        return ["FireRed row-field rewrites", "item identity changes"]
+        return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokeruby:
         return ["Ruby/Sapphire positional gItems rewrites", "item identity changes", "description text rewrites"]
     case .pokeemeraldExpansion:

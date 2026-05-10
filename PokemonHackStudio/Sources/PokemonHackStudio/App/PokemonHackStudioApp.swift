@@ -18,6 +18,30 @@ struct PokemonHackStudioApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
+                Button("Save Project") {
+                    store.saveProjectWorkspace()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(!store.canSaveProjectWorkspace)
+
+                Button("Save Drafts") {
+                    store.saveDraftsNow()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(!store.canSaveProjectWorkspace)
+
+                Button("Reload Saved Drafts") {
+                    store.loadSavedWorkspaceForSelectedProject()
+                }
+                .disabled(!store.canSaveProjectWorkspace)
+
+                Button("Discard Saved Drafts") {
+                    store.discardSavedDrafts()
+                }
+                .disabled(!store.canSaveProjectWorkspace || (store.savedDraftCount == 0 && store.currentDraftCount == 0))
+
+                Divider()
+
                 Button("Refresh Project Indexes") {
                     store.refreshProjectIndexes()
                 }

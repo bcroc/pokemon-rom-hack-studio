@@ -3,6 +3,7 @@ import SwiftUI
 
 struct MapWorkbenchPanels: View {
     let document: MapVisualDocument
+    let catalog: ProjectMapCatalog?
     @ObservedObject var session: MapEditorSession
     let layoutMode: MapEditorLayoutMode
     let viewport: MapCanvasViewport
@@ -16,9 +17,19 @@ struct MapWorkbenchPanels: View {
     @State private var metatileTileRawValue = ""
     @State private var metatileAttributeKey = "behavior"
     @State private var metatileAttributeValue = ""
+    @State private var duplicateMapID = ""
+    @State private var duplicateMapName = ""
+    @State private var prefabName = "Prefab"
+    @State private var prefabWidth = "2"
+    @State private var prefabHeight = "2"
+    @State private var prefabRawValues = "1, 1, 1, 1"
+    @State private var prefabX = "0"
+    @State private var prefabY = "0"
+    @State private var exportFileStem = ""
 
     init(
         document: MapVisualDocument,
+        catalog: ProjectMapCatalog? = nil,
         session: MapEditorSession,
         layoutMode: MapEditorLayoutMode,
         viewport: MapCanvasViewport,
@@ -30,6 +41,7 @@ struct MapWorkbenchPanels: View {
         onCenterEvent: @escaping (MapEventDescriptor) -> Void
     ) {
         self.document = document
+        self.catalog = catalog
         self.session = session
         self.layoutMode = layoutMode
         self.viewport = viewport
@@ -90,6 +102,8 @@ struct MapWorkbenchPanels: View {
             eventsScriptsPanel
         case .mapData:
             mapDataPanel
+        case .workflow:
+            workflowPanel
         }
     }
 
@@ -130,6 +144,100 @@ struct MapWorkbenchPanels: View {
             headerPanel
             connectionsPanel
             wildPanel
+        }
+    }
+
+    private var workflowPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            EditorSection(title: "Duplicate Map Plan") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        TextField("New map id", text: $duplicateMapID)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("New map folder", text: $duplicateMapName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if let duplicationPlan {
+                        workflowPlanSummary(
+                            title: duplicationPlan.mutationPlan.title,
+                            summary: duplicationPlan.mutationPlan.summary,
+                            diagnostics: duplicationPlan.diagnostics,
+                            reasons: duplicationPlan.executionState.reasons
+                        )
+                        workflowPathList(duplicationPlan.plannedFiles.map { $0.destinationPath ?? $0.sourcePath })
+                    } else {
+                        Text("Load the map catalog before planning duplication.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            EditorSection(title: "Reload Snapshot") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if reloadDiagnostics.isEmpty {
+                        Label("Tracked map sources match the current workflow snapshot.", systemImage: "checkmark.seal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(reloadDiagnostics) { diagnostic in
+                            workflowDiagnosticRow(diagnostic)
+                        }
+                    }
+                    workflowPathList(workflowSnapshots.map(\.relativePath))
+                }
+            }
+
+            EditorSection(title: "Prefab Paste") {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Prefab name", text: $prefabName)
+                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 8) {
+                        TextField("Width", text: $prefabWidth)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Height", text: $prefabHeight)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("X", text: $prefabX)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Y", text: $prefabY)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    TextField("Raw metatiles", text: $prefabRawValues)
+                        .textFieldStyle(.roundedBorder)
+                    if let prefabPastePlan {
+                        workflowPlanSummary(
+                            title: prefabPastePlan.mutationPlan.title,
+                            summary: prefabPastePlan.mutationPlan.summary,
+                            diagnostics: prefabPastePlan.diagnostics,
+                            reasons: prefabPastePlan.executionState.reasons
+                        )
+                    }
+                    Button("Stage Prefab Paste", systemImage: "plus") {
+                        stagePrefabPaste()
+                    }
+                    .disabled(prefabPastePlan?.executionState.canApply != true)
+                }
+            }
+
+            EditorSection(title: "Region and Export Plans") {
+                VStack(alignment: .leading, spacing: 10) {
+                    workflowPlanSummary(
+                        title: regionPreview.displayName,
+                        summary: regionPreview.usesFallback ? "Region preview falls back to the map name." : "Region preview uses \(regionPreview.regionMapSection ?? "source metadata").",
+                        diagnostics: regionPreview.diagnostics,
+                        reasons: []
+                    )
+                    TextField("Export file stem", text: $exportFileStem)
+                        .textFieldStyle(.roundedBorder)
+                    workflowPlanSummary(
+                        title: visualExportPlan.mutationPlan.title,
+                        summary: visualExportPlan.mutationPlan.summary,
+                        diagnostics: visualExportPlan.diagnostics,
+                        reasons: visualExportPlan.executionState.reasons
+                    )
+                    workflowPathList(visualExportPlan.artifacts.map(\.relativePath))
+                }
+            }
         }
     }
 
@@ -886,6 +994,168 @@ struct MapWorkbenchPanels: View {
         let centerX = CGFloat(placement.originX) + CGFloat(placement.width) / 2
         let centerY = CGFloat(placement.originY) + CGFloat(placement.height) / 2
         onSelectViewportCenter(centerX, centerY)
+    }
+
+    private var duplicationPlan: MapDuplicationPlan? {
+        guard let catalog else { return nil }
+        return MapWorkflowPlanner.planDuplication(
+            catalog: catalog,
+            sourceMapID: document.mapID,
+            proposedMapID: normalizedDuplicateMapID,
+            proposedMapName: normalizedDuplicateMapName
+        )
+    }
+
+    private var workflowSnapshots: [MapWorkflowSourceSnapshot] {
+        MapWorkflowPlanner.captureSourceSnapshots(
+            rootPath: document.rootPath,
+            paths: [document.mapSourcePath, document.blockdata.filepath] + [document.border?.filepath].compactMap(\.self)
+        )
+    }
+
+    private var reloadDiagnostics: [Diagnostic] {
+        MapWorkflowPlanner.externalChangeDiagnostics(rootPath: document.rootPath, snapshots: workflowSnapshots)
+    }
+
+    private var regionPreview: MapRegionPreviewMetadata {
+        MapWorkflowPlanner.regionPreviewMetadata(
+            for: MapDescriptor(
+                id: document.mapID,
+                name: document.mapName,
+                sourcePath: document.mapSourcePath,
+                groupID: nil,
+                groupIndex: nil,
+                mapIndexInGroup: nil,
+                layout: document.layout.layoutID,
+                layoutSlotIndex: document.layout.slotIndex,
+                music: document.mapMetadata.music,
+                mapType: document.mapMetadata.mapType,
+                weather: document.mapMetadata.weather,
+                regionMapSection: document.mapMetadata.regionMapSection,
+                floorNumber: document.mapMetadata.floorNumber,
+                sharedEventsMap: nil,
+                sharedScriptsMap: nil
+            )
+        )
+    }
+
+    private var visualExportPlan: MapVisualExportPlan {
+        MapWorkflowPlanner.planVisualExport(
+            document: document,
+            format: .png,
+            fileStem: exportFileStem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : exportFileStem
+        )
+    }
+
+    private var prefabPastePlan: MapPrefabPastePlan? {
+        guard
+            let prefabWidth = parsedInt(prefabWidth),
+            let prefabHeight = parsedInt(prefabHeight),
+            let x = parsedInt(prefabX),
+            let y = parsedInt(prefabY)
+        else { return nil }
+        let prefab = MapBlockPrefab(
+            name: prefabName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Prefab" : prefabName,
+            width: prefabWidth,
+            height: prefabHeight,
+            rawValues: parsedUInt16List(prefabRawValues)
+        )
+        return MapWorkflowPlanner.planPrefabPaste(document: document, prefab: prefab, x: x, y: y)
+    }
+
+    private var normalizedDuplicateMapID: String {
+        let trimmed = duplicateMapID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "\(document.mapID)_COPY" : trimmed
+    }
+
+    private var normalizedDuplicateMapName: String {
+        let trimmed = duplicateMapName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "\(document.mapName)_Copy" : trimmed
+    }
+
+    @ViewBuilder
+    private func workflowPlanSummary(
+        title: String,
+        summary: String,
+        diagnostics: [Diagnostic],
+        reasons: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            Text(summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(diagnostics.prefix(3)) { diagnostic in
+                workflowDiagnosticRow(diagnostic)
+            }
+            ForEach(Array(reasons.prefix(2).enumerated()), id: \.offset) { _, reason in
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func workflowPathList(_ paths: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(paths.prefix(5).enumerated()), id: \.offset) { _, path in
+                Text(path)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+    }
+
+    private func workflowDiagnosticRow(_ diagnostic: Diagnostic) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: diagnostic.severity == .error ? "exclamationmark.triangle" : "info.circle")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(diagnostic.code)
+                    .font(.caption2.weight(.semibold))
+                Text(diagnostic.message)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func stagePrefabPaste() {
+        guard
+            let plan = prefabPastePlan,
+            plan.executionState.canApply,
+            let operation = plan.operation,
+            let x = operation.x,
+            let y = operation.y,
+            let width = operation.width,
+            let height = operation.height,
+            let rawValues = operation.rawValues
+        else { return }
+        session.pasteBlockPattern(x: x, y: y, width: width, height: height, target: operation.target ?? .layout, rawValues: rawValues)
+    }
+
+    private func parsedInt(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("0x") {
+            return Int(trimmed.dropFirst(2), radix: 16)
+        }
+        return Int(trimmed)
+    }
+
+    private func parsedUInt16List(_ text: String) -> [UInt16] {
+        text
+            .split { $0 == "," || $0 == " " || $0 == "\n" || $0 == "\t" }
+            .compactMap { token in
+                let raw = String(token)
+                guard let value = parsedInt(raw), (0...Int(UInt16.max)).contains(value) else {
+                    return nil
+                }
+                return UInt16(value)
+            }
     }
 
     private func canCopyTwoByTwo(from cell: MapCellSelection) -> Bool {

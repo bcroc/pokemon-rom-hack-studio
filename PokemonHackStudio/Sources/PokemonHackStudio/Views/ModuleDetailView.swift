@@ -273,6 +273,18 @@ struct ModuleDetailView: View {
                 previewBlockedReason: store.itemPreviewBlockedReason,
                 applyBlockedReason: store.itemApplyBlockedReason
             )
+        case .graphics:
+            MutationPlanPanelContext.graphics(
+                plan: store.latestGraphicsEditPlan,
+                result: store.latestGraphicsApplyResult,
+                draft: store.selectedGraphicsDraft,
+                isDirty: store.selectedGraphicsIsDirty,
+                canPreview: store.canPreviewSelectedGraphicsMutationPlan,
+                canApply: store.canApplySelectedGraphicsMutationPlan,
+                canDiscard: store.canDiscardGraphicsEdits,
+                previewBlockedReason: store.graphicsPreviewBlockedReason,
+                applyBlockedReason: store.graphicsApplyBlockedReason
+            )
         default:
             nil
         }
@@ -288,6 +300,8 @@ struct ModuleDetailView: View {
             store.previewSelectedMoveMutationPlan()
         case .items:
             store.previewSelectedItemMutationPlan()
+        case .graphics:
+            store.previewSelectedGraphicsMutationPlan()
         default:
             store.previewSelectedMapMutationPlan()
         }
@@ -303,6 +317,8 @@ struct ModuleDetailView: View {
             store.applySelectedMoveMutationPlan()
         case .items:
             store.applySelectedItemMutationPlan()
+        case .graphics:
+            store.applySelectedGraphicsMutationPlan()
         default:
             store.applySelectedMapMutationPlan()
         }
@@ -318,6 +334,8 @@ struct ModuleDetailView: View {
             store.discardMoveEdits()
         case .items:
             store.discardItemEdits()
+        case .graphics:
+            store.discardGraphicsEdits()
         default:
             store.discardMapEdits()
         }

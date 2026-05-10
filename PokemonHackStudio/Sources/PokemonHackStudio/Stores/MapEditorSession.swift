@@ -280,6 +280,17 @@ final class MapEditorSession: ObservableObject {
         }
     }
 
+    func restoreSavedDraft(operations: [MapEditOperation]) {
+        guard selectedMapVisualDocument != nil else { return }
+        discardChanges(preserveSelection: false)
+        guard !operations.isEmpty else { return }
+        undoStack = [
+            MapEditorHistoryEntry(command: .previewMutationPlan, operations: operations)
+        ]
+        redoStack = []
+        rebuildStagedMapStateFromHistory()
+    }
+
     func clearSelection() {
         selectedMapCell = nil
         selectedMapBlockTarget = .layout

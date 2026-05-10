@@ -56,6 +56,47 @@ final class GenIIIAssetCatalogTests: XCTestCase {
         XCTAssertEqual(generatedAsset.navigationTarget?.identifier, "pokeemerald.gba")
     }
 
+    func testSourceProjectAssetCatalogCacheIsCreatedReusedAndInvalidated() throws {
+        let root = try makeEmeraldAssetProject()
+        let cacheURL = root.appendingPathComponent(".pokemonhackstudio/indexes/asset-catalog-v1.json")
+
+        let first = GenIIIAssetCatalogBuilder.build(path: root.path)
+        let firstCacheData = try Data(contentsOf: cacheURL)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path))
+
+        let cached = GenIIIAssetCatalogBuilder.build(path: root.path)
+        let cachedData = try Data(contentsOf: cacheURL)
+
+        XCTAssertEqual(assetIDs(first), assetIDs(cached))
+        XCTAssertEqual(first.assetCount, cached.assetCount)
+        XCTAssertEqual(firstCacheData, cachedData)
+
+        try write(
+            minimalMapJSON(id: "MAP_ROUTE1", name: "Longer Route One", layout: "LAYOUT_ROUTE1"),
+            to: root.appendingPathComponent("data/maps/Route1/map.json")
+        )
+
+        let invalidated = GenIIIAssetCatalogBuilder.build(path: root.path)
+        let invalidatedData = try Data(contentsOf: cacheURL)
+
+        XCTAssertTrue(invalidated.assets.contains { $0.category == .maps && $0.title == "Longer Route One" })
+        XCTAssertNotEqual(firstCacheData, invalidatedData)
+        XCTAssertEqual(first.assetCount, invalidated.assetCount)
+    }
+
+    func testAssetCatalogJSONDoesNotExposePersistentCachePayloadFields() throws {
+        let root = try makeEmeraldAssetProject()
+        let catalog = GenIIIAssetCatalogBuilder.build(path: root.path)
+        let data = try JSONEncoder().encode(catalog)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertNil(object["schemaVersion"])
+        XCTAssertNil(object["sourceFingerprint"])
+        XCTAssertNil(object["project"])
+        XCTAssertNil(object["catalog"])
+    }
+
     func testSafeInventoryExcludesGeneratedNestedROMsAndBuildProducts() throws {
         let root = try makeEmeraldAssetProject()
         try write(Data([1, 2, 3]), to: root.appendingPathComponent("graphics/build/skipped.png"))
@@ -294,6 +335,10 @@ final class GenIIIAssetCatalogTests: XCTestCase {
           "bg_events": []
         }
         """
+    }
+
+    private func assetIDs(_ catalog: GenIIIAssetCatalog) -> [String] {
+        catalog.assets.map(\.id).sorted()
     }
 
     private func writeBlockdata(_ words: [UInt16], to url: URL) throws {

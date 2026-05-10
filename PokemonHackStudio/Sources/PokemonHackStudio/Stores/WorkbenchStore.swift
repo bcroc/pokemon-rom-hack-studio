@@ -88,6 +88,82 @@ private struct PlaytestArtifactExportPayload: Codable {
     let detail: String
 }
 
+enum WorkbenchToolbarMutationTarget: String, Equatable {
+    case none
+    case map
+    case pokemon
+    case trainer
+    case move
+    case item
+    case graphics
+
+    var title: String {
+        switch self {
+        case .none: "No Editable Selection"
+        case .map: "Map Changes"
+        case .pokemon: "Pokemon Changes"
+        case .trainer: "Trainer Changes"
+        case .move: "Move Changes"
+        case .item: "Item Changes"
+        case .graphics: "Graphics Changes"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .none: "doc.text.magnifyingglass"
+        case .map: "map"
+        case .pokemon: "sparkles"
+        case .trainer: "person.2"
+        case .move: "bolt"
+        case .item: "shippingbox"
+        case .graphics: "photo.on.rectangle"
+        }
+    }
+}
+
+struct WorkbenchToolbarMutationState: Equatable {
+    let target: WorkbenchToolbarMutationTarget
+    let canPreview: Bool
+    let canApply: Bool
+    let canDiscard: Bool
+    let previewBlockedReason: String?
+    let applyBlockedReason: String?
+
+    var hasEditableTarget: Bool {
+        target != .none
+    }
+
+    var title: String {
+        target.title
+    }
+
+    var systemImage: String {
+        target.systemImage
+    }
+
+    var previewHelp: String {
+        previewBlockedReason ?? "Preview staged \(title.lowercased())"
+    }
+
+    var applyHelp: String {
+        applyBlockedReason ?? "Apply previewed \(title.lowercased())"
+    }
+
+    var discardHelp: String {
+        "Discard staged \(title.lowercased())"
+    }
+
+    static let unavailable = WorkbenchToolbarMutationState(
+        target: .none,
+        canPreview: false,
+        canApply: false,
+        canDiscard: false,
+        previewBlockedReason: "Select an editable module before previewing mutations.",
+        applyBlockedReason: "Preview a mutation plan before applying."
+    )
+}
+
 @MainActor
 final class WorkbenchStore: ObservableObject {
     @Published var selection: WorkbenchModule = .dashboard
@@ -132,6 +208,10 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var mapCatalogStatus: MapCatalogLoadStatus = .idle
     @Published private(set) var mapEditorSession = MapEditorSession()
     @Published private(set) var mapVisualStatus: MapVisualLoadStatus = .idle
+    @Published private(set) var latestSavedWorkspace: PokemonHackCore.SavedHackWorkspace?
+    @Published private(set) var workspacePersistenceStatus = "Not saved"
+    @Published private(set) var workspacePersistenceError: String?
+    @Published private(set) var workspaceAutosavePending = false
     @Published private(set) var recentProjectRoots: [String]
     @Published private(set) var resourceLibrary: ResourceLibraryViewState?
     @Published private(set) var selectedScriptReadinessReport: ScriptReadinessReportViewState?
@@ -153,10 +233,13 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var latestMoveApplyResult: PokemonHackCore.MoveApplyResult?
     @Published private(set) var latestItemEditPlan: PokemonHackCore.ItemEditPlan?
     @Published private(set) var latestItemApplyResult: PokemonHackCore.ItemApplyResult?
+    @Published private(set) var latestGraphicsEditPlan: PokemonHackCore.GraphicsEditPlan?
+    @Published private(set) var latestGraphicsApplyResult: PokemonHackCore.GraphicsApplyResult?
     @Published private var speciesDraftsByKey: [String: PokemonHackCore.SpeciesEditDraft] = [:]
     @Published private var trainerDraftsByKey: [String: PokemonHackCore.TrainerEditDraft] = [:]
     @Published private var moveDraftsByKey: [String: PokemonHackCore.MoveEditDraft] = [:]
     @Published private var itemDraftsByKey: [String: PokemonHackCore.ItemEditDraft] = [:]
+    @Published private var graphicsDraftsByKey: [String: PokemonHackCore.GraphicsEditDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
     @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
 
@@ -177,6 +260,7 @@ final class WorkbenchStore: ObservableObject {
     private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
     private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
+    private var mapCatalogsByID: [String: PokemonHackCore.ProjectMapCatalog] = [:]
     private var romInspectorReportsByID: [String: PokemonHackCore.BinaryROMInspectorReport] = [:]
     private var scriptReadinessReportsByID: [String: ScriptReadinessReportViewState] = [:]
     private var speciesCatalogsByID: [String: PokemonHackCore.ProjectSpeciesCatalog] = [:]
@@ -200,10 +284,21 @@ final class WorkbenchStore: ObservableObject {
     private var pendingResourceAssetFocus: String?
     private var pendingScriptAssetTargetID: String?
     private var settingsCancellable: AnyCancellable?
+    private var mapEditorCancellable: AnyCancellable?
+    private var autosaveTask: Task<Void, Never>?
+    private var savedMapDraftsByProjectID: [String: [PokemonHackCore.SavedMapDraftSnapshot]] = [:]
     private var projectLoadGeneration = 0
 
     private static let recentRootsKey = "PokemonHackStudio.recentProjectRoots"
+    private static let autosaveDelayNanoseconds: UInt64 = 600_000_000
     static let allResourceAssetCategories = "All"
+
+    private static let workspaceSavedDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -226,6 +321,11 @@ final class WorkbenchStore: ObservableObject {
 
         settingsCancellable = self.userSettings.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
+        }
+        mapEditorCancellable = mapEditorSession.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.scheduleDraftAutosaveIfNeeded()
+            }
         }
 
         if autoLoadProjects && self.userSettings.autoLoadProjects {
@@ -721,11 +821,105 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var hasStagedEdits: Bool {
-        hasStagedMapEdits || selectedSpeciesIsDirty || selectedTrainerIsDirty || selectedMoveIsDirty || selectedItemIsDirty
+        hasStagedMapEdits
+            || selectedSpeciesIsDirty
+            || selectedTrainerIsDirty
+            || selectedMoveIsDirty
+            || selectedItemIsDirty
+            || selectedGraphicsIsDirty
+    }
+
+    var currentDraftCounts: PokemonHackCore.SavedDraftCounts {
+        currentDraftSnapshot().counts
+    }
+
+    var currentDraftCount: Int {
+        currentDraftCounts.total
+    }
+
+    var savedDraftCount: Int {
+        latestSavedWorkspace?.drafts.counts.total ?? 0
+    }
+
+    var workspaceLastSavedLabel: String {
+        guard let savedAt = latestSavedWorkspace?.savedAt else {
+            return workspacePersistenceStatus
+        }
+        return Self.workspaceSavedDateFormatter.string(from: savedAt)
+    }
+
+    var canSaveProjectWorkspace: Bool {
+        selectedIndexedProject != nil
+    }
+
+    var toolbarMutationState: WorkbenchToolbarMutationState {
+        switch selection {
+        case .maps:
+            return WorkbenchToolbarMutationState(
+                target: .map,
+                canPreview: mapEditorSession.canPreviewSelectedMapMutationPlan,
+                canApply: mapEditorSession.canApplySelectedMapMutationPlan,
+                canDiscard: mapEditorSession.canDiscardMapEdits,
+                previewBlockedReason: mapEditorSession.previewBlockedReason,
+                applyBlockedReason: mapEditorSession.applyBlockedReason
+            )
+        case .pokemon:
+            return WorkbenchToolbarMutationState(
+                target: .pokemon,
+                canPreview: canPreviewSelectedSpeciesMutationPlan,
+                canApply: canApplySelectedSpeciesMutationPlan,
+                canDiscard: canDiscardSpeciesEdits,
+                previewBlockedReason: speciesPreviewBlockedReason,
+                applyBlockedReason: speciesApplyBlockedReason
+            )
+        case .trainers:
+            return WorkbenchToolbarMutationState(
+                target: .trainer,
+                canPreview: canPreviewSelectedTrainerMutationPlan,
+                canApply: canApplySelectedTrainerMutationPlan,
+                canDiscard: canDiscardTrainerEdits,
+                previewBlockedReason: trainerPreviewBlockedReason,
+                applyBlockedReason: trainerApplyBlockedReason
+            )
+        case .moves:
+            return WorkbenchToolbarMutationState(
+                target: .move,
+                canPreview: canPreviewSelectedMoveMutationPlan,
+                canApply: canApplySelectedMoveMutationPlan,
+                canDiscard: canDiscardMoveEdits,
+                previewBlockedReason: movePreviewBlockedReason,
+                applyBlockedReason: moveApplyBlockedReason
+            )
+        case .items:
+            return WorkbenchToolbarMutationState(
+                target: .item,
+                canPreview: canPreviewSelectedItemMutationPlan,
+                canApply: canApplySelectedItemMutationPlan,
+                canDiscard: canDiscardItemEdits,
+                previewBlockedReason: itemPreviewBlockedReason,
+                applyBlockedReason: itemApplyBlockedReason
+            )
+        case .graphics:
+            return WorkbenchToolbarMutationState(
+                target: .graphics,
+                canPreview: canPreviewSelectedGraphicsMutationPlan,
+                canApply: canApplySelectedGraphicsMutationPlan,
+                canDiscard: canDiscardGraphicsEdits,
+                previewBlockedReason: graphicsPreviewBlockedReason,
+                applyBlockedReason: graphicsApplyBlockedReason
+            )
+        case .dashboard, .resources, .encounters, .scripts, .text, .build, .issues:
+            return .unavailable
+        }
     }
 
     var selectedMapVisualDocument: PokemonHackCore.MapVisualDocument? {
         mapEditorSession.selectedMapVisualDocument
+    }
+
+    var selectedCoreMapCatalog: PokemonHackCore.ProjectMapCatalog? {
+        guard let selectedIndexedProject else { return nil }
+        return mapCatalogsByID[selectedIndexedProject.id]
     }
 
     var selectedMapTool: MapEditorTool {
@@ -812,9 +1006,9 @@ final class WorkbenchStore: ObservableObject {
             return cache.rows
         }
 
-        let rows = Self.filterAndSort(
-            assetRows: selectedAssetCatalog.rows,
+        let rows = selectedAssetCatalog.index.filteredRows(
             category: resourceAssetCategory,
+            allCategory: Self.allResourceAssetCategories,
             searchText: searchText,
             sortMode: resourceAssetSortMode
         )
@@ -874,7 +1068,7 @@ final class WorkbenchStore: ObservableObject {
             return selected
         }
         if let selectedResourceAssetID,
-           let selected = selectedAssetCatalog?.rows.first(where: { $0.id == selectedResourceAssetID })
+           let selected = selectedAssetCatalog?.index.rowsByID[selectedResourceAssetID]
         {
             return selected
         }
@@ -933,6 +1127,46 @@ final class WorkbenchStore: ObservableObject {
             return selected
         }
         return filteredGraphicsReportRows.first
+    }
+
+    var selectedGraphicsDraft: PokemonHackCore.GraphicsEditDraft? {
+        guard let selectedIndexedProject, let row = selectedGraphicsReportRow else { return nil }
+        let key = graphicsDraftKey(projectID: selectedIndexedProject.id, tilesetSymbol: row.source.symbol)
+        return graphicsDraftsByKey[key] ?? PokemonHackCore.GraphicsEditDraft(tilesetSymbol: row.source.symbol)
+    }
+
+    var selectedGraphicsIsDirty: Bool {
+        guard let selectedIndexedProject, let row = selectedGraphicsReportRow else { return false }
+        let key = graphicsDraftKey(projectID: selectedIndexedProject.id, tilesetSymbol: row.source.symbol)
+        return !(graphicsDraftsByKey[key]?.operations.isEmpty ?? true)
+    }
+
+    var canPreviewSelectedGraphicsMutationPlan: Bool {
+        selectedGraphicsIsDirty && selectedGraphicsDraft != nil
+    }
+
+    var canApplySelectedGraphicsMutationPlan: Bool {
+        latestGraphicsEditPlan?.validateApplyability(fileManager: fileManager).isApplyable == true
+    }
+
+    var canDiscardGraphicsEdits: Bool {
+        selectedGraphicsIsDirty || latestGraphicsEditPlan != nil || latestGraphicsApplyResult != nil
+    }
+
+    var graphicsPreviewBlockedReason: String? {
+        guard selectedGraphicsReport != nil else { return "Load graphics diagnostics before previewing edits." }
+        guard selectedGraphicsReportRow != nil else { return "Select a tileset, metatile, or palette source row before previewing edits." }
+        guard selectedGraphicsIsDirty else { return "Stage a supported graphics source edit before previewing a mutation plan." }
+        return nil
+    }
+
+    var graphicsApplyBlockedReason: String? {
+        guard let plan = latestGraphicsEditPlan else { return "Preview graphics mutations before applying." }
+        let applyability = plan.validateApplyability(fileManager: fileManager)
+        if applyability.isApplyable {
+            return nil
+        }
+        return applyability.diagnostics.first?.message ?? "Resolve graphics mutation diagnostics before applying."
     }
 
     var selectedDiagnosticBucketSummary: DiagnosticBucketSummary {
@@ -1102,34 +1336,12 @@ final class WorkbenchStore: ObservableObject {
         searchText: String,
         sortMode: ResourceAssetSortMode
     ) -> [ResourceAssetRowViewState] {
-        let needle = searchText.lowercased()
-        let filtered = assetRows.filter { row in
-            (category == Self.allResourceAssetCategories || row.category == category)
-                && (needle.isEmpty || row.searchBlob.contains(needle))
-        }
-        return filtered.sorted { lhs, rhs in
-            switch sortMode {
-            case .category:
-                if lhs.category == rhs.category {
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
-                return lhs.category < rhs.category
-            case .title:
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            case .path:
-                return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
-            case .status:
-                if lhs.status.rawValue == rhs.status.rawValue {
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
-                return lhs.status.rawValue < rhs.status.rawValue
-            case .availability:
-                if lhs.availability == rhs.availability {
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
-                return lhs.availability < rhs.availability
-            }
-        }
+        ResourceAssetCatalogIndex(rows: assetRows).filteredRows(
+            category: category,
+            allCategory: Self.allResourceAssetCategories,
+            searchText: searchText,
+            sortMode: sortMode
+        )
     }
 
     private static func speciesSearchBlob(_ species: PokemonHackCore.SpeciesDetail) -> String {
@@ -1218,6 +1430,95 @@ final class WorkbenchStore: ObservableObject {
 
     private func itemDraftKey(projectID: String, itemID: String) -> String {
         "\(projectID)::item::\(itemID)"
+    }
+
+    private func graphicsDraftKey(projectID: String, tilesetSymbol: String) -> String {
+        "\(projectID)::graphics::\(tilesetSymbol)"
+    }
+
+    private func draftKeyPrefix(projectID: String, kind: String) -> String {
+        "\(projectID)::\(kind)::"
+    }
+
+    private func currentDraftSnapshot(projectID: String? = nil) -> PokemonHackCore.SavedDraftSnapshot {
+        guard let projectID = projectID ?? selectedIndexedProject?.id else {
+            return PokemonHackCore.SavedDraftSnapshot()
+        }
+
+        let speciesPrefix = draftKeyPrefix(projectID: projectID, kind: "species")
+        let trainerPrefix = draftKeyPrefix(projectID: projectID, kind: "trainer")
+        let movePrefix = draftKeyPrefix(projectID: projectID, kind: "move")
+        let itemPrefix = draftKeyPrefix(projectID: projectID, kind: "item")
+        let graphicsPrefix = draftKeyPrefix(projectID: projectID, kind: "graphics")
+
+        var mapDrafts = savedMapDraftsByProjectID[projectID] ?? []
+        if
+            let document = mapEditorSession.selectedMapVisualDocument,
+            mapEditorSession.isDirty,
+            !mapEditorSession.mapEditOperations.isEmpty
+        {
+            mapDrafts.removeAll { $0.mapID == document.mapID }
+            mapDrafts.append(
+                PokemonHackCore.SavedMapDraftSnapshot(
+                    mapID: document.mapID,
+                    documentID: document.id,
+                    operations: mapEditorSession.mapEditOperations
+                )
+            )
+        }
+
+        return PokemonHackCore.SavedDraftSnapshot(
+            speciesDrafts: speciesDraftsByKey
+                .filter { $0.key.hasPrefix(speciesPrefix) }
+                .map(\.value)
+                .sorted { $0.speciesID < $1.speciesID },
+            trainerDrafts: trainerDraftsByKey
+                .filter { $0.key.hasPrefix(trainerPrefix) }
+                .map(\.value)
+                .sorted { $0.trainerID < $1.trainerID },
+            moveDrafts: moveDraftsByKey
+                .filter { $0.key.hasPrefix(movePrefix) }
+                .map(\.value)
+                .sorted { $0.moveID < $1.moveID },
+            itemDrafts: itemDraftsByKey
+                .filter { $0.key.hasPrefix(itemPrefix) }
+                .map(\.value)
+                .sorted { $0.itemID < $1.itemID },
+            mapDrafts: mapDrafts.sorted { $0.mapID < $1.mapID },
+            graphicsDrafts: graphicsDraftsByKey
+                .filter { $0.key.hasPrefix(graphicsPrefix) }
+                .map(\.value)
+                .filter { !$0.operations.isEmpty }
+                .sorted { $0.tilesetSymbol < $1.tilesetSymbol }
+        )
+    }
+
+    private func workspaceSnapshot(savedAt: Date = Date()) -> PokemonHackCore.SavedHackWorkspace? {
+        guard let project = selectedIndexedProject else { return nil }
+        let index = projectIndexesByID[project.id]
+        return PokemonHackCore.SavedHackWorkspace(
+            savedAt: savedAt,
+            projectRootPath: project.rootPath,
+            projectTitle: project.title,
+            profile: index?.profile ?? PokemonHackCore.GameProfile(rawValue: project.profile) ?? .unknown,
+            adapterID: index?.adapterID ?? project.adapterName,
+            selectedModule: selection.rawValue,
+            selectedMapID: selectedMapID.isEmpty ? nil : selectedMapID,
+            selectedSpeciesID: selectedSpeciesID.isEmpty ? nil : selectedSpeciesID,
+            selectedTrainerID: selectedTrainerID.isEmpty ? nil : selectedTrainerID,
+            selectedMoveID: selectedMoveID.isEmpty ? nil : selectedMoveID,
+            selectedItemID: selectedItemID.isEmpty ? nil : selectedItemID,
+            drafts: currentDraftSnapshot(projectID: project.id)
+        )
+    }
+
+    private func clearDrafts(for projectID: String) {
+        speciesDraftsByKey = speciesDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "species")) }
+        trainerDraftsByKey = trainerDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "trainer")) }
+        moveDraftsByKey = moveDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "move")) }
+        itemDraftsByKey = itemDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "item")) }
+        graphicsDraftsByKey = graphicsDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "graphics")) }
+        savedMapDraftsByProjectID.removeValue(forKey: projectID)
     }
 
     func moduleStatus(for module: WorkbenchModule) -> ValidationState {
@@ -1477,6 +1778,7 @@ final class WorkbenchStore: ObservableObject {
         romInspectorReportsByID = romInspectorReports
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
+        savedMapDraftsByProjectID = savedMapDraftsByProjectID.filter { indexes.keys.contains($0.key) }
         mapVisualSharedCacheDataByID = [:]
         resourceAssetRowsCache = nil
         if !summaries.contains(where: { $0.id == selectedProjectID }) {
@@ -1495,6 +1797,7 @@ final class WorkbenchStore: ObservableObject {
         refreshSelectedTrainerSelection()
         refreshSelectedMoveSelection()
         refreshSelectedItemSelection()
+        loadSavedWorkspaceForSelectedProject()
         updateAssetCatalogLoadStatusForSelection()
         if userSettings.autoLoadAssetCatalog {
             loadSelectedAssetCatalogIfNeeded()
@@ -1526,6 +1829,7 @@ final class WorkbenchStore: ObservableObject {
             refreshSelectedTrainerSelection()
             refreshSelectedMoveSelection()
             refreshSelectedItemSelection()
+            loadSavedWorkspaceForSelectedProject()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
@@ -1674,6 +1978,8 @@ final class WorkbenchStore: ObservableObject {
         latestMoveApplyResult = nil
         latestItemEditPlan = nil
         latestItemApplyResult = nil
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
         rawGraphicsImportPackagePlan = nil
         selectedGraphicsImportPackagePlan = nil
         graphicsImportPackagePlanStatus = .idle
@@ -1744,6 +2050,94 @@ final class WorkbenchStore: ObservableObject {
             rawGraphicsImportPackagePlan = nil
             selectedGraphicsImportPackagePlan = nil
             graphicsImportPackagePlanStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func stageSelectedGraphicsOperation(_ operation: PokemonHackCore.GraphicsEditOperation) {
+        guard let selectedIndexedProject, let row = selectedGraphicsReportRow else { return }
+        let key = graphicsDraftKey(projectID: selectedIndexedProject.id, tilesetSymbol: row.source.symbol)
+        var draft = graphicsDraftsByKey[key] ?? PokemonHackCore.GraphicsEditDraft(tilesetSymbol: row.source.symbol)
+        draft.operations.append(operation)
+        graphicsDraftsByKey[key] = draft
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
+        scheduleDraftAutosave()
+    }
+
+    func removeSelectedGraphicsOperation(id: String) {
+        guard let selectedIndexedProject, let row = selectedGraphicsReportRow else { return }
+        let key = graphicsDraftKey(projectID: selectedIndexedProject.id, tilesetSymbol: row.source.symbol)
+        guard var draft = graphicsDraftsByKey[key] else { return }
+        draft.operations.removeAll { $0.id == id }
+        if draft.operations.isEmpty {
+            graphicsDraftsByKey.removeValue(forKey: key)
+        } else {
+            graphicsDraftsByKey[key] = draft
+        }
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    func discardGraphicsEdits() {
+        guard let selectedIndexedProject, let row = selectedGraphicsReportRow else {
+            latestGraphicsEditPlan = nil
+            latestGraphicsApplyResult = nil
+            return
+        }
+        graphicsDraftsByKey.removeValue(forKey: graphicsDraftKey(projectID: selectedIndexedProject.id, tilesetSymbol: row.source.symbol))
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    func previewSelectedGraphicsMutationPlan() {
+        guard let selectedIndexedProject, let draft = selectedGraphicsDraft else {
+            latestGraphicsEditPlan = nil
+            latestGraphicsApplyResult = nil
+            return
+        }
+        latestGraphicsEditPlan = GraphicsMutationPlanner.plan(rootPath: selectedIndexedProject.rootPath, draft: draft, fileManager: fileManager)
+        latestGraphicsApplyResult = nil
+    }
+
+    func applySelectedGraphicsMutationPlan() {
+        if latestGraphicsEditPlan == nil {
+            previewSelectedGraphicsMutationPlan()
+        }
+
+        guard let plan = latestGraphicsEditPlan else { return }
+        let projectIDBeforeApply = selectedProjectID
+        let tilesetSymbolBeforeApply = plan.draft.tilesetSymbol
+
+        do {
+            let result = try GraphicsMutationApplier.apply(plan: plan, fileManager: fileManager)
+            latestGraphicsApplyResult = result
+            guard !result.appliedChanges.isEmpty else { return }
+            if !projectIDBeforeApply.isEmpty {
+                graphicsDraftsByKey.removeValue(
+                    forKey: graphicsDraftKey(projectID: projectIDBeforeApply, tilesetSymbol: tilesetSymbolBeforeApply)
+                )
+            }
+            reloadSelectedProjectAfterGraphicsApply(projectID: projectIDBeforeApply)
+            if indexedProjects.contains(where: { $0.id == projectIDBeforeApply }) {
+                selectedProjectID = projectIDBeforeApply
+            }
+            latestGraphicsEditPlan = nil
+            latestGraphicsApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
+        } catch {
+            latestGraphicsApplyResult = GraphicsApplyResult(
+                backupRootPath: plan.backupRelativeRoot,
+                appliedChanges: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "GRAPHICS_APPLY_FAILED",
+                        message: error.localizedDescription
+                    )
+                ]
+            )
         }
     }
 
@@ -1853,15 +2247,8 @@ final class WorkbenchStore: ObservableObject {
         let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let catalog = selectedAssetCatalog else { return false }
         let needle = trimmed.lowercased()
-        let exactMatch = catalog.rows.first { $0.id == trimmed }
-            ?? catalog.rows.first { $0.targetID == trimmed }
-            ?? catalog.rows.first { $0.path == trimmed && $0.targetID == trimmed }
-            ?? catalog.rows.first { $0.path == trimmed }
-            ?? catalog.rows.first { $0.title == trimmed }
-            ?? catalog.rows.first { $0.source.path == trimmed }
-        let fallbackMatch = exactMatch ?? catalog.rows.first { row in
-            row.searchBlob.contains(needle)
-        }
+        let fallbackMatch = catalog.index.exactMatch(identifier: trimmed)
+            ?? catalog.index.substringMatch(needle: needle)
         selectedResourceAssetID = fallbackMatch?.id
         return fallbackMatch != nil
     }
@@ -1904,7 +2291,13 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func discardMapEdits() {
+        let projectID = selectedIndexedProject?.id
+        let mapID = mapEditorSession.selectedMapVisualDocument?.mapID
         mapEditorSession.discardChanges()
+        if let projectID, let mapID {
+            savedMapDraftsByProjectID[projectID]?.removeAll { $0.mapID == mapID }
+        }
+        scheduleDraftAutosaveIfNeeded()
     }
 
     func discardMapEditsAndContinueNavigation() {
@@ -1925,6 +2318,8 @@ final class WorkbenchStore: ObservableObject {
             refreshSelectedSpeciesSelection()
             refreshSelectedTrainerSelection()
             refreshSelectedMoveSelection()
+            refreshSelectedItemSelection()
+            loadSavedWorkspaceForSelectedProject()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
@@ -1985,10 +2380,15 @@ final class WorkbenchStore: ObservableObject {
             refreshSelectedTrainerSelection()
             refreshSelectedMoveSelection()
             refreshSelectedItemSelection()
+            loadSavedWorkspaceForSelectedProject()
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = nil
             latestTrainerEditPlan = nil
             latestTrainerApplyResult = nil
+            latestMoveEditPlan = nil
+            latestMoveApplyResult = nil
+            latestItemEditPlan = nil
+            latestItemApplyResult = nil
             updateAssetCatalogLoadStatusForSelection()
             loadSelectedModuleDataIfNeeded()
             projectIndexStatus = .loaded(indexedProjects.count)
@@ -2018,6 +2418,91 @@ final class WorkbenchStore: ObservableObject {
         case .items:
             loadSelectedItemCatalogIfNeeded()
         case .dashboard, .build, .graphics, .issues, .encounters:
+            break
+        }
+    }
+
+    func refreshSelectedModuleContext() {
+        switch selection {
+        case .dashboard:
+            refreshHealthChecks()
+        case .resources:
+            refreshResourceLibrary()
+            loadSelectedAssetCatalogIfNeeded(force: true)
+        case .maps:
+            refreshSelectedMapCatalog()
+            loadSelectedMapVisualDocument()
+        case .scripts:
+            loadSelectedSourceGraphIfNeeded(force: true)
+            refreshSelectedScriptReadinessReport()
+        case .text, .encounters:
+            loadSelectedSourceGraphIfNeeded(force: true)
+        case .pokemon:
+            loadSelectedSpeciesCatalogIfNeeded(force: true)
+        case .trainers:
+            loadSelectedTrainerCatalogIfNeeded(force: true)
+        case .moves:
+            loadSelectedMoveCatalogIfNeeded(force: true)
+        case .items:
+            loadSelectedItemCatalogIfNeeded(force: true)
+        case .graphics, .build, .issues:
+            refreshHealthChecks()
+        }
+    }
+
+    func previewToolbarMutationTarget() {
+        switch toolbarMutationState.target {
+        case .map:
+            previewSelectedMapMutationPlan()
+        case .pokemon:
+            previewSelectedSpeciesMutationPlan()
+        case .trainer:
+            previewSelectedTrainerMutationPlan()
+        case .move:
+            previewSelectedMoveMutationPlan()
+        case .item:
+            previewSelectedItemMutationPlan()
+        case .graphics:
+            previewSelectedGraphicsMutationPlan()
+        case .none:
+            break
+        }
+    }
+
+    func applyToolbarMutationTarget() {
+        switch toolbarMutationState.target {
+        case .map:
+            applySelectedMapMutationPlan()
+        case .pokemon:
+            applySelectedSpeciesMutationPlan()
+        case .trainer:
+            applySelectedTrainerMutationPlan()
+        case .move:
+            applySelectedMoveMutationPlan()
+        case .item:
+            applySelectedItemMutationPlan()
+        case .graphics:
+            applySelectedGraphicsMutationPlan()
+        case .none:
+            break
+        }
+    }
+
+    func discardToolbarMutationTarget() {
+        switch toolbarMutationState.target {
+        case .map:
+            discardMapEdits()
+        case .pokemon:
+            discardSpeciesEdits()
+        case .trainer:
+            discardTrainerEdits()
+        case .move:
+            discardMoveEdits()
+        case .item:
+            discardItemEdits()
+        case .graphics:
+            discardGraphicsEdits()
+        case .none:
             break
         }
     }
@@ -2413,6 +2898,7 @@ final class WorkbenchStore: ObservableObject {
         }
         latestSpeciesEditPlan = nil
         latestSpeciesApplyResult = nil
+        scheduleDraftAutosave()
     }
 
     func updateSelectedMoveDraft(_ draft: PokemonHackCore.MoveEditDraft) {
@@ -2428,6 +2914,7 @@ final class WorkbenchStore: ObservableObject {
         }
         latestMoveEditPlan = nil
         latestMoveApplyResult = nil
+        scheduleDraftAutosave()
     }
 
     func discardMoveEdits() {
@@ -2439,6 +2926,7 @@ final class WorkbenchStore: ObservableObject {
         moveDraftsByKey.removeValue(forKey: moveDraftKey(projectID: selectedIndexedProject.id, moveID: detail.moveID))
         latestMoveEditPlan = nil
         latestMoveApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
     }
 
     func previewSelectedMoveMutationPlan() {
@@ -2477,6 +2965,7 @@ final class WorkbenchStore: ObservableObject {
             }
             latestMoveEditPlan = nil
             latestMoveApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
         } catch {
             latestMoveApplyResult = MoveApplyResult(
                 backupRootPath: plan.backupRelativeRoot,
@@ -2505,6 +2994,7 @@ final class WorkbenchStore: ObservableObject {
         }
         latestItemEditPlan = nil
         latestItemApplyResult = nil
+        scheduleDraftAutosave()
     }
 
     func discardItemEdits() {
@@ -2516,6 +3006,7 @@ final class WorkbenchStore: ObservableObject {
         itemDraftsByKey.removeValue(forKey: itemDraftKey(projectID: selectedIndexedProject.id, itemID: detail.itemID))
         latestItemEditPlan = nil
         latestItemApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
     }
 
     func previewSelectedItemMutationPlan() {
@@ -2554,6 +3045,7 @@ final class WorkbenchStore: ObservableObject {
             }
             latestItemEditPlan = nil
             latestItemApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
         } catch {
             latestItemApplyResult = ItemApplyResult(
                 backupRootPath: plan.backupRelativeRoot,
@@ -2578,6 +3070,7 @@ final class WorkbenchStore: ObservableObject {
         speciesDraftsByKey.removeValue(forKey: speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: detail.speciesID))
         latestSpeciesEditPlan = nil
         latestSpeciesApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
     }
 
     func previewSelectedSpeciesMutationPlan() {
@@ -2616,6 +3109,7 @@ final class WorkbenchStore: ObservableObject {
             }
             latestSpeciesEditPlan = nil
             latestSpeciesApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
         } catch {
             latestSpeciesApplyResult = SpeciesApplyResult(
                 backupRootPath: plan.backupRelativeRoot,
@@ -2711,6 +3205,7 @@ final class WorkbenchStore: ObservableObject {
         }
         latestTrainerEditPlan = nil
         latestTrainerApplyResult = nil
+        scheduleDraftAutosave()
     }
 
     func discardTrainerEdits() {
@@ -2722,6 +3217,7 @@ final class WorkbenchStore: ObservableObject {
         trainerDraftsByKey.removeValue(forKey: trainerDraftKey(projectID: selectedIndexedProject.id, trainerID: detail.trainerID))
         latestTrainerEditPlan = nil
         latestTrainerApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
     }
 
     func previewSelectedTrainerMutationPlan() {
@@ -2760,6 +3256,7 @@ final class WorkbenchStore: ObservableObject {
             }
             latestTrainerEditPlan = nil
             latestTrainerApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
         } catch {
             latestTrainerApplyResult = TrainerApplyResult(
                 backupRootPath: plan.backupRelativeRoot,
@@ -2871,6 +3368,24 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    private func reloadSelectedProjectAfterGraphicsApply(projectID: String) {
+        let rootPath = indexedProjects.first { $0.id == projectID }?.rootPath ?? projectID
+        guard fileManager.fileExists(atPath: rootPath) else { return }
+
+        do {
+            let index = try GameAdapterRegistry.index(path: rootPath, fileManager: fileManager)
+            let summary = Self.summary(from: index)
+            projectIndexesByID[summary.id] = index
+            let sourceIndex = try ProjectSourceIndexLoader.load(from: index, fileManager: fileManager)
+            sourceIndexesByID[summary.id] = sourceIndex
+            graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
+            upsert(summary)
+            selectedProjectID = summary.id
+        } catch {
+            graphicsImportPackagePlanStatus = .failed(error.localizedDescription)
+        }
+    }
+
     private func selectedScriptReadinessTarget(index: PokemonHackCore.ProjectIndex) -> PokemonHackCore.ScriptReadinessTarget? {
         switch scriptReadinessTargetMode {
         case .map:
@@ -2910,6 +3425,190 @@ final class WorkbenchStore: ObservableObject {
         recentProjectRoots = []
         userDefaults.removeObject(forKey: Self.recentRootsKey)
         refreshResourceLibrary()
+    }
+
+    @discardableResult
+    func saveProjectWorkspace() -> Bool {
+        guard let workspace = workspaceSnapshot(), let project = selectedIndexedProject else { return false }
+
+        do {
+            try ProjectWorkspacePersistence.saveProject(workspace, root: URL(fileURLWithPath: project.rootPath), fileManager: fileManager)
+            latestSavedWorkspace = workspace
+            workspacePersistenceStatus = "Project saved"
+            workspacePersistenceError = nil
+            workspaceAutosavePending = false
+            return true
+        } catch {
+            workspacePersistenceStatus = "Save failed"
+            workspacePersistenceError = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func saveDraftsNow() -> Bool {
+        autosaveTask?.cancel()
+        guard let workspace = workspaceSnapshot(), let project = selectedIndexedProject else {
+            workspaceAutosavePending = false
+            return false
+        }
+
+        do {
+            try ProjectWorkspacePersistence.saveAutosave(workspace, root: URL(fileURLWithPath: project.rootPath), fileManager: fileManager)
+            latestSavedWorkspace = workspace
+            workspacePersistenceStatus = workspace.drafts.isEmpty ? "No drafts saved" : "Drafts saved"
+            workspacePersistenceError = nil
+            workspaceAutosavePending = false
+            return true
+        } catch {
+            workspacePersistenceStatus = "Autosave failed"
+            workspacePersistenceError = error.localizedDescription
+            workspaceAutosavePending = false
+            return false
+        }
+    }
+
+    @discardableResult
+    func loadSavedWorkspaceForSelectedProject() -> Bool {
+        guard let project = selectedIndexedProject else { return false }
+        let root = URL(fileURLWithPath: project.rootPath)
+
+        do {
+            let autosave = try ProjectWorkspacePersistence.loadAutosave(root: root, fileManager: fileManager)
+            let projectSave = try ProjectWorkspacePersistence.loadProject(root: root, fileManager: fileManager)
+            guard let workspace = [autosave, projectSave].compactMap(\.self).max(by: { $0.savedAt < $1.savedAt }) else {
+                latestSavedWorkspace = nil
+                workspacePersistenceStatus = "Not saved"
+                workspacePersistenceError = nil
+                return false
+            }
+
+            applySavedWorkspace(workspace, toProjectID: project.id)
+            workspacePersistenceStatus = workspace.drafts.isEmpty ? "Project loaded" : "Drafts loaded"
+            workspacePersistenceError = nil
+            return true
+        } catch {
+            latestSavedWorkspace = nil
+            workspacePersistenceStatus = "Load failed"
+            workspacePersistenceError = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    func discardSavedDrafts() -> Bool {
+        guard let project = selectedIndexedProject else { return false }
+        let projectID = project.id
+        let root = URL(fileURLWithPath: project.rootPath)
+
+        autosaveTask?.cancel()
+        clearDrafts(for: projectID)
+        if mapEditorSession.isDirty {
+            mapEditorSession.discardChanges()
+        }
+        latestSpeciesEditPlan = nil
+        latestSpeciesApplyResult = nil
+        latestTrainerEditPlan = nil
+        latestTrainerApplyResult = nil
+        latestMoveEditPlan = nil
+        latestMoveApplyResult = nil
+        latestItemEditPlan = nil
+        latestItemApplyResult = nil
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
+
+        do {
+            try ProjectWorkspacePersistence.discardAutosave(root: root, fileManager: fileManager)
+            if let workspace = workspaceSnapshot() {
+                try ProjectWorkspacePersistence.saveProject(workspace, root: root, fileManager: fileManager)
+                latestSavedWorkspace = workspace
+            } else {
+                latestSavedWorkspace = nil
+            }
+            workspacePersistenceStatus = "Drafts discarded"
+            workspacePersistenceError = nil
+            workspaceAutosavePending = false
+            return true
+        } catch {
+            workspacePersistenceStatus = "Discard failed"
+            workspacePersistenceError = error.localizedDescription
+            workspaceAutosavePending = false
+            return false
+        }
+    }
+
+    private func scheduleDraftAutosave() {
+        guard selectedIndexedProject != nil else { return }
+        autosaveTask?.cancel()
+        workspaceAutosavePending = true
+        autosaveTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: Self.autosaveDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            _ = self?.saveDraftsNow()
+        }
+    }
+
+    private func scheduleDraftAutosaveIfNeeded() {
+        guard selectedIndexedProject != nil else { return }
+        if hasStagedEdits || savedDraftCount > 0 || workspaceAutosavePending {
+            scheduleDraftAutosave()
+        }
+    }
+
+    private func applySavedWorkspace(_ workspace: PokemonHackCore.SavedHackWorkspace, toProjectID projectID: String) {
+        clearDrafts(for: projectID)
+        latestSavedWorkspace = workspace
+
+        if let selectedModule = workspace.selectedModule.flatMap(WorkbenchModule.init(rawValue:)) {
+            selection = selectedModule
+        }
+        if let mapID = workspace.selectedMapID, !mapID.isEmpty {
+            selectedMapID = mapID
+        }
+        if let speciesID = workspace.selectedSpeciesID, !speciesID.isEmpty {
+            selectedSpeciesID = speciesID
+        }
+        if let trainerID = workspace.selectedTrainerID, !trainerID.isEmpty {
+            selectedTrainerID = trainerID
+        }
+        if let moveID = workspace.selectedMoveID, !moveID.isEmpty {
+            selectedMoveID = moveID
+        }
+        if let itemID = workspace.selectedItemID, !itemID.isEmpty {
+            selectedItemID = itemID
+        }
+
+        for draft in workspace.drafts.speciesDrafts {
+            speciesDraftsByKey[speciesDraftKey(projectID: projectID, speciesID: draft.speciesID)] = draft
+        }
+        for draft in workspace.drafts.trainerDrafts {
+            trainerDraftsByKey[trainerDraftKey(projectID: projectID, trainerID: draft.trainerID)] = draft
+        }
+        for draft in workspace.drafts.moveDrafts {
+            moveDraftsByKey[moveDraftKey(projectID: projectID, moveID: draft.moveID)] = draft
+        }
+        for draft in workspace.drafts.itemDrafts {
+            itemDraftsByKey[itemDraftKey(projectID: projectID, itemID: draft.itemID)] = draft
+        }
+        for draft in workspace.drafts.graphicsDrafts where !draft.operations.isEmpty {
+            graphicsDraftsByKey[graphicsDraftKey(projectID: projectID, tilesetSymbol: draft.tilesetSymbol)] = draft
+        }
+        savedMapDraftsByProjectID[projectID] = workspace.drafts.mapDrafts
+        restoreSelectedMapDraftIfAvailable(projectID: projectID)
+    }
+
+    private func restoreSelectedMapDraftIfAvailable(projectID: String? = nil) {
+        guard let projectID = projectID ?? selectedIndexedProject?.id,
+              let document = mapEditorSession.selectedMapVisualDocument,
+              let draft = savedMapDraftsByProjectID[projectID]?.first(where: { $0.mapID == document.mapID })
+        else {
+            return
+        }
+        mapEditorSession.restoreSavedDraft(operations: draft.operations)
     }
 
     @discardableResult
@@ -3095,6 +3794,9 @@ final class WorkbenchStore: ObservableObject {
         mapCatalogTask?.cancel()
         mapVisualTask?.cancel()
         selectedMapCatalog = nil
+        if let selectedIndexedProject {
+            mapCatalogsByID.removeValue(forKey: selectedIndexedProject.id)
+        }
         selectedMapID = ""
         mapCatalogStatus = selectedIndexedProject == nil ? .idle : .loading
         clearSelectedMapVisualDocument()
@@ -3136,6 +3838,7 @@ final class WorkbenchStore: ObservableObject {
                 else { return }
 
                 projectIndexesByID[projectID] = payload.index
+                mapCatalogsByID[projectID] = payload.catalog
                 mapVisualSharedCacheDataByID.removeValue(forKey: projectID)
                 let viewState = Self.mapCatalogViewState(from: payload.catalog, project: projectSummary)
                 selectedMapCatalog = viewState
@@ -3211,6 +3914,7 @@ final class WorkbenchStore: ObservableObject {
                 mapVisualSharedCacheDataByID[projectID] = try? JSONEncoder().encode(payload.sharedCache)
                 mapEditorSession.load(document: payload.document, preserveSelection: false)
                 applyMapEditorDefaults()
+                restoreSelectedMapDraftIfAvailable(projectID: projectID)
                 mapVisualStatus = .loaded(payload.document.mapName)
             } catch {
                 guard let self,
@@ -3325,11 +4029,13 @@ final class WorkbenchStore: ObservableObject {
             }
             if !mapIDBeforeApply.isEmpty {
                 selectedMapID = mapIDBeforeApply
+                savedMapDraftsByProjectID[projectIDBeforeApply]?.removeAll { $0.mapID == mapIDBeforeApply }
             }
             if selectedProjectID == projectIDBeforeApply {
                 loadSelectedMapCatalog()
                 loadSelectedMapVisualDocument()
             }
+            scheduleDraftAutosaveIfNeeded()
         } catch {
             mapEditorSession.recordApplyFailure(error)
         }

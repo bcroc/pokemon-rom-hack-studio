@@ -244,10 +244,16 @@ public extension GenIIIAssetAvailability {
 }
 
 public enum GenIIIAssetCatalogBuilder {
+    private static let cacheSchemaVersion = 3
+    private static let cacheRelativePath = ".pokemonhackstudio/indexes/asset-catalog-v1.json"
+    private static let cacheMetadataRelativePath = ".pokemonhackstudio/indexes/asset-catalog-v1-metadata.json"
+    private static let cacheOutputRelativePath = ".pokemonhackstudio/indexes/asset-catalog-v1-output.json"
     private static let inventoryRoots = ["data", "graphics", "sound", "songs", "src/data", "include", "constants"]
+    private static let recursiveFingerprintRoots = ["data/maps", "data/layouts", "data/scripts", "data/text", "src/data", "include", "constants"]
     private static let excludedDirectoryNames: Set<String> = [
         ".build",
         ".git",
+        ".pokemonhackstudio",
         ".swiftpm",
         "DerivedData",
         "build",
@@ -281,8 +287,26 @@ public enum GenIIIAssetCatalogBuilder {
             if index.profile == .binaryROM {
                 return build(resourceEntry: GenIIIResourceRegistry.resourceIndex(path: url.path, fileManager: fileManager))
             }
+            let identity = CacheProjectIdentity(index: index)
+            let fingerprint = sourceFingerprint(for: index, fileManager: fileManager)
+            if let cached = cachedCatalog(
+                root: url,
+                identity: identity,
+                fingerprint: fingerprint,
+                fileManager: fileManager
+            ) {
+                return cached
+            }
             let buildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
-            return build(index: index, buildReport: buildReport, fileManager: fileManager)
+            let catalog = build(index: index, buildReport: buildReport, fileManager: fileManager)
+            writeCache(
+                catalog: catalog,
+                root: url,
+                identity: identity,
+                fingerprint: fingerprint,
+                fileManager: fileManager
+            )
+            return catalog
         } catch {
             let resource = GenIIIResourceRegistry.resourceIndex(path: url.path, fileManager: fileManager)
             var catalog = build(resourceEntry: resource)
@@ -302,6 +326,43 @@ public enum GenIIIAssetCatalogBuilder {
             )
             return catalog
         }
+    }
+
+    public static func cachedCatalogJSONString(
+        path: String,
+        fileManager: FileManager = .default
+    ) -> String? {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard
+            let index = try? GameAdapterRegistry.index(path: url.path, fileManager: fileManager),
+            index.profile != .binaryROM
+        else {
+            return nil
+        }
+        let identity = CacheProjectIdentity(index: index)
+        let fingerprint = sourceFingerprint(for: index, fileManager: fileManager)
+        guard cacheMetadataMatches(root: url, identity: identity, fingerprint: fingerprint, fileManager: fileManager) else {
+            if let payload = cachedPayload(root: url, identity: identity, fingerprint: fingerprint, fileManager: fileManager) {
+                writeCache(
+                    catalog: payload.catalog,
+                    root: url,
+                    identity: identity,
+                    fingerprint: fingerprint,
+                    fileManager: fileManager
+                )
+                let outputURL = cacheOutputURL(for: url)
+                guard let data = try? Data(contentsOf: outputURL) else { return nil }
+                return String(decoding: data, as: UTF8.self)
+            }
+            return nil
+        }
+        let outputURL = cacheOutputURL(for: url)
+        guard fileManager.fileExists(atPath: outputURL.path),
+              let data = try? Data(contentsOf: outputURL)
+        else {
+            return nil
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     public static func build(
@@ -332,7 +393,7 @@ public enum GenIIIAssetCatalogBuilder {
         let loadedMapCatalog = mapCatalog ?? (try? ProjectMapCatalogLoader.load(from: index, fileManager: fileManager))
         let loadedGraphicsReport = graphicsReport ?? (index.editorModules.contains(.graphics) ? GraphicsDiagnosticsReportBuilder.build(index: index, fileManager: fileManager) : nil)
         let loadedBuildReport = buildReport
-        let loadedResourceEntry = resourceEntry ?? GenIIIResourceRegistry.resourceIndex(path: index.root.path, fileManager: fileManager)
+        let loadedResourceEntry = resourceEntry ?? GenIIIResourceRegistry.resourceEntry(from: index, fileManager: fileManager)
 
         if let loadedSourceIndex {
             diagnostics.append(contentsOf: catalogDiagnostics(from: loadedSourceIndex.diagnostics))
@@ -448,6 +509,280 @@ public enum GenIIIAssetCatalogBuilder {
             assets: assets.sorted(by: assetSort),
             diagnostics: entry.diagnostics
         )
+    }
+
+    private static func cachedCatalog(
+        root: URL,
+        identity: CacheProjectIdentity,
+        fingerprint: String,
+        fileManager: FileManager
+    ) -> GenIIIAssetCatalog? {
+        cachedPayload(root: root, identity: identity, fingerprint: fingerprint, fileManager: fileManager)?.catalog
+    }
+
+    private static func cachedPayload(
+        root: URL,
+        identity: CacheProjectIdentity,
+        fingerprint: String,
+        fileManager: FileManager
+    ) -> AssetCatalogCachePayload? {
+        let url = cacheURL(for: root)
+        guard
+            fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let payload = try? JSONDecoder.pokemonHackAssetCatalogCache.decode(AssetCatalogCachePayload.self, from: data),
+            payload.schemaVersion == cacheSchemaVersion,
+            payload.project == identity,
+            payload.sourceFingerprint == fingerprint
+        else {
+            return nil
+        }
+        return payload
+    }
+
+    private static func cacheMetadataMatches(
+        root: URL,
+        identity: CacheProjectIdentity,
+        fingerprint: String,
+        fileManager: FileManager
+    ) -> Bool {
+        let url = cacheMetadataURL(for: root)
+        guard
+            fileManager.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            let payload = try? JSONDecoder.pokemonHackAssetCatalogCache.decode(AssetCatalogCacheMetadata.self, from: data)
+        else {
+            return false
+        }
+        return payload.schemaVersion == cacheSchemaVersion
+            && payload.project == identity
+            && payload.sourceFingerprint == fingerprint
+    }
+
+    private static func writeCache(
+        catalog: GenIIIAssetCatalog,
+        root: URL,
+        identity: CacheProjectIdentity,
+        fingerprint: String,
+        fileManager: FileManager
+    ) {
+        let url = cacheURL(for: root)
+        let payload = AssetCatalogCachePayload(
+            schemaVersion: cacheSchemaVersion,
+            generatedAt: Date(),
+            project: identity,
+            sourceFingerprint: fingerprint,
+            catalog: catalog
+        )
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONEncoder.pokemonHackAssetCatalogCache.encode(payload)
+            try data.write(to: url, options: .atomic)
+            let metadata = AssetCatalogCacheMetadata(
+                schemaVersion: payload.schemaVersion,
+                generatedAt: payload.generatedAt,
+                project: payload.project,
+                sourceFingerprint: payload.sourceFingerprint
+            )
+            let metadataData = try JSONEncoder.pokemonHackAssetCatalogCache.encode(metadata)
+            try metadataData.write(to: cacheMetadataURL(for: root), options: .atomic)
+            let outputData = try JSONEncoder.pokemonHackPublicAssetCatalog.encode(catalog)
+            try outputData.write(to: cacheOutputURL(for: root), options: .atomic)
+        } catch {
+            // Persistent indexes are an optimization; source builds remain authoritative.
+        }
+    }
+
+    private static func cacheURL(for root: URL) -> URL {
+        root.appendingPathComponent(cacheRelativePath)
+    }
+
+    private static func cacheMetadataURL(for root: URL) -> URL {
+        root.appendingPathComponent(cacheMetadataRelativePath)
+    }
+
+    private static func cacheOutputURL(for root: URL) -> URL {
+        root.appendingPathComponent(cacheOutputRelativePath)
+    }
+
+    private struct AssetCatalogCachePayload: Codable, Equatable {
+        let schemaVersion: Int
+        let generatedAt: Date
+        let project: CacheProjectIdentity
+        let sourceFingerprint: String
+        let catalog: GenIIIAssetCatalog
+    }
+
+    private struct AssetCatalogCacheMetadata: Codable, Equatable {
+        let schemaVersion: Int
+        let generatedAt: Date
+        let project: CacheProjectIdentity
+        let sourceFingerprint: String
+    }
+
+    private struct CacheProjectIdentity: Codable, Equatable {
+        let rootPath: String
+        let profile: GameProfile
+        let adapterID: String
+
+        init(index: ProjectIndex) {
+            rootPath = URL(fileURLWithPath: index.root.path).standardizedFileURL.path
+            profile = index.profile
+            adapterID = index.adapterID
+        }
+    }
+
+    private struct SourceFingerprintEntry: Codable, Equatable {
+        let relativePath: String
+        let kind: String
+        let size: UInt64?
+        let modificationTime: TimeInterval?
+    }
+
+    private struct SourceFingerprintPayload: Codable, Equatable {
+        let project: CacheProjectIdentity
+        let index: SourceFingerprintIndex
+        let files: [SourceFingerprintEntry]
+    }
+
+    private struct SourceFingerprintIndex: Codable, Equatable {
+        let editorModules: [EditorModule]
+        let capabilities: [CoreCapability]
+        let writePolicy: WritePolicy
+        let documents: [SourceFingerprintDocument]
+        let generatedOutputs: [SourceFingerprintDocument]
+        let buildTargets: [BuildTarget]
+
+        init(index: ProjectIndex) {
+            editorModules = index.editorModules
+            capabilities = index.capabilities
+            writePolicy = index.writePolicy
+            documents = index.documents.map(SourceFingerprintDocument.init)
+            generatedOutputs = index.generatedOutputs.map(SourceFingerprintDocument.init)
+            buildTargets = index.buildTargets
+        }
+    }
+
+    private struct SourceFingerprintDocument: Codable, Equatable {
+        let relativePath: String
+        let kind: SourceKind
+        let role: SourceRole
+        let exists: Bool
+        let preservesUnknownFields: Bool
+
+        init(document: SourceDocument) {
+            relativePath = document.relativePath
+            kind = document.kind
+            role = document.role
+            exists = document.exists
+            preservesUnknownFields = document.preservesUnknownFields
+        }
+    }
+
+    private static func sourceFingerprint(for index: ProjectIndex, fileManager: FileManager) -> String {
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let payload = SourceFingerprintPayload(
+            project: CacheProjectIdentity(index: index),
+            index: SourceFingerprintIndex(index: index),
+            files: fingerprintEntries(root: root, index: index, fileManager: fileManager)
+        )
+        guard let data = try? JSONEncoder.pokemonHackAssetCatalogCache.encode(payload) else {
+            return "\(index.root.path)|\(index.profile.rawValue)|\(index.adapterID)"
+        }
+        return pokemonHackSHA1Hex(data)
+    }
+
+    private static func fingerprintEntries(root: URL, index: ProjectIndex, fileManager: FileManager) -> [SourceFingerprintEntry] {
+        var entries = topLevelFingerprintEntries(root: root, fileManager: fileManager)
+        for relativeRoot in inventoryRoots {
+            let url = root.appendingPathComponent(relativeRoot)
+            if let entry = fingerprintEntry(relativePath: relativeRoot, root: root, fileManager: fileManager), fileManager.fileExists(atPath: url.path) {
+                entries.append(entry)
+            }
+        }
+        for relativeRoot in recursiveFingerprintRoots {
+            entries.append(contentsOf: recursiveFingerprintEntries(relativeRoot: relativeRoot, root: root, fileManager: fileManager))
+        }
+        let documentPaths = (index.documents + index.generatedOutputs).map(\.relativePath)
+        let buildPaths = index.buildTargets.compactMap(\.outputPath)
+        for relativePath in Set(documentPaths + buildPaths).sorted() {
+            if let entry = fingerprintEntry(relativePath: relativePath, root: root, fileManager: fileManager) {
+                entries.append(entry)
+            }
+        }
+        return entries.sorted { lhs, rhs in lhs.relativePath < rhs.relativePath }
+    }
+
+    private static func recursiveFingerprintEntries(relativeRoot: String, root: URL, fileManager: FileManager) -> [SourceFingerprintEntry] {
+        let url = root.appendingPathComponent(relativeRoot)
+        guard fileManager.fileExists(atPath: url.path) else { return [] }
+        let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )
+        var entries: [SourceFingerprintEntry] = []
+        while let fileURL = enumerator?.nextObject() as? URL {
+            let relativePath = relativePath(for: fileURL, root: root)
+            let name = fileURL.lastPathComponent
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+            if values?.isDirectory == true {
+                if excludedDirectoryNames.contains(name) {
+                    enumerator?.skipDescendants()
+                }
+                continue
+            }
+            guard shouldIndexInventoryPath(relativePath, indexedPaths: [], url: fileURL) else {
+                continue
+            }
+            entries.append(
+                SourceFingerprintEntry(
+                    relativePath: relativePath,
+                    kind: kind(forInventoryPath: relativePath),
+                    size: values?.fileSize.map(UInt64.init),
+                    modificationTime: values?.contentModificationDate?.timeIntervalSince1970
+                )
+            )
+        }
+        return entries
+    }
+
+    private static func fingerprintEntry(relativePath: String, root: URL, fileManager: FileManager) -> SourceFingerprintEntry? {
+        let url = root.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: url.path) else {
+            return SourceFingerprintEntry(relativePath: relativePath, kind: kind(forInventoryPath: relativePath), size: nil, modificationTime: nil)
+        }
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+        let kind = values?.isDirectory == true ? "directory" : kind(forInventoryPath: relativePath)
+        return SourceFingerprintEntry(
+            relativePath: relativePath,
+            kind: kind,
+            size: values?.fileSize.map(UInt64.init),
+            modificationTime: values?.contentModificationDate?.timeIntervalSince1970
+        )
+    }
+
+    private static func topLevelFingerprintEntries(root: URL, fileManager: FileManager) -> [SourceFingerprintEntry] {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return contents.compactMap { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey])
+            guard values?.isDirectory != true else { return nil }
+            let relativePath = relativePath(for: url, root: root)
+            guard shouldIndexInventoryPath(relativePath, indexedPaths: [], url: url) else { return nil }
+            return SourceFingerprintEntry(
+                relativePath: relativePath,
+                kind: kind(forInventoryPath: relativePath),
+                size: values?.fileSize.map(UInt64.init),
+                modificationTime: values?.contentModificationDate?.timeIntervalSince1970
+            )
+        }
     }
 
     private static func sourceIndexAsset(_ record: SourceIndexRecord) -> GenIIIAsset {
@@ -968,5 +1303,28 @@ public enum GenIIIAssetCatalogBuilder {
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
         return lhs.category.rawValue < rhs.category.rawValue
+    }
+}
+
+private extension JSONEncoder {
+    static var pokemonHackPublicAssetCatalog: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+
+    static var pokemonHackAssetCatalogCache: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+}
+
+private extension JSONDecoder {
+    static var pokemonHackAssetCatalogCache: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
     }
 }

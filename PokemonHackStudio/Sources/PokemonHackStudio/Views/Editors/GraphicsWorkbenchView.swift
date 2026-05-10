@@ -1,8 +1,19 @@
 import AppKit
+import PokemonHackCore
 import SwiftUI
 
 struct GraphicsWorkbenchView: View {
     @ObservedObject var store: WorkbenchStore
+    @State private var authoringPath = ""
+    @State private var metatileID = "0"
+    @State private var tileEntryIndex = "0"
+    @State private var rawTileValue = "0x0000"
+    @State private var attributeWordSize = "2"
+    @State private var rawAttributeValue = "0x0000"
+    @State private var paletteColorIndex = "0"
+    @State private var paletteRed = "0"
+    @State private var paletteGreen = "0"
+    @State private var paletteBlue = "0"
 
     var body: some View {
         ScrollView {
@@ -24,7 +35,7 @@ struct GraphicsWorkbenchView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Graphics")
                         .font(.largeTitle.weight(.semibold))
-                    Text("\(project.title) read-only tileset, palette, metatile, and animation diagnostics.")
+                    Text("\(project.title) source-backed tileset, palette, metatile, and animation workspace.")
                         .foregroundStyle(.secondary)
                     Text(report.rootPath)
                         .font(.system(.caption, design: .monospaced))
@@ -53,6 +64,8 @@ struct GraphicsWorkbenchView: View {
             }
 
             packagePlanControls(project: project)
+
+            sourceAuthoringSection(project: project)
 
             if let plan = store.selectedGraphicsImportPackagePlan {
                 packagePlanSections(plan: plan)
@@ -91,17 +104,148 @@ struct GraphicsWorkbenchView: View {
                     Button("Convert Plan", systemImage: "wand.and.stars") {}
                         .disabled(true)
                         .help("Conversion remains a dry-run report and does not invoke external tools.")
-                    Button("Apply", systemImage: "checkmark.seal") {}
-                        .disabled(true)
-                        .help("Graphics writes are disabled until an explicit mutation-plan apply path is implemented.")
                     Spacer()
-                    Text("Preview only")
+                    Text("Package copy and conversion stay preview-only")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .padding(24)
+    }
+
+    private func sourceAuthoringSection(project: IndexedProjectSummary) -> some View {
+        EditorSection(title: "Source Authoring") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Selected source")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        TextField("data/tilesets/.../metatiles.bin or palette", text: $authoringPath)
+                            .textFieldStyle(.roundedBorder)
+                        HStack(spacing: 8) {
+                            Button("Use Selected Row", systemImage: "scope") {
+                                authoringPath = store.selectedGraphicsReportRow?.source.path ?? ""
+                            }
+                            .disabled(store.selectedGraphicsReportRow == nil)
+                            Text(store.selectedGraphicsReportRow?.source.symbol ?? project.title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(minWidth: 260)
+
+                    draftSummary
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], alignment: .leading, spacing: 12) {
+                    authoringCard("Metatile Tile Word", systemImage: "square.grid.3x3") {
+                        numberField("Metatile", text: $metatileID)
+                        numberField("Tile slot 0...7", text: $tileEntryIndex)
+                        numberField("Raw word", text: $rawTileValue)
+                        Button("Stage Tile Word", systemImage: "plus") {
+                            stageMetatileTile()
+                        }
+                        .disabled(!canStageMetatileTile)
+                    }
+
+                    authoringCard("Metatile Attributes", systemImage: "tablecells") {
+                        numberField("Metatile", text: $metatileID)
+                        numberField("Word size", text: $attributeWordSize)
+                        numberField("Raw value", text: $rawAttributeValue)
+                        Button("Stage Attributes", systemImage: "plus") {
+                            stageMetatileAttribute()
+                        }
+                        .disabled(!canStageMetatileAttribute)
+                    }
+
+                    authoringCard("Palette Color", systemImage: "paintpalette") {
+                        numberField("Color index", text: $paletteColorIndex)
+                        HStack(spacing: 8) {
+                            numberField("R", text: $paletteRed)
+                            numberField("G", text: $paletteGreen)
+                            numberField("B", text: $paletteBlue)
+                        }
+                        Button("Stage Palette Color", systemImage: "plus") {
+                            stagePaletteColor()
+                        }
+                        .disabled(!canStagePaletteColor)
+                    }
+                }
+
+                if let draft = store.selectedGraphicsDraft, !draft.operations.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Staged Operations")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(draft.operations) { operation in
+                            HStack(spacing: 10) {
+                                Image(systemName: operationIcon(operation.kind))
+                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(operation.summary)
+                                        .font(.caption.weight(.semibold))
+                                    Text(operation.path)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                Spacer()
+                                Button("Remove", systemImage: "xmark") {
+                                    store.removeSelectedGraphicsOperation(id: operation.id)
+                                }
+                                .labelStyle(.iconOnly)
+                                .help("Remove staged graphics edit")
+                            }
+                            .padding(8)
+                            .background(.thinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var draftSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Draft")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(store.selectedGraphicsDraft?.tilesetSymbol ?? "No graphics row selected")
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+            Text("\(store.selectedGraphicsDraft?.operations.count ?? 0) staged operation(s)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Text("Writes are limited to metatiles.bin, metatile_attributes.bin, .pal, and .gbapal source files.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 320, alignment: .leading)
+    }
+
+    private func authoringCard<Content: View>(
+        _ title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+            content()
+        }
+        .padding(12)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func numberField(_ title: String, text: Binding<String>) -> some View {
+        TextField(title, text: text)
+            .textFieldStyle(.roundedBorder)
     }
 
     private func packagePlanControls(project: IndexedProjectSummary) -> some View {
@@ -259,6 +403,120 @@ struct GraphicsWorkbenchView: View {
         if panel.runModal() == .OK, let url = panel.url {
             store.requestGraphicsImportPackagePath(url.path)
             store.loadSelectedGraphicsImportPackagePlan()
+        }
+    }
+
+    private var stagedPath: String {
+        let trimmed = authoringPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        return store.selectedGraphicsReportRow?.source.path ?? ""
+    }
+
+    private var canStageMetatileTile: Bool {
+        !stagedPath.isEmpty
+            && parsedInt(metatileID) != nil
+            && parsedInt(tileEntryIndex) != nil
+            && parsedUInt16(rawTileValue) != nil
+    }
+
+    private var canStageMetatileAttribute: Bool {
+        !stagedPath.isEmpty
+            && parsedInt(metatileID) != nil
+            && parsedInt(attributeWordSize) != nil
+            && parsedUInt32(rawAttributeValue) != nil
+    }
+
+    private var canStagePaletteColor: Bool {
+        !stagedPath.isEmpty
+            && parsedInt(paletteColorIndex) != nil
+            && parsedUInt8(paletteRed) != nil
+            && parsedUInt8(paletteGreen) != nil
+            && parsedUInt8(paletteBlue) != nil
+    }
+
+    private func stageMetatileTile() {
+        guard
+            let metatileLocalID = parsedInt(metatileID),
+            let tileEntryIndex = parsedInt(tileEntryIndex),
+            let rawTileValue = parsedUInt16(rawTileValue)
+        else { return }
+        store.stageSelectedGraphicsOperation(
+            .metatileTile(
+                path: stagedPath,
+                metatileLocalID: metatileLocalID,
+                tileEntryIndex: tileEntryIndex,
+                rawTileValue: rawTileValue
+            )
+        )
+    }
+
+    private func stageMetatileAttribute() {
+        guard
+            let metatileLocalID = parsedInt(metatileID),
+            let wordSize = parsedInt(attributeWordSize),
+            let rawAttributeValue = parsedUInt32(rawAttributeValue)
+        else { return }
+        store.stageSelectedGraphicsOperation(
+            .metatileAttribute(
+                path: stagedPath,
+                metatileLocalID: metatileLocalID,
+                rawAttributeValue: rawAttributeValue,
+                wordSize: wordSize
+            )
+        )
+    }
+
+    private func stagePaletteColor() {
+        guard
+            let colorIndex = parsedInt(paletteColorIndex),
+            let red = parsedUInt8(paletteRed),
+            let green = parsedUInt8(paletteGreen),
+            let blue = parsedUInt8(paletteBlue)
+        else { return }
+        store.stageSelectedGraphicsOperation(
+            .paletteColor(
+                path: stagedPath,
+                colorIndex: colorIndex,
+                red: red,
+                green: green,
+                blue: blue
+            )
+        )
+    }
+
+    private func parsedInt(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("0x") {
+            return Int(trimmed.dropFirst(2), radix: 16)
+        }
+        return Int(trimmed)
+    }
+
+    private func parsedUInt16(_ text: String) -> UInt16? {
+        guard let value = parsedInt(text), (0...Int(UInt16.max)).contains(value) else { return nil }
+        return UInt16(value)
+    }
+
+    private func parsedUInt32(_ text: String) -> UInt32? {
+        guard let value = parsedInt(text), value >= 0, value <= Int(UInt32.max) else { return nil }
+        return UInt32(value)
+    }
+
+    private func parsedUInt8(_ text: String) -> UInt8? {
+        guard let value = parsedInt(text), (0...Int(UInt8.max)).contains(value) else { return nil }
+        return UInt8(value)
+    }
+
+    private func operationIcon(_ kind: GraphicsEditOperationKind) -> String {
+        switch kind {
+        case .metatileTile:
+            "square.grid.3x3"
+        case .metatileAttribute:
+            "tablecells"
+        case .paletteColor:
+            "paintpalette"
         }
     }
 

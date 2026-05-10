@@ -28,7 +28,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertFalse(items.unsupportedFields.contains("description text rewrites"))
     }
 
-    func testClassicFireRedReportMarksPokemonMovesAndItemDescriptionsEditable() throws {
+    func testClassicFireRedReportMarksPokemonMovesAndItemRowsEditable() throws {
         let root = try temporaryRoot()
         try makeClassicProject(at: root, profile: .pokefirered)
 
@@ -50,9 +50,10 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(items.indexedCount, 1)
         XCTAssertEqual(items.editableCount, 1)
         XCTAssertNil(items.blockedReason)
-        XCTAssertTrue(items.unsupportedFields.contains("FireRed row-field rewrites"))
+        XCTAssertFalse(items.unsupportedFields.contains("FireRed row-field rewrites"))
+        XCTAssertTrue(items.unsupportedFields.contains("TM/HM item compatibility edits"))
         XCTAssertFalse(items.unsupportedFields.contains("description text rewrites"))
-        XCTAssertEqual(items.recommendedFutureRow, "PHS-T57")
+        XCTAssertNil(items.recommendedFutureRow)
     }
 
     func testRubyAndExpansionItemsReportReadOnlyBlockedShapes() throws {

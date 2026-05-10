@@ -195,6 +195,9 @@ struct PokemonHackCLI {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
         }
+        if let cachedJSON = GenIIIAssetCatalogBuilder.cachedCatalogJSONString(path: path) {
+            return cachedJSON
+        }
         return try encode(GenIIIAssetCatalogBuilder.build(path: path))
     }
 

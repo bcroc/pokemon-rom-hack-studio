@@ -51,6 +51,16 @@ struct WorkbenchSidebarPanel: View {
                     sidebarMetric("Projects", "\(store.indexedProjects.count)")
                     sidebarMetric("Issues", "\(store.issueCount)")
                     sidebarMetric("Dirty", store.hasStagedEdits ? "Yes" : "No")
+                    sidebarMetric("Drafts", "\(store.currentDraftCount)/\(store.savedDraftCount)")
+                }
+
+                HStack(spacing: 6) {
+                    Image(systemName: store.workspaceAutosavePending ? "clock.arrow.circlepath" : "tray.and.arrow.down")
+                        .foregroundStyle(.secondary)
+                    Text(store.workspacePersistenceError ?? "\(store.workspacePersistenceStatus) · \(store.workspaceLastSavedLabel)")
+                        .font(.caption2)
+                        .foregroundStyle(store.workspacePersistenceError == nil ? Color.secondary : Color.red)
+                        .lineLimit(1)
                 }
             }
         }
@@ -571,6 +581,7 @@ struct WorkbenchSidebarPanel: View {
                     Divider()
                     MapWorkbenchPanels(
                         document: document,
+                        catalog: store.selectedCoreMapCatalog,
                         session: store.mapEditorSession,
                         layoutMode: .compact,
                         viewport: .zero,

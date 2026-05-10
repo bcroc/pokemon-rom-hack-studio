@@ -79,19 +79,20 @@ final class PokemonItemCatalogTests: XCTestCase {
         }
     }
 
-    func testFireRedItemDescriptionPlansAppliesWithoutRowEditing() throws {
+    func testFireRedItemRowsAndDescriptionPlanAsSingleFileChange() throws {
         let root = try temporaryRoot()
         try makeFireRedProject(at: root)
 
         let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokefirered))
         let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
-        XCTAssertFalse(potion.isEditable)
+        XCTAssertTrue(potion.isEditable)
         XCTAssertTrue(potion.isDescriptionEditable)
         XCTAssertEqual(potion.descriptionSymbol, "gItemDescription_ITEM_POTION")
         XCTAssertEqual(potion.descriptionText, "A spray medicine.\nIt restores HP.")
 
         var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
-        XCTAssertNil(draft.price)
+        draft.price = "700"
+        draft.holdEffectParam = "60"
         draft.descriptionText = "A compact medicine.\nIt restores 20 HP."
 
         let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
@@ -99,6 +100,8 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
         XCTAssertTrue(plan.isApplyable)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains("gItemDescription_ITEM_POTION") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".price = 700") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".holdEffectParam = 60") == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(#""A compact medicine.""#) == true)
 
         let result = try ItemMutationApplier.apply(plan: plan)
@@ -106,9 +109,10 @@ final class PokemonItemCatalogTests: XCTestCase {
 
         let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokefirered))
         let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
-        XCTAssertFalse(edited.isEditable)
+        XCTAssertTrue(edited.isEditable)
         XCTAssertTrue(edited.isDescriptionEditable)
-        XCTAssertEqual(edited.price, "300")
+        XCTAssertEqual(edited.price, "700")
+        XCTAssertEqual(edited.holdEffectParam, "60")
         XCTAssertEqual(edited.descriptionText, "A compact medicine.\nIt restores 20 HP.")
     }
 

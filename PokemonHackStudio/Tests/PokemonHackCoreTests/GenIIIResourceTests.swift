@@ -61,6 +61,29 @@ final class GenIIIResourceTests: XCTestCase {
         XCTAssertTrue(resource.variants.contains { $0.title == "LeafGreen" && $0.checksumPath == "leafgreen.sha1" })
     }
 
+    func testProjectIndexResourceEntryHelperMatchesPathResourceIndex() throws {
+        let root = try makeDecompFixture(name: "pokeemerald") { root in
+            try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+            try write("f3ae088181bf583e55daf962a92bb46f4f1d07b7  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        }
+        let index = try GameAdapterRegistry.index(path: root.path)
+
+        let helperEntry = GenIIIResourceRegistry.resourceEntry(from: index)
+        let pathEntry = GenIIIResourceRegistry.resourceIndex(path: root.path)
+
+        XCTAssertEqual(helperEntry.id, pathEntry.id)
+        XCTAssertEqual(helperEntry.path, pathEntry.path)
+        XCTAssertEqual(helperEntry.platform, pathEntry.platform)
+        XCTAssertEqual(helperEntry.family, pathEntry.family)
+        XCTAssertEqual(helperEntry.profile, pathEntry.profile)
+        XCTAssertEqual(helperEntry.variants, pathEntry.variants)
+        XCTAssertEqual(helperEntry.role, pathEntry.role)
+        XCTAssertEqual(helperEntry.adapterID, pathEntry.adapterID)
+        XCTAssertEqual(helperEntry.modules, pathEntry.modules)
+        XCTAssertEqual(helperEntry.items, pathEntry.items)
+        XCTAssertEqual(helperEntry.diagnostics.map(\.code), pathEntry.diagnostics.map(\.code))
+    }
+
     func testResourceRegistryAutoDiscoversOnlyGBASourcesReferencesAndROMs() throws {
         let temp = try ResourceTemporaryDirectory()
         temporaryDirectories.append(temp)

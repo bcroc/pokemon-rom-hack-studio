@@ -274,6 +274,8 @@ struct MapEditorView: View {
             .labelStyle(.iconOnly)
             .help(store.mapShowsPalette ? "Hide metatile palette" : "Show metatile palette")
 
+            mapCommandMenu
+
             zoomControls
 
             Spacer(minLength: 8)
@@ -293,6 +295,50 @@ struct MapEditorView: View {
             }
         }
         .frame(height: 34)
+    }
+
+    private var mapCommandMenu: some View {
+        Menu {
+            Button("Reload Selected Map", systemImage: "arrow.clockwise") {
+                store.loadSelectedMapVisualDocument()
+            }
+            .disabled(store.selectedMapID.isEmpty)
+
+            Divider()
+
+            Button("Preview Map Changes", systemImage: "doc.text.magnifyingglass") {
+                store.previewSelectedMapMutationPlan()
+            }
+            .disabled(!session.canPreviewSelectedMapMutationPlan)
+            .help(session.previewBlockedReason ?? "Preview staged map mutations")
+
+            Button("Apply Previewed Map Changes", systemImage: "checkmark.seal") {
+                store.applySelectedMapMutationPlan()
+            }
+            .disabled(!session.canApplySelectedMapMutationPlan)
+            .help(session.applyBlockedReason ?? "Apply previewed map mutations")
+
+            Button("Discard Map Changes", systemImage: "trash") {
+                store.discardMapEdits()
+            }
+            .disabled(!session.canDiscardMapEdits)
+
+            Divider()
+
+            Button("Duplicate Selected Event", systemImage: "plus.square.on.square") {
+                _ = session.dispatch(.duplicateSelectedMapEvent)
+            }
+            .disabled(session.selectedMapEventID == nil)
+
+            Button("Delete Selected Event", systemImage: "trash") {
+                _ = session.dispatch(.deleteSelectedMapEvent)
+            }
+            .disabled(session.selectedMapEventID == nil)
+        } label: {
+            Label("Map Commands", systemImage: "ellipsis.circle")
+        }
+        .labelStyle(.iconOnly)
+        .help("Map reload, mutation, and selected-event commands")
     }
 
     private var zoomBinding: Binding<Double> {

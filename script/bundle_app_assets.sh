@@ -18,7 +18,7 @@ DESTINATION_ROOT="$RESOURCES_DIR/PokemonHackStudioAssets"
 PROJECTS_DESTINATION="$DESTINATION_ROOT/Projects"
 MANIFEST_PATH="$DESTINATION_ROOT/manifest.json"
 MANIFEST_SCHEMA_VERSION=1
-MANIFEST_SOURCE_POLICY="Local build artifact. Safe source asset trees only; ROMs, saves, generated outputs, build products, toolchains, and reference clones are excluded."
+MANIFEST_SOURCE_POLICY="Local build artifact. Safe source asset trees and companion root metadata/rules only; ROMs, saves, generated outputs, build products, toolchains, helper scripts, and reference clones are excluded."
 
 IFS=" " read -r -a PROJECT_NAMES <<< "${POKEMONHACKSTUDIO_BUNDLE_PROJECTS:-pokeemerald pokefirered pokeruby pokesapphire pokeemerald-expansion}"
 
@@ -33,11 +33,22 @@ INCLUDED_DIRECTORIES=(
 )
 
 ROOT_FILES=(
+  "audio_rules.mk"
+  "charmap.txt"
   "config.mk"
-  "firered.sha1"
-  "leafgreen.sha1"
+  "graphics_file_rules.mk"
+  "json_data_rules.mk"
   "Makefile"
-  "rom.sha1"
+  "make_tools.mk"
+  "map_data_rules.mk"
+  "spritesheet_rules.mk"
+  "tileset_rules.mk"
+)
+
+ROOT_FILE_PATTERNS=(
+  "*.sha1"
+  "ld_script*.ld"
+  "sym_*.txt"
 )
 
 RSYNC_EXCLUDES=(
@@ -157,6 +168,18 @@ copy_root_file() {
   run_incremental_rsync "$source_path" "$destination_root/" "${RSYNC_EXCLUDES[@]}"
 }
 
+copy_root_file_pattern() {
+  local source_root="$1"
+  local destination_root="$2"
+  local pattern="$3"
+  local source_path
+
+  for source_path in "$source_root"/$pattern; do
+    [[ -f "$source_path" ]] || continue
+    copy_root_file "$source_root" "$destination_root" "$(basename "$source_path")"
+  done
+}
+
 project_is_bundled() {
   local project_name="$1"
   local bundled_project
@@ -172,6 +195,7 @@ top_level_is_allowed() {
   local entry_name="$1"
   local relative_path
   local file_name
+  local file_pattern
 
   for relative_path in "${INCLUDED_DIRECTORIES[@]}"; do
     if [[ "${relative_path%%/*}" == "$entry_name" ]]; then
@@ -181,6 +205,12 @@ top_level_is_allowed() {
 
   for file_name in "${ROOT_FILES[@]}"; do
     if [[ "$file_name" == "$entry_name" ]]; then
+      return 0
+    fi
+  done
+
+  for file_pattern in "${ROOT_FILE_PATTERNS[@]}"; do
+    if [[ "$entry_name" == $file_pattern ]]; then
       return 0
     fi
   done
@@ -321,7 +351,23 @@ write_manifest() {
       printf '"%s"' "$(printf '%s' "${INCLUDED_DIRECTORIES[$index]}" | json_escape)"
     done
     printf '],\n'
-    printf '  "excluded": ["ROMs", "saves", "generated ROMs", "build outputs", "toolchains", "reference clones"]\n'
+    printf '  "includedRootFiles": ['
+    for index in "${!ROOT_FILES[@]}"; do
+      if [[ "$index" != "0" ]]; then
+        printf ', '
+      fi
+      printf '"%s"' "$(printf '%s' "${ROOT_FILES[$index]}" | json_escape)"
+    done
+    printf '],\n'
+    printf '  "includedRootFilePatterns": ['
+    for index in "${!ROOT_FILE_PATTERNS[@]}"; do
+      if [[ "$index" != "0" ]]; then
+        printf ', '
+      fi
+      printf '"%s"' "$(printf '%s' "${ROOT_FILE_PATTERNS[$index]}" | json_escape)"
+    done
+    printf '],\n'
+    printf '  "excluded": ["ROMs", "saves", "generated ROMs", "build outputs", "toolchains", "helper scripts", "reference clones"]\n'
     printf '}\n'
   } > "$output_path"
 }
@@ -370,6 +416,10 @@ for project_name in "${PROJECT_NAMES[@]}"; do
 
   for file_name in "${ROOT_FILES[@]}"; do
     copy_root_file "$source_root" "$project_destination" "$file_name"
+  done
+
+  for file_pattern in "${ROOT_FILE_PATTERNS[@]}"; do
+    copy_root_file_pattern "$source_root" "$project_destination" "$file_pattern"
   done
 
   prune_project_top_level "$project_destination"

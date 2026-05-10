@@ -64,37 +64,170 @@ struct ContentView: View {
 
                 Divider()
 
-                Button("Open Project", systemImage: "folder.badge.plus") {
-                    openProjectPanel()
-                }
-                .labelStyle(.iconOnly)
-                .help("Open project")
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    store.refreshProjectIndexes()
-                }
-                .labelStyle(.iconOnly)
-                .help("Refresh project indexes")
-                Button("Build", systemImage: "hammer") {
-                    store.selection = .build
-                }
-                .labelStyle(.iconOnly)
-                .help("Show build workbench")
-                Button("Run", systemImage: "play.fill") {
-                    store.selection = .build
-                }
-                .labelStyle(.iconOnly)
-                .help("Show run and playtest workbench")
-                Button("Validate", systemImage: "checkmark.seal") {
-                    store.selection = .issues
-                }
-                .labelStyle(.iconOnly)
-                .help("Show diagnostics")
+                workspaceMenu
+                refreshMenu
+
+                Divider()
+
+                mutationActions
+                navigationMenu
 
                 DiagnosticStatusButton(summary: store.diagnosticSummary) {
                     store.selection = .issues
                 }
             }
         }
+    }
+
+    private var workspaceMenu: some View {
+        Menu {
+            Button("Open Project...", systemImage: "folder.badge.plus") {
+                openProjectPanel()
+            }
+
+            Divider()
+
+            Button("Save Project", systemImage: "externaldrive.badge.checkmark") {
+                store.saveProjectWorkspace()
+            }
+            .disabled(!store.canSaveProjectWorkspace)
+
+            Button("Save Drafts", systemImage: "square.and.arrow.down") {
+                store.saveDraftsNow()
+            }
+            .disabled(!store.canSaveProjectWorkspace)
+
+            Button("Reload Saved Drafts", systemImage: "arrow.down.doc") {
+                store.loadSavedWorkspaceForSelectedProject()
+            }
+            .disabled(!store.canSaveProjectWorkspace)
+
+            Button("Discard Saved Drafts", systemImage: "trash") {
+                store.discardSavedDrafts()
+            }
+            .disabled(!store.canSaveProjectWorkspace || (store.savedDraftCount == 0 && store.currentDraftCount == 0))
+
+            Divider()
+
+            Label("\(store.currentDraftCount) current · \(store.savedDraftCount) saved", systemImage: "tray.full")
+            Label(store.workspaceLastSavedLabel, systemImage: store.workspaceAutosavePending ? "clock.badge" : "clock")
+        } label: {
+            Label("Workspace", systemImage: store.workspaceAutosavePending ? "externaldrive.badge.clock" : "externaldrive")
+        }
+        .labelStyle(.iconOnly)
+        .help("Workspace saves and project files")
+    }
+
+    private var refreshMenu: some View {
+        Menu {
+            Button("Refresh \(store.selection.title)", systemImage: "arrow.triangle.2.circlepath") {
+                store.refreshSelectedModuleContext()
+            }
+            .disabled(!store.hasIndexedProjects)
+
+            Button("Refresh Project Indexes", systemImage: "arrow.clockwise") {
+                store.refreshProjectIndexes()
+            }
+
+            Button("Refresh Health Checks", systemImage: "stethoscope") {
+                store.refreshHealthChecks()
+            }
+            .disabled(!store.hasIndexedProjects)
+
+            Button("Refresh Resource Library", systemImage: "externaldrive.connected.to.line.below") {
+                store.refreshResourceLibrary()
+            }
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
+        .labelStyle(.iconOnly)
+        .help("Refresh project and module data")
+    }
+
+    private var mutationActions: some View {
+        let state = store.toolbarMutationState
+        return HStack(spacing: 4) {
+            Menu {
+                Button("Preview \(state.title)", systemImage: "doc.text.magnifyingglass") {
+                    store.previewToolbarMutationTarget()
+                }
+                .disabled(!state.canPreview)
+                .help(state.previewHelp)
+
+                Button("Apply \(state.title)", systemImage: "checkmark.seal") {
+                    store.applyToolbarMutationTarget()
+                }
+                .disabled(!state.canApply)
+                .help(state.applyHelp)
+
+                Button("Discard \(state.title)", systemImage: "trash") {
+                    store.discardToolbarMutationTarget()
+                }
+                .disabled(!state.canDiscard)
+                .help(state.discardHelp)
+            } label: {
+                Label("Mutations", systemImage: state.systemImage)
+            }
+            .labelStyle(.iconOnly)
+            .help(state.hasEditableTarget ? state.title : state.previewHelp)
+            .disabled(!state.hasEditableTarget)
+
+            Button("Preview", systemImage: "doc.text.magnifyingglass") {
+                store.previewToolbarMutationTarget()
+            }
+            .labelStyle(.iconOnly)
+            .help(state.previewHelp)
+            .disabled(!state.canPreview)
+
+            Button("Apply", systemImage: "checkmark.seal") {
+                store.applyToolbarMutationTarget()
+            }
+            .labelStyle(.iconOnly)
+            .help(state.applyHelp)
+            .disabled(!state.canApply)
+
+            Button("Discard", systemImage: "trash") {
+                store.discardToolbarMutationTarget()
+            }
+            .labelStyle(.iconOnly)
+            .help(state.discardHelp)
+            .disabled(!state.canDiscard)
+        }
+    }
+
+    private var navigationMenu: some View {
+        Menu {
+            ForEach(WorkbenchModuleGroup.allCases) { group in
+                Section(group.rawValue) {
+                    ForEach(group.modules) { module in
+                        Button {
+                            store.selection = module
+                            store.loadSelectedModuleDataIfNeeded()
+                        } label: {
+                            Label(module.title, systemImage: module.systemImage)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("Build Target", systemImage: "hammer") {
+                store.selection = .build
+            }
+
+            Button("Run Target", systemImage: "play.fill") {
+                store.selection = .build
+            }
+
+            Button("Show Diagnostics", systemImage: "checkmark.seal") {
+                store.selection = .issues
+            }
+        } label: {
+            Label(store.selection.title, systemImage: store.selection.systemImage)
+        }
+        .labelStyle(.iconOnly)
+        .help("Navigate modules and ship surfaces")
     }
 
     private var projectSelection: Binding<String> {

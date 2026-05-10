@@ -304,6 +304,17 @@ public enum GenIIIResourceRegistry {
         )
     }
 
+    public static func resourceEntry(
+        from index: ProjectIndex,
+        role: GenIIIResourceRole = .localInput,
+        workspaceRoot: String = FileManager.default.currentDirectoryPath,
+        fileManager: FileManager = .default
+    ) -> GenIIIResourceEntry {
+        let workspaceURL = URL(fileURLWithPath: workspaceRoot).standardizedFileURL
+        let resolvedRole = roleFor(index: index, requestedRole: role, workspaceRoot: workspaceURL)
+        return entry(from: index, role: resolvedRole, fileManager: fileManager)
+    }
+
     private static func referenceCandidates(
         workspaceRoot: URL,
         fileManager: FileManager,

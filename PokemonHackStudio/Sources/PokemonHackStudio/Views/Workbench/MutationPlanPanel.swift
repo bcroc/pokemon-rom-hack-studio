@@ -460,6 +460,47 @@ extension MutationPlanPanelContext {
         )
     }
 
+    @MainActor
+    static func graphics(
+        plan: GraphicsEditPlan?,
+        result: GraphicsApplyResult?,
+        draft: GraphicsEditDraft?,
+        isDirty: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        previewBlockedReason: String?,
+        applyBlockedReason: String?
+    ) -> MutationPlanPanelContext? {
+        guard isDirty || plan != nil || result != nil else {
+            return nil
+        }
+
+        let planDiagnostics = plan?.diagnostics ?? []
+        let applyDiagnostics = result?.diagnostics ?? []
+        let diagnostics = (planDiagnostics + applyDiagnostics).map { MutationPlanDiagnosticRow(diagnostic: $0) }
+        let status = Self.status(
+            diagnostics: diagnostics,
+            isApplyReady: canApply,
+            hasAppliedChanges: !(result?.appliedChanges.isEmpty ?? true)
+        )
+
+        return MutationPlanPanelContext(
+            title: plan?.mutationPlan.title ?? "Graphics Mutation Plan",
+            summary: Self.graphicsSummary(plan: plan, result: result, isDirty: isDirty),
+            status: status,
+            operationCount: draft?.operations.count ?? 0,
+            changes: (plan?.changes ?? []).map { MutationPlanChangeRow(change: $0) },
+            appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
+            diagnostics: diagnostics,
+            canPreview: canPreview,
+            canApply: canApply,
+            canDiscard: canDiscard,
+            previewBlockedReason: previewBlockedReason,
+            applyBlockedReason: applyBlockedReason
+        )
+    }
+
     private static func status(
         diagnostics: [MutationPlanDiagnosticRow],
         isApplyReady: Bool,
@@ -570,6 +611,30 @@ extension MutationPlanPanelContext {
 
         return "No \(kind.lowercased()) edits are staged."
     }
+
+    private static func graphicsSummary(
+        plan: GraphicsEditPlan?,
+        result: GraphicsApplyResult?,
+        isDirty: Bool
+    ) -> String {
+        if let result, !result.appliedChanges.isEmpty {
+            return "Applied \(result.appliedChanges.count) graphics source file change(s); backups are recorded for review."
+        }
+
+        if let result, !result.diagnostics.isEmpty {
+            return "Graphics apply is blocked until the reported diagnostics are resolved."
+        }
+
+        if let plan {
+            return plan.mutationPlan.summary
+        }
+
+        if isDirty {
+            return "Graphics edits are staged locally and waiting for source mutation preview."
+        }
+
+        return "No graphics edits are staged."
+    }
 }
 
 private extension MutationPlanChangeRow {
@@ -607,6 +672,13 @@ private extension MutationPlanChangeRow {
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
     }
+
+    init(change: GraphicsEditFileChange) {
+        id = change.id
+        path = change.path
+        summary = change.summary
+        detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+    }
 }
 
 private extension MutationPlanAppliedChangeRow {
@@ -639,6 +711,13 @@ private extension MutationPlanAppliedChangeRow {
     }
 
     init(change: AppliedItemFileChange) {
+        id = change.id
+        path = change.path
+        backupPath = change.backupPath
+        byteCount = change.byteCount
+    }
+
+    init(change: AppliedGraphicsFileChange) {
         id = change.id
         path = change.path
         backupPath = change.backupPath

@@ -99,6 +99,7 @@ enum MapWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
     case paintCollision
     case eventsScripts
     case mapData
+    case workflow
 
     var id: String { rawValue }
 
@@ -108,6 +109,7 @@ enum MapWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
         case .paintCollision: "Paint/Collision"
         case .eventsScripts: "Events/Scripts"
         case .mapData: "Map Data"
+        case .workflow: "Workflow"
         }
     }
 
@@ -117,6 +119,7 @@ enum MapWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
         case .paintCollision: "paintbrush.pointed"
         case .eventsScripts: "point.3.connected.trianglepath.dotted"
         case .mapData: "doc.text.magnifyingglass"
+        case .workflow: "arrow.triangle.branch"
         }
     }
 
@@ -950,9 +953,169 @@ struct ResourceAssetCatalogViewState: Identifiable {
     let availabilityCounts: [ResourceAssetAvailabilityCount]
     let rows: [ResourceAssetRowViewState]
     let diagnostics: [IndexedDiagnosticRow]
+    let index: ResourceAssetCatalogIndex
+
+    init(
+        id: String,
+        projectTitle: String,
+        rootPath: String,
+        profile: String,
+        assetCount: Int,
+        categoryCounts: [ResourceAssetCategoryCount],
+        availabilityCounts: [ResourceAssetAvailabilityCount],
+        rows: [ResourceAssetRowViewState],
+        diagnostics: [IndexedDiagnosticRow],
+        index: ResourceAssetCatalogIndex? = nil
+    ) {
+        self.id = id
+        self.projectTitle = projectTitle
+        self.rootPath = rootPath
+        self.profile = profile
+        self.assetCount = assetCount
+        self.categoryCounts = categoryCounts
+        self.availabilityCounts = availabilityCounts
+        self.rows = rows
+        self.diagnostics = diagnostics
+        self.index = index ?? ResourceAssetCatalogIndex(rows: rows)
+    }
 
     var categoryTitles: [String] {
         categoryCounts.map(\.category)
+    }
+}
+
+struct ResourceAssetCatalogIndex {
+    let rows: [ResourceAssetRowViewState]
+    let rowsByID: [String: ResourceAssetRowViewState]
+    let rowsByTargetID: [String: ResourceAssetRowViewState]
+    let rowsByPath: [String: ResourceAssetRowViewState]
+    let rowsByPathMatchingTargetID: [String: ResourceAssetRowViewState]
+    let rowsByTitle: [String: ResourceAssetRowViewState]
+    let rowsBySourcePath: [String: ResourceAssetRowViewState]
+    let categoryBuckets: [String: [ResourceAssetRowViewState]]
+    let sortedRowsByMode: [ResourceAssetSortMode: [ResourceAssetRowViewState]]
+    let sortedCategoryBucketsByMode: [ResourceAssetSortMode: [String: [ResourceAssetRowViewState]]]
+    let availabilityCountsByValue: [String: Int]
+    let availabilityStatusCounts: [ValidationState: Int]
+    let availabilityProblemStatusCounts: [ValidationState: Int]
+    let availabilityProblemCount: Int
+
+    init(rows: [ResourceAssetRowViewState]) {
+        var rowsByID: [String: ResourceAssetRowViewState] = [:]
+        var rowsByTargetID: [String: ResourceAssetRowViewState] = [:]
+        var rowsByPath: [String: ResourceAssetRowViewState] = [:]
+        var rowsByPathMatchingTargetID: [String: ResourceAssetRowViewState] = [:]
+        var rowsByTitle: [String: ResourceAssetRowViewState] = [:]
+        var rowsBySourcePath: [String: ResourceAssetRowViewState] = [:]
+        var categoryBuckets: [String: [ResourceAssetRowViewState]] = [:]
+        var availabilityCountsByValue: [String: Int] = [:]
+        var availabilityStatusCounts: [ValidationState: Int] = [:]
+        var availabilityProblemStatusCounts: [ValidationState: Int] = [:]
+
+        for row in rows {
+            rowsByID[row.id] = rowsByID[row.id] ?? row
+            if let targetID = row.targetID, !targetID.isEmpty {
+                rowsByTargetID[targetID] = rowsByTargetID[targetID] ?? row
+                if row.path == targetID {
+                    rowsByPathMatchingTargetID[targetID] = rowsByPathMatchingTargetID[targetID] ?? row
+                }
+            }
+            rowsByPath[row.path] = rowsByPath[row.path] ?? row
+            rowsByTitle[row.title] = rowsByTitle[row.title] ?? row
+            rowsBySourcePath[row.source.path] = rowsBySourcePath[row.source.path] ?? row
+            categoryBuckets[row.category, default: []].append(row)
+            availabilityCountsByValue[row.availability, default: 0] += 1
+            availabilityStatusCounts[row.status, default: 0] += 1
+            if row.affectsResourceAvailability, row.status != .valid {
+                availabilityProblemStatusCounts[row.status, default: 0] += 1
+            }
+        }
+
+        var sortedRowsByMode: [ResourceAssetSortMode: [ResourceAssetRowViewState]] = [:]
+        var sortedCategoryBucketsByMode: [ResourceAssetSortMode: [String: [ResourceAssetRowViewState]]] = [:]
+        for sortMode in ResourceAssetSortMode.allCases {
+            sortedRowsByMode[sortMode] = Self.sorted(rows, by: sortMode)
+            var buckets: [String: [ResourceAssetRowViewState]] = [:]
+            for (category, bucketRows) in categoryBuckets {
+                buckets[category] = Self.sorted(bucketRows, by: sortMode)
+            }
+            sortedCategoryBucketsByMode[sortMode] = buckets
+        }
+
+        self.rows = rows
+        self.rowsByID = rowsByID
+        self.rowsByTargetID = rowsByTargetID
+        self.rowsByPath = rowsByPath
+        self.rowsByPathMatchingTargetID = rowsByPathMatchingTargetID
+        self.rowsByTitle = rowsByTitle
+        self.rowsBySourcePath = rowsBySourcePath
+        self.categoryBuckets = categoryBuckets
+        self.sortedRowsByMode = sortedRowsByMode
+        self.sortedCategoryBucketsByMode = sortedCategoryBucketsByMode
+        self.availabilityCountsByValue = availabilityCountsByValue
+        self.availabilityStatusCounts = availabilityStatusCounts
+        self.availabilityProblemStatusCounts = availabilityProblemStatusCounts
+        self.availabilityProblemCount = availabilityProblemStatusCounts.values.reduce(0, +)
+    }
+
+    func exactMatch(identifier: String) -> ResourceAssetRowViewState? {
+        rowsByID[identifier]
+            ?? rowsByTargetID[identifier]
+            ?? rowsByPathMatchingTargetID[identifier]
+            ?? rowsByPath[identifier]
+            ?? rowsByTitle[identifier]
+            ?? rowsBySourcePath[identifier]
+    }
+
+    func substringMatch(needle: String) -> ResourceAssetRowViewState? {
+        rows.first { $0.searchBlob.contains(needle) }
+    }
+
+    func filteredRows(
+        category: String,
+        allCategory: String,
+        searchText: String,
+        sortMode: ResourceAssetSortMode
+    ) -> [ResourceAssetRowViewState] {
+        let sortedRows: [ResourceAssetRowViewState]
+        if category == allCategory {
+            sortedRows = sortedRowsByMode[sortMode] ?? []
+        } else {
+            sortedRows = sortedCategoryBucketsByMode[sortMode]?[category] ?? []
+        }
+
+        let needle = searchText.lowercased()
+        guard !needle.isEmpty else { return sortedRows }
+        return sortedRows.filter { $0.searchBlob.contains(needle) }
+    }
+
+    static func sorted(
+        _ rows: [ResourceAssetRowViewState],
+        by sortMode: ResourceAssetSortMode
+    ) -> [ResourceAssetRowViewState] {
+        rows.sorted { lhs, rhs in
+            switch sortMode {
+            case .category:
+                if lhs.category == rhs.category {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.category < rhs.category
+            case .title:
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            case .path:
+                return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
+            case .status:
+                if lhs.status.rawValue == rhs.status.rawValue {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.status.rawValue < rhs.status.rawValue
+            case .availability:
+                if lhs.availability == rhs.availability {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.availability < rhs.availability
+            }
+        }
     }
 }
 

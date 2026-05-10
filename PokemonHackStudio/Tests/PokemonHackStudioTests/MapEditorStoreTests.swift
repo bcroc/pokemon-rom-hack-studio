@@ -41,6 +41,82 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testToolbarMutationStateDefaultsWithoutEditableModule() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        let state = store.toolbarMutationState
+
+        XCTAssertEqual(state.target, .none)
+        XCTAssertFalse(state.hasEditableTarget)
+        XCTAssertFalse(state.canPreview)
+        XCTAssertFalse(state.canApply)
+        XCTAssertFalse(state.canDiscard)
+        XCTAssertEqual(state.previewBlockedReason, "Select an editable module before previewing mutations.")
+    }
+
+    @MainActor
+    func testToolbarMutationStateRoutesMapPreviewAndDiscard() async throws {
+        let store = try await makeLoadedStore()
+        store.selection = .maps
+
+        XCTAssertEqual(store.toolbarMutationState.target, .map)
+        XCTAssertFalse(store.toolbarMutationState.canPreview)
+        XCTAssertEqual(store.toolbarMutationState.previewBlockedReason, "No staged edits to preview.")
+
+        store.selectBrush(rawValue: 0x0044)
+        store.paintMapCell(x: 0, y: 0)
+
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.toolbarMutationState.canDiscard)
+
+        store.previewToolbarMutationTarget()
+
+        XCTAssertNotNil(store.latestMapEditPlan)
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+
+        store.discardToolbarMutationTarget()
+
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+        XCTAssertNil(store.latestMapEditPlan)
+        XCTAssertFalse(store.toolbarMutationState.canDiscard)
+    }
+
+    @MainActor
+    func testToolbarMutationStateRoutesTrainerPreviewAndDiscard() async throws {
+        let root = try makeTrainerProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selection = .trainers
+        store.loadSelectedTrainerCatalogIfNeeded()
+        try await waitForSelectedTrainerCatalog(store)
+        store.requestTrainerSelection("TRAINER_BOSS")
+
+        var draft = try XCTUnwrap(store.selectedTrainerDraft)
+        draft.trainerName = "EDITED"
+        store.updateSelectedTrainerDraft(draft)
+
+        XCTAssertEqual(store.toolbarMutationState.target, .trainer)
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.toolbarMutationState.canDiscard)
+
+        store.previewToolbarMutationTarget()
+
+        XCTAssertNotNil(store.latestTrainerEditPlan)
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+
+        store.discardToolbarMutationTarget()
+
+        XCTAssertFalse(store.selectedTrainerIsDirty)
+        XCTAssertNil(store.latestTrainerEditPlan)
+        XCTAssertFalse(store.toolbarMutationState.canDiscard)
+    }
+
+    @MainActor
     func testTrainerCatalogLoadsSelectionAndFilteringIntoStore() async throws {
         let root = try makeTrainerProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -746,19 +822,20 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     func testResourceAssetFilteringHandlesLargeSyntheticCatalog() throws {
         let rows = (0..<50_000).map(Self.syntheticAssetRow)
+        let index = ResourceAssetCatalogIndex(rows: rows)
 
-        let searchResult = WorkbenchStore.filterAndSort(
-            assetRows: rows,
+        let searchResult = index.filteredRows(
             category: "items",
+            allCategory: WorkbenchStore.allResourceAssetCategories,
             searchText: "needle-49999",
             sortMode: .path
         )
 
         XCTAssertEqual(searchResult.map(\.id), ["asset-49999"])
 
-        let mapRows = WorkbenchStore.filterAndSort(
-            assetRows: rows,
+        let mapRows = index.filteredRows(
             category: "maps",
+            allCategory: WorkbenchStore.allResourceAssetCategories,
             searchText: "",
             sortMode: .availability
         )
@@ -766,6 +843,89 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(mapRows.count, 25_000)
         XCTAssertTrue(mapRows.allSatisfy { $0.category == "maps" })
         XCTAssertTrue(mapRows.prefix(100).allSatisfy { $0.availability == "availableSource" })
+        XCTAssertEqual(index.categoryBuckets["maps"]?.count, 25_000)
+        XCTAssertEqual(index.sortedRowsByMode[.path]?.count, rows.count)
+        XCTAssertEqual(index.availabilityCountsByValue["availableSource"], 25_000)
+        XCTAssertEqual(index.availabilityProblemCount, 0)
+    }
+
+    @MainActor
+    func testResourceAssetIndexExactLookupPrecedence() throws {
+        let rows = [
+            Self.makeAssetRow(
+                id: "source-match",
+                title: "Source",
+                path: "source/path",
+                sourcePath: "shared-key"
+            ),
+            Self.makeAssetRow(
+                id: "title-match",
+                title: "shared-key",
+                path: "title/path"
+            ),
+            Self.makeAssetRow(
+                id: "path-match",
+                title: "Path",
+                path: "shared-key"
+            ),
+            Self.makeAssetRow(
+                id: "path-target-match",
+                title: "Path Target",
+                path: "shared-key",
+                targetID: "shared-key"
+            ),
+            Self.makeAssetRow(
+                id: "target-match",
+                title: "Target",
+                path: "target/path",
+                targetID: "shared-key"
+            ),
+            Self.makeAssetRow(
+                id: "shared-key",
+                title: "ID",
+                path: "id/path",
+                targetID: "other-target"
+            ),
+            Self.makeAssetRow(
+                id: "availability-warning",
+                title: "Availability Warning",
+                path: "warning/path",
+                status: .warning,
+                availability: "requiredSourceMissing",
+                affectsResourceAvailability: true
+            )
+        ]
+        let index = ResourceAssetCatalogIndex(rows: rows)
+
+        XCTAssertEqual(index.exactMatch(identifier: "shared-key")?.id, "shared-key")
+        XCTAssertEqual(index.exactMatch(identifier: "other-target")?.id, "shared-key")
+        XCTAssertEqual(index.exactMatch(identifier: "warning/path")?.id, "availability-warning")
+        XCTAssertEqual(index.exactMatch(identifier: "Availability Warning")?.id, "availability-warning")
+        XCTAssertEqual(index.exactMatch(identifier: "source/path")?.id, "source-match")
+        XCTAssertEqual(index.availabilityCountsByValue["requiredSourceMissing"], 1)
+        XCTAssertEqual(index.availabilityStatusCounts[.warning], 1)
+        XCTAssertEqual(index.availabilityProblemStatusCounts[.warning], 1)
+        XCTAssertEqual(index.availabilityProblemCount, 1)
+    }
+
+    @MainActor
+    func testPendingResourceAssetFocusResolvesAfterLazyAssetLoad() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        XCTAssertNil(store.selectedAssetCatalog)
+
+        store.navigateToResourceAsset(path: "data/scripts/test.inc")
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.searchText, "data/scripts/test.inc")
+
+        let catalog = try await waitForSelectedAssetCatalog(store)
+        let scriptSourceAsset = try XCTUnwrap(catalog.index.exactMatch(identifier: "data/scripts/test.inc"))
+
+        XCTAssertEqual(store.selectedResourceAssetID, scriptSourceAsset.id)
+        XCTAssertEqual(store.selectedResourceAsset?.id, scriptSourceAsset.id)
     }
 
     @MainActor
@@ -1994,27 +2154,58 @@ final class MapEditorStoreTests: XCTestCase {
         let category = isMap ? "maps" : "items"
         let title = isMap ? "Map \(index)" : "Item \(index)"
         let availability = isMap ? "availableSource" : "optionalGeneratedMissing"
-        return ResourceAssetRowViewState(
+        return makeAssetRow(
             id: "asset-\(index)",
             title: title,
-            subtitle: "Synthetic \(category)",
             path: "data/synthetic/\(category)/\(index).inc",
             category: category,
             kind: isMap ? "map" : "generated",
             role: isMap ? "source" : "generated",
-            status: .valid,
             availability: availability,
-            availabilitySummary: isMap ? "Source available" : "Optional generated output missing",
-            affectsResourceAvailability: false,
+            tags: [category, "needle-\(index)"],
+            targetModule: isMap ? .maps : .items,
+            targetID: title
+        )
+    }
+
+    private static func makeAssetRow(
+        id: String,
+        title: String,
+        path: String,
+        category: String = "maps",
+        kind: String = "source",
+        role: String = "source",
+        status: ValidationState = .valid,
+        availability: String = "availableSource",
+        affectsResourceAvailability: Bool = false,
+        sourcePath: String? = nil,
+        tags: [String] = [],
+        targetModule: WorkbenchModule? = .maps,
+        targetID: String? = nil
+    ) -> ResourceAssetRowViewState {
+        ResourceAssetRowViewState(
+            id: id,
+            title: title,
+            subtitle: "Synthetic \(category)",
+            path: path,
+            category: category,
+            kind: kind,
+            role: role,
+            status: status,
+            availability: availability,
+            availabilitySummary: availability == "availableSource" ? "Source available" : "Source missing",
+            affectsResourceAvailability: affectsResourceAvailability,
             sizeSummary: "1 KB",
             checksumSummary: "Not checked",
-            source: SourceLocation(path: "data/synthetic/\(category)/\(index).inc", symbol: title, line: 1),
-            tags: [category, "needle-\(index)"],
+            source: SourceLocation(path: sourcePath ?? path, symbol: title, line: 1),
+            tags: tags,
             facts: [],
             diagnostics: [],
-            targetModule: isMap ? .maps : .items,
-            targetID: title,
-            searchBlob: "\(title.lowercased()) data/synthetic/\(category)/\(index).inc \(category) needle-\(index)"
+            targetModule: targetModule,
+            targetID: targetID,
+            searchBlob: ([title, path, category, kind, role, targetID ?? ""] + tags)
+                .joined(separator: " ")
+                .lowercased()
         )
     }
 }

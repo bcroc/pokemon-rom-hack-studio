@@ -480,7 +480,7 @@ public enum ItemMutationPlanner {
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald item rows and supported Emerald/FireRed item descriptions.")
+                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald/FireRed item rows and supported Emerald/FireRed item descriptions.")
                 ]
             )
         }
@@ -498,13 +498,19 @@ public enum ItemMutationPlanner {
         var changes: [ItemEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            if descriptor.supportsRowEditing,
-               let change = rewriteChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
-            {
-                changes.append(change)
-            }
-            if let change = rewriteDescriptionChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics) {
-                changes.append(change)
+            if descriptor.descriptionPath == descriptor.itemPath {
+                if let change = rewriteCombinedItemSourceChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics) {
+                    changes.append(change)
+                }
+            } else {
+                if descriptor.supportsRowEditing,
+                   let change = rewriteChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
+                {
+                    changes.append(change)
+                }
+                if let change = rewriteDescriptionChange(root: root, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics) {
+                    changes.append(change)
+                }
             }
         }
 
@@ -527,6 +533,88 @@ public enum ItemMutationPlanner {
             mutationPlan: mutationPlan,
             backupRelativeRoot: ".pokemonhackstudio/backups/\(backupTimestamp())"
         )
+    }
+
+    private static func rewriteCombinedItemSourceChange(
+        root: URL,
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) -> ItemEditFileChange? {
+        let path = descriptor.itemPath
+        let url = root.appendingPathComponent(path)
+        guard let originalText = try? readText(url), let originalData = originalText.data(using: .utf8) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_PLAN_SOURCE_UNREADABLE", message: "Item source file could not be read before planning: \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+            return nil
+        }
+
+        var newText = originalText
+        var previews: [String] = []
+        var summaries: [String] = []
+        let rowChanges = changedFields(item: item, draft: draft)
+
+        if descriptor.supportsRowEditing, !rowChanges.isEmpty {
+            let parsed = CInitializerParser.tableEntries(
+                in: newText,
+                descriptor: CInitializerTableDescriptor(module: .items, relativePath: path, tableSymbol: descriptor.tableSymbol, entryStyle: descriptor.entryStyle, idField: descriptor.idField)
+            )
+            guard let entry = parsed.entries.first(where: { $0.symbol == item.itemID }) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_PLAN_TARGET_MISSING", message: "Item \(item.itemID) is not present in \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+                return nil
+            }
+            guard let patchedBody = ItemFieldPatcher.patch(entryBody: entry.body, changes: rowChanges, diagnostics: &diagnostics, span: entry.span) else {
+                return nil
+            }
+            let replacement = patchedBody.hasSuffix(",") ? patchedBody : "\(patchedBody),"
+            newText = replaceLines(in: newText, span: entry.span, replacement: replacement)
+            previews.append(replacement)
+            summaries.append("item source block")
+        }
+
+        if let descriptionText = patchedDescriptionText(in: newText, descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics) {
+            newText = descriptionText.text
+            previews.append(descriptionText.preview)
+            summaries.append("item description text")
+        }
+
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else { return nil }
+        guard newText != originalText, let newData = newText.data(using: .utf8) else { return nil }
+        let summary = summaries.isEmpty ? "Update item source" : "Update \(summaries.joined(separator: " and "))"
+        return ItemEditFileChange(
+            path: path,
+            summary: summary,
+            originalByteCount: originalData.count,
+            originalSHA1: pokemonHackSHA1Hex(originalData),
+            newByteCount: newData.count,
+            newData: newData,
+            textPreview: previews.joined(separator: "\n\n")
+        )
+    }
+
+    private static func patchedDescriptionText(
+        in sourceText: String,
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) -> (text: String, preview: String)? {
+        guard let draftText = draft.descriptionText, draftText != item.descriptionText else { return nil }
+        guard let path = descriptor.descriptionPath, let symbol = item.descriptionSymbol else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_SOURCE_MISSING", message: "Item \(item.itemID) does not have a description symbol that can be rewritten.", span: item.sourceSpan))
+            return nil
+        }
+        guard let description = ItemDescriptionScanner.descriptions(in: sourceText, relativePath: path)[symbol] else {
+            diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_SYMBOL_MISSING", message: "Description symbol \(symbol) was not found in \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+            return nil
+        }
+        let replacement = renderDescriptionDeclaration(symbol: symbol, text: draftText, usesStatic: description.usesStatic)
+        let mutableText = NSMutableString(string: sourceText)
+        mutableText.replaceCharacters(
+            in: NSRange(location: description.startOffset, length: description.endOffset - description.startOffset),
+            with: replacement
+        )
+        return (mutableText as String, replacement)
     }
 
     private static func blockedPlan(catalog: ProjectItemCatalog, draft: ItemEditDraft, diagnostics: [Diagnostic]) -> ItemEditPlan {
@@ -784,7 +872,7 @@ private struct ItemCatalogDescriptor {
         case .pokeemerald:
             ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/text/item_descriptions.h", tableSymbol: "gItems", entryStyle: .bracketed, idField: nil, supportsRowEditing: true, supportsDescriptionEditing: true)
         case .pokefirered:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: false, supportsDescriptionEditing: true)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: true, supportsDescriptionEditing: true)
         case .pokeruby:
             ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", descriptionPath: nil, tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: false, supportsDescriptionEditing: false)
         case .pokeemeraldExpansion:
@@ -860,8 +948,7 @@ private enum ItemFieldPatcher {
     private static func fieldRanges(in text: String) -> [ItemFieldRange] {
         let characters = Array(text)
         guard
-            let equals = firstCharacter("=", in: characters, after: 0),
-            let open = firstCharacter("{", in: characters, after: equals + 1),
+            let open = initializerOpenBrace(in: characters),
             let close = matchingCloseBrace(in: characters, from: open)
         else {
             return []
@@ -946,6 +1033,15 @@ private enum ItemFieldPatcher {
             index = max(valueEnd, index + 1)
         }
         return ranges
+    }
+
+    private static func initializerOpenBrace(in characters: [Character]) -> Int? {
+        if let equals = firstCharacter("=", in: characters, after: 0),
+           let open = firstCharacter("{", in: characters, after: equals + 1)
+        {
+            return open
+        }
+        return firstCharacter("{", in: characters, after: 0)
     }
 }
 
@@ -1033,7 +1129,7 @@ private func readOnlyDiagnostic(profile: GameProfile, span: SourceSpan?) -> Diag
     Diagnostic(
         severity: .warning,
         code: "ITEM_CATALOG_READ_ONLY_PROFILE",
-        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald rows plus Emerald/FireRed item description text.",
+        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald/FireRed rows plus Emerald/FireRed item description text.",
         span: span
     )
 }
