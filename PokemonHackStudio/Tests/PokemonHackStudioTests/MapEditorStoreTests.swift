@@ -520,6 +520,100 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkbenchModuleSwitchingRestoresScopedSearchAndTracksSessionRecents() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.searchText = "dashboard"
+        store.selectWorkbenchModule(.pokemon, search: .replace("treecko"))
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.searchText, "treecko")
+
+        store.searchText = "grovyle"
+        store.selectWorkbenchModule(.moves, search: .replace("pound"))
+        XCTAssertEqual(store.selection, .moves)
+        XCTAssertEqual(store.searchText, "pound")
+
+        store.searchText = "flash"
+        store.selectWorkbenchModule(.pokemon)
+
+        XCTAssertEqual(store.searchText, "grovyle")
+        XCTAssertEqual(Array(store.recentModules.prefix(2)), [.pokemon, .moves])
+    }
+
+    @MainActor
+    func testSpeciesFocusPreservesDraftsAndRecordsRecentTargets() async throws {
+        let root = try makePokemonProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.pokemon, search: .clear)
+        try await waitForSelectedSpeciesCatalog(store)
+
+        XCTAssertTrue(store.focusSpecies("SPECIES_TREECKO"))
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.baseStats.hp = 47
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.focusSpecies("SPECIES_GROVYLE"))
+        XCTAssertTrue(store.focusSpecies("SPECIES_TREECKO"))
+
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(store.searchText, "SPECIES_TREECKO")
+        XCTAssertEqual(store.selectedSpeciesDraft?.baseStats.hp, 47)
+        XCTAssertTrue(store.isSpeciesDirty("SPECIES_TREECKO"))
+        XCTAssertEqual(store.dirtySpeciesDraftCount, 1)
+        XCTAssertEqual(store.recentSpeciesTargets.first?.target, .species("SPECIES_TREECKO"))
+    }
+
+    @MainActor
+    func testMoveFocusKeepsDetailDraftToolbarAndInspectorOnSameHiddenMove() async throws {
+        let root = try makePokemonProject()
+        try writeBattleMoveTable(to: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.moves, search: .replace("pound"))
+        let catalog = try await waitForSelectedMoveCatalog(store)
+        XCTAssertTrue(catalog.moves.contains { $0.moveID == "MOVE_ABSORB" })
+
+        XCTAssertTrue(store.focusMove("MOVE_ABSORB"))
+        var draft = try XCTUnwrap(store.selectedMoveDraft)
+        draft.power = 24
+        store.updateSelectedMoveDraft(draft)
+        store.selectedMoveWorkbenchFilter = .tmhm
+
+        XCTAssertEqual(store.selectedMoveID, "MOVE_ABSORB")
+        XCTAssertEqual(store.selectedMoveDetail?.moveID, "MOVE_ABSORB")
+        XCTAssertEqual(store.selectedCoreMoveDetail?.moveID, "MOVE_ABSORB")
+        XCTAssertEqual(store.selectedMoveDraft?.moveID, "MOVE_ABSORB")
+        XCTAssertEqual(store.selectedMoveDraft?.power, 24)
+        XCTAssertTrue(store.selectedMoveIsDirty)
+        XCTAssertTrue(store.selectedMoveIsHiddenByCurrentFilter)
+
+        XCTAssertTrue(store.focusMove("MOVE_POUND"))
+        XCTAssertTrue(store.focusMove("MOVE_ABSORB"))
+
+        XCTAssertEqual(store.selectedMoveDraft?.power, 24)
+        XCTAssertTrue(store.isMoveDirty("MOVE_ABSORB"))
+        XCTAssertEqual(store.dirtyMoveDraftCount, 1)
+        XCTAssertEqual(store.recentMoveTargets.first?.target, .move("MOVE_ABSORB"))
+
+        let learner = try XCTUnwrap(store.selectedMoveDetail?.learnedBy.first)
+        XCTAssertTrue(store.focusSpecies(learner.speciesID))
+        XCTAssertEqual(store.selection, .pokemon)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(store.searchText, "SPECIES_TREECKO")
+    }
+
+    @MainActor
     func testSidebarSearchFallbacksAndGenericRecordSelection() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -1372,6 +1466,269 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDirtyMapNavigationGuardStillBlocksHiddenSidebarTargets() async throws {
+        let store = try await makeLoadedStore()
+
+        store.searchText = "Route2"
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+
+        store.requestMapSelection("MAP_ROUTE2")
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.pendingMapNavigation, .map("MAP_ROUTE2"))
+
+        store.cancelPendingMapNavigation()
+        store.searchText = ""
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testMapRefreshIsGuardedWhenVisualEditsAreStaged() async throws {
+        let store = try await makeLoadedStore()
+
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.refreshSelectedMapCatalog()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.pendingMapNavigation, .refreshMaps)
+        XCTAssertNotNil(store.selectedMapCatalog)
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testModuleRefreshDefersMapReloadWhenVisualEditsAreStaged() async throws {
+        let store = try await makeLoadedStore()
+        store.selectWorkbenchModule(.maps)
+
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.refreshSelectedModuleContext()
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.selectedMapVisualDocument?.mapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.pendingMapNavigation, .refreshMaps)
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testDirtyMapRefreshDiscardContinueReloadsCatalogAndSelection() async throws {
+        let store = try await makeLoadedStore()
+        store.selectWorkbenchModule(.maps)
+
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.refreshSelectedMapCatalog()
+        store.discardMapEditsAndContinueNavigation()
+
+        let catalog = try await waitForSelectedMapCatalog(store)
+        try await waitForSelectedMapVisual(store, mapID: "MAP_ROUTE1")
+
+        XCTAssertEqual(catalog.mapCount, 2)
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testDirtyMapNavigationCancelPreservesSearchAndAcceptedNavigationAppliesTargetSearch() async throws {
+        let store = try await makeLoadedStore()
+        store.selectWorkbenchModule(.maps, search: .replace("Route1"))
+
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.focusWorkbenchTarget(.map("MAP_ROUTE2"), search: .replace("Route2"))
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.searchText, "Route1")
+        XCTAssertEqual(store.pendingMapNavigation, .map("MAP_ROUTE2"))
+
+        store.cancelPendingMapNavigation()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.searchText, "Route1")
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+
+        store.focusWorkbenchTarget(.map("MAP_ROUTE2"), search: .replace("Route2"))
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertEqual(store.searchText, "Route2")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testOpenProjectWhileMapIsDirtyDefersSelectionUntilDiscardContinue() async throws {
+        let firstRoot = try makeVisualProject()
+        let secondRoot = try makeVisualProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: firstRoot.path)
+        store.selectedMapID = "MAP_ROUTE1"
+        store.loadSelectedMapVisualDocument()
+        try await waitForSelectedMapVisual(store, mapID: "MAP_ROUTE1")
+        let firstProjectID = store.selectedProjectID
+
+        store.selectedResourceAssetID = "stale-resource"
+        store.resourceAssetCategory = "maps"
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.openProject(path: secondRoot.path)
+
+        XCTAssertEqual(store.selectedProjectID, firstProjectID)
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, firstRoot.path)
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+        XCTAssertNotNil(store.pendingMapNavigation)
+
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertNil(store.selectedResourceAssetID)
+        XCTAssertEqual(store.resourceAssetCategory, WorkbenchStore.allResourceAssetCategories)
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testScriptReadinessMapSwitchUsesDirtyNavigationGuard() async throws {
+        let store = try await makeLoadedStore()
+
+        store.scriptReadinessTargetMode = .map
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.requestScriptReadinessMapSelection("MAP_ROUTE2")
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.pendingMapNavigation, .map("MAP_ROUTE2"))
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testScriptReadinessMapSwitchRefreshesAfterDirtyDiscardContinue() async throws {
+        let store = try await makeLoadedStore()
+
+        store.selection = .scripts
+        store.scriptReadinessTargetMode = .map
+        store.refreshSelectedScriptReadinessReport()
+        XCTAssertEqual(store.selectedScriptReadinessReport?.mapContext?.mapID, "MAP_ROUTE1")
+
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        store.requestScriptReadinessMapSelection("MAP_ROUTE2")
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertEqual(store.selectedScriptReadinessReport?.mapContext?.mapID, "MAP_ROUTE2")
+        XCTAssertNil(store.pendingMapNavigation)
+    }
+
+    @MainActor
+    func testResourceBacklinksForceMatchingResourceMode() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let scriptAsset = try XCTUnwrap(assetCatalog.rows.first { $0.category == "scripts" && $0.targetID == "data/scripts/test.inc" })
+        let rootEntry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
+
+        store.selectedResourceLibraryMode = .entries
+        XCTAssertTrue(store.focusResourceAsset(scriptAsset.id))
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.selectedResourceLibraryMode, .assets)
+        XCTAssertEqual(store.selectedResourceAssetID, scriptAsset.id)
+
+        store.selectedResourceLibraryMode = .assets
+        XCTAssertTrue(store.focusResourceEntry(rootEntry.id))
+        XCTAssertEqual(store.selection, .resources)
+        XCTAssertEqual(store.selectedResourceLibraryMode, .entries)
+        XCTAssertEqual(store.selectedResourceLibraryEntryID, rootEntry.id)
+    }
+
+    @MainActor
+    func testInvalidResourceBacklinksDoNotPoisonPokemonMoveOrTrainerSelection() async throws {
+        let pokemonRoot = try makePokemonProject()
+        try writeBattleMoveTable(to: pokemonRoot)
+        let pokemonDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let pokemonStore = WorkbenchStore(userDefaults: pokemonDefaults, autoLoadProjects: false)
+
+        pokemonStore.openProject(path: pokemonRoot.path)
+        pokemonStore.selectWorkbenchModule(.pokemon)
+        try await waitForSelectedSpeciesCatalog(pokemonStore)
+        XCTAssertTrue(pokemonStore.focusSpecies("SPECIES_TREECKO"))
+        let speciesRecentCount = pokemonStore.recentSpeciesTargets.count
+
+        pokemonStore.navigateToAsset(Self.makeAssetRow(
+            id: "invalid-species",
+            title: "Invalid Species",
+            path: "src/data/pokemon/species_info.h",
+            category: "species",
+            targetModule: .pokemon,
+            targetID: "SPECIES_MISSINGNO"
+        ))
+
+        XCTAssertEqual(pokemonStore.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(pokemonStore.recentSpeciesTargets.count, speciesRecentCount)
+        XCTAssertFalse(pokemonStore.recentSpeciesTargets.contains { $0.target == .species("SPECIES_MISSINGNO") })
+
+        pokemonStore.selectWorkbenchModule(.moves)
+        try await waitForSelectedMoveCatalog(pokemonStore)
+        XCTAssertTrue(pokemonStore.focusMove("MOVE_POUND"))
+        let moveRecentCount = pokemonStore.recentMoveTargets.count
+
+        pokemonStore.navigateToAsset(Self.makeAssetRow(
+            id: "invalid-move",
+            title: "Invalid Move",
+            path: "src/data/battle_moves.h",
+            category: "moves",
+            targetModule: .moves,
+            targetID: "MOVE_SPLASHIER"
+        ))
+
+        XCTAssertEqual(pokemonStore.selectedMoveID, "MOVE_POUND")
+        XCTAssertEqual(pokemonStore.recentMoveTargets.count, moveRecentCount)
+        XCTAssertFalse(pokemonStore.recentMoveTargets.contains { $0.target == .move("MOVE_SPLASHIER") })
+
+        let trainerRoot = try makeTrainerProject()
+        let trainerDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let trainerStore = WorkbenchStore(userDefaults: trainerDefaults, autoLoadProjects: false)
+
+        trainerStore.openProject(path: trainerRoot.path)
+        trainerStore.selectWorkbenchModule(.trainers)
+        try await waitForSelectedTrainerCatalog(trainerStore)
+        trainerStore.requestTrainerSelection("TRAINER_TEST")
+
+        trainerStore.navigateToAsset(Self.makeAssetRow(
+            id: "invalid-trainer",
+            title: "Invalid Trainer",
+            path: "src/data/trainers.h",
+            category: "trainers",
+            targetModule: .trainers,
+            targetID: "TRAINER_MISSING"
+        ))
+
+        XCTAssertEqual(trainerStore.selectedTrainerID, "TRAINER_TEST")
+    }
+
+    @MainActor
     func testSelectionPersistenceAndMapSwitchClearsDirtyState() async throws {
         let store = try await makeLoadedStore()
 
@@ -2090,6 +2447,65 @@ final class MapEditorStoreTests: XCTestCase {
             #define ITEM_HM05_FLASH 105
             """,
             to: root.appendingPathComponent("include/constants/items.h")
+        )
+    }
+
+    private func writeBattleMoveTable(to root: URL) throws {
+        try write(
+            """
+            const struct BattleMove gBattleMoves[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                },
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                },
+                [MOVE_ABSORB] =
+                {
+                    .effect = EFFECT_ABSORB,
+                    .power = 20,
+                    .type = TYPE_GRASS,
+                    .accuracy = 100,
+                    .pp = 25,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_PROTECT_AFFECTED,
+                },
+                [MOVE_FLASH] =
+                {
+                    .effect = EFFECT_ACCURACY_DOWN,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 70,
+                    .pp = 20,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/battle_moves.h")
         )
     }
 

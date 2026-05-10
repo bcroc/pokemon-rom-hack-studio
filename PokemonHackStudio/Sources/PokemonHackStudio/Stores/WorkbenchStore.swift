@@ -202,6 +202,8 @@ final class WorkbenchStore: ObservableObject {
     @Published var resourceAssetCategory = WorkbenchStore.allResourceAssetCategories
     @Published var resourceAssetSortMode: ResourceAssetSortMode = .category
     @Published var pendingMapNavigation: PendingMapNavigation?
+    @Published private(set) var recentModules: [WorkbenchModule] = []
+    @Published private(set) var recentWorkbenchTargets: [WorkbenchRecentTarget] = []
     @Published private(set) var indexedProjects: [IndexedProjectSummary] = []
     @Published private(set) var projectIndexStatus: ProjectIndexLoadStatus = .idle
     @Published private(set) var selectedMapCatalog: MapCatalogViewState?
@@ -283,6 +285,11 @@ final class WorkbenchStore: ObservableObject {
     private var pendingRelatedMapTargetID: String?
     private var pendingResourceAssetFocus: String?
     private var pendingScriptAssetTargetID: String?
+    private var moduleSearchTextByModule: [WorkbenchModule: String] = [:]
+    private var pendingMapNavigationSearchBehavior: WorkbenchSearchBehavior?
+    private var pendingMapNavigationSearchIdentifier: String?
+    private var pendingMapNavigationSource: String?
+    private var pendingMapNavigationShouldRefreshScriptReadiness = false
     private var settingsCancellable: AnyCancellable?
     private var mapEditorCancellable: AnyCancellable?
     private var autosaveTask: Task<Void, Never>?
@@ -341,6 +348,47 @@ final class WorkbenchStore: ObservableObject {
 
     var selectedIndexedProject: IndexedProjectSummary? {
         indexedProjects.first { $0.id == selectedProjectID } ?? indexedProjects.first
+    }
+
+    var recentMapTargets: [WorkbenchRecentTarget] {
+        recentWorkbenchTargets.filter { $0.module == .maps }
+    }
+
+    var recentSpeciesTargets: [WorkbenchRecentTarget] {
+        recentWorkbenchTargets.filter { $0.module == .pokemon }
+    }
+
+    var recentMoveTargets: [WorkbenchRecentTarget] {
+        recentWorkbenchTargets.filter { $0.module == .moves }
+    }
+
+    var pendingMapNavigationTitle: String {
+        guard let pendingMapNavigation else { return "Staged map edits" }
+        switch pendingMapNavigation {
+        case .project(let projectID):
+            let title = indexedProjects.first { $0.id == projectID }?.title ?? "selected project"
+            return "Switch to \(title)?"
+        case .map(let mapID):
+            let title = selectedMapCatalog?.maps.first { $0.id == mapID }?.name ?? mapID
+            return "Switch to \(title)?"
+        case .refreshMaps:
+            return "Refresh maps?"
+        }
+    }
+
+    var pendingMapNavigationMessage: String {
+        guard let pendingMapNavigation else {
+            return "This map has staged edits. Preview or discard them before changing selection."
+        }
+        switch pendingMapNavigation {
+        case .project:
+            return "This map has staged edits. Preview or discard them before switching projects."
+        case .map(let mapID):
+            let title = selectedMapCatalog?.maps.first { $0.id == mapID }?.name ?? mapID
+            return "This map has staged edits. Preview or discard them before opening \(title)."
+        case .refreshMaps:
+            return "This map has staged edits. Preview or discard them before refreshing the map catalog."
+        }
     }
 
     var selectedSourceIndex: PokemonHackCore.ProjectSourceIndex? {
@@ -405,10 +453,10 @@ final class WorkbenchStore: ObservableObject {
 
     var selectedMoveDetail: MoveDetailViewState? {
         guard let catalog = selectedMoveCatalog else { return nil }
-        if let selected = filteredMoveDetails.first(where: { $0.moveID == selectedMoveID }) {
+        if let selected = catalog.moves.first(where: { $0.moveID == selectedMoveID }) {
             return selected
         }
-        return filteredMoveDetails.first ?? catalog.moves.first
+        return catalog.moves.first { $0.isEditable } ?? catalog.moves.first
     }
 
     var selectedCoreMoveDetail: PokemonHackCore.MoveDetail? {
@@ -416,7 +464,12 @@ final class WorkbenchStore: ObservableObject {
         if let selected = catalog.moves.first(where: { $0.moveID == selectedMoveID }) {
             return selected
         }
-        return catalog.moves.first
+        return catalog.moves.first { $0.isEditable } ?? catalog.moves.first
+    }
+
+    var selectedMoveIsHiddenByCurrentFilter: Bool {
+        guard !selectedMoveID.isEmpty, selectedMoveCatalog != nil else { return false }
+        return !filteredMoveDetails.contains { $0.moveID == selectedMoveID }
     }
 
     var selectedMoveDraft: PokemonHackCore.MoveEditDraft? {
@@ -566,6 +619,11 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    var selectedSpeciesIsHiddenByCurrentSearch: Bool {
+        guard !selectedSpeciesID.isEmpty, selectedSpeciesCatalog != nil, !searchText.isEmpty else { return false }
+        return !filteredSpeciesDetails.contains { $0.speciesID == selectedSpeciesID }
+    }
+
     var selectedSpeciesDetail: PokemonHackCore.SpeciesDetail? {
         guard let catalog = selectedSpeciesCatalog else { return nil }
         if let selected = catalog.species.first(where: { $0.speciesID == selectedSpeciesID }) {
@@ -598,6 +656,16 @@ final class WorkbenchStore: ObservableObject {
         let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: detail.speciesID)
         guard let draft = speciesDraftsByKey[key] else { return false }
         return draft != baseDraft
+    }
+
+    var dirtySpeciesDraftCount: Int {
+        guard let selectedIndexedProject, let catalog = selectedSpeciesCatalog else { return 0 }
+        return catalog.species.filter { isSpeciesDirty($0.speciesID, projectID: selectedIndexedProject.id) }.count
+    }
+
+    var dirtyMoveDraftCount: Int {
+        guard let selectedIndexedProject, let catalog = selectedCoreMoveCatalog else { return 0 }
+        return catalog.moves.filter { isMoveDirty($0.moveID, projectID: selectedIndexedProject.id) }.count
     }
 
     var canPreviewSelectedSpeciesMutationPlan: Bool {
@@ -1428,6 +1496,42 @@ final class WorkbenchStore: ObservableObject {
         "\(projectID)::move::\(moveID)"
     }
 
+    func isSpeciesDirty(_ speciesID: String) -> Bool {
+        guard let selectedIndexedProject else { return false }
+        return isSpeciesDirty(speciesID, projectID: selectedIndexedProject.id)
+    }
+
+    private func isSpeciesDirty(_ speciesID: String, projectID: String) -> Bool {
+        guard
+            let catalog = speciesCatalogsByID[projectID],
+            let detail = catalog.species.first(where: { $0.speciesID == speciesID }),
+            let baseDraft = PokemonHackCore.SpeciesEditDraft(detail: detail)
+        else {
+            return false
+        }
+        let key = speciesDraftKey(projectID: projectID, speciesID: speciesID)
+        guard let draft = speciesDraftsByKey[key] else { return false }
+        return draft != baseDraft
+    }
+
+    func isMoveDirty(_ moveID: String) -> Bool {
+        guard let selectedIndexedProject else { return false }
+        return isMoveDirty(moveID, projectID: selectedIndexedProject.id)
+    }
+
+    private func isMoveDirty(_ moveID: String, projectID: String) -> Bool {
+        guard
+            let catalog = coreMoveCatalogsByID[projectID],
+            let detail = catalog.moves.first(where: { $0.moveID == moveID })
+        else {
+            return false
+        }
+        let baseDraft = PokemonHackCore.MoveEditDraft(detail: detail)
+        let key = moveDraftKey(projectID: projectID, moveID: moveID)
+        guard let draft = moveDraftsByKey[key] else { return false }
+        return draft != baseDraft
+    }
+
     private func itemDraftKey(projectID: String, itemID: String) -> String {
         "\(projectID)::item::\(itemID)"
     }
@@ -1809,52 +1913,275 @@ final class WorkbenchStore: ObservableObject {
         openProject(path: url.standardizedFileURL.path)
     }
 
+    func selectWorkbenchModule(
+        _ module: WorkbenchModule,
+        focus: WorkbenchFocusTarget? = nil,
+        search: WorkbenchSearchBehavior = .restoreModule
+    ) {
+        storeSearchTextForCurrentModule()
+        selection = module
+        applySearchBehavior(search, for: module, targetIdentifier: focus?.rawIdentifier)
+        recordRecentModule(module)
+        loadSelectedModuleDataIfNeeded()
+        if let focus {
+            focusWorkbenchTarget(focus, search: .preserve)
+        }
+    }
+
+    func selectModule(_ module: WorkbenchModule, search: WorkbenchSearchBehavior = .restoreModule) {
+        selectWorkbenchModule(module, search: search)
+    }
+
+    @discardableResult
+    func focusMap(_ mapID: String, search: WorkbenchSearchBehavior = .replaceTargetIdentifier) -> Bool {
+        let trimmed = mapID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let resolvedMapID: String
+        if let catalog = selectedMapCatalog {
+            guard let match = Self.mapID(forRelatedTarget: trimmed, in: catalog) else { return false }
+            resolvedMapID = match
+        } else {
+            resolvedMapID = trimmed
+            pendingRelatedMapTargetID = trimmed
+        }
+        focusWorkbenchTarget(.map(resolvedMapID), search: search)
+        if selectedMapCatalog == nil {
+            loadSelectedMapCatalogIfNeeded()
+        }
+        return true
+    }
+
+    @discardableResult
+    func focusSpecies(_ speciesID: String, search: WorkbenchSearchBehavior = .replaceTargetIdentifier) -> Bool {
+        let trimmed = speciesID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let catalog = selectedSpeciesCatalog,
+           !catalog.species.contains(where: { $0.speciesID == trimmed }) {
+            return false
+        }
+        focusWorkbenchTarget(.species(trimmed), search: search)
+        if selectedSpeciesCatalog == nil {
+            loadSelectedSpeciesCatalogIfNeeded()
+        }
+        return true
+    }
+
+    @discardableResult
+    func focusMove(_ moveID: String, search: WorkbenchSearchBehavior = .replaceTargetIdentifier) -> Bool {
+        let trimmed = moveID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let catalog = selectedMoveCatalog,
+           !catalog.moves.contains(where: { $0.moveID == trimmed }) {
+            return false
+        }
+        focusWorkbenchTarget(.move(trimmed), search: search)
+        if selectedMoveCatalog == nil {
+            loadSelectedMoveCatalogIfNeeded()
+        }
+        return true
+    }
+
+    @discardableResult
+    func focusResourceAsset(_ identifier: String, search: WorkbenchSearchBehavior = .replaceTargetIdentifier) -> Bool {
+        let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let catalog = selectedAssetCatalog {
+            let needle = trimmed.lowercased()
+            guard catalog.index.exactMatch(identifier: trimmed) != nil
+                    || catalog.index.substringMatch(needle: needle) != nil
+            else { return false }
+        }
+        selectWorkbenchModule(.resources, search: search == .replaceTargetIdentifier ? .replace(trimmed) : search)
+        selectedResourceLibraryMode = .assets
+        resourceAssetCategory = Self.allResourceAssetCategories
+        if selectResourceAsset(matching: trimmed) {
+            recordRecentTarget(recentResourceAssetTarget(for: selectedResourceAssetID ?? trimmed))
+        } else {
+            pendingResourceAssetFocus = trimmed
+            loadSelectedAssetCatalogIfNeeded()
+            recordRecentTarget(recentResourceAssetTarget(for: trimmed))
+        }
+        return true
+    }
+
+    @discardableResult
+    func focusResourceEntry(_ entryID: String, search: WorkbenchSearchBehavior = .replaceTargetIdentifier) -> Bool {
+        let trimmed = entryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let resourceLibrary,
+           !resourceLibrary.entries.contains(where: { $0.id == trimmed }) {
+            return false
+        }
+        selectWorkbenchModule(.resources, search: search == .replaceTargetIdentifier ? .replace(trimmed) : search)
+        selectedResourceLibraryMode = .entries
+        requestResourceLibraryEntrySelection(trimmed)
+        recordRecentTarget(recentResourceEntryTarget(for: trimmed))
+        return true
+    }
+
+    func focusWorkbenchTarget(
+        _ target: WorkbenchFocusTarget,
+        search: WorkbenchSearchBehavior = .replaceTargetIdentifier
+    ) {
+        if case .map(let id) = target {
+            if selection != target.module {
+                selectWorkbenchModule(target.module, search: .restoreModule)
+            }
+            if requestMapSelection(id, source: "Navigation", deferredSearch: search) {
+                applySearchBehavior(search, for: target.module, targetIdentifier: id)
+            }
+            return
+        }
+
+        if selection != target.module {
+            selectWorkbenchModule(target.module, focus: target, search: search)
+            return
+        } else {
+            applySearchBehavior(search, for: target.module, targetIdentifier: target.rawIdentifier)
+        }
+
+        switch target {
+        case .map:
+            break
+        case .species(let id):
+            requestSpeciesSelection(id)
+        case .trainer(let id):
+            requestTrainerSelection(id)
+        case .move(let id):
+            requestMoveSelection(id)
+        case .item(let id):
+            requestItemSelection(id)
+        case .resourceAsset(let id):
+            requestResourceAssetSelection(id)
+        case .resourceEntry(let id):
+            requestResourceLibraryEntrySelection(id)
+        case .scriptLabel(let id):
+            requestScriptLabelSelection(id)
+        case .buildRow(let id):
+            requestBuildReportRowSelection(id)
+        case .diagnostic(let id):
+            requestDiagnosticRowSelection(id)
+        }
+    }
+
+    func clearCurrentModuleSearch() {
+        searchText = ""
+        moduleSearchTextByModule[selection] = ""
+    }
+
+    func revealSelectedSpeciesInSidebar() {
+        clearCurrentModuleSearch()
+    }
+
+    func revealSelectedMoveInSidebar() {
+        selectedMoveWorkbenchFilter = .all
+        clearCurrentModuleSearch()
+    }
+
+    private func storeSearchTextForCurrentModule() {
+        moduleSearchTextByModule[selection] = searchText
+    }
+
+    private func applySearchBehavior(
+        _ behavior: WorkbenchSearchBehavior,
+        for module: WorkbenchModule,
+        targetIdentifier: String? = nil
+    ) {
+        switch behavior {
+        case .preserve:
+            break
+        case .restoreModule:
+            searchText = moduleSearchTextByModule[module] ?? ""
+        case .replace(let value):
+            searchText = value
+            moduleSearchTextByModule[module] = value
+        case .replaceTargetIdentifier:
+            let value = targetIdentifier ?? ""
+            searchText = value
+            moduleSearchTextByModule[module] = value
+        case .clear:
+            searchText = ""
+            moduleSearchTextByModule[module] = ""
+        }
+    }
+
+    private func recordRecentModule(_ module: WorkbenchModule) {
+        recentModules.removeAll { $0 == module }
+        recentModules.insert(module, at: 0)
+        recentModules = Array(recentModules.prefix(6))
+    }
+
+    private func recordRecentTarget(_ target: WorkbenchRecentTarget?) {
+        guard let target else { return }
+        recentWorkbenchTargets.removeAll { $0.id == target.id }
+        recentWorkbenchTargets.insert(target, at: 0)
+        recentWorkbenchTargets = Array(recentWorkbenchTargets.prefix(18))
+    }
+
     func requestProjectSelection(_ projectID: String) {
         guard projectID != selectedProjectID else { return }
         if hasStagedMapEdits {
             pendingMapNavigation = .project(projectID)
+            clearPendingMapNavigationContext()
         } else {
-            selectedProjectID = projectID
-            prepareForSelectedProjectChange()
-            selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
-            resetPatchManifestReportForProjectChange()
-            resetGraphicsImportPackagePlanForProjectChange()
-            resetSidebarSelectionsForProjectChange()
-            resourceAssetCategory = Self.allResourceAssetCategories
-            selectedResourceAssetID = nil
-            pendingRelatedMapTargetID = nil
-            pendingResourceAssetFocus = nil
-            resourceAssetRowsCache = nil
-            refreshSelectedSpeciesSelection()
-            refreshSelectedTrainerSelection()
-            refreshSelectedMoveSelection()
-            refreshSelectedItemSelection()
-            loadSavedWorkspaceForSelectedProject()
-            latestSpeciesEditPlan = nil
-            latestSpeciesApplyResult = nil
-            latestTrainerEditPlan = nil
-            latestTrainerApplyResult = nil
-            latestMoveEditPlan = nil
-            latestMoveApplyResult = nil
-            latestItemEditPlan = nil
-            latestItemApplyResult = nil
-            updateAssetCatalogLoadStatusForSelection()
-            loadSelectedModuleDataIfNeeded()
+            applyProjectSelection(projectID)
         }
     }
 
-    func requestMapSelection(_ mapID: String) {
-        guard mapID != selectedMapID else { return }
+    private func applyProjectSelection(_ projectID: String) {
+        selectedProjectID = projectID
+        prepareForSelectedProjectChange()
+        selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
+        resetPatchManifestReportForProjectChange()
+        resetGraphicsImportPackagePlanForProjectChange()
+        resetSidebarSelectionsForProjectChange()
+        resourceAssetCategory = Self.allResourceAssetCategories
+        selectedResourceAssetID = nil
+        pendingRelatedMapTargetID = nil
+        pendingResourceAssetFocus = nil
+        resourceAssetRowsCache = nil
+        refreshSelectedSpeciesSelection()
+        refreshSelectedTrainerSelection()
+        refreshSelectedMoveSelection()
+        refreshSelectedItemSelection()
+        loadSavedWorkspaceForSelectedProject()
+        latestSpeciesEditPlan = nil
+        latestSpeciesApplyResult = nil
+        latestTrainerEditPlan = nil
+        latestTrainerApplyResult = nil
+        latestMoveEditPlan = nil
+        latestMoveApplyResult = nil
+        latestItemEditPlan = nil
+        latestItemApplyResult = nil
+        updateAssetCatalogLoadStatusForSelection()
+        loadSelectedModuleDataIfNeeded()
+    }
+
+    @discardableResult
+    func requestMapSelection(
+        _ mapID: String,
+        source: String? = nil,
+        deferredSearch: WorkbenchSearchBehavior? = nil
+    ) -> Bool {
+        guard mapID != selectedMapID else { return true }
         if hasStagedMapEdits {
             pendingMapNavigation = .map(mapID)
+            pendingMapNavigationSource = source
+            pendingMapNavigationSearchBehavior = deferredSearch
+            pendingMapNavigationSearchIdentifier = mapID
+            pendingMapNavigationShouldRefreshScriptReadiness = false
+            return false
         } else {
             selectedMapID = mapID
+            recordRecentTarget(recentMapTarget(for: mapID, source: source))
+            return true
         }
     }
 
     func requestSpeciesSelection(_ speciesID: String) {
         guard speciesID != selectedSpeciesID else { return }
         selectedSpeciesID = speciesID
+        recordRecentTarget(recentSpeciesTarget(for: speciesID))
         latestSpeciesEditPlan = nil
         latestSpeciesApplyResult = nil
     }
@@ -1869,6 +2196,7 @@ final class WorkbenchStore: ObservableObject {
     func requestMoveSelection(_ moveID: String) {
         guard moveID != selectedMoveID else { return }
         selectedMoveID = moveID
+        recordRecentTarget(recentMoveTarget(for: moveID))
         latestMoveEditPlan = nil
         latestMoveApplyResult = nil
     }
@@ -1882,10 +2210,14 @@ final class WorkbenchStore: ObservableObject {
 
     func requestResourceAssetSelection(_ assetID: ResourceAssetRowViewState.ID?) {
         selectedResourceAssetID = assetID
+        if let assetID {
+            recordRecentTarget(recentResourceAssetTarget(for: assetID))
+        }
     }
 
     func requestResourceLibraryEntrySelection(_ entryID: ResourceLibraryEntryViewState.ID) {
         selectedResourceLibraryEntryID = entryID
+        recordRecentTarget(recentResourceEntryTarget(for: entryID))
     }
 
     func requestScriptSourceSelection(_ sourceID: String) {
@@ -2144,7 +2476,7 @@ final class WorkbenchStore: ObservableObject {
     func navigateToAsset(_ asset: ResourceAssetRowViewState) {
         guard let targetModule = asset.targetModule else { return }
         selectedResourceAssetID = asset.id
-        selection = targetModule
+        selectWorkbenchModule(targetModule, search: .preserve)
         switch targetModule {
         case .maps:
             navigateToMapAssetTarget(asset.targetID)
@@ -2157,9 +2489,9 @@ final class WorkbenchStore: ObservableObject {
         case .moves:
             navigateToMoveAssetTarget(asset.targetID ?? asset.path)
         case .graphics, .build, .text, .items:
-            searchText = asset.targetID ?? asset.path
+            applySearchBehavior(.replace(asset.targetID ?? asset.path), for: targetModule)
         default:
-            searchText = asset.targetID ?? asset.path
+            applySearchBehavior(.replace(asset.targetID ?? asset.path), for: targetModule)
             break
         }
     }
@@ -2167,9 +2499,10 @@ final class WorkbenchStore: ObservableObject {
     func navigateToResourceAsset(path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        selection = .resources
+        selectWorkbenchModule(.resources, search: .preserve)
+        selectedResourceLibraryMode = .assets
         resourceAssetCategory = Self.allResourceAssetCategories
-        searchText = trimmed
+        applySearchBehavior(.replace(trimmed), for: .resources)
         if !selectResourceAsset(matching: trimmed) {
             pendingResourceAssetFocus = trimmed
             loadSelectedAssetCatalogIfNeeded()
@@ -2181,13 +2514,15 @@ final class WorkbenchStore: ObservableObject {
             loadSelectedMapCatalogIfNeeded()
             return
         }
-        searchText = targetID
         if let catalog = selectedMapCatalog,
            let mapID = Self.mapID(forRelatedTarget: targetID, in: catalog)
         {
             pendingRelatedMapTargetID = nil
-            requestMapSelection(mapID)
+            if requestMapSelection(mapID, source: "Resources", deferredSearch: .replace(targetID)) {
+                applySearchBehavior(.replace(targetID), for: .maps)
+            }
         } else {
+            applySearchBehavior(.replace(targetID), for: .maps)
             pendingRelatedMapTargetID = targetID
             loadSelectedMapCatalogIfNeeded()
         }
@@ -2208,36 +2543,36 @@ final class WorkbenchStore: ObservableObject {
 
     private func navigateToPokemonAssetTarget(_ targetID: String?) {
         guard let targetID, !targetID.isEmpty else { return }
-        searchText = targetID
-        if selectedSpeciesCatalog == nil {
+        applySearchBehavior(.replace(targetID), for: .pokemon)
+        if let catalog = selectedSpeciesCatalog {
+            guard catalog.species.contains(where: { $0.speciesID == targetID }) else { return }
+            requestSpeciesSelection(targetID)
+        } else {
             loadSelectedSpeciesCatalogIfNeeded()
-        }
-        requestSpeciesSelection(targetID)
-        if selectedSpeciesCatalog?.species.contains(where: { $0.speciesID == targetID }) == true {
             requestSpeciesSelection(targetID)
         }
     }
 
     private func navigateToTrainerAssetTarget(_ targetID: String?) {
         guard let targetID, !targetID.isEmpty else { return }
-        searchText = targetID
-        if selectedTrainerCatalog == nil {
+        applySearchBehavior(.replace(targetID), for: .trainers)
+        if let catalog = selectedTrainerCatalog {
+            guard catalog.trainers.contains(where: { $0.trainerID == targetID }) else { return }
+            requestTrainerSelection(targetID)
+        } else {
             loadSelectedTrainerCatalogIfNeeded()
-        }
-        requestTrainerSelection(targetID)
-        if selectedTrainerCatalog?.trainers.contains(where: { $0.trainerID == targetID }) == true {
             requestTrainerSelection(targetID)
         }
     }
 
     private func navigateToMoveAssetTarget(_ targetID: String?) {
         guard let targetID, !targetID.isEmpty else { return }
-        searchText = targetID
-        if selectedMoveCatalog == nil {
+        applySearchBehavior(.replace(targetID), for: .moves)
+        if let catalog = selectedMoveCatalog {
+            guard catalog.moves.contains(where: { $0.moveID == targetID }) else { return }
+            requestMoveSelection(targetID)
+        } else {
             loadSelectedMoveCatalogIfNeeded()
-        }
-        requestMoveSelection(targetID)
-        if selectedMoveCatalog?.moves.contains(where: { $0.moveID == targetID }) == true {
             requestMoveSelection(targetID)
         }
     }
@@ -2257,6 +2592,72 @@ final class WorkbenchStore: ObservableObject {
         guard let pendingResourceAssetFocus else { return }
         _ = selectResourceAsset(matching: pendingResourceAssetFocus)
         self.pendingResourceAssetFocus = nil
+    }
+
+    private func recentMapTarget(for mapID: String, source: String? = nil) -> WorkbenchRecentTarget {
+        let map = selectedMapCatalog?.maps.first { $0.id == mapID }
+        let subtitleParts = [
+            source,
+            map?.groupName,
+            map?.layout?.name
+        ].compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return WorkbenchRecentTarget(
+            target: .map(mapID),
+            module: .maps,
+            title: map?.name ?? mapID,
+            subtitle: subtitleParts.joined(separator: " · "),
+            systemImage: WorkbenchModule.maps.systemImage
+        )
+    }
+
+    private func recentSpeciesTarget(for speciesID: String) -> WorkbenchRecentTarget {
+        let species = selectedSpeciesCatalog?.species.first { $0.speciesID == speciesID }
+        return WorkbenchRecentTarget(
+            target: .species(speciesID),
+            module: .pokemon,
+            title: species?.displayName ?? speciesID,
+            subtitle: speciesID,
+            systemImage: species?.isEditable == true ? "pencil" : "lock"
+        )
+    }
+
+    private func recentMoveTarget(for moveID: String) -> WorkbenchRecentTarget {
+        let move = selectedMoveCatalog?.moves.first { $0.moveID == moveID }
+        let learnerText = move.map { "\($0.learnerCount) learners" } ?? "Move"
+        return WorkbenchRecentTarget(
+            target: .move(moveID),
+            module: .moves,
+            title: move?.displayName ?? moveID,
+            subtitle: "\(moveID) · \(learnerText)",
+            systemImage: WorkbenchModule.moves.systemImage
+        )
+    }
+
+    private func recentResourceAssetTarget(for identifier: String) -> WorkbenchRecentTarget {
+        let asset = selectedAssetCatalog?.rows.first {
+            $0.id == identifier || $0.path == identifier || $0.targetID == identifier || $0.title == identifier
+        }
+        return WorkbenchRecentTarget(
+            target: .resourceAsset(asset?.id ?? identifier),
+            module: .resources,
+            title: asset?.title ?? identifier,
+            subtitle: asset.map { "\($0.category) · \($0.availabilitySummary)" } ?? "Resource asset",
+            systemImage: WorkbenchModule.resources.systemImage
+        )
+    }
+
+    private func recentResourceEntryTarget(for entryID: String) -> WorkbenchRecentTarget {
+        let entry = resourceLibrary?.entries.first { $0.id == entryID || $0.path == entryID }
+        return WorkbenchRecentTarget(
+            target: .resourceEntry(entry?.id ?? entryID),
+            module: .resources,
+            title: entry?.title ?? entryID,
+            subtitle: entry.map { "\($0.family) · \($0.parseStatus)" } ?? "Resource entry",
+            systemImage: WorkbenchModule.resources.systemImage
+        )
     }
 
     private static func mapID(forRelatedTarget targetID: String, in catalog: MapCatalogViewState) -> String? {
@@ -2282,11 +2683,13 @@ final class WorkbenchStore: ObservableObject {
 
     func cancelPendingMapNavigation() {
         pendingMapNavigation = nil
+        clearPendingMapNavigationContext()
     }
 
     func previewBeforePendingMapNavigation() {
         previewSelectedMapMutationPlan()
         pendingMapNavigation = nil
+        clearPendingMapNavigationContext()
         selection = .maps
     }
 
@@ -2302,37 +2705,42 @@ final class WorkbenchStore: ObservableObject {
 
     func discardMapEditsAndContinueNavigation() {
         guard let pendingMapNavigation else { return }
+        let pendingSearchBehavior = pendingMapNavigationSearchBehavior
+        let pendingSearchIdentifier = pendingMapNavigationSearchIdentifier
+        let pendingSource = pendingMapNavigationSource
+        let shouldRefreshScriptReadiness = pendingMapNavigationShouldRefreshScriptReadiness
         discardMapEdits()
         self.pendingMapNavigation = nil
+        clearPendingMapNavigationContext()
 
         switch pendingMapNavigation {
         case .project(let projectID):
-            selectedProjectID = projectID
-            prepareForSelectedProjectChange()
-            selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
-            resetPatchManifestReportForProjectChange()
-            resetGraphicsImportPackagePlanForProjectChange()
-            resetSidebarSelectionsForProjectChange()
-            resourceAssetCategory = Self.allResourceAssetCategories
-            resourceAssetRowsCache = nil
-            refreshSelectedSpeciesSelection()
-            refreshSelectedTrainerSelection()
-            refreshSelectedMoveSelection()
-            refreshSelectedItemSelection()
-            loadSavedWorkspaceForSelectedProject()
-            latestSpeciesEditPlan = nil
-            latestSpeciesApplyResult = nil
-            latestTrainerEditPlan = nil
-            latestTrainerApplyResult = nil
-            latestMoveEditPlan = nil
-            latestMoveApplyResult = nil
-            latestItemEditPlan = nil
-            latestItemApplyResult = nil
-            updateAssetCatalogLoadStatusForSelection()
-            loadSelectedModuleDataIfNeeded()
+            applyProjectSelection(projectID)
         case .map(let mapID):
             selectedMapID = mapID
+            recordRecentTarget(recentMapTarget(for: mapID, source: pendingSource ?? "Navigation"))
+            if let pendingSearchBehavior {
+                applySearchBehavior(
+                    pendingSearchBehavior,
+                    for: .maps,
+                    targetIdentifier: pendingSearchIdentifier ?? mapID
+                )
+            }
+            if shouldRefreshScriptReadiness, scriptReadinessTargetMode == .map {
+                refreshSelectedScriptReadinessReport()
+            }
+        case .refreshMaps:
+            if refreshSelectedMapCatalog(ignoringStagedEdits: true) {
+                loadSelectedMapCatalogIfNeeded()
+            }
         }
+    }
+
+    private func clearPendingMapNavigationContext() {
+        pendingMapNavigationSearchBehavior = nil
+        pendingMapNavigationSearchIdentifier = nil
+        pendingMapNavigationSource = nil
+        pendingMapNavigationShouldRefreshScriptReadiness = false
     }
 
     func openProject(path: String) {
@@ -2369,28 +2777,13 @@ final class WorkbenchStore: ObservableObject {
             if userSettings.resourceAutoRefreshOnOpen {
                 refreshResourceLibrary()
             }
-            selectedProjectID = summary.id
-            prepareForSelectedProjectChange()
-            resetPatchManifestReportForProjectChange()
-            resetGraphicsImportPackagePlanForProjectChange()
-            resetSidebarSelectionsForProjectChange()
-            refreshSelectedMapCatalog()
-            refreshSelectedScriptReadinessReportIfVisible()
-            refreshSelectedSpeciesSelection()
-            refreshSelectedTrainerSelection()
-            refreshSelectedMoveSelection()
-            refreshSelectedItemSelection()
-            loadSavedWorkspaceForSelectedProject()
-            latestSpeciesEditPlan = nil
-            latestSpeciesApplyResult = nil
-            latestTrainerEditPlan = nil
-            latestTrainerApplyResult = nil
-            latestMoveEditPlan = nil
-            latestMoveApplyResult = nil
-            latestItemEditPlan = nil
-            latestItemApplyResult = nil
-            updateAssetCatalogLoadStatusForSelection()
-            loadSelectedModuleDataIfNeeded()
+            if hasStagedMapEdits {
+                pendingMapNavigation = .project(summary.id)
+                clearPendingMapNavigationContext()
+                projectIndexStatus = .loaded(indexedProjects.count)
+                return
+            }
+            applyProjectSelection(summary.id)
             projectIndexStatus = .loaded(indexedProjects.count)
         } catch {
             projectIndexStatus = .failed(error.localizedDescription)
@@ -2430,8 +2823,9 @@ final class WorkbenchStore: ObservableObject {
             refreshResourceLibrary()
             loadSelectedAssetCatalogIfNeeded(force: true)
         case .maps:
-            refreshSelectedMapCatalog()
-            loadSelectedMapVisualDocument()
+            if refreshSelectedMapCatalog() {
+                loadSelectedMapCatalogIfNeeded()
+            }
         case .scripts:
             loadSelectedSourceGraphIfNeeded(force: true)
             refreshSelectedScriptReadinessReport()
@@ -2590,7 +2984,11 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func requestScriptReadinessMapSelection(_ mapID: String) {
-        selectedMapID = mapID
+        let didSelect = requestMapSelection(mapID, source: "Scripts")
+        guard didSelect else {
+            pendingMapNavigationShouldRefreshScriptReadiness = scriptReadinessTargetMode == .map
+            return
+        }
         if scriptReadinessTargetMode == .map {
             refreshSelectedScriptReadinessReport()
         }
@@ -3790,7 +4188,13 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
-    func refreshSelectedMapCatalog() {
+    @discardableResult
+    func refreshSelectedMapCatalog(ignoringStagedEdits: Bool = false) -> Bool {
+        if hasStagedMapEdits && !ignoringStagedEdits {
+            pendingMapNavigation = .refreshMaps
+            clearPendingMapNavigationContext()
+            return false
+        }
         mapCatalogTask?.cancel()
         mapVisualTask?.cancel()
         selectedMapCatalog = nil
@@ -3800,6 +4204,7 @@ final class WorkbenchStore: ObservableObject {
         selectedMapID = ""
         mapCatalogStatus = selectedIndexedProject == nil ? .idle : .loading
         clearSelectedMapVisualDocument()
+        return true
     }
 
     func loadSelectedMapCatalogIfNeeded() {
@@ -3855,7 +4260,9 @@ final class WorkbenchStore: ObservableObject {
                     selectedMapID = viewState.maps.first?.id ?? ""
                 }
                 mapCatalogStatus = .loaded(viewState.mapCount)
-                loadSelectedMapVisualDocument()
+                if !hasStagedMapEdits {
+                    loadSelectedMapVisualDocumentIfNeeded()
+                }
                 refreshSelectedScriptReadinessReportIfVisible()
             } catch {
                 guard let self,

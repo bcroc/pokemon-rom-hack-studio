@@ -44,8 +44,10 @@ extension WorkbenchStore {
             return
         }
 
-        selection = action.targetModule
-        searchText = action.searchText ?? ""
+        selectWorkbenchModule(
+            action.targetModule,
+            search: action.searchText.map(WorkbenchSearchBehavior.replace) ?? .restoreModule
+        )
         if let buildTab = action.buildTab {
             selectedBuildWorkbenchTab = buildTab
         }

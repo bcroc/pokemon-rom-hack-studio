@@ -13,6 +13,9 @@ struct PokemonMovesWorkbenchView: View {
     let fallbackRecords: [WorkbenchRecord]
     let onLoadCatalog: () -> Void
     let onUpdateDraft: (MoveEditDraft) -> Void
+    let onRevealMoveInSidebar: (String) -> Void
+    let onFocusSpecies: (String) -> Void
+    let onNavigateToResourceAsset: (String) -> Void
 
     var body: some View {
         Group {
@@ -29,22 +32,15 @@ struct PokemonMovesWorkbenchView: View {
     }
 
     private func indexedMoves(_ catalog: MoveCatalogViewState) -> some View {
-        VStack(spacing: 0) {
-            header(catalog)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 18)
+        GeometryReader { proxy in
+            let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
+            ScrollView {
+                VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+                    header(catalog, layoutMode: layoutMode)
 
-            Divider()
-
-            HStack(spacing: 0) {
-                moveList
-                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 360)
-
-                Divider()
-
-                ScrollView {
                     if let selectedMove {
-                        moveDetail(selectedMove)
+                        selectedMoveFilterNotice(selectedMove)
+                        moveDetail(selectedMove, layoutMode: layoutMode)
                     } else {
                         ContentUnavailableView(
                             "No Move Selected",
@@ -54,37 +50,40 @@ struct PokemonMovesWorkbenchView: View {
                         .frame(maxWidth: .infinity, minHeight: 360)
                     }
                 }
+                .padding(layoutMode.contentPadding)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
     }
 
-    private func header(_ catalog: MoveCatalogViewState) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Moves")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("\(catalog.projectTitle) read-only battle move definitions and learnability.")
-                        .foregroundStyle(.secondary)
-                    Text(catalog.rootPath)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
+    @ViewBuilder
+    private func header(_ catalog: MoveCatalogViewState, layoutMode: WorkbenchLayoutMode) -> some View {
+        let metricMinimum: CGFloat = layoutMode.isCompact ? 120 : 150
 
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 8) {
+        VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+            if layoutMode.isCompact {
+                VStack(alignment: .leading, spacing: 10) {
+                    titleBlock(catalog)
                     StatusPill(state: catalog.status)
-                    Text(catalog.profile)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    filterControls(catalog)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    titleBlock(catalog)
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 8) {
+                        StatusPill(state: catalog.status)
+                        Text(catalog.profile)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        filterControls(catalog)
+                    }
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: metricMinimum), spacing: 12)], spacing: 12) {
                 MetricCard(title: "Moves", value: "\(catalog.moveCount)", detail: "\(moves.count) visible")
                 MetricCard(title: "TM/HM", value: "\(catalog.tmhmMoveCount)", detail: "Moves with machine learners")
                 MetricCard(title: "Tutor", value: "\(catalog.tutorMoveCount)", detail: "Moves with tutor learners")
@@ -94,8 +93,23 @@ struct PokemonMovesWorkbenchView: View {
         }
     }
 
-    private var moveList: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func titleBlock(_ catalog: MoveCatalogViewState) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Moves")
+                .font(.largeTitle.weight(.semibold))
+            Text("\(catalog.projectTitle) read-only battle move definitions and learnability.")
+                .foregroundStyle(.secondary)
+            Text(catalog.rootPath)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func filterControls(_ catalog: MoveCatalogViewState) -> some View {
+        HStack(spacing: 8) {
             Picker("Filter", selection: $filter) {
                 ForEach(MoveWorkbenchFilter.allCases) { filter in
                     Text(filter.rawValue).tag(filter)
@@ -103,65 +117,45 @@ struct PokemonMovesWorkbenchView: View {
             }
             .pickerStyle(.menu)
 
-            if moves.isEmpty {
-                ContentUnavailableView(
-                    "No Matching Moves",
-                    systemImage: "magnifyingglass",
-                    description: Text("No move rows match the current search and filter.")
-                )
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(moves) { move in
-                            moveListRow(move)
-                        }
-                    }
-                    .padding(.bottom, 12)
-                }
-            }
+            Text("\(moves.count) of \(catalog.moveCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
-        .padding(16)
-        .background(.background)
     }
 
-    private func moveListRow(_ move: MoveDetailViewState) -> some View {
-        Button {
-            selectedMoveID = move.moveID
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: WorkbenchModule.moves.systemImage)
+    @ViewBuilder
+    private func selectedMoveFilterNotice(_ move: MoveDetailViewState) -> some View {
+        if !isMoveVisible(move) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
                     .foregroundStyle(.secondary)
-                    .frame(width: 18)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(move.displayName)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(move.moveID)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Selected Move Hidden")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(move.displayName) is selected but is outside the current search or filter.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Text("\(move.tmhmLearners.count) TM/HM · \(move.tutorLearners.count) tutor · \(move.learnedBy.count) learned")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
 
-                Spacer(minLength: 6)
-                StatusPill(state: move.status)
+                Spacer(minLength: 8)
+
+                Button("Reveal", systemImage: "scope") {
+                    onRevealMoveInSidebar(move.moveID)
+                }
+                .buttonStyle(.bordered)
             }
-            .padding(10)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(selectedMoveID == move.moveID ? Color.accentColor.opacity(0.16) : Color.clear)
-            )
+            .padding(12)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
     }
 
-    private func moveDetail(_ move: MoveDetailViewState) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+    private func isMoveVisible(_ move: MoveDetailViewState) -> Bool {
+        moves.contains { $0.moveID == move.moveID }
+    }
+
+    private func moveDetail(_ move: MoveDetailViewState, layoutMode: WorkbenchLayoutMode) -> some View {
+        VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(move.displayName)
@@ -176,26 +170,32 @@ struct PokemonMovesWorkbenchView: View {
                 StatusPill(state: move.status)
             }
 
-            EditorSection(title: "Battle Facts") {
-                FactGrid(facts: move.battleFacts.isEmpty ? move.facts : move.battleFacts)
-            }
-
-            if let draft {
-                editSection(draft)
+            if layoutMode.isCompact {
+                battleFactsSection(move)
+                moveEditingSection
             } else {
-                EditorSection(title: "Editing") {
-                    Text("This move source shape is read-only.")
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 18) {
+                    battleFactsSection(move)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    moveEditingSection
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
 
-            learnerSection(title: "TM/HM", rows: move.tmhmLearners)
-            learnerSection(title: "Tutor", rows: move.tutorLearners)
-            learnerSection(title: "Learned By", rows: move.learnedBy)
+            learnerSection(title: "TM/HM", rows: move.tmhmLearners, layoutMode: layoutMode)
+            learnerSection(title: "Tutor", rows: move.tutorLearners, layoutMode: layoutMode)
+            learnerSection(title: "Learned By", rows: move.learnedBy, layoutMode: layoutMode)
 
             EditorSection(title: "Source") {
                 VStack(alignment: .leading, spacing: 10) {
-                    SourceLocationView(source: move.source)
+                    HStack(alignment: .top, spacing: 10) {
+                        SourceLocationView(source: move.source)
+                        Spacer(minLength: 8)
+                        Button("Resources", systemImage: "doc.text.magnifyingglass") {
+                            onNavigateToResourceAsset(move.source.path)
+                        }
+                        .disabled(move.source.path.isEmpty)
+                    }
                     sourcePreviewText(move.sourcePreview)
                 }
             }
@@ -213,7 +213,24 @@ struct PokemonMovesWorkbenchView: View {
                 }
             }
         }
-        .padding(24)
+    }
+
+    private func battleFactsSection(_ move: MoveDetailViewState) -> some View {
+        EditorSection(title: "Battle Facts") {
+            FactGrid(facts: move.battleFacts.isEmpty ? move.facts : move.battleFacts)
+        }
+    }
+
+    @ViewBuilder
+    private var moveEditingSection: some View {
+        if let draft {
+            editSection(draft)
+        } else {
+            EditorSection(title: "Editing") {
+                Text("This move source shape is read-only.")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func editSection(_ draft: MoveEditDraft) -> some View {
@@ -298,13 +315,20 @@ struct PokemonMovesWorkbenchView: View {
         )
     }
 
-    private func learnerSection(title: String, rows: [MoveLearnerRowViewState]) -> some View {
+    private func learnerSection(
+        title: String,
+        rows: [MoveLearnerRowViewState],
+        layoutMode: WorkbenchLayoutMode
+    ) -> some View {
         EditorSection(title: title) {
             if rows.isEmpty {
                 Text("No \(title.lowercased()) learners indexed.")
                     .foregroundStyle(.secondary)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 10)], spacing: 10) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: layoutMode.isCompact ? 170 : 210), spacing: 10)],
+                    spacing: 10
+                ) {
                     ForEach(rows.prefix(120)) { row in
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: row.bucket == .tmhm ? "disc" : "sparkle.magnifyingglass")
@@ -312,9 +336,14 @@ struct PokemonMovesWorkbenchView: View {
                                 .frame(width: 18)
 
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(row.speciesID)
-                                    .font(.callout.weight(.medium))
-                                    .lineLimit(1)
+                                Button {
+                                    onFocusSpecies(row.speciesID)
+                                } label: {
+                                    Text(row.speciesID)
+                                        .font(.callout.weight(.medium))
+                                        .lineLimit(1)
+                                }
+                                .buttonStyle(.borderless)
                                 Text(row.bucketTitle)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -323,6 +352,13 @@ struct PokemonMovesWorkbenchView: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                 SourceLocationView(source: row.source)
+                                if !row.source.path.isEmpty {
+                                    Button("Source", systemImage: "doc.text.magnifyingglass") {
+                                        onNavigateToResourceAsset(row.source.path)
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.borderless)
+                                }
                             }
 
                             Spacer(minLength: 4)

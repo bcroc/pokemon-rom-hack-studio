@@ -17,7 +17,7 @@ struct ContentView: View {
             store.loadSelectedModuleDataIfNeeded()
         }
         .confirmationDialog(
-            store.pendingMapNavigation?.title ?? "Staged map edits",
+            store.pendingMapNavigationTitle,
             isPresented: Binding(
                 get: { store.pendingMapNavigation != nil },
                 set: { isPresented in
@@ -38,7 +38,7 @@ struct ContentView: View {
                 store.cancelPendingMapNavigation()
             }
         } message: { pending in
-            Text(pending.message)
+            Text(store.pendingMapNavigationMessage)
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -73,7 +73,7 @@ struct ContentView: View {
                 navigationMenu
 
                 DiagnosticStatusButton(summary: store.diagnosticSummary) {
-                    store.selection = .issues
+                    store.selectWorkbenchModule(.issues)
                 }
             }
         }
@@ -201,8 +201,7 @@ struct ContentView: View {
                 Section(group.rawValue) {
                     ForEach(group.modules) { module in
                         Button {
-                            store.selection = module
-                            store.loadSelectedModuleDataIfNeeded()
+                            store.selectWorkbenchModule(module)
                         } label: {
                             Label(module.title, systemImage: module.systemImage)
                         }
@@ -213,15 +212,15 @@ struct ContentView: View {
             Divider()
 
             Button("Build Target", systemImage: "hammer") {
-                store.selection = .build
+                store.selectWorkbenchModule(.build)
             }
 
             Button("Run Target", systemImage: "play.fill") {
-                store.selection = .build
+                store.selectWorkbenchModule(.build)
             }
 
             Button("Show Diagnostics", systemImage: "checkmark.seal") {
-                store.selection = .issues
+                store.selectWorkbenchModule(.issues)
             }
         } label: {
             Label(store.selection.title, systemImage: store.selection.systemImage)

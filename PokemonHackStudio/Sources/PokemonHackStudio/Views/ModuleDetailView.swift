@@ -132,7 +132,15 @@ struct ModuleDetailView: View {
                 onLoadCatalog: {
                     store.loadSelectedMoveCatalogIfNeeded()
                 },
-                onUpdateDraft: store.updateSelectedMoveDraft
+                onUpdateDraft: store.updateSelectedMoveDraft,
+                onRevealMoveInSidebar: { moveID in
+                    store.selectedMoveWorkbenchFilter = .all
+                    store.focusWorkbenchTarget(.move(moveID), search: .replace(moveID))
+                },
+                onFocusSpecies: { speciesID in
+                    store.focusSpecies(speciesID)
+                },
+                onNavigateToResourceAsset: store.navigateToResourceAsset
             )
         case .pokemon:
             PokemonSpeciesWorkbenchView(
@@ -151,6 +159,9 @@ struct ModuleDetailView: View {
                     store.loadSelectedSpeciesCatalogIfNeeded()
                 },
                 onUpdateDraft: store.updateSelectedSpeciesDraft,
+                onFocusSpecies: { speciesID in
+                    store.focusSpecies(speciesID)
+                },
                 onNavigateToResourceAsset: store.navigateToResourceAsset
             )
         case .encounters:

@@ -8,12 +8,19 @@ struct WorkbenchSidebarPanel: View {
     @State private var scriptDraftKey = ""
     @State private var scriptDraftText = ""
 
+    private static let recentLimit = 5
+    private static let mapRowLimit = 260
+    private static let speciesRowLimit = 220
+    private static let moveRowLimit = 260
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 projectSummary
                 moduleNavigation
+                recentModuleNavigation
                 sidebarSearch
+                currentTargetNavigation
                 objectNavigation
                 contextualTools
                 selectionProperties
@@ -84,10 +91,35 @@ struct WorkbenchSidebarPanel: View {
         }
     }
 
+    private var recentModuleNavigation: some View {
+        let modules = store.recentModules.isEmpty ? [store.selection] : store.recentModules
+        return sidebarSection("Recent Modules", systemImage: "clock.arrow.circlepath") {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(modules.prefix(Self.recentLimit)) { module in
+                    moduleRow(module, compact: true)
+                }
+            }
+        }
+    }
+
     private var sidebarSearch: some View {
         sidebarSection("Find", systemImage: "magnifyingglass") {
             TextField("Search current module", text: $store.searchText)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    @ViewBuilder
+    private var currentTargetNavigation: some View {
+        switch store.selection {
+        case .maps:
+            currentAndRecentMapsNavigation
+        case .pokemon:
+            currentAndRecentPokemonNavigation
+        case .moves:
+            currentAndRecentMovesNavigation
+        default:
+            EmptyView()
         }
     }
 
@@ -215,9 +247,11 @@ struct WorkbenchSidebarPanel: View {
         }
     }
 
-    private func moduleRow(_ module: WorkbenchModule) -> some View {
-        Button {
-            store.selection = module
+    private func moduleRow(_ module: WorkbenchModule, compact: Bool = false) -> some View {
+        let isSelected = store.selection == module
+        let dirtyCount = dirtyCount(for: module)
+        return Button {
+            selectModule(module)
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: module.systemImage)
@@ -232,14 +266,20 @@ struct WorkbenchSidebarPanel: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
+                if let dirtyCount {
+                    dirtyCountBadge(dirtyCount)
+                }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.vertical, compact ? 5 : 6)
             .contentShape(Rectangle())
-            .background(selectionBackground(store.selection == module))
+            .background(selectionBackground(isSelected))
         }
         .buttonStyle(.plain)
         .help(module.subtitle)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(module.title)
+        .accessibilityValue(moduleAccessibilityValue(isSelected: isSelected, dirtyCount: dirtyCount))
     }
 
     private var dashboardNavigation: some View {
@@ -253,6 +293,159 @@ struct WorkbenchSidebarPanel: View {
                     isSelected: store.selectedGuidedFlowID == flow.id
                 ) {
                     store.requestGuidedFlowSelection(flow.id)
+                }
+            }
+        }
+    }
+
+    private var currentAndRecentMapsNavigation: some View {
+        sidebarSection("Current Map", systemImage: WorkbenchModule.maps.systemImage) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let map = currentMap {
+                    sidebarButton(
+                        id: "current-map-\(map.id)",
+                        title: map.name,
+                        subtitle: map.mapID,
+                        systemImage: "scope",
+                        isSelected: store.selectedMapID == map.id,
+                        badgeText: store.hasStagedMapEdits ? "Dirty" : nil
+                    ) {
+                        selectMap(map.id)
+                    }
+
+                    if currentMapIsHidden(map) {
+                        hiddenTargetControls(
+                            detail: "Current map is hidden by the list filter or row limit.",
+                            canClear: !store.searchText.isEmpty,
+                            reveal: { revealMap(map) },
+                            clear: { store.clearCurrentModuleSearch() }
+                        )
+                    }
+                } else {
+                    emptySidebarText(store.mapCatalogStatus.label)
+                }
+
+                let recents = recentMaps(excluding: currentMap?.id)
+                if !recents.isEmpty {
+                    sidebarSubheading("Recent")
+                    ForEach(recents.prefix(Self.recentLimit)) { map in
+                        sidebarButton(
+                            id: "recent-map-\(map.id)",
+                            title: map.name,
+                            subtitle: "\(map.groupName) · \(map.mapID)",
+                            systemImage: "map",
+                            isSelected: store.selectedMapID == map.id,
+                            badgeText: store.hasStagedMapEdits && store.selectedMapID == map.id ? "Dirty" : nil
+                        ) {
+                            selectMap(map.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var currentAndRecentPokemonNavigation: some View {
+        sidebarSection("Current Pokemon", systemImage: WorkbenchModule.pokemon.systemImage) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    sidebarMetric("Visible", "\(store.filteredSpeciesDetails.count)")
+                    sidebarMetric("Dirty", "\(store.dirtySpeciesDraftCount)")
+                }
+
+                if let species = currentSpecies {
+                    sidebarButton(
+                        id: "current-species-\(species.speciesID)",
+                        title: species.displayName,
+                        subtitle: species.speciesID,
+                        systemImage: species.isEditable ? "pencil" : "lock",
+                        isSelected: selectedSpeciesID == species.speciesID,
+                        badgeText: dirtyBadgeText(forSpeciesID: species.speciesID)
+                    ) {
+                        selectSpecies(species.speciesID)
+                    }
+
+                    if currentSpeciesIsHidden(species) {
+                        hiddenTargetControls(
+                            detail: "Current Pokemon is hidden by search or the row limit.",
+                            canClear: !store.searchText.isEmpty,
+                            reveal: { revealSpecies(species) },
+                            clear: { store.clearCurrentModuleSearch() }
+                        )
+                    }
+                } else {
+                    emptySidebarText(store.speciesCatalogLoadStatus.label)
+                }
+
+                let recents = recentSpecies(excluding: currentSpecies?.speciesID)
+                if !recents.isEmpty {
+                    sidebarSubheading("Recent")
+                    ForEach(recents.prefix(Self.recentLimit), id: \.speciesID) { species in
+                        sidebarButton(
+                            id: "recent-species-\(species.speciesID)",
+                            title: species.displayName,
+                            subtitle: species.speciesID,
+                            systemImage: species.isEditable ? "pencil" : "lock",
+                            isSelected: selectedSpeciesID == species.speciesID,
+                            badgeText: dirtyBadgeText(forSpeciesID: species.speciesID)
+                        ) {
+                            selectSpecies(species.speciesID)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var currentAndRecentMovesNavigation: some View {
+        sidebarSection("Current Move", systemImage: WorkbenchModule.moves.systemImage) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    sidebarMetric("Visible", "\(store.filteredMoveDetails.count)")
+                    sidebarMetric("Dirty", "\(store.dirtyMoveDraftCount)")
+                }
+
+                if let move = currentMove {
+                    sidebarButton(
+                        id: "current-move-\(move.moveID)",
+                        title: move.displayName,
+                        subtitle: move.moveID,
+                        systemImage: move.isEditable ? "pencil" : "lock",
+                        isSelected: selectedMoveID == move.moveID,
+                        badgeText: dirtyBadgeText(forMoveID: move.moveID)
+                    ) {
+                        selectMove(move.moveID)
+                    }
+
+                    if currentMoveIsHidden(move) {
+                        hiddenTargetControls(
+                            detail: "Current move is hidden by search, filter, or the row limit.",
+                            canClear: !store.searchText.isEmpty || store.selectedMoveWorkbenchFilter != .all,
+                            reveal: { revealMove(move) },
+                            clear: {
+                                store.revealSelectedMoveInSidebar()
+                            }
+                        )
+                    }
+                } else {
+                    emptySidebarText(store.moveCatalogLoadStatus.label)
+                }
+
+                let recents = recentMoves(excluding: currentMove?.moveID)
+                if !recents.isEmpty {
+                    sidebarSubheading("Recent")
+                    ForEach(recents.prefix(Self.recentLimit)) { move in
+                        sidebarButton(
+                            id: "recent-move-\(move.moveID)",
+                            title: move.displayName,
+                            subtitle: "\(move.moveID) · \(move.learnerCount) learners",
+                            systemImage: move.isEditable ? "pencil" : "lock",
+                            isSelected: selectedMoveID == move.moveID,
+                            badgeText: dirtyBadgeText(forMoveID: move.moveID)
+                        ) {
+                            selectMove(move.moveID)
+                        }
+                    }
                 }
             }
         }
@@ -302,15 +495,16 @@ struct WorkbenchSidebarPanel: View {
     private var mapsNavigation: some View {
         sidebarSection("Maps", systemImage: WorkbenchModule.maps.systemImage) {
             if let catalog = store.selectedMapCatalog {
-                sidebarRows(filteredMaps(in: catalog), limit: 260) { map in
+                sidebarRows(filteredMaps(in: catalog), limit: Self.mapRowLimit) { map in
                     sidebarButton(
                         id: map.id,
                         title: map.name,
                         subtitle: "\(map.groupName) · \(map.layout?.name ?? "No layout")",
                         systemImage: "map",
-                        isSelected: store.selectedMapID == map.id
+                        isSelected: store.selectedMapID == map.id,
+                        badgeText: store.hasStagedMapEdits && store.selectedMapID == map.id ? "Dirty" : nil
                     ) {
-                        store.requestMapSelection(map.id)
+                        selectMap(map.id)
                     }
                 }
             } else {
@@ -321,15 +515,16 @@ struct WorkbenchSidebarPanel: View {
 
     private var pokemonNavigation: some View {
         sidebarSection("Pokemon", systemImage: WorkbenchModule.pokemon.systemImage) {
-            sidebarRows(store.filteredSpeciesDetails, limit: 220) { species in
+            sidebarRows(store.filteredSpeciesDetails, limit: Self.speciesRowLimit) { species in
                 sidebarButton(
                     id: species.speciesID,
                     title: species.displayName,
                     subtitle: species.speciesID,
                     systemImage: species.isEditable ? "pencil" : "lock",
-                    isSelected: store.selectedSpeciesDetail?.speciesID == species.speciesID
+                    isSelected: selectedSpeciesID == species.speciesID,
+                    badgeText: dirtyBadgeText(forSpeciesID: species.speciesID)
                 ) {
-                    store.requestSpeciesSelection(species.speciesID)
+                    selectSpecies(species.speciesID)
                 }
             }
         }
@@ -353,15 +548,16 @@ struct WorkbenchSidebarPanel: View {
 
     private var movesNavigation: some View {
         sidebarSection("Moves", systemImage: WorkbenchModule.moves.systemImage) {
-            sidebarRows(store.filteredMoveDetails, limit: 260) { move in
+            sidebarRows(store.filteredMoveDetails, limit: Self.moveRowLimit) { move in
                 sidebarButton(
                     id: move.moveID,
                     title: move.displayName,
                     subtitle: "\(move.moveID) · \(move.learnerCount) learners",
                     systemImage: WorkbenchModule.moves.systemImage,
-                    isSelected: store.selectedMoveDetail?.moveID == move.moveID
+                    isSelected: selectedMoveID == move.moveID,
+                    badgeText: dirtyBadgeText(forMoveID: move.moveID)
                 ) {
-                    store.requestMoveSelection(move.moveID)
+                    selectMove(move.moveID)
                 }
             }
 
@@ -995,6 +1191,44 @@ struct WorkbenchSidebarPanel: View {
         return catalog.maps.first { $0.id == store.selectedMapID } ?? catalog.maps.first
     }
 
+    private var currentMap: MapSummaryViewState? {
+        guard let catalog = store.selectedMapCatalog else { return nil }
+        if let selected = catalog.maps.first(where: { $0.id == store.selectedMapID }) {
+            return selected
+        }
+        return catalog.maps.first
+    }
+
+    private var currentSpecies: PokemonHackCore.SpeciesDetail? {
+        guard let catalog = store.selectedSpeciesCatalog else { return nil }
+        if let selected = catalog.species.first(where: { $0.speciesID == selectedSpeciesID }) {
+            return selected
+        }
+        return catalog.species.first
+    }
+
+    private var currentMove: MoveDetailViewState? {
+        guard let catalog = store.selectedMoveCatalog else { return nil }
+        if let selected = catalog.moves.first(where: { $0.moveID == selectedMoveID }) {
+            return selected
+        }
+        return catalog.moves.first
+    }
+
+    private var selectedSpeciesID: String {
+        if !store.selectedSpeciesID.isEmpty {
+            return store.selectedSpeciesID
+        }
+        return store.selectedSpeciesDetail?.speciesID ?? ""
+    }
+
+    private var selectedMoveID: String {
+        if !store.selectedMoveID.isEmpty {
+            return store.selectedMoveID
+        }
+        return store.selectedMoveDetail?.moveID ?? ""
+    }
+
     private var resourceCategoryOptions: [String] {
         [WorkbenchStore.allResourceAssetCategories] + (store.selectedAssetCatalog?.categoryTitles ?? [])
     }
@@ -1008,6 +1242,118 @@ struct WorkbenchSidebarPanel: View {
                 || (map.layout?.name.localizedCaseInsensitiveContains(store.searchText) == true)
                 || map.source.path.localizedCaseInsensitiveContains(store.searchText)
         }
+    }
+
+    private func currentMapIsHidden(_ map: MapSummaryViewState) -> Bool {
+        guard let catalog = store.selectedMapCatalog else { return false }
+        return !filteredMaps(in: catalog).prefix(Self.mapRowLimit).contains { $0.id == map.id }
+    }
+
+    private func currentSpeciesIsHidden(_ species: PokemonHackCore.SpeciesDetail) -> Bool {
+        !store.filteredSpeciesDetails.prefix(Self.speciesRowLimit).contains { $0.speciesID == species.speciesID }
+    }
+
+    private func currentMoveIsHidden(_ move: MoveDetailViewState) -> Bool {
+        !store.filteredMoveDetails.prefix(Self.moveRowLimit).contains { $0.moveID == move.moveID }
+    }
+
+    private func recentMaps(excluding currentID: String?) -> [MapSummaryViewState] {
+        guard let catalog = store.selectedMapCatalog else { return [] }
+        return store.recentMapTargets.compactMap { recent in
+            let id = recent.target.rawIdentifier
+            guard id != currentID else { return nil }
+            return catalog.maps.first { $0.id == id }
+        }
+    }
+
+    private func recentSpecies(excluding currentID: String?) -> [PokemonHackCore.SpeciesDetail] {
+        guard let catalog = store.selectedSpeciesCatalog else { return [] }
+        return store.recentSpeciesTargets.compactMap { recent in
+            let id = recent.target.rawIdentifier
+            guard id != currentID else { return nil }
+            return catalog.species.first { $0.speciesID == id }
+        }
+    }
+
+    private func recentMoves(excluding currentID: String?) -> [MoveDetailViewState] {
+        guard let catalog = store.selectedMoveCatalog else { return [] }
+        return store.recentMoveTargets.compactMap { recent in
+            let id = recent.target.rawIdentifier
+            guard id != currentID else { return nil }
+            return catalog.moves.first { $0.moveID == id }
+        }
+    }
+
+    private func selectModule(_ module: WorkbenchModule) {
+        store.selectWorkbenchModule(module)
+    }
+
+    private func selectMap(_ mapID: String) {
+        store.focusWorkbenchTarget(.map(mapID), search: .preserve)
+    }
+
+    private func selectSpecies(_ speciesID: String) {
+        store.focusWorkbenchTarget(.species(speciesID), search: .preserve)
+    }
+
+    private func selectMove(_ moveID: String) {
+        store.focusWorkbenchTarget(.move(moveID), search: .preserve)
+    }
+
+    private func revealMap(_ map: MapSummaryViewState) {
+        store.focusWorkbenchTarget(.map(map.id), search: .replace(map.mapID))
+    }
+
+    private func revealSpecies(_ species: PokemonHackCore.SpeciesDetail) {
+        store.focusWorkbenchTarget(.species(species.speciesID), search: .replace(species.speciesID))
+    }
+
+    private func revealMove(_ move: MoveDetailViewState) {
+        store.selectedMoveWorkbenchFilter = .all
+        store.focusWorkbenchTarget(.move(move.moveID), search: .replace(move.moveID))
+    }
+
+    private func dirtyCount(for module: WorkbenchModule) -> Int? {
+        let count: Int
+        switch module {
+        case .pokemon:
+            count = store.dirtySpeciesDraftCount
+        case .moves:
+            count = store.dirtyMoveDraftCount
+        default:
+            return nil
+        }
+        return count > 0 ? count : nil
+    }
+
+    private func dirtyBadgeText(forSpeciesID speciesID: String) -> String? {
+        store.isSpeciesDirty(speciesID) ? "Dirty" : nil
+    }
+
+    private func dirtyBadgeText(forMoveID moveID: String) -> String? {
+        store.isMoveDirty(moveID) ? "Dirty" : nil
+    }
+
+    private func hiddenTargetControls(
+        detail: String,
+        canClear: Bool,
+        reveal: @escaping () -> Void,
+        clear: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Reveal", systemImage: "scope", action: reveal)
+                Button("Clear", systemImage: "xmark.circle", action: clear)
+                    .disabled(!canClear)
+            }
+            .font(.caption)
+        }
+        .padding(8)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func sidebarSection<Content: View>(
@@ -1057,6 +1403,7 @@ struct WorkbenchSidebarPanel: View {
         subtitle: String,
         systemImage: String,
         isSelected: Bool,
+        badgeText: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1076,6 +1423,9 @@ struct WorkbenchSidebarPanel: View {
                 }
 
                 Spacer(minLength: 4)
+                if let badgeText {
+                    compactBadge(badgeText)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -1084,11 +1434,46 @@ struct WorkbenchSidebarPanel: View {
         }
         .id(id)
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(subtitle)")
+        .accessibilityValue(rowAccessibilityValue(isSelected: isSelected, badgeText: badgeText))
     }
 
     private func selectionBackground(_ isSelected: Bool) -> some View {
         RoundedRectangle(cornerRadius: 6)
             .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+    }
+
+    private func compactBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.blue.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.blue)
+            .accessibilityLabel(text)
+    }
+
+    private func dirtyCountBadge(_ count: Int) -> some View {
+        Label("\(count)", systemImage: "circle.fill")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.blue.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.blue)
+            .help(count == 1 ? "1 dirty draft" : "\(count) dirty drafts")
+            .accessibilityLabel(count == 1 ? "1 dirty draft" : "\(count) dirty drafts")
+    }
+
+    private func rowAccessibilityValue(isSelected: Bool, badgeText: String?) -> String {
+        [isSelected ? "Selected" : nil, badgeText].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    private func moduleAccessibilityValue(isSelected: Bool, dirtyCount: Int?) -> String {
+        let dirtyText = dirtyCount.map { $0 == 1 ? "1 dirty draft" : "\($0) dirty drafts" }
+        return [isSelected ? "Selected" : nil, dirtyText].compactMap { $0 }.joined(separator: ", ")
     }
 
     private func sidebarMetric(_ title: String, _ value: String) -> some View {

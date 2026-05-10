@@ -13,10 +13,10 @@ struct PokemonSpeciesWorkbenchView: View {
     let loadStatus: SpeciesCatalogLoadStatus
     let onLoadCatalog: () -> Void
     let onUpdateDraft: (PokemonHackCore.SpeciesEditDraft) -> Void
+    let onFocusSpecies: (String) -> Void
     let onNavigateToResourceAsset: (String) -> Void
 
     @State private var sourceExpanded = false
-    @State private var showCompactBrowser = false
 
     var body: some View {
         Group {
@@ -35,9 +35,6 @@ struct PokemonSpeciesWorkbenchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onChange(of: selectedSpeciesID) { _, _ in
-            showCompactBrowser = false
-        }
         .onAppear {
             guard catalog == nil else { return }
             DispatchQueue.main.async {
@@ -45,89 +42,6 @@ struct PokemonSpeciesWorkbenchView: View {
             }
         }
         .navigationTitle("Pokemon")
-    }
-
-    private func compactWorkbench(
-        catalog: PokemonHackCore.ProjectSpeciesCatalog,
-        layoutMode: WorkbenchLayoutMode
-    ) -> some View {
-        VStack(spacing: 0) {
-            compactBrowserBar(catalog: catalog)
-            Divider()
-            speciesDetail(layoutMode: layoutMode)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private func compactBrowserBar(catalog: PokemonHackCore.ProjectSpeciesCatalog) -> some View {
-        HStack(spacing: 10) {
-            Button("Pokemon", systemImage: "sidebar.left") {
-                showCompactBrowser.toggle()
-            }
-            .help("Open Pokemon browser")
-            .popover(isPresented: $showCompactBrowser, arrowEdge: .bottom) {
-                speciesBrowser(catalog: catalog)
-                    .frame(
-                        width: WorkbenchLayoutMode.compactPopoverWidth,
-                        height: WorkbenchLayoutMode.compactPopoverHeight
-                    )
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(selectedSpecies?.displayName ?? "No Pokemon Selected")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Text("\(species.count) of \(catalog.speciesCount)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            StatusPill(state: validationState(for: catalog.diagnostics))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    private func speciesBrowser(catalog: PokemonHackCore.ProjectSpeciesCatalog) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pokemon")
-                        .font(.headline)
-                    Text("\(species.count) of \(catalog.speciesCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                StatusPill(state: validationState(for: catalog.diagnostics))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            if species.isEmpty {
-                ContentUnavailableView(
-                    "No Pokemon",
-                    systemImage: "magnifyingglass",
-                    description: Text("No rows matched the current search.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(selection: $selectedSpeciesID) {
-                    ForEach(species) { detail in
-                        SpeciesBrowserRow(species: detail, rootPath: rootPath)
-                            .tag(detail.speciesID)
-                    }
-                }
-                .listStyle(.sidebar)
-            }
-        }
     }
 
     @ViewBuilder
@@ -392,7 +306,7 @@ struct PokemonSpeciesWorkbenchView: View {
                                 .foregroundStyle(.secondary)
                             if canSelectSpecies(evolution.targetSpecies) {
                                 Button {
-                                    selectedSpeciesID = evolution.targetSpecies
+                                    onFocusSpecies(evolution.targetSpecies)
                                 } label: {
                                     Text(displayConstant(evolution.targetSpecies))
                                         .fontWeight(.medium)
@@ -727,42 +641,6 @@ struct PokemonSpeciesWorkbenchView: View {
             return "MOVE_TACKLE"
         }
         return constants(.moves).first { $0.symbol != "MOVE_NONE" }?.symbol ?? "MOVE_NONE"
-    }
-}
-
-private struct SpeciesBrowserRow: View {
-    let species: PokemonHackCore.SpeciesDetail
-    let rootPath: String?
-
-    var body: some View {
-        HStack(spacing: 10) {
-            SpeciesAssetPreview(
-                asset: species.assets.first { $0.kind == .icon },
-                rootPath: rootPath,
-                size: 28
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(species.displayName)
-                        .lineLimit(1)
-                    if !species.isEditable {
-                        Image(systemName: "lock.doc")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .help("Read-only source shape")
-                    }
-                }
-                .help(species.speciesID)
-
-                HStack(spacing: 4) {
-                    ForEach(Array(species.types.prefix(2).enumerated()), id: \.offset) { _, type in
-                        SpeciesTag(text: displayConstant(type))
-                    }
-                }
-            }
-        }
-        .padding(.vertical, 3)
     }
 }
 

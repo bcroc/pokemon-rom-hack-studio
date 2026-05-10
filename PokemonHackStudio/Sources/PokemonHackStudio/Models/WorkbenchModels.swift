@@ -194,6 +194,82 @@ enum WorkbenchSidebarSelection: Hashable {
     case guidedFlow(String)
 }
 
+enum WorkbenchSearchBehavior: Equatable {
+    case preserve
+    case restoreModule
+    case replace(String)
+    case replaceTargetIdentifier
+    case clear
+}
+
+enum WorkbenchFocusTarget: Hashable, Identifiable {
+    case map(String)
+    case species(String)
+    case trainer(String)
+    case move(String)
+    case item(String)
+    case resourceAsset(String)
+    case resourceEntry(String)
+    case scriptLabel(String)
+    case buildRow(String)
+    case diagnostic(String)
+
+    var id: String {
+        "\(module.id)::\(rawIdentifier)"
+    }
+
+    var module: WorkbenchModule {
+        switch self {
+        case .map:
+            .maps
+        case .species:
+            .pokemon
+        case .trainer:
+            .trainers
+        case .move:
+            .moves
+        case .item:
+            .items
+        case .resourceAsset, .resourceEntry:
+            .resources
+        case .scriptLabel:
+            .scripts
+        case .buildRow:
+            .build
+        case .diagnostic:
+            .issues
+        }
+    }
+
+    var rawIdentifier: String {
+        switch self {
+        case .map(let id),
+             .species(let id),
+             .trainer(let id),
+             .move(let id),
+             .item(let id),
+             .resourceAsset(let id),
+             .resourceEntry(let id),
+             .scriptLabel(let id),
+             .buildRow(let id),
+             .diagnostic(let id):
+            id
+        }
+    }
+}
+
+struct WorkbenchRecentTarget: Identifiable, Hashable {
+    let target: WorkbenchFocusTarget
+    let module: WorkbenchModule
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var id: String {
+        "\(module.id)::\(target.rawIdentifier)"
+    }
+}
+
 enum ValidationState: String, Identifiable {
     case valid = "Valid"
     case warning = "Warning"
@@ -1735,6 +1811,7 @@ struct MapCellSelection: Equatable {
 enum PendingMapNavigation: Identifiable, Equatable {
     case project(String)
     case map(String)
+    case refreshMaps
 
     var id: String {
         switch self {
@@ -1742,6 +1819,8 @@ enum PendingMapNavigation: Identifiable, Equatable {
             "project:\(id)"
         case .map(let id):
             "map:\(id)"
+        case .refreshMaps:
+            "refreshMaps"
         }
     }
 
@@ -1751,6 +1830,8 @@ enum PendingMapNavigation: Identifiable, Equatable {
             "Switch project?"
         case .map:
             "Switch map?"
+        case .refreshMaps:
+            "Refresh maps?"
         }
     }
 

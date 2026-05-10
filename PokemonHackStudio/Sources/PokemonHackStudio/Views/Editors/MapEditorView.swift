@@ -486,7 +486,7 @@ struct MapEditorView: View {
             return
         }
         if !catalog.maps.contains(where: { $0.id == store.selectedMapID }) {
-            store.selectedMapID = firstID
+            store.requestMapSelection(firstID, source: "Maps")
         }
     }
 }

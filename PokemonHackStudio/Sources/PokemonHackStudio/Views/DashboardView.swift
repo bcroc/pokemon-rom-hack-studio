@@ -139,7 +139,7 @@ struct DashboardView: View {
     private var diagnosticsHub: some View {
         EditorSection(title: "Project Health") {
             DiagnosticSummaryStrip(summary: store.diagnosticSummary) {
-                store.selection = .issues
+                store.selectWorkbenchModule(.issues)
             }
         }
     }

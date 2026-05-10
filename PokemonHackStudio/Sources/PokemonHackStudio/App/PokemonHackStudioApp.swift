@@ -265,11 +265,7 @@ private extension PokemonHackStudioApp {
     }
 
     func selectModule(_ module: WorkbenchModule) {
-        store.selection = module
-        if module == .maps {
-            store.loadSelectedMapCatalogIfNeeded()
-            store.loadSelectedMapVisualDocumentIfNeeded()
-        }
+        store.selectWorkbenchModule(module)
     }
 
     func selectAdjacentModule(offset: Int) {
