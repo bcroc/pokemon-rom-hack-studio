@@ -26,4 +26,4 @@ This repo is a local development workspace for PokemonHackStudio. Keep the first
 
 ## Current Focus
 
-No implementation row is currently active. The live baseline is tracked in `docs/planning-and-progress.md` and is complete through `PHS-T40`; choose new work from the Active Board candidate rows and update the board/proof ledger when closing a row.
+No implementation row is currently active. Treat `docs/planning-and-progress.md` as the live baseline and source of truth before choosing work; choose new work from the Active Board candidate rows and update the board/proof ledger when closing a row.

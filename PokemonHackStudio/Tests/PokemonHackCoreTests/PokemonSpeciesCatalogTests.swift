@@ -27,12 +27,15 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(treecko.learnsets.levelUp.map(\.level), [1, 1, 6])
         XCTAssertEqual(treecko.learnsets.tmhm.map(\.move), ["MOVE_BULLET_SEED", "MOVE_CUT"])
         XCTAssertEqual(treecko.learnsets.egg.map(\.move), ["MOVE_CRUNCH", "MOVE_LEECH_SEED"])
+        XCTAssertEqual(treecko.learnsets.tutor.map(\.move).sorted(), ["MOVE_MEGA_PUNCH", "MOVE_SWORD_DANCE"])
         XCTAssertEqual(treecko.evolutions.first?.method, "EVO_LEVEL")
         XCTAssertEqual(treecko.evolutions.first?.parameter, "16")
         XCTAssertEqual(treecko.evolutions.first?.targetSpecies, "SPECIES_GROVYLE")
         XCTAssertEqual(treecko.pokedex?.categoryName, "WOOD GECKO")
         XCTAssertEqual(treecko.pokedex?.height, "5")
         XCTAssertEqual(treecko.pokedex?.weight, "50")
+        XCTAssertEqual(treecko.pokedex?.pokemonScale, "256")
+        XCTAssertEqual(treecko.pokedex?.pokemonOffset, "0")
         XCTAssertTrue(treecko.pokedex?.description?.contains("protector of the forest") == true)
         XCTAssertTrue(treecko.assets.contains { $0.kind == .front && $0.exists })
         XCTAssertTrue(treecko.assets.contains { $0.kind == .icon && $0.exists })
@@ -65,6 +68,8 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
         draft.tmhmMoves.append("MOVE_FLASH")
         draft.eggMoves = ["MOVE_LEECH_SEED", "MOVE_FLASH"]
+        draft.tutorMoves.append("MOVE_FURY_CUTTER")
+        draft.pokedex?.pokemonScale = "257"
 
         let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
 
@@ -73,17 +78,21 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             [
                 "src/data/pokemon/egg_moves.h",
                 "src/data/pokemon/level_up_learnsets.h",
+                "src/data/pokemon/pokedex_entries.h",
                 "src/data/pokemon/species_info.h",
-                "src/data/pokemon/tmhm_learnsets.h"
+                "src/data/pokemon/tmhm_learnsets.h",
+                "src/data/pokemon/tutor_learnsets.h"
             ]
         )
         XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
         XCTAssertTrue(plan.isApplyable)
         XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/species_info.h" }?.textPreview?.contains(".baseHP = 41") == true)
         XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/tmhm_learnsets.h" }?.textPreview?.contains(".FLASH = TRUE") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/tutor_learnsets.h" }?.textPreview?.contains("TUTOR(FURY_CUTTER)") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/pokedex_entries.h" }?.textPreview?.contains(".pokemonScale = 257") == true)
 
         let result = try SpeciesMutationApplier.apply(plan: plan)
-        XCTAssertEqual(result.appliedChanges.count, 4)
+        XCTAssertEqual(result.appliedChanges.count, 6)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
 
         let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
@@ -102,7 +111,91 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(edited.heldItems.common, "ITEM_POTION")
         XCTAssertEqual(edited.learnsets.levelUp.map(\.move), ["MOVE_TACKLE", "MOVE_LEER", "MOVE_ABSORB", "MOVE_FLASH"])
         XCTAssertTrue(edited.learnsets.tmhm.map(\.move).contains("MOVE_FLASH"))
+        XCTAssertEqual(edited.learnsets.tutor.map(\.move).sorted(), ["MOVE_FURY_CUTTER", "MOVE_MEGA_PUNCH", "MOVE_SWORD_DANCE"])
         XCTAssertEqual(edited.learnsets.egg.map(\.move), ["MOVE_LEECH_SEED", "MOVE_FLASH"])
+        XCTAssertEqual(edited.pokedex?.pokemonScale, "257")
+    }
+
+    func testSpeciesMutationPlannerRewritesPokedexEntriesAndText() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        XCTAssertNotNil(draft.pokedex)
+        draft.pokedex?.height = "6"
+        draft.pokedex?.categoryName = "NEW \"BUG\\TYPE\""
+        draft.pokedex?.description = "New \"description\"\\path\nwith two lines."
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.changes.contains { $0.path == "src/data/pokemon/pokedex_entries.h" })
+        XCTAssertTrue(plan.changes.contains { $0.path == "src/data/pokemon/pokedex_text.h" })
+
+        let entryPreview = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/pokedex_entries.h" }?.textPreview)
+        XCTAssertTrue(entryPreview.contains(".height = 6"))
+        XCTAssertTrue(entryPreview.contains(#".categoryName = _("NEW \"BUG\\TYPE\"")"#))
+
+        let textPreview = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/pokedex_text.h" }?.textPreview)
+        XCTAssertEqual(textPreview, #"const u8 gTreeckoPokedexText[] = _("New \"description\"\\path\nwith two lines.");"#)
+
+        _ = try SpeciesMutationApplier.apply(plan: plan)
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.pokedex?.height, "6")
+        XCTAssertEqual(edited.pokedex?.categoryName, #"NEW "BUG\\TYPE""#)
+        XCTAssertEqual(edited.pokedex?.description, #"New "description"\\path"# + "\nwith two lines.")
+    }
+
+    func testSpeciesMutationPlannerBlocksInvalidPokedexNumericFields() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.pokedex?.height = "tall"
+        draft.pokedex?.pokemonScale = "big"
+        draft.pokedex?.pokemonOffset = "near"
+        draft.pokedex?.trainerScale = "wide"
+        draft.pokedex?.trainerOffset = "far"
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_HEIGHT_INVALID" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_POKEMON_SCALE_INVALID" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_POKEMON_OFFSET_INVALID" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TRAINER_SCALE_INVALID" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TRAINER_OFFSET_INVALID" })
+        XCTAssertFalse(plan.isApplyable)
+    }
+
+    func testSpeciesMutationPlannerStagesAssetChanges() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        let dummyData = "DUMMY PNG".data(using: .utf8)!
+        draft.assetData[.front] = dummyData
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
+        let change = try XCTUnwrap(plan.changes.first { $0.path == "graphics/pokemon/treecko/front.png" })
+        XCTAssertEqual(change.newData, dummyData)
+        XCTAssertEqual(change.summary, "Replace front asset")
+
+        _ = try SpeciesMutationApplier.apply(plan: plan)
+
+        let appliedData = try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+        XCTAssertEqual(appliedData, dummyData)
     }
 
     func testSpeciesMutationPlannerRendersFireRedTMHMMacros() throws {
@@ -244,14 +337,27 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             {
                 [NATIONAL_DEX_TREECKO] =
                 {
-                    .categoryName = _(\"WOOD GECKO\"),
+                    .categoryName = _("WOOD GECKO"),
                     .height = 5,
                     .weight = 50,
                     .description = gTreeckoPokedexText,
+                    .pokemonScale = 256,
+                    .pokemonOffset = 0,
+                    .trainerScale = 256,
+                    .trainerOffset = 0,
                 },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        )
+        try write(
+            """
+            const u16 gTutorLearnsets[] =
+            {
+                [SPECIES_TREECKO] = (TUTOR(MEGA_PUNCH) | TUTOR(SWORD_DANCE)),
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
         )
         try write(
             """
@@ -293,6 +399,10 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             #define GROWTH_FAST 4
             #define BODY_COLOR_RED 0
             #define BODY_COLOR_GREEN 5
+            #define EVO_LEVEL 4
+            #define EVO_ITEM 7
+            #define EVO_TRADE_ITEM 8
+            #define EVO_FRIENDSHIP 9
             """,
             to: root.appendingPathComponent("include/constants/pokemon.h")
         )
@@ -326,6 +436,9 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             #define MOVE_FLASH 7
             #define MOVE_CRUNCH 8
             #define MOVE_LEECH_SEED 9
+            #define MOVE_FURY_CUTTER 10
+            #define MOVE_MEGA_PUNCH 11
+            #define MOVE_SWORD_DANCE 12
             """,
             to: root.appendingPathComponent("include/constants/moves.h")
         )
@@ -338,6 +451,90 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+    func testSpeciesMutationPlannerRewritesEvolutions() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.evolutions[0].parameter = "18"
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let evolutionChange = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/evolution.h" })
+        let evolutionPreview = try XCTUnwrap(evolutionChange.textPreview)
+
+        XCTAssertTrue(evolutionPreview.contains("[SPECIES_TREECKO] = {{ EVO_LEVEL, 18, SPECIES_GROVYLE }}"))
+
+        _ = try SpeciesMutationApplier.apply(plan: plan)
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.evolutions.first?.parameter, "18")
+    }
+
+    func testSpeciesMutationPlannerRewritesMultipleEvolutions() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_ITEM", parameter: "ITEM_POTION", targetSpecies: "SPECIES_GROVYLE"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let evolutionChange = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/evolution.h" })
+        let evolutionPreview = try XCTUnwrap(evolutionChange.textPreview)
+
+        XCTAssertTrue(evolutionPreview.contains("[SPECIES_TREECKO] = {"))
+        XCTAssertTrue(evolutionPreview.contains("{ EVO_LEVEL, 16, SPECIES_GROVYLE },"))
+        XCTAssertTrue(evolutionPreview.contains("{ EVO_ITEM, ITEM_POTION, SPECIES_GROVYLE }"))
+
+        _ = try SpeciesMutationApplier.apply(plan: plan)
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.evolutions.count, 2)
+        XCTAssertEqual(edited.evolutions.last?.method, "EVO_ITEM")
+        XCTAssertEqual(edited.evolutions.last?.parameter, "ITEM_POTION")
+    }
+
+    func testSpeciesMutationPlannerHandlesEvolutionRemovalAndComplexMethodValidation() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.evolutions.removeAll()
+        let removalPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        let removalPreview = try XCTUnwrap(removalPlan.changes.first { $0.path == "src/data/pokemon/evolution.h" }?.textPreview)
+        XCTAssertEqual(removalPreview, "    [SPECIES_TREECKO] = {},")
+
+        draft.evolutions = [
+            SpeciesEvolutionDraft(method: "EVO_TRADE_ITEM", parameter: "ITEM_POTION", targetSpecies: "SPECIES_GROVYLE")
+        ]
+        let tradeItemPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(tradeItemPlan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(tradeItemPlan.changes.first { $0.path == "src/data/pokemon/evolution.h" }?.textPreview?.contains("EVO_TRADE_ITEM, ITEM_POTION") == true)
+
+        draft.evolutions = [
+            SpeciesEvolutionDraft(method: "EVO_FRIENDSHIP", parameter: "16", targetSpecies: "SPECIES_GROVYLE")
+        ]
+        let invalidParameterPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(invalidParameterPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_PARAMETER_INVALID" })
+        XCTAssertFalse(invalidParameterPlan.isApplyable)
+
+        let grovyle = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_GROVYLE" })
+        var grovyleDraft = try XCTUnwrap(SpeciesEditDraft(detail: grovyle))
+        grovyleDraft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "36", targetSpecies: "SPECIES_TREECKO"))
+        let missingRowPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: grovyleDraft)
+        XCTAssertTrue(missingRowPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_SPAN_MISSING" })
+        XCTAssertFalse(missingRowPlan.isApplyable)
     }
 }
 

@@ -9,6 +9,7 @@ public enum PokemonDataCompatibilitySurface: String, Codable, Equatable, CaseIte
     case eggMoves
     case evolutions
     case pokedex
+    case tutorLearnsets
     case assets
     case cries
     case forms
@@ -138,6 +139,7 @@ public enum PokemonDataCompatibilityReportBuilder {
         entries.append(learnsetEntry(surface: .levelUpLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(learnsetEntry(surface: .tmhmLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(learnsetEntry(surface: .eggMoves, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
+        entries.append(learnsetEntry(surface: .tutorLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(evolutionsEntry(index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(pokedexEntry(index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(assetsEntry(index: index, assetCatalog: assetCatalog))
@@ -238,6 +240,9 @@ public enum PokemonDataCompatibilityReportBuilder {
         case .eggMoves:
             indexed = speciesCatalog?.species.filter { !$0.learnsets.egg.isEmpty }.count
                 ?? learnsetRecordCount(in: sourceIndex, matching: ["egg"])
+        case .tutorLearnsets:
+            indexed = speciesCatalog?.species.filter { !$0.learnsets.tutor.isEmpty }.count
+                ?? learnsetRecordCount(in: sourceIndex, matching: ["tutor"])
         default:
             indexed = 0
         }
@@ -261,14 +266,15 @@ public enum PokemonDataCompatibilityReportBuilder {
         let descriptor = descriptor(for: .evolutions, profile: index.profile)
         let indexed = speciesCatalog?.species.filter { !$0.evolutions.isEmpty }.count
             ?? recordCount(.evolutions, in: sourceIndex)
+        let editable = supportsSpeciesEditing(index.profile) && indexed > 0 ? indexed : 0
         return entry(
             surface: .evolutions,
             index: index,
             descriptor: descriptor,
             indexedCount: indexed,
-            editableCount: 0,
-            unsupportedFields: ["evolution method edits", "target species edits", "parameter edits", "evolution row insertion/reordering"],
-            recommendedFutureRow: "PHS-T57"
+            editableCount: editable,
+            unsupportedFields: editable > 0 ? ["missing evolution row insertion"] : ["evolution method edits", "target species edits", "parameter edits", "evolution row insertion/reordering"],
+            recommendedFutureRow: editable > 0 ? nil : "PHS-T57"
         )
     }
 
@@ -280,14 +286,15 @@ public enum PokemonDataCompatibilityReportBuilder {
         let descriptor = descriptor(for: .pokedex, profile: index.profile)
         let indexed = speciesCatalog?.species.filter { $0.pokedex != nil }.count
             ?? recordCount(.pokedex, in: sourceIndex)
+        let editable = supportsSpeciesEditing(index.profile) && indexed > 0 ? indexed : 0
         return entry(
             surface: .pokedex,
             index: index,
             descriptor: descriptor,
             indexedCount: indexed,
-            editableCount: 0,
-            unsupportedFields: ["category text edits", "height/weight edits", "description text rewrites", "national dex identity changes"],
-            recommendedFutureRow: "PHS-T57"
+            editableCount: editable,
+            unsupportedFields: editable > 0 ? ["national dex identity changes", "missing Pokedex row insertion"] : ["category text edits", "height/weight edits", "description text rewrites", "national dex identity changes"],
+            recommendedFutureRow: editable > 0 ? nil : "PHS-T57"
         )
     }
 
@@ -476,18 +483,20 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
             return nil
         }
     case .tmhmLearnsets:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "TM/HM compatibility edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T57")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsSpeciesEditing(profile))
     case .eggMoves:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsSpeciesEditing(profile), readOnlyReason: "Egg move edits are indexed but remain a dedicated follow-up surface.", futureRow: "PHS-T57")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsSpeciesEditing(profile))
     case .evolutions:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/evolution.h", emeraldTable: "gEvolutionTable", fireRedTable: "gEvolutionTable", rubyTable: "gEvolutionTable", expansionTable: "gEvolutionTable", supportsEditing: false, readOnlyReason: "Evolution rows are indexed for navigation only in this row.", futureRow: "PHS-T57")
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/evolution.h", emeraldTable: "gEvolutionTable", fireRedTable: "gEvolutionTable", rubyTable: "gEvolutionTable", expansionTable: "gEvolutionTable", supportsEditing: supportsSpeciesEditing(profile))
     case .pokedex:
         switch profile {
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", recommendedFutureRow: "PHS-T57")
         default:
-            return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/pokedex_entries.h", emeraldTable: "gPokedexEntries", fireRedTable: "gPokedexEntries", rubyTable: "gPokedexEntries", expansionTable: "gPokedexEntries", supportsEditing: false, readOnlyReason: "Pokedex rows are indexed for navigation only in this row.", futureRow: "PHS-T57")
+            return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/pokedex_entries.h", emeraldTable: "gPokedexEntries", fireRedTable: "gPokedexEntries", rubyTable: "gPokedexEntries", expansionTable: "gPokedexEntries", supportsEditing: supportsSpeciesEditing(profile))
         }
+    case .tutorLearnsets:
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tutor_learnsets.h", emeraldTable: "gTutorLearnsets", fireRedTable: "gTutorLearnsets", rubyTable: nil, expansionTable: "gTutorLearnsets", supportsEditing: supportsSpeciesEditing(profile))
     case .assets:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
@@ -519,11 +528,11 @@ private func pokemonTableDescriptor(
     path: String,
     emeraldTable: String,
     fireRedTable: String,
-    rubyTable: String,
+    rubyTable: String? = nil,
     expansionTable: String,
     supportsEditing: Bool,
-    readOnlyReason: String,
-    futureRow: String
+    readOnlyReason: String? = nil,
+    futureRow: String? = nil
 ) -> PokemonDataSurfaceDescriptor? {
     switch profile {
     case .pokeemerald:
@@ -531,7 +540,8 @@ private func pokemonTableDescriptor(
     case .pokefirered:
         return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: fireRedTable, supportsEditing: supportsEditing, readOnlyReason: supportsEditing ? nil : readOnlyReason, recommendedFutureRow: supportsEditing ? nil : futureRow)
     case .pokeruby:
-        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: rubyTable, supportsEditing: false, readOnlyReason: readOnlyReason, recommendedFutureRow: futureRow)
+        guard let rubyTable = rubyTable else { return nil }
+        return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: rubyTable, supportsEditing: false, readOnlyReason: readOnlyReason ?? "Surface is not editable for this profile.", recommendedFutureRow: futureRow)
     case .pokeemeraldExpansion:
         return PokemonDataSurfaceDescriptor(sourcePath: path, tableSymbol: expansionTable, supportsEditing: false, readOnlyReason: readOnlyReason, recommendedFutureRow: futureRow)
     default:

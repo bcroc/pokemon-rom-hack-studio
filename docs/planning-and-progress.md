@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The live baseline is complete through `PHS-T63`; choose new work from the Active Board candidate rows and update this board/proof ledger when closing a row.
+No implementation row is currently active. The live baseline is complete through `PHS-T67`; choose new work from the Active Board candidate rows and update this board/proof ledger when closing a row.
 
 ## Active Board
 
@@ -64,13 +64,18 @@ No implementation row is currently active. The live baseline is complete through
 | PHS-T56 | Done | Playtest Capture Artifacts | mGBA playtest now has explicit screenshot and savestate capture actions in CLI and app surfaces; each capture path writes its own ignored capture log/stdout/stderr/script and target artifact path while ordinary `--launch` behavior remains unchanged. |
 | PHS-T57A | Done | Item Description Text Editing | Items now drafts, previews, and applies supported Emerald `src/data/text/item_descriptions.h` and FireRed `gItemDescription_ITEM_*` description text through the existing item mutation-plan gate; FireRed row fields, TM/HM/tutor editing, Ruby/Sapphire data edits, and Expansion/Modern Emerald support remain out of scope. |
 | PHS-T57B | Done | FireRed Item Row Field Editing | FireRed positional `src/data/items.h` item rows now draft, preview, apply, back up, and reload through the existing item mutation path, including combined row-field plus description rewrites and compatibility-matrix editable status. |
-| PHS-T57 | Candidate | Compatibility-Specific Data Editors | Continue splitting tutor compatibility, move-centric TM/HM compatibility editing, Ruby/Sapphire data edits, Expansion/Modern Emerald support, evolutions, Pokedex, forms, assets, and cries into parser/planner/apply rows driven by the `PHS-T49` compatibility matrix. |
+| PHS-T57 | Candidate | Compatibility-Specific Data Editors | Continue splitting Ruby/Sapphire data edits, Expansion/Modern Emerald support, forms, assets, cries, and remaining adapter-specific writers into parser/planner/apply rows driven by the `PHS-T49` compatibility matrix. |
 | PHS-T58 | Done | Startup And Project Switching Speed/Stability | Project open/refresh now keep source graph, script outline, Pokemon, Trainer, Move, Item, asset, map catalog, and map visual work lazy, cancellable, and guarded against stale project selections; Dashboard and guided flows render lightweight status instead of triggering heavy catalogs. |
 | PHS-T59 | Done | Unified Draft And Project Saves | Local workspace/project and recoverable Pokemon, Trainer, Move, Item, map, and graphics draft saves now persist under ignored `.pokemonhackstudio/` files with autosave, explicit save/reload/discard controls, and existing mutation-plan apply gates unchanged. |
 | PHS-T60 | Done | Source Bundle Completeness Audit | The Xcode asset bundle phase now includes safe root companion metadata and rule files (`*.sha1`, `ld_script*.ld`, `sym_*.txt`, `*_rules.mk`, `make_tools.mk`, and `charmap.txt`) alongside the existing source asset trees while continuing to exclude ROMs, saves, build outputs, toolchains, helper scripts, and reference clones; runtime project selection still prefers editable local roots over bundled read-only fallbacks. |
 | PHS-T61 | Done | Persistent Resource Index Cache | Ignored `.pokemonhackstudio/indexes/asset-catalog-v1.json` catalog caches plus metadata/public-output sidecars now let repeated Resources loads and CLI `asset-index --json` runs reuse valid source-project catalogs, while schema, identity, decode, or source-fingerprint mismatches rebuild from source. App Resources rows now have ID/path/title/source lookup indexes, category buckets, pre-sorted buckets, and availability counts. |
 | PHS-T62 | Done | Context-Aware Toolbar Commands | The titlebar toolbar now groups workspace saves, refreshes, module navigation, diagnostics, and current-module mutation preview/apply/discard controls from store-owned toolbar state; Maps adds a compact command menu for reload, preview/apply/discard, and selected-event duplicate/delete while still using the existing mutation-plan gates. |
 | PHS-T63 | Done | Sidebar-First Switching UX | The persistent left panel now routes module, map, Pokemon, move, resource, guided-action, menu, and toolbar switching through store-owned focus/search APIs with session-only recents, module-scoped search restore, dirty draft badges, hidden-target reveal controls, guarded map refresh/script-readiness navigation, and unified Pokemon/Moves draft-preserving detail state. |
+| PHS-T64 | Done | Evolution Editor | Existing evolution rows now draft, preview, apply, reload, remove, and validate method/target/parameter edits through the Species mutation-plan gate, including trade-item parameters and zero-parameter method diagnostics while safely blocking missing-row insertion. |
+| PHS-T65 | Done | Pokedex Workbench | Pokedex category, height, weight, description text, Pokemon scale/offset, and trainer scale/offset now edit through the Species mutation-plan gate with source spans, backups, C-string escaping, and numeric validation. |
+| PHS-T66 | Done | Move Compatibility Editor | Species-side TM/HM and Tutor assignments now edit through Species drafts, and Moves exposes a move-centric species compatibility checklist with visible batch preview/apply/discard wiring through the Species mutation-plan gate. |
+| PHS-T67 | Done | Trainer Data Editor | Comprehensive trainer workbench improvements: searchable constant pickers for species/moves/items, species icons in party rows, Reset to Defaults for moves, and verified mutation planning for party additions/removals and complex item updates. |
+| PHS-T68 | Candidate | Species Asset Import Validation | Promote species asset import from draft groundwork into a tracked row with per-kind format validation, PNG sprite handling, palette-file policy, source-hash safety, cache invalidation, generated-output boundaries, and explicit mutation-plan proof before enabling applyable controls. |
 
 ## Recent Progress
 
@@ -508,6 +513,24 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make validate` (includes `moves-graph`, `species-graph`, and synthetic/project-backed `patch-manifest` smokes)
   - `make verify` (regenerated the Xcode project, built, signed, and launched the macOS app target with the Data > Pokemon workbench compiled in)
   - Manual app smoke: opened Data > Pokemon on repo-local `pokeemerald`, confirmed the dedicated species browser and workbench render, selected Bulbasaur and Chimecho, and verified local front/back/icon/footprint/animation asset previews, stats, EV yields, training/breeding data, level-up learnsets, TM/HM and egg counts, Pokedex/source links, and asset availability rows.
+- `PHS-T64`-`PHS-T67` remediation batch:
+  - Review-remediation proof: `swift test --package-path PokemonHackStudio --filter 'PokemonDataCompatibilityTests|PokemonSpeciesCatalogTests|TrainerCatalogTests'` (20 tests; compatibility matrix tutor/evolution/Pokedex status, Pokedex escaping/numeric validation, species/trainer mutation paths passed)
+  - Review-remediation app proof: `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS,arch=arm64' test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testMovesCompatibilityBatchPreviewApplyAndDiscardFlow`
+  - Review-remediation full proof: `make test` (181 SwiftPM tests), `make validate`, and `make verify`
+  - Source-write posture: Pokedex strings now render through a shared C-string encoder; all Pokedex numeric fields validate before apply; Moves compatibility edits now surface as a visible Pokemon compatibility batch before apply; species asset import controls stay disabled until `PHS-T68` defines format-specific validation.
+  - `swift test --package-path PokemonHackStudio --filter 'PokemonSpeciesCatalogTests|TrainerCatalogTests|PokemonDataCompatibilityTests'` (19 tests; evolution apply/reload, complex evolution validation, Pokedex text/scale edits, tutor persistence, trainer party removal, and compatibility metadata passed)
+  - `cd PokemonHackStudio && xcodegen generate`
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS,arch=arm64' build-for-testing` (passed after shared picker extraction compile fixes)
+  - `make test` (180 SwiftPM tests; passed)
+  - `make validate` (passed; includes SwiftPM tests plus CLI smokes across local editable roots and reference fixtures)
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - `git diff --check`
+  - Source-write posture: move-centric compatibility rows stage species drafts only; source writes remain behind existing Species preview/apply mutation plans with backups.
+  - `swift test --package-path PokemonHackStudio --filter TrainerCatalogTests` (7 tests; party removal and re-indexing covered)
+  - `make test` (175 tests; passed)
+  - `make validate`
+  - `make verify` (passed; regenerated Xcode project, built/signed the macOS app)
+  - Manual app smoke: opened Trainers on repo-local `pokeemerald`, confirmed searchable constant pickers for all fields, species icons in party list, "Reset to Defaults" for moves, and correct IV/nature display.
 - `PHS-T41`:
   - `swift test --package-path PokemonHackStudio --filter SourceIndexTests.testWildEncountersJSONIndexesEncountersByMap` (1 test; passed)
   - `make test` (112 tests; passed)

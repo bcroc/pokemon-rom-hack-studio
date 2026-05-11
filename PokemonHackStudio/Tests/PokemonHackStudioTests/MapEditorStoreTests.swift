@@ -285,6 +285,65 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testMovesCompatibilityBatchPreviewApplyAndDiscardFlow() async throws {
+        let root = try makePokemonProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selection = .moves
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_CUT", bucket: .tmhm, isEnabled: false)
+        store.setSpeciesCompatibility(speciesID: "SPECIES_GROVYLE", moveID: "MOVE_FLASH", bucket: .tmhm, isEnabled: true)
+
+        XCTAssertEqual(store.dirtySpeciesBatchDrafts.map(\.speciesID), ["SPECIES_GROVYLE", "SPECIES_TREECKO"])
+        XCTAssertEqual(store.toolbarMutationState.target, .pokemonBatch)
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.toolbarMutationState.canDiscard)
+
+        store.previewToolbarMutationTarget()
+
+        XCTAssertEqual(store.latestSpeciesBatchEditPlans.count, 2)
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+        let context = try XCTUnwrap(
+            MutationPlanPanelContext.speciesBatch(
+                plans: store.latestSpeciesBatchEditPlans,
+                result: store.latestSpeciesBatchApplyResult,
+                dirtyDraftCount: store.dirtySpeciesBatchDrafts.count,
+                canPreview: store.canPreviewSpeciesBatchMutationPlan,
+                canApply: store.canApplySpeciesBatchMutationPlan,
+                canDiscard: store.canDiscardSpeciesBatchEdits,
+                previewBlockedReason: store.speciesBatchPreviewBlockedReason,
+                applyBlockedReason: store.speciesBatchApplyBlockedReason
+            )
+        )
+        XCTAssertEqual(context.operationCount, 2)
+        XCTAssertTrue(context.canApply)
+
+        store.discardToolbarMutationTarget()
+
+        XCTAssertTrue(store.dirtySpeciesBatchDrafts.isEmpty)
+        XCTAssertTrue(store.latestSpeciesBatchEditPlans.isEmpty)
+
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_CUT", bucket: .tmhm, isEnabled: false)
+        store.setSpeciesCompatibility(speciesID: "SPECIES_GROVYLE", moveID: "MOVE_FLASH", bucket: .tmhm, isEnabled: true)
+        store.previewToolbarMutationTarget()
+        store.applyToolbarMutationTarget()
+
+        XCTAssertTrue((store.latestSpeciesBatchApplyResult?.appliedChanges.count ?? 0) > 0)
+        XCTAssertTrue(store.dirtySpeciesBatchDrafts.isEmpty)
+        let catalog = try XCTUnwrap(store.selectedSpeciesCatalog)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        let grovyle = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_GROVYLE" })
+        XCTAssertFalse(treecko.learnsets.tmhm.map(\.move).contains("MOVE_CUT"))
+        XCTAssertTrue(grovyle.learnsets.tmhm.map(\.move).contains("MOVE_FLASH"))
+    }
+
+    @MainActor
     func testFixtureRecordsRemainAvailableWithoutLoadedProject() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)

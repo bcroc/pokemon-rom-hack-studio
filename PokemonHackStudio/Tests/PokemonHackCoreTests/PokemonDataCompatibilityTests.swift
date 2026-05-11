@@ -14,12 +14,23 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
         let eggMoves = entry(.eggMoves, in: report)
+        let tutor = entry(.tutorLearnsets, in: report)
+        let evolutions = entry(.evolutions, in: report)
+        let pokedex = entry(.pokedex, in: report)
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertNil(levelUp.recommendedFutureRow)
         XCTAssertEqual(tmhm.status, .editable)
         XCTAssertNil(tmhm.recommendedFutureRow)
         XCTAssertEqual(eggMoves.status, .editable)
         XCTAssertNil(eggMoves.recommendedFutureRow)
+        XCTAssertEqual(tutor.status, .editable)
+        XCTAssertNil(tutor.recommendedFutureRow)
+        XCTAssertEqual(evolutions.status, .editable)
+        XCTAssertEqual(evolutions.editableCount, 1)
+        XCTAssertNil(evolutions.recommendedFutureRow)
+        XCTAssertEqual(pokedex.status, .editable)
+        XCTAssertEqual(pokedex.editableCount, 1)
+        XCTAssertNil(pokedex.recommendedFutureRow)
         let items = entry(.items, in: report)
         XCTAssertEqual(items.status, .editable)
         XCTAssertEqual(items.sourcePath, "src/data/items.h")
@@ -39,10 +50,19 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(entry(.moves, in: report).status, .editable)
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
+        let tutor = entry(.tutorLearnsets, in: report)
+        let evolutions = entry(.evolutions, in: report)
+        let pokedex = entry(.pokedex, in: report)
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertNil(levelUp.recommendedFutureRow)
         XCTAssertEqual(tmhm.status, .editable)
         XCTAssertNil(tmhm.recommendedFutureRow)
+        XCTAssertEqual(tutor.status, .editable)
+        XCTAssertNil(tutor.recommendedFutureRow)
+        XCTAssertEqual(evolutions.status, .editable)
+        XCTAssertNil(evolutions.recommendedFutureRow)
+        XCTAssertEqual(pokedex.status, .editable)
+        XCTAssertNil(pokedex.recommendedFutureRow)
         let items = entry(.items, in: report)
         XCTAssertEqual(items.status, .editable)
         XCTAssertEqual(items.sourcePath, "src/data/items.h")
@@ -90,7 +110,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
-        let staleRows = report.entries.compactMap(\.recommendedFutureRow).filter { $0 == "PHS-T50" || $0 == "PHS-T51" }
+        let staleRows = report.entries.compactMap(\.recommendedFutureRow).filter { ["PHS-T50", "PHS-T51", "PHS-T64", "PHS-T65", "PHS-T66"].contains($0) }
         XCTAssertTrue(staleRows.isEmpty, "Completed rows should not appear as future guidance: \(staleRows)", file: file, line: line)
     }
 
@@ -200,11 +220,22 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             """
             const struct PokedexEntry gPokedexEntries[] =
             {
-                [NATIONAL_DEX_TREECKO] = { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50 },
+                [NATIONAL_DEX_TREECKO] = { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50, .description = gTreeckoPokedexText },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
         )
+        try write(
+            """
+            #define TUTOR_FURY_CUTTER 0
+            const u16 gTutorLearnsets[] =
+            {
+                [SPECIES_TREECKO] = TUTOR(FURY_CUTTER),
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        )
+        try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h"))
         try write(
             """
             #define MOVE_POUND 1

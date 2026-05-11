@@ -2,7 +2,7 @@
 
 PokemonHackStudio is a local-first macOS workbench for Pokemon Generation III ROM hacking. The project is source-tree-first: decompilation projects are the canonical editing surface, while ROM inspection, patching, and playtest workflows support validation and migration.
 
-The completed baseline is tracked in `docs/planning-and-progress.md` and is currently complete through `PHS-T40`. New implementation work should start from the Active Board candidate rows.
+The completed baseline is tracked in `docs/planning-and-progress.md`; read that live workboard before choosing implementation work. New implementation work should start from the Active Board candidate rows.
 
 ## Repository Layout
 

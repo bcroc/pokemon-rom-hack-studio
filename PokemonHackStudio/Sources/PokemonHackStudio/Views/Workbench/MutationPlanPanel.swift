@@ -381,6 +381,56 @@ extension MutationPlanPanelContext {
     }
 
     @MainActor
+    static func speciesBatch(
+        plans: [SpeciesEditPlan],
+        result: SpeciesApplyResult?,
+        dirtyDraftCount: Int,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        previewBlockedReason: String?,
+        applyBlockedReason: String?
+    ) -> MutationPlanPanelContext? {
+        guard dirtyDraftCount > 0 || !plans.isEmpty || result != nil else {
+            return nil
+        }
+
+        let planDiagnostics = plans.flatMap(\.diagnostics)
+        let applyDiagnostics = result?.diagnostics ?? []
+        let diagnostics = (planDiagnostics + applyDiagnostics).map { MutationPlanDiagnosticRow(diagnostic: $0) }
+        let status = Self.status(
+            diagnostics: diagnostics,
+            isApplyReady: canApply,
+            hasAppliedChanges: !(result?.appliedChanges.isEmpty ?? true)
+        )
+        let changes = plans.flatMap { plan in
+            plan.changes.map { change in
+                MutationPlanChangeRow(
+                    id: "\(plan.speciesID)::\(change.id)",
+                    path: change.path,
+                    summary: "\(plan.speciesID): \(change.summary)",
+                    detail: "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+                )
+            }
+        }
+
+        return MutationPlanPanelContext(
+            title: "Pokemon Compatibility Batch",
+            summary: Self.speciesBatchSummary(plans: plans, result: result, dirtyDraftCount: dirtyDraftCount),
+            status: status,
+            operationCount: dirtyDraftCount,
+            changes: changes,
+            appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
+            diagnostics: diagnostics,
+            canPreview: canPreview,
+            canApply: canApply,
+            canDiscard: canDiscard,
+            previewBlockedReason: previewBlockedReason,
+            applyBlockedReason: applyBlockedReason
+        )
+    }
+
+    @MainActor
     static func move(
         plan: MoveEditPlan?,
         result: MoveApplyResult?,
@@ -584,6 +634,31 @@ extension MutationPlanPanelContext {
         }
 
         return "No Pokemon edits are staged."
+    }
+
+    private static func speciesBatchSummary(
+        plans: [SpeciesEditPlan],
+        result: SpeciesApplyResult?,
+        dirtyDraftCount: Int
+    ) -> String {
+        if let result, !result.appliedChanges.isEmpty {
+            return "Applied \(result.appliedChanges.count) Pokemon compatibility source file change(s); backups are recorded for review."
+        }
+
+        if let result, !result.diagnostics.isEmpty {
+            return "Pokemon compatibility apply is blocked until the reported diagnostics are resolved."
+        }
+
+        if !plans.isEmpty {
+            let changeCount = plans.reduce(0) { $0 + $1.changes.count }
+            return "\(plans.count) Pokemon draft(s) preview \(changeCount) source file change(s)."
+        }
+
+        if dirtyDraftCount > 0 {
+            return "\(dirtyDraftCount) Pokemon compatibility draft(s) are staged locally and waiting for source mutation preview."
+        }
+
+        return "No Pokemon compatibility edits are staged."
     }
 
     private static func editSummary(

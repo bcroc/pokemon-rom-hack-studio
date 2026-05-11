@@ -8,6 +8,7 @@ struct PokemonMovesWorkbenchView: View {
     let selectedMove: MoveDetailViewState?
     let draft: MoveEditDraft?
     let isDirty: Bool
+    let speciesCatalog: ProjectSpeciesCatalog?
     let loadStatus: MoveCatalogLoadStatus
     @Binding var filter: MoveWorkbenchFilter
     let fallbackRecords: [WorkbenchRecord]
@@ -15,6 +16,8 @@ struct PokemonMovesWorkbenchView: View {
     let onUpdateDraft: (MoveEditDraft) -> Void
     let onRevealMoveInSidebar: (String) -> Void
     let onFocusSpecies: (String) -> Void
+    let isSpeciesCompatibleWithMove: (String, String, LearnsetBucket) -> Bool
+    let onSetSpeciesCompatibility: (String, String, LearnsetBucket, Bool) -> Void
     let onNavigateToResourceAsset: (String) -> Void
 
     var body: some View {
@@ -184,6 +187,7 @@ struct PokemonMovesWorkbenchView: View {
 
             learnerSection(title: "TM/HM", rows: move.tmhmLearners, layoutMode: layoutMode)
             learnerSection(title: "Tutor", rows: move.tutorLearners, layoutMode: layoutMode)
+            compatibilityBatchSection(move: move, layoutMode: layoutMode)
             learnerSection(title: "Learned By", rows: move.learnedBy, layoutMode: layoutMode)
 
             EditorSection(title: "Source") {
@@ -374,6 +378,83 @@ struct PokemonMovesWorkbenchView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func compatibilityBatchSection(move: MoveDetailViewState, layoutMode: WorkbenchLayoutMode) -> some View {
+        EditorSection(title: "Compatibility Batch") {
+            if let speciesCatalog {
+                let supportsTMHM = speciesCatalog.constants[.tmhmMoves]?.contains { $0.symbol == move.moveID } == true
+                let supportsTutor = speciesCatalog.constants[.tutorMoves]?.contains { $0.symbol == move.moveID } == true
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("\(speciesCatalog.species.count) species")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text([
+                            supportsTMHM ? "TM/HM editable" : "TM/HM unavailable",
+                            supportsTutor ? "Tutor editable" : "Tutor unavailable"
+                        ].joined(separator: " / "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: layoutMode.isCompact ? 210 : 260), spacing: 10)],
+                        alignment: .leading,
+                        spacing: 8
+                    ) {
+                        ForEach(speciesCatalog.species) { species in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Button {
+                                    onFocusSpecies(species.speciesID)
+                                } label: {
+                                    Text(displayConstant(species.speciesID))
+                                        .font(.callout.weight(.medium))
+                                        .lineLimit(1)
+                                }
+                                .buttonStyle(.borderless)
+                                .help(species.speciesID)
+
+                                HStack(spacing: 12) {
+                                    Toggle("TM/HM", isOn: compatibilityBinding(speciesID: species.speciesID, moveID: move.moveID, bucket: .tmhm))
+                                        .toggleStyle(.checkbox)
+                                        .disabled(!supportsTMHM)
+                                    Toggle("Tutor", isOn: compatibilityBinding(speciesID: species.speciesID, moveID: move.moveID, bucket: .tutor))
+                                        .toggleStyle(.checkbox)
+                                        .disabled(!supportsTutor)
+                                }
+                                .font(.caption)
+                            }
+                            .padding(10)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(.quaternary, lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text("Open a supported Pokemon data project to batch-stage move compatibility.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func compatibilityBinding(
+        speciesID: String,
+        moveID: String,
+        bucket: LearnsetBucket
+    ) -> Binding<Bool> {
+        Binding(
+            get: { isSpeciesCompatibleWithMove(speciesID, moveID, bucket) },
+            set: { isEnabled in
+                onSetSpeciesCompatibility(speciesID, moveID, bucket, isEnabled)
+            }
+        )
     }
 
     private func diagnosticRow(_ diagnostic: IndexedDiagnosticRow) -> some View {

@@ -998,28 +998,3 @@ private extension MapEventTemplateKind {
         }
     }
 }
-
-private func displayConstant(_ symbol: String) -> String {
-    var value = symbol
-    for prefix in [
-        "OBJ_EVENT_GFX_",
-        "MOVEMENT_TYPE_",
-        "TRAINER_TYPE_",
-        "BG_EVENT_PLAYER_FACING_",
-        "ITEM_",
-        "VAR_",
-        "FLAG_",
-        "MAP_"
-    ] {
-        if value.hasPrefix(prefix) {
-            value.removeFirst(prefix.count)
-            break
-        }
-    }
-    return value
-        .split(separator: "_")
-        .map { word in
-            word.prefix(1).uppercased() + word.dropFirst().lowercased()
-        }
-        .joined(separator: " ")
-}

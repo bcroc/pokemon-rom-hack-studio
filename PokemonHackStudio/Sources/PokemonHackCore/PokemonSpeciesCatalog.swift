@@ -39,6 +39,8 @@ public enum SpeciesConstantGroup: String, Codable, Equatable, CaseIterable, Iden
     case items
     case moves
     case tmhmMoves
+    case tutorMoves
+    case evolutionMethods
 
     public var id: String { rawValue }
 }
@@ -235,27 +237,33 @@ public struct SpeciesLearnsets: Codable, Equatable {
     public let levelUp: [SpeciesLevelUpMove]
     public let tmhm: [SpeciesMoveReference]
     public let egg: [SpeciesMoveReference]
+    public let tutor: [SpeciesMoveReference]
     public let levelUpSymbol: String?
     public let levelUpSourceSpan: SourceSpan?
     public let tmhmSourceSpan: SourceSpan?
     public let eggSourceSpan: SourceSpan?
+    public let tutorSourceSpan: SourceSpan?
 
     public init(
         levelUp: [SpeciesLevelUpMove] = [],
         tmhm: [SpeciesMoveReference] = [],
         egg: [SpeciesMoveReference] = [],
+        tutor: [SpeciesMoveReference] = [],
         levelUpSymbol: String? = nil,
         levelUpSourceSpan: SourceSpan? = nil,
         tmhmSourceSpan: SourceSpan? = nil,
-        eggSourceSpan: SourceSpan? = nil
+        eggSourceSpan: SourceSpan? = nil,
+        tutorSourceSpan: SourceSpan? = nil
     ) {
         self.levelUp = levelUp
         self.tmhm = tmhm
         self.egg = egg
+        self.tutor = tutor
         self.levelUpSymbol = levelUpSymbol
         self.levelUpSourceSpan = levelUpSourceSpan
         self.tmhmSourceSpan = tmhmSourceSpan
         self.eggSourceSpan = eggSourceSpan
+        self.tutorSourceSpan = tutorSourceSpan
     }
 }
 
@@ -305,24 +313,39 @@ public struct SpeciesPokedexEntry: Codable, Equatable {
     public let categoryName: String?
     public let height: String?
     public let weight: String?
+    public let pokemonScale: String?
+    public let pokemonOffset: String?
+    public let trainerScale: String?
+    public let trainerOffset: String?
     public let descriptionSymbol: String?
     public let description: String?
     public let sourceSpan: SourceSpan
+    public let descriptionSpan: SourceSpan?
 
     public init(
         categoryName: String? = nil,
         height: String? = nil,
         weight: String? = nil,
+        pokemonScale: String? = nil,
+        pokemonOffset: String? = nil,
+        trainerScale: String? = nil,
+        trainerOffset: String? = nil,
         descriptionSymbol: String? = nil,
         description: String? = nil,
-        sourceSpan: SourceSpan
+        sourceSpan: SourceSpan,
+        descriptionSpan: SourceSpan? = nil
     ) {
         self.categoryName = categoryName
         self.height = height
         self.weight = weight
+        self.pokemonScale = pokemonScale
+        self.pokemonOffset = pokemonOffset
+        self.trainerScale = trainerScale
+        self.trainerOffset = trainerOffset
         self.descriptionSymbol = descriptionSymbol
         self.description = description
         self.sourceSpan = sourceSpan
+        self.descriptionSpan = descriptionSpan
     }
 }
 
@@ -446,6 +469,28 @@ public struct SpeciesEVYieldDraft: Codable, Equatable {
     }
 }
 
+public struct SpeciesPokedexDraft: Codable, Equatable {
+    public var categoryName: String
+    public var height: String
+    public var weight: String
+    public var pokemonScale: String
+    public var pokemonOffset: String
+    public var trainerScale: String
+    public var trainerOffset: String
+    public var description: String
+
+    public init(entry: SpeciesPokedexEntry) {
+        self.categoryName = entry.categoryName ?? ""
+        self.height = entry.height ?? "0"
+        self.weight = entry.weight ?? "0"
+        self.pokemonScale = entry.pokemonScale ?? "256"
+        self.pokemonOffset = entry.pokemonOffset ?? "0"
+        self.trainerScale = entry.trainerScale ?? "256"
+        self.trainerOffset = entry.trainerOffset ?? "0"
+        self.description = entry.description ?? ""
+    }
+}
+
 public struct SpeciesLevelUpMoveDraft: Codable, Equatable, Identifiable {
     public var id: String
     public var level: Int
@@ -455,6 +500,28 @@ public struct SpeciesLevelUpMoveDraft: Codable, Equatable, Identifiable {
         self.id = id
         self.level = level
         self.move = move
+    }
+}
+
+public struct SpeciesEvolutionDraft: Codable, Equatable, Identifiable {
+    public var id: String
+    public var method: String
+    public var parameter: String
+    public var targetSpecies: String
+
+    public init(id: String = UUID().uuidString, method: String, parameter: String, targetSpecies: String) {
+        self.id = id
+        self.method = method
+        self.parameter = parameter
+        self.targetSpecies = targetSpecies
+    }
+
+    public init(evolution: SpeciesEvolution) {
+        self.init(
+            method: evolution.method,
+            parameter: evolution.parameter,
+            targetSpecies: evolution.targetSpecies
+        )
     }
 }
 
@@ -481,6 +548,10 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
     public var levelUpMoves: [SpeciesLevelUpMoveDraft]
     public var tmhmMoves: [String]
     public var eggMoves: [String]
+    public var tutorMoves: [String]
+    public var evolutions: [SpeciesEvolutionDraft]
+    public var pokedex: SpeciesPokedexDraft?
+    public var assetData: [SpeciesAssetKind: Data]
 
     public init(
         speciesID: String,
@@ -502,7 +573,11 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         noFlip: Bool,
         levelUpMoves: [SpeciesLevelUpMoveDraft],
         tmhmMoves: [String],
-        eggMoves: [String]
+        eggMoves: [String],
+        tutorMoves: [String],
+        evolutions: [SpeciesEvolutionDraft],
+        pokedex: SpeciesPokedexDraft? = nil,
+        assetData: [SpeciesAssetKind: Data] = [:]
     ) {
         self.speciesID = speciesID
         self.baseStats = baseStats
@@ -524,10 +599,22 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         self.levelUpMoves = levelUpMoves
         self.tmhmMoves = Array(Set(tmhmMoves)).sorted()
         self.eggMoves = eggMoves
+        self.tutorMoves = Array(Set(tutorMoves)).sorted()
+        self.evolutions = evolutions
+        self.pokedex = pokedex
+        self.assetData = assetData
     }
 
     public init?(detail: SpeciesDetail) {
         guard detail.isEditable else { return nil }
+
+        let levelUpMoves = detail.learnsets.levelUp.map { SpeciesLevelUpMoveDraft(level: $0.level, move: $0.move) }
+        let tmhmMoves = detail.learnsets.tmhm.map(\.move)
+        let eggMoves = detail.learnsets.egg.map(\.move)
+        let tutorMoves = detail.learnsets.tutor.map(\.move)
+        let evolutions = detail.evolutions.map { SpeciesEvolutionDraft(evolution: $0) }
+        let pokedex = detail.pokedex.map { SpeciesPokedexDraft(entry: $0) }
+
         self.init(
             speciesID: detail.speciesID,
             baseStats: SpeciesBaseStatsDraft(stats: detail.baseStats),
@@ -546,9 +633,13 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
             itemRare: detail.heldItems.rare ?? "ITEM_NONE",
             bodyColor: detail.bodyColor ?? "BODY_COLOR_RED",
             noFlip: boolValue(detail.noFlip),
-            levelUpMoves: detail.learnsets.levelUp.map { SpeciesLevelUpMoveDraft(level: $0.level, move: $0.move) },
-            tmhmMoves: detail.learnsets.tmhm.map(\.move),
-            eggMoves: detail.learnsets.egg.map(\.move)
+            levelUpMoves: levelUpMoves,
+            tmhmMoves: tmhmMoves,
+            eggMoves: eggMoves,
+            tutorMoves: tutorMoves,
+            evolutions: evolutions,
+            pokedex: pokedex,
+            assetData: [:]
         )
     }
 }
@@ -715,6 +806,7 @@ public enum ProjectSpeciesCatalogBuilder {
         let levelUpLearnsets = try readLevelUpLearnsets(descriptor: descriptor, root: root, fileManager: fileManager)
         let tmhmLearnsets = try readTMHMLearnsets(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
         let eggMoves = try readEggMoves(descriptor: descriptor, root: root, fileManager: fileManager)
+        let tutorLearnsets = try readTutorLearnsets(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
         let evolutions = try readEvolutions(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
         let pokedexEntries = try readPokedexEntries(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
 
@@ -728,6 +820,7 @@ public enum ProjectSpeciesCatalogBuilder {
             let levelUp = levelUpLearnsets[speciesID]
             let tmhm = tmhmLearnsets[speciesID]
             let egg = eggMoves[speciesID]
+            let tutor = tutorLearnsets[speciesID]
             return SpeciesDetail(
                 speciesID: speciesID,
                 displayName: displayName(for: speciesID),
@@ -767,10 +860,12 @@ public enum ProjectSpeciesCatalogBuilder {
                     levelUp: levelUp?.moves ?? [],
                     tmhm: tmhm?.moves ?? [],
                     egg: egg?.moves ?? [],
+                    tutor: tutor?.moves ?? [],
                     levelUpSymbol: levelUp?.symbol,
                     levelUpSourceSpan: levelUp?.span,
                     tmhmSourceSpan: tmhm?.span,
-                    eggSourceSpan: egg?.span
+                    eggSourceSpan: egg?.span,
+                    tutorSourceSpan: tutor?.span
                 ),
                 evolutions: evolutions[speciesID] ?? [],
                 pokedex: pokedexEntries[speciesID],
@@ -809,6 +904,10 @@ public enum ProjectSpeciesCatalogBuilder {
         if !tmhmMoves.isEmpty {
             result[.tmhmMoves] = tmhmMoves
         }
+        let tutorMoves = tutorMoveConstants(descriptor: descriptor, root: root, fileManager: fileManager)
+        if !tutorMoves.isEmpty {
+            result[.tutorMoves] = tutorMoves
+        }
         return result.mapValues { constants in
             constants.sorted { lhs, rhs in
                 let lhsNumeric = Int(lhs.value)
@@ -838,6 +937,28 @@ public enum ProjectSpeciesCatalogBuilder {
                 sourceSpan: SourceSpan(relativePath: descriptor.path, startLine: index + 1)
             )
         }
+    }
+
+    private static func tutorMoveConstants(descriptor: SpeciesCatalogDescriptor, root: URL, fileManager: FileManager) -> [SpeciesConstant] {
+        guard let path = descriptor.tutorPath else { return [] }
+        let url = root.appendingPathComponent(path)
+        guard let text = try? readText(at: url) else { return [] }
+
+        let lines = text.components(separatedBy: .newlines)
+        var result: [SpeciesConstant] = []
+        for (index, line) in lines.enumerated() {
+            if let match = firstRegexMatch(#"#define\s+TUTOR_([A-Z0-9_]+)\s+"#, in: line) {
+                result.append(
+                    SpeciesConstant(
+                        group: .tutorMoves,
+                        symbol: "MOVE_\(match)",
+                        value: match,
+                        sourceSpan: SourceSpan(relativePath: path, startLine: index + 1)
+                    )
+                )
+            }
+        }
+        return result
     }
 
     private static func tmhmMoveConstants(from itemConstants: [SpeciesConstant]) -> [SpeciesConstant] {
@@ -1108,6 +1229,55 @@ public enum ProjectSpeciesCatalogBuilder {
         }
     }
 
+    private static func readTutorLearnsets(
+        descriptor: SpeciesCatalogDescriptor,
+        root: URL,
+        fileManager: FileManager,
+        diagnostics: inout [Diagnostic]
+    ) throws -> [String: SpeciesMoveListRecord] {
+        guard let relativePath = descriptor.tutorPath else { return [:] }
+        let url = root.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: url.path) else { return [:] }
+        let text = try readText(at: url)
+
+        for symbol in descriptor.tutorTableSymbols {
+            let parsed = CInitializerParser.tableEntries(
+                in: text,
+                descriptor: CInitializerTableDescriptor(
+                    module: .learnsets,
+                    relativePath: relativePath,
+                    tableSymbol: symbol,
+                    entryStyle: .bracketed
+                )
+            )
+            guard !parsed.entries.isEmpty else {
+                diagnostics.append(contentsOf: parsed.diagnostics)
+                continue
+            }
+            return Dictionary(uniqueKeysWithValues: parsed.entries.compactMap { entry in
+                guard entry.symbol.hasPrefix("SPECIES_") else { return nil }
+                let moves = tutorMoves(in: entry.body, sourceSpan: entry.span)
+                return (entry.symbol, SpeciesMoveListRecord(span: entry.span, moves: moves.sorted { $0.move < $1.move }))
+            })
+        }
+        return [:]
+    }
+
+    private static func tutorMoves(in body: String, sourceSpan: SourceSpan) -> [SpeciesMoveReference] {
+        var moves: [String] = []
+        moves.append(contentsOf: regexMatches(#"TUTOR\(\s*([A-Z0-9_]+)\s*\)"#, in: body).compactMap { match in
+            guard match.count >= 2 else { return nil }
+            return "MOVE_\(match[1])"
+        })
+        moves.append(contentsOf: regexMatches(#"(MOVE_[A-Z0-9_]+)"#, in: body).compactMap { match in
+            guard match.count >= 2 else { return nil }
+            return match[1]
+        })
+        return Array(Set(moves.filter { $0 != "MOVE_NONE" })).map {
+            SpeciesMoveReference(move: $0, sourceSpan: sourceSpan)
+        }
+    }
+
     private static func readEggMoves(
         descriptor: SpeciesCatalogDescriptor,
         root: URL,
@@ -1208,13 +1378,19 @@ public enum ProjectSpeciesCatalogBuilder {
             let species = speciesConstant(fromDexSymbol: entry.symbol)
             guard species.hasPrefix("SPECIES_") else { return nil }
             let descriptionSymbol = compact(entry.fields["description"])
+            let textData = descriptionSymbol.flatMap { descriptionText[$0] }
             let pokedex = SpeciesPokedexEntry(
                 categoryName: unwrapTextMacro(entry.fields["categoryName"]),
                 height: compact(entry.fields["height"]),
                 weight: compact(entry.fields["weight"]),
+                pokemonScale: compact(entry.fields["pokemonScale"]),
+                pokemonOffset: compact(entry.fields["pokemonOffset"]),
+                trainerScale: compact(entry.fields["trainerScale"]),
+                trainerOffset: compact(entry.fields["trainerOffset"]),
                 descriptionSymbol: descriptionSymbol,
-                description: descriptionSymbol.flatMap { descriptionText[$0] },
-                sourceSpan: entry.span
+                description: textData?.text,
+                sourceSpan: entry.span,
+                descriptionSpan: textData?.span
             )
             return (species, pokedex)
         })
@@ -1224,22 +1400,35 @@ public enum ProjectSpeciesCatalogBuilder {
         descriptor: SpeciesCatalogDescriptor,
         root: URL,
         fileManager: FileManager
-    ) throws -> [String: String] {
+    ) throws -> [String: (text: String, span: SourceSpan)] {
         guard let relativePath = descriptor.pokedexTextPath else { return [:] }
         let url = root.appendingPathComponent(relativePath)
         guard fileManager.fileExists(atPath: url.path) else { return [:] }
         let text = try readText(at: url)
-        var result: [String: String] = [:]
+        var result: [String: (text: String, span: SourceSpan)] = [:]
+
         let pattern = #"const\s+u8\s+(g[A-Za-z0-9_]+PokedexText)\[\]\s*=\s*_\(\s*((?:"(?:\\.|[^"])*"\s*)+)\);"#
-        for match in regexMatches(pattern, in: text, options: [.dotMatchesLineSeparators]) {
-            guard match.count >= 3 else { continue }
-            let lines = regexMatches(#""((?:\\.|[^"])*)""#, in: match[2]).compactMap { quoted -> String? in
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [:] }
+        let nsText = text as NSString
+
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            guard match.numberOfRanges >= 3 else { continue }
+            let symbol = nsText.substring(with: match.range(at: 1))
+            let fullMatchRange = match.range(at: 0)
+            let fullTextRange = match.range(at: 2)
+            let fullText = nsText.substring(with: fullTextRange)
+
+            let lines = regexMatches(#""((?:\\.|[^"])*)""#, in: fullText, options: [.dotMatchesLineSeparators]).compactMap { quoted -> String? in
                 guard quoted.count >= 2 else { return nil }
                 return quoted[1]
-                    .replacingOccurrences(of: #"\\n"#, with: "\n")
-                    .replacingOccurrences(of: #"\""#, with: "\"")
+                    .replacingOccurrences(of: "\\n", with: "\n")
+                    .replacingOccurrences(of: "\\\"", with: "\"")
             }
-            result[match[1]] = lines.joined(separator: "\n")
+
+            result[symbol] = (
+                text: lines.joined(separator: "\n"),
+                span: SourceSpan.span(for: fullMatchRange, in: text, relativePath: relativePath)
+            )
         }
         return result
     }
@@ -1409,6 +1598,67 @@ public enum SpeciesMutationPlanner {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EGG_MOVES_SPAN_MISSING", message: "\(draft.speciesID) has no editable egg-move source span. Adding new egg-move blocks is not supported yet.", span: species.sourceSpan))
                 }
             }
+            if evolutionChanged(species: species, draft: draft) {
+                if let span = species.evolutions.first?.sourceSpan,
+                   let path = descriptor.evolutionPath,
+                   let evolutionChange = rewriteChange(
+                    root: root,
+                    path: path,
+                    span: span,
+                    replacement: renderEvolutionEntry(speciesID: draft.speciesID, evolutions: draft.evolutions)
+                   ) {
+                    changes.append(evolutionChange)
+                } else if descriptor.evolutionPath != nil {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTION_SPAN_MISSING", message: "\(draft.speciesID) has no editable evolution source span.", span: species.sourceSpan))
+                }
+            }
+            if pokedexChanged(species: species, draft: draft) {
+                if let span = species.pokedex?.sourceSpan,
+                   let path = descriptor.pokedexPath,
+                   let pokedexDraft = draft.pokedex,
+                   let pokedexChange = rewriteChange(
+                    root: root,
+                    path: path,
+                    span: span,
+                    replacement: renderPokedexEntry(speciesID: draft.speciesID, draft: pokedexDraft, descriptionSymbol: species.pokedex?.descriptionSymbol)
+                   ) {
+                    changes.append(pokedexChange)
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_SPAN_MISSING", message: "\(draft.speciesID) has no editable Pokedex source span.", span: species.sourceSpan))
+                }
+            }
+            if pokedexTextChanged(species: species, draft: draft) {
+                if let span = species.pokedex?.descriptionSpan,
+                   let path = descriptor.pokedexTextPath,
+                   let text = draft.pokedex?.description,
+                   let symbol = species.pokedex?.descriptionSymbol,
+                   let pokedexTextChange = rewriteChange(
+                    root: root,
+                    path: path,
+                    span: span,
+                    replacement: renderPokedexText(symbol: symbol, text: text)
+                   ) {
+                    changes.append(pokedexTextChange)
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_TEXT_SPAN_MISSING", message: "\(draft.speciesID) has no editable Pokedex description source span.", span: species.sourceSpan))
+                }
+            }
+            if tutorChanged(species: species, draft: draft) {
+                if let span = species.learnsets.tutorSourceSpan,
+                   let path = descriptor.tutorPath,
+                   let tutorChange = rewriteChange(
+                    root: root,
+                    path: path,
+                    span: span,
+                    replacement: renderTutorLearnset(speciesID: draft.speciesID, moves: draft.tutorMoves)
+                   ) {
+                    changes.append(tutorChange)
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_TUTOR_SPAN_MISSING", message: "\(draft.speciesID) has no editable tutor learnset source span. Bitfield-based tutor learnsets are only supported if they already exist in the source.", span: species.sourceSpan))
+                }
+            }
+
+            changes.append(contentsOf: assetChanges(catalog: catalog, draft: draft, root: root, fileManager: fileManager))
         }
 
         let plannedChanges = changes.map {
@@ -1451,26 +1701,19 @@ public enum SpeciesMutationPlanner {
     }
 
     private static func plannerDiagnostics(catalog: ProjectSpeciesCatalog, species: SpeciesDetail, draft: SpeciesEditDraft) -> [Diagnostic] {
-        var diagnostics = species.diagnostics.filter { $0.severity == .error }
-        guard species.isEditable else {
-            diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_NOT_EDITABLE", message: "\(species.speciesID) is read-only until its source diagnostics are resolved.", span: species.sourceSpan))
-            return diagnostics
-        }
-        appendRangeDiagnostics(draft: draft, species: species, diagnostics: &diagnostics)
+        var diagnostics: [Diagnostic] = []
+        appendStructuralDiagnostics(draft: draft, species: species, diagnostics: &diagnostics)
         appendConstantDiagnostics(catalog: catalog, draft: draft, species: species, diagnostics: &diagnostics)
-        if levelUpChanged(species: species, draft: draft), species.learnsets.levelUpSourceSpan == nil {
-            diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_LEVEL_UP_SPAN_MISSING", message: "\(draft.speciesID) has no editable level-up learnset source span.", span: species.sourceSpan))
-        }
-        if tmhmChanged(species: species, draft: draft), species.learnsets.tmhmSourceSpan == nil {
-            diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_TMHM_SPAN_MISSING", message: "\(draft.speciesID) has no editable TM/HM learnset source span.", span: species.sourceSpan))
-        }
+        appendEvolutionDiagnostics(catalog: catalog, draft: draft, species: species, diagnostics: &diagnostics)
+
         if eggChanged(species: species, draft: draft), species.learnsets.eggSourceSpan == nil {
             diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EGG_MOVES_SPAN_MISSING", message: "\(draft.speciesID) has no editable egg-move source span.", span: species.sourceSpan))
         }
+
         return diagnostics
     }
 
-    private static func appendRangeDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
+    private static func appendStructuralDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
         let stats = [
             ("HP", draft.baseStats.hp),
             ("Attack", draft.baseStats.attack),
@@ -1510,6 +1753,29 @@ public enum SpeciesMutationPlanner {
                 diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_LEVEL_UP_LEVEL_INVALID", message: "Level-up move levels must be between 1 and 100.", span: species.learnsets.levelUpSourceSpan ?? species.sourceSpan))
             }
         }
+        if draft.evolutions.count > 5 {
+            diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTIONS_EXCEEDED", message: "Species cannot have more than 5 evolutions.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
+        }
+        if let pokedex = draft.pokedex {
+            appendPokedexNumericDiagnostic(label: "height", value: pokedex.height, code: "SPECIES_POKEDEX_HEIGHT_INVALID", species: species, diagnostics: &diagnostics)
+            appendPokedexNumericDiagnostic(label: "weight", value: pokedex.weight, code: "SPECIES_POKEDEX_WEIGHT_INVALID", species: species, diagnostics: &diagnostics)
+            appendPokedexNumericDiagnostic(label: "Pokemon scale", value: pokedex.pokemonScale, code: "SPECIES_POKEDEX_POKEMON_SCALE_INVALID", species: species, diagnostics: &diagnostics)
+            appendPokedexNumericDiagnostic(label: "Pokemon offset", value: pokedex.pokemonOffset, code: "SPECIES_POKEDEX_POKEMON_OFFSET_INVALID", species: species, diagnostics: &diagnostics)
+            appendPokedexNumericDiagnostic(label: "trainer scale", value: pokedex.trainerScale, code: "SPECIES_POKEDEX_TRAINER_SCALE_INVALID", species: species, diagnostics: &diagnostics)
+            appendPokedexNumericDiagnostic(label: "trainer offset", value: pokedex.trainerOffset, code: "SPECIES_POKEDEX_TRAINER_OFFSET_INVALID", species: species, diagnostics: &diagnostics)
+        }
+    }
+
+    private static func appendPokedexNumericDiagnostic(
+        label: String,
+        value: String,
+        code: String,
+        species: SpeciesDetail,
+        diagnostics: inout [Diagnostic]
+    ) {
+        if Int(value.trimmingCharacters(in: .whitespacesAndNewlines)) == nil {
+            diagnostics.append(Diagnostic(severity: .error, code: code, message: "Pokedex \(label) must be a numeric value.", span: species.pokedex?.sourceSpan ?? species.sourceSpan))
+        }
     }
 
     private static func appendConstantDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
@@ -1522,7 +1788,26 @@ public enum SpeciesMutationPlanner {
         appendUnknown([draft.itemCommon, draft.itemRare].filter { $0 != "ITEM_NONE" }, group: .items, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown(draft.eggMoves.filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+        appendUnknown(draft.tutorMoves, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown(draft.tmhmMoves, group: .tmhmMoves, constants: constants, species: species, diagnostics: &diagnostics)
+    }
+
+    private static func appendEvolutionDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
+        let constants = catalog.constants.mapValues { Set($0.map(\.symbol)) }
+        appendUnknown(draft.evolutions.map(\.method), group: .evolutionMethods, constants: constants, species: species, diagnostics: &diagnostics)
+
+        let knownSpecies = Set(catalog.species.map(\.speciesID))
+        for evolution in draft.evolutions {
+            if !knownSpecies.contains(evolution.targetSpecies) {
+                diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_DRAFT_CONSTANT_UNRESOLVED", message: "\(evolution.targetSpecies) is not a valid species in the current project.", span: species.sourceSpan))
+            }
+            if itemParameterEvolutionMethods.contains(evolution.method) {
+                appendUnknown([evolution.parameter], group: .items, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if zeroParameterEvolutionMethods.contains(evolution.method), compact(evolution.parameter) != "0" {
+                diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTION_PARAMETER_INVALID", message: "\(evolution.method) requires parameter 0.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
+            }
+        }
     }
 
     private static func appendUnknown(
@@ -1561,6 +1846,93 @@ public enum SpeciesMutationPlanner {
             newData: newData,
             textPreview: replacement
         )
+    }
+
+    private static func assetChanges(
+        catalog: ProjectSpeciesCatalog,
+        draft: SpeciesEditDraft,
+        root: URL,
+        fileManager: FileManager
+    ) -> [SpeciesEditFileChange] {
+        let directory = "graphics/pokemon/\(assetSlug(for: draft.speciesID))"
+        return draft.assetData.compactMap { kind, newData in
+            let path = "\(directory)/\(kind.filename)"
+            let url = root.appendingPathComponent(path)
+            let originalData = try? Data(contentsOf: url)
+
+            return SpeciesEditFileChange(
+                path: path,
+                summary: "Replace \(kind.rawValue) asset",
+                originalByteCount: originalData?.count ?? 0,
+                originalSHA1: originalData.map { pokemonHackSHA1Hex($0) },
+                newByteCount: newData.count,
+                newData: newData,
+                textPreview: nil
+            )
+        }
+    }
+
+    private static func pokedexChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        guard let old = species.pokedex, let new = draft.pokedex else {
+            return (species.pokedex != nil) != (draft.pokedex != nil)
+        }
+        return old.categoryName != new.categoryName ||
+               old.height != new.height ||
+               old.weight != new.weight ||
+               old.pokemonScale != new.pokemonScale ||
+               old.pokemonOffset != new.pokemonOffset ||
+               old.trainerScale != new.trainerScale ||
+               old.trainerOffset != new.trainerOffset
+    }
+
+    private static func pokedexTextChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        guard let oldText = species.pokedex?.description, let newText = draft.pokedex?.description else {
+            return (species.pokedex?.description != nil) != (draft.pokedex?.description != nil)
+        }
+        return oldText != newText
+    }
+
+    private static func renderPokedexEntry(speciesID: String, draft: SpeciesPokedexDraft, descriptionSymbol: String?) -> String {
+        var lines: [String] = []
+        let dexID = speciesID.replacingOccurrences(of: "SPECIES_", with: "NATIONAL_DEX_")
+        lines.append("    [\(dexID)] =")
+        lines.append("    {")
+        lines.append("        .categoryName = _(\(cStringLiteral(draft.categoryName))),")
+        lines.append("        .height = \(draft.height),")
+        lines.append("        .weight = \(draft.weight),")
+        lines.append("        .description = \(descriptionSymbol ?? "gDummyPokedexText"),")
+        lines.append("        .pokemonScale = \(draft.pokemonScale),")
+        lines.append("        .pokemonOffset = \(draft.pokemonOffset),")
+        lines.append("        .trainerScale = \(draft.trainerScale),")
+        lines.append("        .trainerOffset = \(draft.trainerOffset),")
+        lines.append("    },")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderPokedexText(symbol: String, text: String) -> String {
+        "const u8 \(symbol)[] = _(\(cStringLiteral(text)));"
+    }
+
+    private static func cStringLiteral(_ text: String) -> String {
+        var result = "\""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\\":
+                result += "\\\\"
+            case "\"":
+                result += "\\\""
+            case "\n":
+                result += "\\n"
+            case "\r":
+                result += "\\r"
+            case "\t":
+                result += "\\t"
+            default:
+                result.unicodeScalars.append(scalar)
+            }
+        }
+        result += "\""
+        return result
     }
 
     private static func renderSpeciesInfoEntry(_ draft: SpeciesEditDraft) -> String {
@@ -1654,6 +2026,21 @@ public enum SpeciesMutationPlanner {
         """
     }
 
+    private static func renderEvolutionEntry(speciesID: String, evolutions: [SpeciesEvolutionDraft]) -> String {
+        guard !evolutions.isEmpty else {
+            return "    [\(speciesID)] = {},"
+        }
+        let rows = evolutions.map { evo in
+            "{ \(evo.method), \(evo.parameter), \(evo.targetSpecies) }"
+        }.joined(separator: ",\n                            ")
+
+        if evolutions.count > 1 {
+            return "    [\(speciesID)] = {\n                            \(rows)\n                        },"
+        } else {
+            return "    [\(speciesID)] = {\(rows)},"
+        }
+    }
+
     private static func orderedTMHMMoves(_ moves: [String], catalog: ProjectSpeciesCatalog) -> [String] {
         let moveSet = Set(moves)
         let ordered = (catalog.constants[.tmhmMoves] ?? []).map(\.symbol).filter { moveSet.contains($0) }
@@ -1673,11 +2060,47 @@ public enum SpeciesMutationPlanner {
         draft.eggMoves != species.learnsets.egg.map(\.move)
     }
 
+    private static func evolutionChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        draft.evolutions.map { "\($0.method):\($0.parameter):\($0.targetSpecies)" } != species.evolutions.map { "\($0.method):\($0.parameter):\($0.targetSpecies)" }
+    }
+
+    private static func tutorChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        Set(draft.tutorMoves) != Set(species.learnsets.tutor.map(\.move))
+    }
+
+    private static func renderTutorLearnset(speciesID: String, moves: [String]) -> String {
+        var lines: [String] = []
+        lines.append("    [\(speciesID)]             = (")
+        if moves.isEmpty {
+            lines.append("                                0")
+        } else {
+            for (index, move) in moves.enumerated() {
+                let suffix = index == moves.count - 1 ? "" : " |"
+                let moveConstant = move.replacingOccurrences(of: "MOVE_", with: "")
+                lines.append("                                TUTOR(\(moveConstant))\(suffix)")
+            }
+        }
+        lines.append("                                ),")
+        return lines.joined(separator: "\n")
+    }
+
     private static func backupTimestamp() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
     }
+
+    private static let itemParameterEvolutionMethods: Set<String> = [
+        "EVO_ITEM",
+        "EVO_TRADE_ITEM"
+    ]
+
+    private static let zeroParameterEvolutionMethods: Set<String> = [
+        "EVO_FRIENDSHIP",
+        "EVO_FRIENDSHIP_DAY",
+        "EVO_FRIENDSHIP_NIGHT",
+        "EVO_TRADE"
+    ]
 }
 
 public enum SpeciesMutationApplier {
@@ -1777,6 +2200,8 @@ private struct SpeciesCatalogDescriptor {
     let evolutionPath: String?
     let pokedexPath: String?
     let pokedexTextPath: String?
+    let tutorPath: String?
+    let tutorTableSymbols: [String]
     let supportsEditing: Bool
     let constants: [SpeciesConstantDescriptor]
 
@@ -1795,6 +2220,8 @@ private struct SpeciesCatalogDescriptor {
                 evolutionPath: "src/data/pokemon/evolution.h",
                 pokedexPath: "src/data/pokemon/pokedex_entries.h",
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
+                tutorPath: "src/data/pokemon/tutor_learnsets.h",
+                tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
                 supportsEditing: true,
                 constants: classicConstants
             )
@@ -1811,6 +2238,8 @@ private struct SpeciesCatalogDescriptor {
                 evolutionPath: "src/data/pokemon/evolution.h",
                 pokedexPath: "src/data/pokemon/pokedex_entries.h",
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
+                tutorPath: "src/data/pokemon/tutor_learnsets.h",
+                tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
                 supportsEditing: true,
                 constants: classicConstants
             )
@@ -1827,6 +2256,8 @@ private struct SpeciesCatalogDescriptor {
                 evolutionPath: "src/data/pokemon/evolution.h",
                 pokedexPath: "src/data/pokedex_entries_en.h",
                 pokedexTextPath: "src/data/pokedex_text_en.h",
+                tutorPath: nil,
+                tutorTableSymbols: [],
                 supportsEditing: false,
                 constants: classicConstants
             )
@@ -1843,6 +2274,8 @@ private struct SpeciesCatalogDescriptor {
                 evolutionPath: "src/data/pokemon/evolution.h",
                 pokedexPath: "src/data/pokemon/pokedex_entries.h",
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
+                tutorPath: "src/data/pokemon/tutor_learnsets.h",
+                tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
                 supportsEditing: false,
                 constants: classicConstants
             )
@@ -1858,7 +2291,8 @@ private struct SpeciesCatalogDescriptor {
         SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .growthRates, prefixes: ["GROWTH_"]),
         SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .bodyColors, prefixes: ["BODY_COLOR_"]),
         SpeciesConstantDescriptor(path: "include/constants/items.h", group: .items, prefixes: ["ITEM_"]),
-        SpeciesConstantDescriptor(path: "include/constants/moves.h", group: .moves, prefixes: ["MOVE_"])
+        SpeciesConstantDescriptor(path: "include/constants/moves.h", group: .moves, prefixes: ["MOVE_"]),
+        SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .evolutionMethods, prefixes: ["EVO_"])
     ]
 }
 

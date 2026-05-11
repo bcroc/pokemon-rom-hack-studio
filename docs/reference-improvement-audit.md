@@ -2,6 +2,8 @@
 
 Generated from the May 6, 2026 broad Pokemon GBA ROM-hacking reference sweep. This audit compares the pinned reference bench against the current PokemonHackStudio codebase and identifies implementation improvements without copying reference code, schemas, tests, UI text, or assets.
 
+> Historical snapshot: this file preserves the May 6 reference sweep. Several rows listed below have since landed; use `docs/planning-and-progress.md` for current Active Board status and proof.
+
 ## Scope And Guardrails
 
 - New broad-sweep clones: `porylive`, `porymoves`, `porypal`, `porysuite`, `team-aquas-asset-repo`, `libtonc`, `gba-tools`, `grit`, `pokeemerald-jp`, `berry-fix`, `modern-emerald`, `dynamic-pokemon-expansion`, `cfru-generator`, `pokemapexport`, `universal-gba-pokedex`, `frame`, `porydelete`, and `pokedata`.
@@ -26,7 +28,7 @@ Generated from the May 6, 2026 broad Pokemon GBA ROM-hacking reference sweep. Th
 | 3 | Live script loop | Porylive, Poryscript, mGBA | Done in `PHS-T21`: `script-readiness` evaluates selected map/script source, build, and playtest prerequisites. | Hot reload remains out of scope until structured script editing is trustworthy. |
 | 4 | Patch manifests | RomPatcher.js, berry-fix, cfru-generator | Done in `PHS-T22`/`PHS-T14`: patch metadata, base-ROM candidates, compatibility, dry-run steps, and app report surface. | Patch apply/export remains locked behind future explicit scope. |
 | 5 | Toolchain and ROM headers | agbcc, gba-tools, grit, libtonc, pret repos | Done in `PHS-T23`: external-tool, ROM-header, graphics-conversion, and generated-artifact health matrix. | Future work can promote selected checks into guided setup actions. |
-| 6 | Playtest bridge | mGBA, Porylive | Done in `PHS-T24` and `PHS-T40`: playtest artifacts plus explicit external mGBA launch for runnable handoffs. | Screenshot/savestate capture remains future work. |
+| 6 | Playtest bridge | mGBA, Porylive | Done in `PHS-T24`, `PHS-T40`, and `PHS-T56`: playtest artifacts, explicit external mGBA launch, screenshot capture, and savestate capture. | Future work can refine guided capture UX. |
 | 7 | All-in-one related UX | PorySuite, HMA, PGE, PokeData | Done in `PHS-T25`: Resources rows navigate across maps, layouts, scripts, Pokemon, trainers, graphics, build rows, text, and items. | Future work can deepen record-specific context panels. |
 | 8 | Asset import/provenance | Team Aqua Asset Repo, porypal, Porytiles, grit | Graphics diagnostics are read-only and do not model credit/provenance for local asset imports yet. | Later, add asset import plans with credit metadata and conversion previews before any write path. |
 | 9 | Binary ROM graph | HMA, PGE, Frame, Dynamic Pokemon Expansion | Binary ROM adapter is still a fallback lane. | Keep `PHS-T17` as a later semantic ROM graph baseline with runs, anchors, pointers, and repoint planning. |
@@ -43,10 +45,10 @@ Generated from the May 6, 2026 broad Pokemon GBA ROM-hacking reference sweep. Th
 | PHS-T23 | Toolchain Health Matrix | Done: make external tool, ROM header, graphics conversion, and generated-artifact health visible. | Tool discovery fixtures and local decomp report smokes. |
 | PHS-T24 | mGBA Playtest Artifact Plans | Done: strengthen external emulator handoff with planned run logs, stdout/stderr, screenshot, and headless savestate artifacts. | `BuildPatchPlaytestValidationTests`, `make test`, `make validate`. |
 | PHS-T25 | All-In-One Related Data UX | Done: app-visible related-data navigation between current module records. | App smoke showing cross-links without widening write policy. |
-| PHS-T41 | Live Encounters Module | Candidate: replace fixture Encounters with live read-only wild encounter rows. | Store/app smoke showing live rows and source links. |
-| PHS-T42 | Structured Script Command Editing | Candidate: move beyond raw script body editing into structured mutation plans. | Parser/planner tests plus Maps app smoke with no generated/shared writes. |
-| PHS-T43 | Wild Encounter Row Editing | Candidate: preview/apply wild encounter row edits with order preservation and backups. | Planner/apply tests plus Maps smoke. |
-| PHS-T44 | Graphics Import And Conversion Plans | Candidate: model import provenance, credit, and conversion plans before writes. | Plan-only diagnostics and disabled-write app smoke. |
+| PHS-T41 | Live Encounters Module | Done: live read-only wild encounter rows replaced the fixture-only Encounters surface. | Store/app smoke showing live rows and source links. |
+| PHS-T42 | Structured Script Command Editing | Done: structured command parsing and gated map-local script mutation planning landed. | Parser/planner tests plus Maps app smoke with no generated/shared writes. |
+| PHS-T43 | Wild Encounter Row Editing | Done: row-based wild encounter edits now preview/apply with order preservation and backups. | Planner/apply tests plus Maps smoke. |
+| PHS-T44 | Graphics Import And Conversion Plans | Done: graphics import provenance and conversion plans are app-visible while import/convert/apply execution remains disabled. | Plan-only diagnostics and disabled-write app smoke. |
 
 ## Adoption Notes
 

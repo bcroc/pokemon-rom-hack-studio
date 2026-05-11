@@ -118,7 +118,7 @@ The playtest lane starts as an external mGBA handoff and can later become an emb
 
 ## Reference Follow-Up State
 
-The first broad reference sweep rows are now implemented through `PHS-T25` and the app baseline has continued through `PHS-T40`. Keep this section as context, but use `docs/planning-and-progress.md` as the live workboard before choosing new work.
+The first broad reference sweep rows are now historical context, and the app baseline has continued well past this snapshot. Keep this section as reference rationale only; use `docs/planning-and-progress.md` as the live workboard before choosing new work.
 
 | ID | State | Reference Signal | Result |
 | --- | --- | --- | --- |
@@ -130,7 +130,7 @@ The first broad reference sweep rows are now implemented through `PHS-T25` and t
 | `PHS-T24` | Done | mGBA, Porylive | Playtest handoff artifacts and later `PHS-T40` explicit external mGBA launch. |
 | `PHS-T25` | Done | PorySuite, HMA, PGE, PokeData | Cross-linked Resources navigation across maps, scripts, species, trainers, graphics, build rows, text, and items. |
 
-Current deferred rows include `PHS-T17` binary ROM graph, `PHS-T41` live Encounters module, `PHS-T42` structured script command editing, `PHS-T43` wild encounter row editing, and `PHS-T44` graphics import/conversion planning.
+Current follow-up work is tracked on the live board, especially `PHS-T57` compatibility-specific data editors and newer Candidate rows such as `PHS-T68` species asset import validation. Rows `PHS-T17`, `PHS-T41`, `PHS-T42`, `PHS-T43`, and `PHS-T44` are no longer deferred in the live workboard.
 
 ## Guardrails
 

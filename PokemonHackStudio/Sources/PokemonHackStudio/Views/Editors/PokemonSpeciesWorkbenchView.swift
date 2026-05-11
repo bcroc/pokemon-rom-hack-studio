@@ -77,7 +77,9 @@ struct PokemonSpeciesWorkbenchView: View {
                         }
 
                         levelUpSection(draft: draft)
+                        evolutionSection(draft: draft)
                         tmhmSection(draft: draft)
+                        tutorSection(draft: draft)
                         eggMovesSection(draft: draft)
                         relatedDataSection(for: selectedSpecies, layoutMode: layoutMode)
                         sourceSection(for: selectedSpecies)
@@ -233,6 +235,24 @@ struct PokemonSpeciesWorkbenchView: View {
         }
     }
 
+    private func tutorSection(draft: PokemonHackCore.SpeciesEditDraft) -> some View {
+        EditorSection(title: "Tutor Moves") {
+            let moves = constants(.tutorMoves)
+            if moves.isEmpty {
+                Text("No tutor move constants were indexed for this project.")
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 10)], alignment: .leading, spacing: 8) {
+                    ForEach(moves) { move in
+                        Toggle(displayConstant(move.symbol), isOn: tutorBinding(move.symbol))
+                            .toggleStyle(.checkbox)
+                            .help(move.symbol)
+                    }
+                }
+            }
+        }
+    }
+
     private func eggMovesSection(draft: PokemonHackCore.SpeciesEditDraft) -> some View {
         EditorSection(title: "Egg Moves") {
             VStack(alignment: .leading, spacing: 12) {
@@ -282,10 +302,78 @@ struct PokemonSpeciesWorkbenchView: View {
                 }
             } else {
                 HStack(alignment: .top, spacing: 18) {
-                    evolutionSection(for: species)
                     pokedexSection(for: species)
+                    sourceSection(for: species)
                 }
             }
+        }
+    }
+
+    private func evolutionSection(draft: PokemonHackCore.SpeciesEditDraft) -> some View {
+        EditorSection(title: "Evolutions") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("\(draft.evolutions.count) rows")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Add Evolution", systemImage: "plus") {
+                        addEvolution()
+                    }
+                }
+
+                if draft.evolutions.isEmpty {
+                    Text("No evolutions defined.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                        GridRow {
+                            Text("Method").foregroundStyle(.secondary)
+                            Text("Parameter").foregroundStyle(.secondary)
+                            Text("Target").foregroundStyle(.secondary)
+                            Text("").accessibilityHidden(true)
+                        }
+                        .font(.caption.weight(.semibold))
+
+                        ForEach(Array(draft.evolutions.enumerated()), id: \.element.id) { index, evolution in
+                            GridRow {
+                                SpeciesConstantPicker(title: "Method", selection: evolutionMethodBinding(id: evolution.id), constants: constants(.evolutionMethods))
+                                    .labelsHidden()
+
+                                evolutionParameterField(evolution: evolution)
+
+                                SearchableConstantPicker(title: "Target", selection: evolutionTargetBinding(id: evolution.id), constants: catalogSpeciesConstants)
+                                    .labelsHidden()
+
+                                moveControls(
+                                    canMoveUp: index > 0,
+                                    canMoveDown: index < draft.evolutions.count - 1,
+                                    onMoveUp: { moveEvolution(id: evolution.id, offset: -1) },
+                                    onMoveDown: { moveEvolution(id: evolution.id, offset: 1) },
+                                    onRemove: { removeEvolution(id: evolution.id) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func evolutionParameterField(evolution: PokemonHackCore.SpeciesEvolutionDraft) -> some View {
+        if itemParameterEvolutionMethods.contains(evolution.method) {
+            SearchableConstantPicker(title: "Item", selection: evolutionParameterBinding(id: evolution.id), constants: constants(.items))
+                .labelsHidden()
+        } else if zeroParameterEvolutionMethods.contains(evolution.method) {
+            Text("0")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 40)
+        } else {
+            SpeciesIntegerField(title: "Param", value: evolutionParameterIntBinding(id: evolution.id), range: 0...65535)
+                .labelsHidden()
+                .frame(width: 60)
         }
     }
 
@@ -329,7 +417,77 @@ struct PokemonSpeciesWorkbenchView: View {
     @ViewBuilder
     private func pokedexSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         EditorSection(title: "Pokedex") {
-            if let pokedex = species.pokedex {
+            if let draft = draft, draft.pokedex != nil {
+                VStack(alignment: .leading, spacing: 12) {
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                        GridRow {
+                            Text("Category")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("WOOD GECKO", text: pokedexCategoryBinding)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        GridRow {
+                            Text("Height")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("5", text: pokedexHeightBinding)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        GridRow {
+                            Text("Weight")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("50", text: pokedexWeightBinding)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Description")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: pokedexDescriptionBinding)
+                            .frame(minHeight: 100)
+                            .padding(4)
+                            .background(Color(NSColor.controlBackgroundColor))
+                            .cornerRadius(4)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.2)))
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
+                        GridRow {
+                            Text("Pokemon Scale")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("256", text: pokedexPokemonScaleBinding)
+                                .textFieldStyle(.roundedBorder)
+                            Text("Offset")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("0", text: pokedexPokemonOffsetBinding)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        GridRow {
+                            Text("Trainer Scale")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("256", text: pokedexTrainerScaleBinding)
+                                .textFieldStyle(.roundedBorder)
+                            Text("Offset")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("0", text: pokedexTrainerOffsetBinding)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+
+                    if let pokedex = species.pokedex {
+                        SourceLocationView(source: sourceLocation(pokedex.sourceSpan, symbol: species.speciesID))
+                    }
+                }
+            } else if let pokedex = species.pokedex {
                 VStack(alignment: .leading, spacing: 10) {
                     FactGrid(facts: [
                         Fact(label: "Category", value: pokedex.categoryName ?? "Unknown"),
@@ -368,9 +526,14 @@ struct PokemonSpeciesWorkbenchView: View {
     private func assetsSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], alignment: .leading, spacing: 12) {
             ForEach(species.assets) { asset in
-                SpeciesAssetTile(asset: asset, rootPath: rootPath) {
-                    onNavigateToResourceAsset(asset.relativePath)
-                }
+                SpeciesAssetTile(
+                    asset: asset,
+                    rootPath: rootPath,
+                    draftData: draft?.assetData[asset.kind],
+                    onOpenResource: {
+                        onNavigateToResourceAsset(asset.relativePath)
+                    }
+                )
             }
         }
     }
@@ -564,9 +727,9 @@ struct PokemonSpeciesWorkbenchView: View {
     private func tmhmBinding(_ move: String) -> Binding<Bool> {
         Binding(
             get: { draft?.tmhmMoves.contains(move) ?? false },
-            set: { enabled in
+            set: { isOn in
                 updateDraft { draft in
-                    if enabled {
+                    if isOn {
                         if !draft.tmhmMoves.contains(move) {
                             draft.tmhmMoves.append(move)
                             draft.tmhmMoves.sort()
@@ -579,6 +742,96 @@ struct PokemonSpeciesWorkbenchView: View {
         )
     }
 
+    private func tutorBinding(_ move: String) -> Binding<Bool> {
+        Binding(
+            get: { draft?.tutorMoves.contains(move) ?? false },
+            set: { isOn in
+                updateDraft { draft in
+                    if isOn {
+                        if !draft.tutorMoves.contains(move) {
+                            draft.tutorMoves.append(move)
+                            draft.tutorMoves.sort()
+                        }
+                    } else {
+                        draft.tutorMoves.removeAll { $0 == move }
+                    }
+                }
+            }
+        )
+    }
+
+    private var pokedexCategoryBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.categoryName ?? "" },
+            set: { value in updateDraft { $0.pokedex?.categoryName = value } }
+        )
+    }
+
+    private var pokedexHeightBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.height ?? "0" },
+            set: { value in updateDraft { $0.pokedex?.height = value } }
+        )
+    }
+
+    private var pokedexWeightBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.weight ?? "0" },
+            set: { value in updateDraft { $0.pokedex?.weight = value } }
+        )
+    }
+
+    private var pokedexDescriptionBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.description ?? "" },
+            set: { value in updateDraft { $0.pokedex?.description = value } }
+        )
+    }
+
+    private var pokedexPokemonScaleBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.pokemonScale ?? "256" },
+            set: { value in updateDraft { $0.pokedex?.pokemonScale = value } }
+        )
+    }
+
+    private var pokedexPokemonOffsetBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.pokemonOffset ?? "0" },
+            set: { value in updateDraft { $0.pokedex?.pokemonOffset = value } }
+        )
+    }
+
+    private var pokedexTrainerScaleBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.trainerScale ?? "256" },
+            set: { value in updateDraft { $0.pokedex?.trainerScale = value } }
+        )
+    }
+
+    private var pokedexTrainerOffsetBinding: Binding<String> {
+        Binding(
+            get: { draft?.pokedex?.trainerOffset ?? "0" },
+            set: { value in updateDraft { $0.pokedex?.trainerOffset = value } }
+        )
+    }
+
+    private func importAsset(kind: PokemonHackCore.SpeciesAssetKind) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.png]
+        panel.message = "Select a replacement \(kind.rawValue) sprite (PNG)"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            if let data = try? Data(contentsOf: url) {
+                updateDraft { draft in
+                    draft.assetData[kind] = data
+                }
+            }
+        }
+    }
+
     private func eggMoveBinding(index: Int, fallback: String) -> Binding<String> {
         Binding(
             get: {
@@ -589,6 +842,59 @@ struct PokemonSpeciesWorkbenchView: View {
                 updateDraft { draft in
                     guard draft.eggMoves.indices.contains(index) else { return }
                     draft.eggMoves[index] = value
+                }
+            }
+        )
+    }
+
+    private func evolutionMethodBinding(id: String) -> Binding<String> {
+        Binding(
+            get: { draft?.evolutions.first(where: { $0.id == id })?.method ?? "EVO_LEVEL" },
+            set: { value in
+                updateDraft { draft in
+                    guard let index = draft.evolutions.firstIndex(where: { $0.id == id }) else { return }
+                    draft.evolutions[index].method = value
+                    if zeroParameterEvolutionMethods.contains(value) {
+                        draft.evolutions[index].parameter = "0"
+                    } else if itemParameterEvolutionMethods.contains(value), !draft.evolutions[index].parameter.hasPrefix("ITEM_") {
+                        draft.evolutions[index].parameter = constants(.items).first?.symbol ?? "ITEM_NONE"
+                    }
+                }
+            }
+        )
+    }
+
+    private func evolutionParameterBinding(id: String) -> Binding<String> {
+        Binding(
+            get: { draft?.evolutions.first(where: { $0.id == id })?.parameter ?? "0" },
+            set: { value in
+                updateDraft { draft in
+                    guard let index = draft.evolutions.firstIndex(where: { $0.id == id }) else { return }
+                    draft.evolutions[index].parameter = value
+                }
+            }
+        )
+    }
+
+    private func evolutionParameterIntBinding(id: String) -> Binding<Int> {
+        Binding(
+            get: { Int(draft?.evolutions.first(where: { $0.id == id })?.parameter ?? "0") ?? 0 },
+            set: { value in
+                updateDraft { draft in
+                    guard let index = draft.evolutions.firstIndex(where: { $0.id == id }) else { return }
+                    draft.evolutions[index].parameter = "\(value)"
+                }
+            }
+        )
+    }
+
+    private func evolutionTargetBinding(id: String) -> Binding<String> {
+        Binding(
+            get: { draft?.evolutions.first(where: { $0.id == id })?.targetSpecies ?? "SPECIES_NONE" },
+            set: { value in
+                updateDraft { draft in
+                    guard let index = draft.evolutions.firstIndex(where: { $0.id == id }) else { return }
+                    draft.evolutions[index].targetSpecies = value
                 }
             }
         )
@@ -636,11 +942,52 @@ struct PokemonSpeciesWorkbenchView: View {
         }
     }
 
+    private func addEvolution() {
+        updateDraft { draft in
+            guard draft.evolutions.count < 5 else { return }
+            draft.evolutions.append(PokemonHackCore.SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "1", targetSpecies: "SPECIES_NONE"))
+        }
+    }
+
+    private func removeEvolution(id: String) {
+        updateDraft { draft in
+            draft.evolutions.removeAll { $0.id == id }
+        }
+    }
+
+    private func moveEvolution(id: String, offset: Int) {
+        updateDraft { draft in
+            guard let index = draft.evolutions.firstIndex(where: { $0.id == id }) else { return }
+            let target = index + offset
+            guard draft.evolutions.indices.contains(target) else { return }
+            draft.evolutions.swapAt(index, target)
+        }
+    }
+
     private var defaultMove: String {
         if constants(.moves).contains(where: { $0.symbol == "MOVE_TACKLE" }) {
             return "MOVE_TACKLE"
         }
         return constants(.moves).first { $0.symbol != "MOVE_NONE" }?.symbol ?? "MOVE_NONE"
+    }
+
+    private var catalogSpeciesConstants: [PokemonHackCore.SpeciesConstant] {
+        catalog?.species.map { detail in
+            PokemonHackCore.SpeciesConstant(
+                group: .moves, // Reusing move constant type as a shim for species in the picker
+                symbol: detail.speciesID,
+                value: "0",
+                sourceSpan: detail.sourceSpan
+            )
+        } ?? []
+    }
+
+    private var itemParameterEvolutionMethods: Set<String> {
+        ["EVO_ITEM", "EVO_TRADE_ITEM"]
+    }
+
+    private var zeroParameterEvolutionMethods: Set<String> {
+        ["EVO_FRIENDSHIP", "EVO_FRIENDSHIP_DAY", "EVO_FRIENDSHIP_NIGHT", "EVO_TRADE"]
     }
 }
 
@@ -695,6 +1042,7 @@ private struct SpeciesHero: View {
         SpeciesAssetPreview(
             asset: species.assets.first { $0.kind == .front },
             rootPath: rootPath,
+            draftData: draft?.assetData[.front],
             size: size
         )
     }
@@ -724,14 +1072,25 @@ private struct SpeciesHero: View {
             heroMetric(title: "EVs", value: "\(evTotal)")
             heroMetric(title: "Level Moves", value: "\(draft?.levelUpMoves.count ?? species.learnsets.levelUp.count)")
             heroMetric(title: "TM/HM", value: "\(draft?.tmhmMoves.count ?? species.learnsets.tmhm.count)")
+            heroMetric(title: "Tutor", value: "\(draft?.tutorMoves.count ?? species.learnsets.tutor.count)")
             heroMetric(title: "Egg", value: "\(draft?.eggMoves.count ?? species.learnsets.egg.count)")
         }
     }
 
     private var secondaryPreviews: some View {
         VStack(spacing: 10) {
-            SpeciesAssetPreview(asset: species.assets.first { $0.kind == .back }, rootPath: rootPath, size: 64)
-            SpeciesAssetPreview(asset: species.assets.first { $0.kind == .footprint }, rootPath: rootPath, size: 40)
+            SpeciesAssetPreview(
+                asset: species.assets.first { $0.kind == .back },
+                rootPath: rootPath,
+                draftData: draft?.assetData[.back],
+                size: 64
+            )
+            SpeciesAssetPreview(
+                asset: species.assets.first { $0.kind == .footprint },
+                rootPath: rootPath,
+                draftData: draft?.assetData[.footprint],
+                size: 40
+            )
         }
     }
 
@@ -881,11 +1240,12 @@ private struct SpeciesTag: View {
 private struct SpeciesAssetTile: View {
     let asset: PokemonHackCore.SpeciesAsset
     let rootPath: String?
+    let draftData: Data?
     let onOpenResource: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SpeciesAssetPreview(asset: asset, rootPath: rootPath, size: 64)
+            SpeciesAssetPreview(asset: asset, rootPath: rootPath, draftData: draftData, size: 64)
 
             HStack {
                 Text(asset.kind.title)
@@ -902,6 +1262,12 @@ private struct SpeciesAssetTile: View {
             .buttonStyle(.borderless)
             .help("Open this asset in Resources")
 
+            Button("Import...", systemImage: "square.and.arrow.down") {}
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(true)
+            .help("Asset import is tracked as a future row pending format-specific validation.")
+
             Text(asset.relativePath)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -913,47 +1279,6 @@ private struct SpeciesAssetTile: View {
     }
 }
 
-private struct SpeciesAssetPreview: View {
-    let asset: PokemonHackCore.SpeciesAsset?
-    let rootPath: String?
-    let size: CGFloat
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.background)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(.quaternary, lineWidth: 1)
-                )
-
-            if let image {
-                Image(nsImage: image)
-                    .interpolation(.none)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(8)
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .frame(width: size, height: size)
-    }
-
-    private var image: NSImage? {
-        guard
-            let asset,
-            asset.exists,
-            asset.relativePath.hasSuffix(".png"),
-            let rootPath
-        else {
-            return nil
-        }
-        let path = URL(fileURLWithPath: rootPath).appendingPathComponent(asset.relativePath).standardizedFileURL.path
-        return PokemonSpeciesImageCache.image(at: path)
-    }
-}
 
 private struct SpeciesDiagnosticRow: View {
     let diagnostic: PokemonHackCore.Diagnostic
@@ -976,46 +1301,7 @@ private struct SpeciesDiagnosticRow: View {
     }
 }
 
-@MainActor
-private enum PokemonSpeciesImageCache {
-    private static var cache: [String: NSImage] = [:]
 
-    static func image(at path: String) -> NSImage? {
-        if let image = cache[path] {
-            return image
-        }
-        guard let image = NSImage(contentsOfFile: path), image.isValid else {
-            return nil
-        }
-        cache[path] = image
-        return image
-    }
-}
-
-private func displayConstant(_ symbol: String) -> String {
-    let prefixes = [
-        "TRAINER_CLASS_",
-        "TRAINER_PIC_",
-        "TRAINER_ENCOUNTER_MUSIC_",
-        "AI_SCRIPT_",
-        "SPECIES_",
-        "ABILITY_",
-        "TYPE_",
-        "EGG_GROUP_",
-        "ITEM_",
-        "MOVE_",
-        "GROWTH_",
-        "BODY_COLOR_",
-        "EVO_"
-    ]
-    let trimmed = prefixes.reduce(symbol) { value, prefix in
-        value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : value
-    }
-    let words = trimmed.split(separator: "_").map { part in
-        part.lowercased().capitalized
-    }
-    return words.isEmpty ? symbol : words.joined(separator: " ")
-}
 
 private struct FlowLayout: Layout {
     let spacing: CGFloat

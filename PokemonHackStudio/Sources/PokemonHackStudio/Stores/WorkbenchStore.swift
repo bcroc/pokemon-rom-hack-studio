@@ -92,6 +92,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
     case none
     case map
     case pokemon
+    case pokemonBatch
     case trainer
     case move
     case item
@@ -102,6 +103,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
         case .none: "No Editable Selection"
         case .map: "Map Changes"
         case .pokemon: "Pokemon Changes"
+        case .pokemonBatch: "Pokemon Batch Changes"
         case .trainer: "Trainer Changes"
         case .move: "Move Changes"
         case .item: "Item Changes"
@@ -114,6 +116,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
         case .none: "doc.text.magnifyingglass"
         case .map: "map"
         case .pokemon: "sparkles"
+        case .pokemonBatch: "sparkles.rectangle.stack"
         case .trainer: "person.2"
         case .move: "bolt"
         case .item: "shippingbox"
@@ -229,6 +232,8 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
     @Published private(set) var latestSpeciesApplyResult: PokemonHackCore.SpeciesApplyResult?
+    @Published private(set) var latestSpeciesBatchEditPlans: [PokemonHackCore.SpeciesEditPlan] = []
+    @Published private(set) var latestSpeciesBatchApplyResult: PokemonHackCore.SpeciesApplyResult?
     @Published private(set) var latestTrainerEditPlan: PokemonHackCore.TrainerEditPlan?
     @Published private(set) var latestTrainerApplyResult: PokemonHackCore.TrainerApplyResult?
     @Published private(set) var latestMoveEditPlan: PokemonHackCore.MoveEditPlan?
@@ -663,6 +668,50 @@ final class WorkbenchStore: ObservableObject {
         return catalog.species.filter { isSpeciesDirty($0.speciesID, projectID: selectedIndexedProject.id) }.count
     }
 
+    var dirtySpeciesBatchDrafts: [PokemonHackCore.SpeciesEditDraft] {
+        guard let selectedIndexedProject, let catalog = selectedSpeciesCatalog else { return [] }
+        return catalog.species.compactMap { detail in
+            let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: detail.speciesID)
+            guard
+                let draft = speciesDraftsByKey[key],
+                let baseDraft = PokemonHackCore.SpeciesEditDraft(detail: detail),
+                draft != baseDraft
+            else {
+                return nil
+            }
+            return draft
+        }
+        .sorted { $0.speciesID < $1.speciesID }
+    }
+
+    var canPreviewSpeciesBatchMutationPlan: Bool {
+        !dirtySpeciesBatchDrafts.isEmpty
+    }
+
+    var canApplySpeciesBatchMutationPlan: Bool {
+        !latestSpeciesBatchEditPlans.isEmpty
+            && latestSpeciesBatchEditPlans.allSatisfy { $0.validateApplyability(fileManager: fileManager).isApplyable }
+    }
+
+    var canDiscardSpeciesBatchEdits: Bool {
+        !dirtySpeciesBatchDrafts.isEmpty || !latestSpeciesBatchEditPlans.isEmpty || latestSpeciesBatchApplyResult != nil
+    }
+
+    var speciesBatchPreviewBlockedReason: String? {
+        guard selectedSpeciesCatalog != nil else { return "Load a Pokemon catalog before previewing compatibility changes." }
+        guard !dirtySpeciesBatchDrafts.isEmpty else { return "Change Pokemon compatibility before previewing a batch mutation plan." }
+        return nil
+    }
+
+    var speciesBatchApplyBlockedReason: String? {
+        guard !latestSpeciesBatchEditPlans.isEmpty else { return "Preview Pokemon compatibility changes before applying." }
+        let diagnostics = latestSpeciesBatchEditPlans.flatMap { $0.validateApplyability(fileManager: fileManager).diagnostics }
+        if diagnostics.isEmpty {
+            return nil
+        }
+        return diagnostics.first?.message ?? "Resolve Pokemon compatibility diagnostics before applying."
+    }
+
     var dirtyMoveDraftCount: Int {
         guard let selectedIndexedProject, let catalog = selectedCoreMoveCatalog else { return 0 }
         return catalog.moves.filter { isMoveDirty($0.moveID, projectID: selectedIndexedProject.id) }.count
@@ -950,6 +999,16 @@ final class WorkbenchStore: ObservableObject {
                 applyBlockedReason: trainerApplyBlockedReason
             )
         case .moves:
+            if canDiscardSpeciesBatchEdits {
+                return WorkbenchToolbarMutationState(
+                    target: .pokemonBatch,
+                    canPreview: canPreviewSpeciesBatchMutationPlan,
+                    canApply: canApplySpeciesBatchMutationPlan,
+                    canDiscard: canDiscardSpeciesBatchEdits,
+                    previewBlockedReason: speciesBatchPreviewBlockedReason,
+                    applyBlockedReason: speciesBatchApplyBlockedReason
+                )
+            }
             return WorkbenchToolbarMutationState(
                 target: .move,
                 canPreview: canPreviewSelectedMoveMutationPlan,
@@ -2850,6 +2909,8 @@ final class WorkbenchStore: ObservableObject {
             previewSelectedMapMutationPlan()
         case .pokemon:
             previewSelectedSpeciesMutationPlan()
+        case .pokemonBatch:
+            previewSpeciesBatchMutationPlan()
         case .trainer:
             previewSelectedTrainerMutationPlan()
         case .move:
@@ -2869,6 +2930,8 @@ final class WorkbenchStore: ObservableObject {
             applySelectedMapMutationPlan()
         case .pokemon:
             applySelectedSpeciesMutationPlan()
+        case .pokemonBatch:
+            applySpeciesBatchMutationPlan()
         case .trainer:
             applySelectedTrainerMutationPlan()
         case .move:
@@ -2888,6 +2951,8 @@ final class WorkbenchStore: ObservableObject {
             discardMapEdits()
         case .pokemon:
             discardSpeciesEdits()
+        case .pokemonBatch:
+            discardSpeciesBatchEdits()
         case .trainer:
             discardTrainerEdits()
         case .move:
@@ -3296,7 +3361,83 @@ final class WorkbenchStore: ObservableObject {
         }
         latestSpeciesEditPlan = nil
         latestSpeciesApplyResult = nil
+        latestSpeciesBatchEditPlans = []
+        latestSpeciesBatchApplyResult = nil
         scheduleDraftAutosave()
+    }
+
+    func speciesCompatibilityValue(
+        speciesID: String,
+        moveID: String,
+        bucket: PokemonHackCore.LearnsetBucket
+    ) -> Bool {
+        guard let selectedIndexedProject, let catalog = selectedSpeciesCatalog else { return false }
+        let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: speciesID)
+        if let draft = speciesDraftsByKey[key] {
+            switch bucket {
+            case .tmhm:
+                return draft.tmhmMoves.contains(moveID)
+            case .tutor:
+                return draft.tutorMoves.contains(moveID)
+            default:
+                return false
+            }
+        }
+        guard let detail = catalog.species.first(where: { $0.speciesID == speciesID }) else { return false }
+        switch bucket {
+        case .tmhm:
+            return detail.learnsets.tmhm.contains { $0.move == moveID }
+        case .tutor:
+            return detail.learnsets.tutor.contains { $0.move == moveID }
+        default:
+            return false
+        }
+    }
+
+    func setSpeciesCompatibility(
+        speciesID: String,
+        moveID: String,
+        bucket: PokemonHackCore.LearnsetBucket,
+        isEnabled: Bool
+    ) {
+        guard
+            let selectedIndexedProject,
+            let detail = selectedSpeciesCatalog?.species.first(where: { $0.speciesID == speciesID }),
+            var draft = speciesDraftsByKey[speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: speciesID)]
+                ?? PokemonHackCore.SpeciesEditDraft(detail: detail)
+        else { return }
+
+        switch bucket {
+        case .tmhm:
+            setMove(moveID, isEnabled: isEnabled, in: &draft.tmhmMoves)
+        case .tutor:
+            setMove(moveID, isEnabled: isEnabled, in: &draft.tutorMoves)
+        default:
+            return
+        }
+
+        let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: speciesID)
+        if let base = PokemonHackCore.SpeciesEditDraft(detail: detail), base == draft {
+            speciesDraftsByKey.removeValue(forKey: key)
+        } else {
+            speciesDraftsByKey[key] = draft
+        }
+        latestSpeciesEditPlan = nil
+        latestSpeciesApplyResult = nil
+        latestSpeciesBatchEditPlans = []
+        latestSpeciesBatchApplyResult = nil
+        scheduleDraftAutosave()
+    }
+
+    private func setMove(_ moveID: String, isEnabled: Bool, in moves: inout [String]) {
+        if isEnabled {
+            if !moves.contains(moveID) {
+                moves.append(moveID)
+                moves.sort()
+            }
+        } else {
+            moves.removeAll { $0 == moveID }
+        }
     }
 
     func updateSelectedMoveDraft(_ draft: PokemonHackCore.MoveEditDraft) {
@@ -3516,6 +3657,99 @@ final class WorkbenchStore: ObservableObject {
                     Diagnostic(
                         severity: .error,
                         code: "SPECIES_APPLY_FAILED",
+                        message: error.localizedDescription
+                    )
+                ]
+            )
+        }
+    }
+
+    func discardSpeciesBatchEdits() {
+        guard let selectedIndexedProject else {
+            latestSpeciesBatchEditPlans = []
+            latestSpeciesBatchApplyResult = nil
+            return
+        }
+        let speciesIDs = Set(dirtySpeciesBatchDrafts.map(\.speciesID))
+        for speciesID in speciesIDs {
+            speciesDraftsByKey.removeValue(forKey: speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: speciesID))
+        }
+        latestSpeciesBatchEditPlans = []
+        latestSpeciesBatchApplyResult = nil
+        latestSpeciesEditPlan = nil
+        latestSpeciesApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    func previewSpeciesBatchMutationPlan() {
+        guard let catalog = selectedSpeciesCatalog else {
+            latestSpeciesBatchEditPlans = []
+            latestSpeciesBatchApplyResult = nil
+            return
+        }
+        latestSpeciesBatchEditPlans = dirtySpeciesBatchDrafts.map { draft in
+            SpeciesMutationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+        }
+        latestSpeciesBatchApplyResult = nil
+    }
+
+    func applySpeciesBatchMutationPlan() {
+        if latestSpeciesBatchEditPlans.isEmpty {
+            previewSpeciesBatchMutationPlan()
+        }
+
+        guard
+            let selectedIndexedProject,
+            !latestSpeciesBatchEditPlans.isEmpty
+        else { return }
+
+        let projectIDBeforeApply = selectedIndexedProject.id
+        let rootPath = selectedIndexedProject.rootPath
+        let drafts = latestSpeciesBatchEditPlans.map(\.draft)
+        var appliedChanges: [AppliedSpeciesFileChange] = []
+        var diagnostics: [Diagnostic] = []
+        var backupRootPath = latestSpeciesBatchEditPlans.first?.backupRelativeRoot ?? ".pokemonhackstudio/backups"
+
+        do {
+            var catalog = try ProjectSpeciesCatalogBuilder.build(path: rootPath, fileManager: fileManager)
+            for draft in drafts {
+                let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+                backupRootPath = plan.backupRelativeRoot
+                let applyability = plan.validateApplyability(fileManager: fileManager)
+                guard applyability.isApplyable else {
+                    diagnostics.append(contentsOf: applyability.diagnostics)
+                    break
+                }
+                let result = try SpeciesMutationApplier.apply(plan: plan, fileManager: fileManager)
+                appliedChanges.append(contentsOf: result.appliedChanges)
+                diagnostics.append(contentsOf: result.diagnostics)
+                speciesDraftsByKey.removeValue(forKey: speciesDraftKey(projectID: projectIDBeforeApply, speciesID: draft.speciesID))
+                catalog = try ProjectSpeciesCatalogBuilder.build(path: rootPath, fileManager: fileManager)
+            }
+
+            latestSpeciesBatchApplyResult = SpeciesApplyResult(
+                backupRootPath: backupRootPath,
+                appliedChanges: appliedChanges,
+                diagnostics: diagnostics
+            )
+            guard !appliedChanges.isEmpty else { return }
+            reloadSelectedProjectAfterSpeciesApply(projectID: projectIDBeforeApply)
+            if indexedProjects.contains(where: { $0.id == projectIDBeforeApply }) {
+                selectedProjectID = projectIDBeforeApply
+            }
+            refreshSelectedSpeciesSelection()
+            latestSpeciesBatchEditPlans = []
+            latestSpeciesEditPlan = nil
+            latestSpeciesApplyResult = nil
+            scheduleDraftAutosaveIfNeeded()
+        } catch {
+            latestSpeciesBatchApplyResult = SpeciesApplyResult(
+                backupRootPath: backupRootPath,
+                appliedChanges: appliedChanges,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_BATCH_APPLY_FAILED",
                         message: error.localizedDescription
                     )
                 ]

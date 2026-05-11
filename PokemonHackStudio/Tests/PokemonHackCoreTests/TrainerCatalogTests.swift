@@ -87,6 +87,45 @@ final class TrainerCatalogTests: XCTestCase {
         XCTAssertEqual(edited.party.first?.ivs, .uniform(14))
     }
 
+    func testTrainerMutationPlannerHandlesPartyRemovalAndItemUpdates() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ITEM_CUSTOM" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+
+        draft.party.append(TrainerPartyPokemonDraft(
+            slot: 1,
+            species: "SPECIES_MUDKIP",
+            level: 10,
+            iv: 0,
+            ivs: .uniform(0),
+            nature: "NATURE_HARDY",
+            heldItem: "ITEM_NONE",
+            moves: ["MOVE_NONE", "MOVE_NONE", "MOVE_NONE", "MOVE_NONE"],
+            defaultMoves: ["MOVE_POUND", "MOVE_NONE", "MOVE_NONE", "MOVE_NONE"]
+        ))
+
+        let planWithTwo = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(planWithTwo.isApplyable)
+        XCTAssertTrue(planWithTwo.changes.first { $0.path == "src/data/trainer_parties.h" }?.textPreview?.contains(".species = SPECIES_MUDKIP") == true)
+
+        draft.party.remove(at: 0)
+        draft.party[0].slot = 0
+
+        let planWithOneRemoved = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(planWithOneRemoved.isApplyable)
+        let partyPreview = planWithOneRemoved.changes.first { $0.path == "src/data/trainer_parties.h" }?.textPreview ?? ""
+        XCTAssertFalse(partyPreview.contains("SPECIES_TREECKO"))
+        XCTAssertTrue(partyPreview.contains("SPECIES_MUDKIP"))
+
+        _ = try TrainerMutationApplier.apply(plan: planWithOneRemoved)
+        let reloaded = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let edited = try XCTUnwrap(reloaded.trainers.first { $0.trainerID == "TRAINER_ITEM_CUSTOM" })
+        XCTAssertEqual(edited.party.map(\.species), ["SPECIES_MUDKIP"])
+    }
+
     func testTrainerDraftUsesDefaultMovesAsCustomMoveStartingPoint() throws {
         let temp = try TrainerCatalogTemporaryDirectory()
         try writeEmeraldFixture(at: temp.url)

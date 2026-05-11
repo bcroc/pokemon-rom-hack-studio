@@ -11,9 +11,11 @@ struct TrainerEditorView: View {
     let rootPath: String?
     let loadStatus: TrainerCatalogLoadStatus
     let fallbackRecords: [WorkbenchRecord]
+    let speciesCatalog: PokemonHackCore.ProjectSpeciesCatalog?
     let onLoadCatalog: () -> Void
     let onSelectTrainer: (String) -> Void
     let onUpdateDraft: (PokemonHackCore.TrainerEditDraft) -> Void
+    var onFocusSpecies: ((String) -> Void)? = nil
 
     @State private var selectedPartySlot = 0
     @State private var showCompactBrowser = false
@@ -215,19 +217,19 @@ struct TrainerEditorView: View {
                 TextField("Trainer name", text: draftStringBinding(\.trainerName, fallback: draft.trainerName))
                     .textFieldStyle(.roundedBorder)
 
-                TrainerConstantPicker(
+                SearchableConstantPicker(
                     title: "Class",
                     selection: draftStringBinding(\.trainerClass, fallback: draft.trainerClass),
                     constants: constants(.trainerClasses)
                 )
 
-                TrainerConstantPicker(
+                SearchableConstantPicker(
                     title: "Pic",
                     selection: draftStringBinding(\.trainerPic, fallback: draft.trainerPic),
                     constants: constants(.trainerPics)
                 )
 
-                TrainerConstantPicker(
+                SearchableConstantPicker(
                     title: "Encounter Music",
                     selection: draftStringBinding(\.encounterMusicGender, fallback: draft.encounterMusicGender),
                     constants: constants(.encounterMusic)
@@ -250,7 +252,7 @@ struct TrainerEditorView: View {
                             Text("Item \(index + 1)")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            TrainerConstantPicker(
+                            SearchableConstantPicker(
                                 title: "Item \(index + 1)",
                                 selection: trainerItemBinding(index: index),
                                 constants: constants(.items)
@@ -310,7 +312,9 @@ struct TrainerEditorView: View {
                                 TrainerPartyRow(
                                     member: member,
                                     shape: draft.partyShape,
-                                    isSelected: member.slot == selectedPartySlot
+                                    isSelected: member.slot == selectedPartySlot,
+                                    species: speciesCatalog?.species.first { $0.speciesID == member.species },
+                                    rootPath: rootPath
                                 ) {
                                     selectedPartySlot = member.slot
                                 }
@@ -329,7 +333,9 @@ struct TrainerEditorView: View {
                                 TrainerPartyRow(
                                     member: member,
                                     shape: draft.partyShape,
-                                    isSelected: member.slot == selectedPartySlot
+                                    isSelected: member.slot == selectedPartySlot,
+                                    species: speciesCatalog?.species.first { $0.speciesID == member.species },
+                                    rootPath: rootPath
                                 ) {
                                     selectedPartySlot = member.slot
                                 }
@@ -391,7 +397,7 @@ struct TrainerEditorView: View {
                     }
                 }
 
-                TrainerConstantPicker(
+                SearchableConstantPicker(
                     title: "Species",
                     selection: partySpeciesBinding(slot: member.slot, fallback: member.species),
                     constants: constants(.species)
@@ -404,7 +410,7 @@ struct TrainerEditorView: View {
                         range: 1...100
                     )
 
-                    TrainerConstantPicker(
+                    SearchableConstantPicker(
                         title: "Nature",
                         selection: partyStringBinding(slot: member.slot, keyPath: \.nature, fallback: member.nature),
                         constants: constants(.natures)
@@ -425,7 +431,7 @@ struct TrainerEditorView: View {
                 )
 
                 if draft.partyShape.usesHeldItems {
-                    TrainerConstantPicker(
+                    SearchableConstantPicker(
                         title: "Held Item",
                         selection: partyStringBinding(slot: member.slot, keyPath: \.heldItem, fallback: member.heldItem),
                         constants: constants(.items)
@@ -438,9 +444,23 @@ struct TrainerEditorView: View {
 
                 if draft.partyShape.usesCustomMoves {
                     VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Move Overrides")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Reset to Defaults", systemImage: "arrow.counterclockwise") {
+                                updatePartyMember(slot: member.slot) { member in
+                                    refreshDefaultMoves(for: &member, fillMoveOverrides: true, replaceMoveOverrides: true)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                        }
+
                         ForEach(0..<4, id: \.self) { index in
-                            TrainerConstantPicker(
-                                title: "Move \(index + 1) Override",
+                            SearchableConstantPicker(
+                                title: "Slot \(index + 1)",
                                 selection: partyMoveBinding(slot: member.slot, index: index),
                                 constants: constants(.moves)
                             )
@@ -929,15 +949,26 @@ private struct TrainerPartyRow: View {
     let member: PokemonHackCore.TrainerPartyPokemonDraft
     let shape: PokemonHackCore.TrainerPartyShape
     let isSelected: Bool
+    let species: PokemonHackCore.SpeciesDetail?
+    let rootPath: String?
     let onSelect: () -> Void
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 10) {
-                Text("\(member.slot + 1)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .frame(width: 26, height: 26)
-                    .background(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12), in: Circle())
+                if let species {
+                    SpeciesAssetPreview(
+                        asset: species.assets.first { $0.kind == .front },
+                        rootPath: rootPath,
+                        draftData: nil,
+                        size: 36
+                    )
+                } else {
+                    Text("\(member.slot + 1)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .frame(width: 36, height: 36)
+                        .background(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12), in: Circle())
+                }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(displayConstant(member.species))
@@ -976,24 +1007,6 @@ private struct TrainerPartyRow: View {
     }
 }
 
-private struct TrainerConstantPicker: View {
-    let title: String
-    @Binding var selection: String
-    let constants: [PokemonHackCore.TrainerConstant]
-
-    var body: some View {
-        Picker(title, selection: $selection) {
-            if !selection.isEmpty && !constants.contains(where: { $0.symbol == selection }) {
-                Text(selection).tag(selection)
-            }
-            ForEach(constants) { constant in
-                Text(displayConstant(constant.symbol)).tag(constant.symbol)
-            }
-        }
-        .pickerStyle(.menu)
-        .help(selection)
-    }
-}
 
 private struct TrainerIntegerField: View {
     let title: String
@@ -1140,25 +1153,6 @@ private struct TrainerTag: View {
     }
 }
 
-private func displayConstant(_ symbol: String) -> String {
-    let prefixes = [
-        "TRAINER_CLASS_",
-        "TRAINER_PIC_",
-        "TRAINER_ENCOUNTER_MUSIC_",
-        "AI_SCRIPT_",
-        "SPECIES_",
-        "ITEM_",
-        "MOVE_",
-        "NATURE_"
-    ]
-    let trimmed = prefixes.reduce(symbol) { value, prefix in
-        value.hasPrefix(prefix) ? String(value.dropFirst(prefix.count)) : value
-    }
-    let words = trimmed.split(separator: "_").map { part in
-        part.lowercased().capitalized
-    }
-    return words.isEmpty ? symbol : words.joined(separator: " ")
-}
 
 private func ivSummary(_ ivs: PokemonHackCore.TrainerPokemonIVs) -> String {
     if let value = ivs.uniformValue {

@@ -26,6 +26,27 @@ public struct SourceSpan: Codable, Equatable, Sendable {
         self.endLine = endLine ?? startLine
         self.endColumn = endColumn ?? startColumn
     }
+
+    public static func span(for range: NSRange, in text: String, relativePath: String) -> SourceSpan {
+        let nsText = text as NSString
+        let before = nsText.substring(to: range.location)
+        let lines = before.components(separatedBy: .newlines)
+        let startLine = lines.count
+        let startColumn = (lines.last?.count ?? 0) + 1
+
+        let content = nsText.substring(with: range)
+        let contentLines = content.components(separatedBy: .newlines)
+        let endLine = startLine + contentLines.count - 1
+        let endColumn = contentLines.count > 1 ? (contentLines.last?.count ?? 0) + 1 : startColumn + contentLines[0].count
+
+        return SourceSpan(
+            relativePath: relativePath,
+            startLine: startLine,
+            startColumn: startColumn,
+            endLine: endLine,
+            endColumn: endColumn
+        )
+    }
 }
 
 public enum SourceKind: String, Codable, Equatable, CaseIterable {

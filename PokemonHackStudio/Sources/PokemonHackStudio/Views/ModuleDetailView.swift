@@ -84,11 +84,15 @@ struct ModuleDetailView: View {
                 rootPath: store.selectedIndexedProject?.rootPath,
                 loadStatus: store.trainerCatalogLoadStatus,
                 fallbackRecords: store.records(for: .trainers),
+                speciesCatalog: store.selectedSpeciesCatalog,
                 onLoadCatalog: {
                     store.loadSelectedTrainerCatalogIfNeeded()
                 },
                 onSelectTrainer: store.requestTrainerSelection,
-                onUpdateDraft: store.updateSelectedTrainerDraft
+                onUpdateDraft: store.updateSelectedTrainerDraft,
+                onFocusSpecies: { speciesID in
+                    store.focusSpecies(speciesID)
+                }
             )
         case .items:
             PokemonItemsWorkbenchView(
@@ -123,6 +127,7 @@ struct ModuleDetailView: View {
                 selectedMove: store.selectedMoveDetail,
                 draft: store.selectedMoveDraft,
                 isDirty: store.selectedMoveIsDirty,
+                speciesCatalog: store.selectedSpeciesCatalog,
                 loadStatus: store.moveCatalogLoadStatus,
                 filter: Binding(
                     get: { store.selectedMoveWorkbenchFilter },
@@ -139,6 +144,12 @@ struct ModuleDetailView: View {
                 },
                 onFocusSpecies: { speciesID in
                     store.focusSpecies(speciesID)
+                },
+                isSpeciesCompatibleWithMove: { speciesID, moveID, bucket in
+                    store.speciesCompatibilityValue(speciesID: speciesID, moveID: moveID, bucket: bucket)
+                },
+                onSetSpeciesCompatibility: { speciesID, moveID, bucket, isEnabled in
+                    store.setSpeciesCompatibility(speciesID: speciesID, moveID: moveID, bucket: bucket, isEnabled: isEnabled)
                 },
                 onNavigateToResourceAsset: store.navigateToResourceAsset
             )
@@ -263,7 +274,19 @@ struct ModuleDetailView: View {
                 applyBlockedReason: store.trainerApplyBlockedReason
             )
         case .moves:
-            MutationPlanPanelContext.move(
+            if let context = MutationPlanPanelContext.speciesBatch(
+                plans: store.latestSpeciesBatchEditPlans,
+                result: store.latestSpeciesBatchApplyResult,
+                dirtyDraftCount: store.dirtySpeciesBatchDrafts.count,
+                canPreview: store.canPreviewSpeciesBatchMutationPlan,
+                canApply: store.canApplySpeciesBatchMutationPlan,
+                canDiscard: store.canDiscardSpeciesBatchEdits,
+                previewBlockedReason: store.speciesBatchPreviewBlockedReason,
+                applyBlockedReason: store.speciesBatchApplyBlockedReason
+            ) {
+                context
+            } else {
+                MutationPlanPanelContext.move(
                 plan: store.latestMoveEditPlan,
                 result: store.latestMoveApplyResult,
                 isDirty: store.selectedMoveIsDirty,
@@ -272,7 +295,8 @@ struct ModuleDetailView: View {
                 canDiscard: store.canDiscardMoveEdits,
                 previewBlockedReason: store.movePreviewBlockedReason,
                 applyBlockedReason: store.moveApplyBlockedReason
-            )
+                )
+            }
         case .items:
             MutationPlanPanelContext.item(
                 plan: store.latestItemEditPlan,
@@ -308,7 +332,11 @@ struct ModuleDetailView: View {
         case .trainers:
             store.previewSelectedTrainerMutationPlan()
         case .moves:
-            store.previewSelectedMoveMutationPlan()
+            if store.canDiscardSpeciesBatchEdits {
+                store.previewSpeciesBatchMutationPlan()
+            } else {
+                store.previewSelectedMoveMutationPlan()
+            }
         case .items:
             store.previewSelectedItemMutationPlan()
         case .graphics:
@@ -325,7 +353,11 @@ struct ModuleDetailView: View {
         case .trainers:
             store.applySelectedTrainerMutationPlan()
         case .moves:
-            store.applySelectedMoveMutationPlan()
+            if store.canDiscardSpeciesBatchEdits {
+                store.applySpeciesBatchMutationPlan()
+            } else {
+                store.applySelectedMoveMutationPlan()
+            }
         case .items:
             store.applySelectedItemMutationPlan()
         case .graphics:
@@ -342,7 +374,11 @@ struct ModuleDetailView: View {
         case .trainers:
             store.discardTrainerEdits()
         case .moves:
-            store.discardMoveEdits()
+            if store.canDiscardSpeciesBatchEdits {
+                store.discardSpeciesBatchEdits()
+            } else {
+                store.discardMoveEdits()
+            }
         case .items:
             store.discardItemEdits()
         case .graphics:
