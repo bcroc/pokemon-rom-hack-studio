@@ -370,7 +370,7 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
         }
     }
 
-    var filename: String {
+    public var filename: String {
         switch self {
         case .front: "front.png"
         case .back: "back.png"
@@ -382,7 +382,7 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
         }
     }
 
-    var isSpriteAsset: Bool {
+    public var isSpriteAsset: Bool {
         switch self {
         case .front, .back, .icon, .footprint, .animFront:
             return true
@@ -391,8 +391,210 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
         }
     }
 
-    var isPaletteAsset: Bool {
+    public var isPaletteAsset: Bool {
         !isSpriteAsset
+    }
+}
+
+public enum SpeciesAssetImportDetectedKind: String, Codable, Equatable {
+    case png
+    case palette
+    case unsupported
+}
+
+public enum SpeciesAssetImportValidationStatus: String, Codable, Equatable {
+    case ready
+    case warning
+    case blocked
+}
+
+public struct SpeciesAssetImportProvenance: Codable, Equatable {
+    public let sourcePath: String
+    public let sourceFileName: String
+    public let byteCount: Int
+    public let sha1: String
+    public let expectedKind: SpeciesAssetKind
+    public let detectedKind: SpeciesAssetImportDetectedKind
+    public let status: SpeciesAssetImportValidationStatus
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        sourcePath: String,
+        sourceFileName: String,
+        byteCount: Int,
+        sha1: String,
+        expectedKind: SpeciesAssetKind,
+        detectedKind: SpeciesAssetImportDetectedKind,
+        status: SpeciesAssetImportValidationStatus,
+        diagnostics: [Diagnostic]
+    ) {
+        self.sourcePath = sourcePath
+        self.sourceFileName = sourceFileName
+        self.byteCount = byteCount
+        self.sha1 = sha1
+        self.expectedKind = expectedKind
+        self.detectedKind = detectedKind
+        self.status = status
+        self.diagnostics = diagnostics
+    }
+}
+
+public enum SpeciesAssetImportValidator {
+    public static func provenance(
+        sourcePath: String,
+        expectedKind: SpeciesAssetKind,
+        data: Data
+    ) -> SpeciesAssetImportProvenance {
+        let sourceURL = URL(fileURLWithPath: sourcePath)
+        let detectedKind = detectedKind(sourcePath: sourcePath, data: data)
+        let diagnostics = diagnostics(sourcePath: sourcePath, expectedKind: expectedKind, detectedKind: detectedKind, data: data)
+        let status: SpeciesAssetImportValidationStatus
+        if diagnostics.contains(where: { $0.severity == .error }) {
+            status = .blocked
+        } else if diagnostics.contains(where: { $0.severity == .warning }) {
+            status = .warning
+        } else {
+            status = .ready
+        }
+
+        return SpeciesAssetImportProvenance(
+            sourcePath: sourceURL.standardizedFileURL.path,
+            sourceFileName: sourceURL.lastPathComponent,
+            byteCount: data.count,
+            sha1: pokemonHackSHA1Hex(data),
+            expectedKind: expectedKind,
+            detectedKind: detectedKind,
+            status: status,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func detectedKind(sourcePath: String, data: Data) -> SpeciesAssetImportDetectedKind {
+        if GraphicsMetadataParser.pngMetadata(from: data) != nil {
+            return .png
+        }
+        if GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath) != nil
+            || GraphicsMetadataParser.gbaPaletteMetadata(from: data) != nil
+        {
+            return .palette
+        }
+        return .unsupported
+    }
+
+    private static func diagnostics(
+        sourcePath: String,
+        expectedKind: SpeciesAssetKind,
+        detectedKind: SpeciesAssetImportDetectedKind,
+        data: Data
+    ) -> [Diagnostic] {
+        let span = SourceSpan(relativePath: sourcePath, startLine: 1)
+        guard !data.isEmpty else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "SPECIES_ASSET_IMPORT_EMPTY",
+                    message: "Imported \(expectedKind.title) asset data is empty.",
+                    span: span
+                )
+            ]
+        }
+
+        if expectedKind.isSpriteAsset {
+            guard detectedKind == .png,
+                  let png = GraphicsMetadataParser.pngMetadata(from: data),
+                  png.width > 0,
+                  png.height > 0
+            else {
+                return [
+                    Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_ASSET_IMPORT_KIND_MISMATCH",
+                        message: "\(expectedKind.title) imports must be readable PNG source assets.",
+                        span: span
+                    )
+                ]
+            }
+
+            var diagnostics: [Diagnostic] = []
+            if let paletteColorCount = png.paletteColorCount, paletteColorCount > 16 {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_ASSET_IMPORT_PNG_PALETTE_OVER_LIMIT",
+                        message: "\(expectedKind.title) PNG declares \(paletteColorCount) palette colors; Gen III sprite sources must fit 16 colors.",
+                        span: span
+                    )
+                )
+            }
+            if png.paletteColorCount == nil {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .warning,
+                        code: "SPECIES_ASSET_IMPORT_PNG_PALETTE_UNVERIFIED",
+                        message: "\(expectedKind.title) PNG has no PLTE chunk; palette fit must be reviewed before conversion.",
+                        span: span
+                    )
+                )
+            }
+            return diagnostics
+        }
+
+        guard detectedKind == .palette,
+              let palette = GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath)
+                ?? GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+        else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "SPECIES_ASSET_IMPORT_KIND_MISMATCH",
+                    message: "\(expectedKind.title) imports must be JASC .pal files or supported GBA palette bytes.",
+                    span: span
+                )
+            ]
+        }
+
+        var diagnostics: [Diagnostic] = []
+        if !palette.hasSlotZero {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "SPECIES_ASSET_IMPORT_PALETTE_SLOT_ZERO_MISSING",
+                    message: "\(expectedKind.title) palette must include slot 0.",
+                    span: span
+                )
+            )
+        }
+        if palette.colorCount > 16 {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "SPECIES_ASSET_IMPORT_PALETTE_OVER_LIMIT",
+                    message: "\(expectedKind.title) palette has \(palette.colorCount) colors; Gen III species palettes must fit 16 colors.",
+                    span: span
+                )
+            )
+        }
+        if palette.colorCount < 16 {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "SPECIES_ASSET_IMPORT_PALETTE_UNDER_LIMIT",
+                    message: "\(expectedKind.title) palette has \(palette.colorCount) colors; expected species palettes normally carry 16 colors.",
+                    span: span
+                )
+            )
+        }
+        if palette.gbaPrecisionLossCount > 0 {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "SPECIES_ASSET_IMPORT_PALETTE_PRECISION_LOSS",
+                    message: "\(expectedKind.title) palette has \(palette.gbaPrecisionLossCount) color(s) that lose precision in GBA 15-bit color.",
+                    span: span
+                )
+            )
+        }
+        return diagnostics
     }
 }
 
@@ -565,6 +767,7 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
     public var evolutions: [SpeciesEvolutionDraft]
     public var pokedex: SpeciesPokedexDraft?
     public var assetData: [SpeciesAssetKind: Data]
+    public var assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance]
 
     public init(
         speciesID: String,
@@ -590,7 +793,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         tutorMoves: [String],
         evolutions: [SpeciesEvolutionDraft],
         pokedex: SpeciesPokedexDraft? = nil,
-        assetData: [SpeciesAssetKind: Data] = [:]
+        assetData: [SpeciesAssetKind: Data] = [:],
+        assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance] = [:]
     ) {
         self.speciesID = speciesID
         self.baseStats = baseStats
@@ -616,6 +820,7 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         self.evolutions = evolutions
         self.pokedex = pokedex
         self.assetData = assetData
+        self.assetImports = assetImports
     }
 
     public init?(detail: SpeciesDetail) {
@@ -652,7 +857,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
             tutorMoves: tutorMoves,
             evolutions: evolutions,
             pokedex: pokedex,
-            assetData: [:]
+            assetData: [:],
+            assetImports: [:]
         )
     }
 }

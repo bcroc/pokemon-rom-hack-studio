@@ -206,6 +206,8 @@ public struct BuildTarget: Codable, Equatable, Identifiable {
     }
 }
 
+extension BuildTarget: @unchecked Sendable {}
+
 public enum PlaytestMode: String, Codable, Equatable, CaseIterable {
     case interactive
     case headless
@@ -313,6 +315,8 @@ public struct ProjectIndex: Codable, Equatable {
         self.buildTargets = buildTargets
     }
 }
+
+extension ProjectIndex: @unchecked Sendable {}
 
 public protocol GameAdapter {
     var id: String { get }
@@ -542,7 +546,7 @@ public struct GameCubeDiscAdapter: GameAdapter {
     public let supportedProfiles: [GameProfile] = [.pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia]
     public let supportedModules: [EditorModule] = [.rom, .graphics, .pokemon, .trainers, .items, .moves, .text, .diagnostics]
     public let capabilities: [CoreCapability] = [.resourceIndex, .diagnostics]
-    public let writePolicy: WritePolicy = .mutationPlanOnly
+    public let writePolicy: WritePolicy = .readOnly
 
     public init() {}
 

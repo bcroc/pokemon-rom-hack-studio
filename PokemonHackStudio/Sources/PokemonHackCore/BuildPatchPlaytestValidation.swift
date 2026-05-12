@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ToolAvailability: Codable, Equatable {
+public struct ToolAvailability: Codable, Equatable, Sendable {
     public let name: String
     public let isAvailable: Bool
     public let resolvedPath: String?
@@ -12,14 +12,24 @@ public struct ToolAvailability: Codable, Equatable {
     }
 }
 
-public typealias ToolAvailabilityResolver = (String) -> ToolAvailability
+public typealias ToolAvailabilityResolver = @Sendable (String) -> ToolAvailability
+
+private final class ToolAvailabilityFileManagerBox: @unchecked Sendable {
+    let fileManager: FileManager
+
+    init(_ fileManager: FileManager) {
+        self.fileManager = fileManager
+    }
+}
 
 public enum ToolAvailabilityResolverFactory {
     public static func pathEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> ToolAvailabilityResolver {
-        { tool in
+        let fileManagerBox = ToolAvailabilityFileManagerBox(fileManager)
+        return { tool in
+            let fileManager = fileManagerBox.fileManager
             if tool.lowercased() == "mgba" {
                 if let appPath = firstExistingPath(
                     [

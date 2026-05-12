@@ -100,12 +100,12 @@ struct GraphicsWorkbenchView: View {
                 HStack {
                     Button("Import Plan", systemImage: "square.and.arrow.down") {}
                         .disabled(true)
-                        .help("Graphics import packages are preview-only and require provenance before any future write path.")
+                        .help("Bulk graphics package imports remain plan-only until a dedicated package executor has preview/apply safeguards.")
                     Button("Convert Plan", systemImage: "wand.and.stars") {}
                         .disabled(true)
-                        .help("Conversion remains a dry-run report and does not invoke external tools.")
+                        .help("Bulk conversion remains a dry-run report and does not invoke external tools.")
                     Spacer()
-                    Text("Package copy and conversion stay preview-only")
+                    Text("Bulk package import and conversion stay preview-only")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

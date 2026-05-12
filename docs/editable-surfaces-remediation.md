@@ -12,31 +12,31 @@ Focus on the most frequently edited pokemon data that is currently read-only.
 | PHS-T66 | **Move Compatibility Editor** | Done: species-side TM/HM and Tutor assignment edits plus a move-centric species checklist in Moves that stages compatibility drafts. |
 | PHS-T67 | **Trainer Hardening** | Done for classic profiles: searchable constants, party previews, reset-to-default moves, and party add/remove mutation proof. Expansion-only per-stat IV/nature write support remains a future adapter-specific row. |
 
-## Phase 2: Workflow Activation (Target: PHS-T68 - PHS-T70)
+## Phase 2: Workflow Activation (Target: PHS-T72 - PHS-T74)
 Promote preview-only workflows into actionable source-write operations.
 
 | ID | Title | Scope |
 | --- | --- | --- |
-| PHS-T68 | **Graphics Import Execution** | Enable "Import" and "Convert" actions for graphics packages, invoking external tools (gtools/porytiles) through the core library. |
-| PHS-T69 | **Patch Apply & ROM Export** | Activate the patch apply gate to produce patched `.gba` files from planned manifests. |
-| PHS-T70 | **Integrated Build Runner** | Support triggering `make` build commands directly from the app with real-time log capture and artifact verification. |
+| PHS-T72 | **Graphics Import Execution** | Enable "Import" and "Convert" actions for graphics packages, invoking external tools (gtools/porytiles) through the core library. |
+| PHS-T73 | **Patch Apply & ROM Export** | Activate the patch apply gate to produce patched `.gba` files from planned manifests. |
+| PHS-T74 | **Integrated Build Runner** | Support triggering `make` build commands directly from the app with real-time log capture and artifact verification. |
 
-## Phase 3: Advanced Assets & Scripting (Target: PHS-T71 - PHS-T73)
+## Phase 3: Advanced Assets & Scripting (Target: PHS-T75 - PHS-T77)
 Address complex binary and high-level authoring surfaces.
 
 | ID | Title | Scope |
 | --- | --- | --- |
-| PHS-T71 | **Sprite & Palette Authoring** | Implement PNG import and automated palette-fitting for Pokemon and Trainer sprites. |
-| PHS-T72 | **Poryscript Integration** | Support Poryscript (.pory) authoring with automated compilation into shared script includes. |
-| PHS-T73 | **Map Duplication & Export** | Move map duplication and visual image export from "Plan-only" to "Execute". |
+| PHS-T75 | **Sprite & Palette Authoring** | Implement PNG import and automated palette-fitting for Pokemon and Trainer sprites. |
+| PHS-T76 | **Poryscript Integration** | Support Poryscript (.pory) authoring with automated compilation into shared script includes. |
+| PHS-T77 | **Map Duplication & Export** | Move map duplication and visual image export from "Plan-only" to "Execute". |
 
-## Phase 4: Expansion & Binary Support (Target: PHS-T74+)
+## Phase 4: Expansion & Binary Support (Target: PHS-T78+)
 Extend support to modern project shapes and binary-only workflows.
 
 | ID | Title | Scope |
 | --- | --- | --- |
-| PHS-T74 | **Modern Expansion Adapters** | Complete editable coverage for Expansion-specific tables like `ItemInfo` and `FormChange`. |
-| PHS-T75 | **Binary Mutation Workbench** | Implement direct ROM byte editing, repointing, and free-space management for binary-only hacks. |
+| PHS-T78 | **Modern Expansion Adapters** | Complete editable coverage for Expansion-specific tables like `ItemInfo` and `FormChange`. |
+| PHS-T79 | **Binary Mutation Workbench** | Implement direct ROM byte editing, repointing, and free-space management for binary-only hacks. |
 
 ## Implementation Guidelines
 1. **Mutation-Plan First**: All new editors must follow the established Draft -> Preview -> Apply pattern with source hash checks and backups.

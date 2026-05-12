@@ -100,7 +100,7 @@ struct PokemonMovesWorkbenchView: View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Moves")
                 .font(.largeTitle.weight(.semibold))
-            Text("\(catalog.projectTitle) read-only battle move definitions and learnability.")
+            Text("\(catalog.projectTitle) editable battle move definitions, compatibility, and learnability.")
                 .foregroundStyle(.secondary)
             Text(catalog.rootPath)
                 .font(.system(.caption, design: .monospaced))
@@ -517,7 +517,7 @@ struct PokemonMovesWorkbenchView: View {
                 ContentUnavailableView(
                     loadStatus.label,
                     systemImage: WorkbenchModule.moves.systemImage,
-                    description: Text("The current app surface uses the existing read-only move graph until a core ProjectMoveCatalog is added.")
+                    description: Text("Open a supported project to load the move catalog, editable classic move rows, compatibility checklists, and source diagnostics.")
                 )
             }
         }

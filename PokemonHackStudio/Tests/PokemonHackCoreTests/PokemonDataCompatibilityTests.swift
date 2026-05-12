@@ -11,6 +11,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertNoCompletedRowRecommendations(in: report)
         XCTAssertEqual(entry(.species, in: report).status, .editable)
         XCTAssertEqual(entry(.moves, in: report).status, .editable)
+        XCTAssertFalse(entry(.species, in: report).unsupportedFields.contains("pokedex text rewrites"))
+        XCTAssertFalse(entry(.moves, in: report).unsupportedFields.contains("TM/HM/tutor compatibility edits"))
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
         let eggMoves = entry(.eggMoves, in: report)
@@ -20,6 +22,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertNil(levelUp.recommendedFutureRow)
         XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertFalse(tmhm.unsupportedFields.contains("compatibility matrix bulk edits"))
         XCTAssertNil(tmhm.recommendedFutureRow)
         XCTAssertEqual(eggMoves.status, .editable)
         XCTAssertNil(eggMoves.recommendedFutureRow)
@@ -48,6 +51,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertNoCompletedRowRecommendations(in: report)
         XCTAssertEqual(entry(.species, in: report).status, .editable)
         XCTAssertEqual(entry(.moves, in: report).status, .editable)
+        XCTAssertFalse(entry(.species, in: report).unsupportedFields.contains("pokedex text rewrites"))
+        XCTAssertFalse(entry(.moves, in: report).unsupportedFields.contains("TM/HM/tutor compatibility edits"))
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
         let tutor = entry(.tutorLearnsets, in: report)
@@ -56,6 +61,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertNil(levelUp.recommendedFutureRow)
         XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertFalse(tmhm.unsupportedFields.contains("compatibility matrix bulk edits"))
         XCTAssertNil(tmhm.recommendedFutureRow)
         XCTAssertEqual(tutor.status, .editable)
         XCTAssertNil(tutor.recommendedFutureRow)
@@ -103,6 +109,19 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(expansionItems.blockedReason?.contains("Expansion ItemInfo") == true)
         XCTAssertTrue(expansionItems.unsupportedFields.contains("Expansion ItemInfo rewrites"))
         XCTAssertEqual(expansionItems.recommendedFutureRow, "PHS-T57")
+    }
+
+    func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
+        let report = try PokemonDataCompatibilityReportBuilder.build(
+            index: projectIndex(profile: .pokeemerald),
+            sourceIndex: sourceIndex(profile: .pokeemerald, itemPath: "src/data/items.h")
+        )
+
+        let assets = entry(.assets, in: report)
+        XCTAssertEqual(assets.recommendedFutureRow, "PHS-T57")
+
+        let cries = entry(.cries, in: report)
+        XCTAssertEqual(cries.recommendedFutureRow, "PHS-T57")
     }
 
     private func assertNoCompletedRowRecommendations(

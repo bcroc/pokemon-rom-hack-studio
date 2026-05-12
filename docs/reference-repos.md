@@ -18,9 +18,11 @@ Detailed feature synthesis, adoption decisions, and the current implementation l
 
 The May 6, 2026 broad sweep expanded the ignored `references/` bench to 30 pinned shallow clones. Only `references/manifest.json` is tracked; all clone directories remain local read-only research material.
 
+The May 12, 2026 central-corpus refresh also cataloged the mainline Gen III GBA decomps and decomp-focused tools in `/Users/bryan/projects/reference-repos`: `pret__pokeruby`, `pret__pokeemerald`, `pret__pokefirered`, `pret__agbcc`, `huderlem__porymap`, `huderlem__poryscript`, `grunt-lucas__porytiles`, and `loxed__porypal`. `references/manifest.json` records those central paths and current central HEADs under each entry's `centralReference` while preserving the ignored local bench pins.
+
 | Path | Primary Use | Notes |
 | --- | --- | --- |
-| `references/agbcc` | pret toolchain setup and compiler/build boundary reference | Mixed GCC/newlib notices; treat as external toolchain research only. |
+| `references/agbcc` | pret toolchain setup and compiler/build boundary reference | Central profile: `pret__agbcc`; mixed GCC/newlib notices; treat as external toolchain research only. |
 | `references/berry-fix` | Patch/update workflow reference | No root license detected; reference-only until root and bundled-tool notices are reviewed. |
 | `references/cfru-generator` | Patch/config generation and expansion workflow | Apache-2.0; clean-room preferred unless a future reuse decision is documented. |
 | `references/dynamic-pokemon-expansion` | Expanded Pokemon data and binary/decomp bridge pressure | License does not map cleanly from the local scan; reference-only until reviewed. |
@@ -32,21 +34,21 @@ The May 6, 2026 broad sweep expanded the ignored `references/` bench to 30 pinne
 | `references/mgba` | Emulator behavior, launch/debug workflows, patch loading expectations | MPL 2.0; useful for integration boundaries and smoke-test behavior. |
 | `references/modern-emerald` | Modern Emerald feature fork and schema pressure | No root license detected; use for compatibility observations only. |
 | `references/pokedata` | Pokemon data aggregation/export reference | MIT; data provenance still needs separate review. |
-| `references/pokeemerald` | Canonical Emerald source layout, build outputs, generated data, and table/script formats | No root license detected; use as read-only compatibility truth, not a code source. |
+| `references/pokeemerald` | Canonical Emerald source layout, build outputs, generated data, and table/script formats | Central profile: `pret__pokeemerald`; no root license detected; use as read-only compatibility truth, not a code source. |
 | `references/pokeemerald-expansion` | Expanded decomp content and compatibility pressure | Check upstream terms before borrowing; use as a target for schema flexibility. |
 | `references/pokeemerald-jp` | Emerald localization/source-layout variation | No root license detected; read-only interoperability reference. |
-| `references/pokefirered` | Canonical FireRed/LeafGreen source layout, build target variants, generated data, and adapter differences | No root license detected; use as read-only compatibility truth, especially for FireRed-specific positional data. |
+| `references/pokefirered` | Canonical FireRed/LeafGreen source layout, build target variants, generated data, and adapter differences | Central profile: `pret__pokefirered`; no separate LeafGreen clone is needed; use as read-only compatibility truth. |
 | `references/pokemapexport` | Visual map export workflow reference | GPL-3.0; behavioral reference only. |
 | `references/pokemon-game-editor` | Legacy binary editor behavior | Custom restrictive license; treat as observational only unless reviewed. |
-| `references/pokeruby` | Additional pret decomp project shape | Use to avoid overfitting core models to only Emerald and FireRed. |
+| `references/pokeruby` | Ruby/Sapphire pret decomp project shape | Central profile: `pret__pokeruby`; no separate Sapphire clone is needed; use to avoid overfitting core models to only Emerald and FireRed. |
 | `references/porydelete` | Safe source-tree cleanup/deletion workflow reference | GPL-3.0; adopt safety checks conceptually only. |
 | `references/porylive` | Live script editing and playtest-loop workflow reference | No root license detected; use behaviorally for future live-readiness planning. |
-| `references/porymap` | Source-tree map editing UX for Gen 3 decomp projects | LGPL 3.0; study project loading, map relationships, and editor workflows carefully before borrowing implementation details. |
+| `references/porymap` | Source-tree map editing UX for Gen 3 decomp projects | Central profile: `huderlem__porymap`; LGPL 3.0; study workflows behaviorally before borrowing implementation details. |
 | `references/porymoves` | Moves and learnset workflow reference | No root license detected; observational reference for editor coverage. |
-| `references/porypal` | Palette editing and GBA color conversion reference | GPL-3.0; clean-room diagnostics and UX reference only. |
-| `references/poryscript` | Script language conventions for decomp-based event scripting | MIT; useful for script workflow compatibility and CLI ergonomics. |
+| `references/porypal` | Sprite/palette conversion and GBA color workflow reference | Central profile: `loxed__porypal`; GPL-3.0; clean-room diagnostics, UX, or external-tool reference only. |
+| `references/poryscript` | Script language conventions for decomp-based event scripting | Central profile: `huderlem__poryscript`; MIT; useful for script workflow compatibility and CLI ergonomics after attribution review. |
 | `references/porysuite` | All-in-one decomp editor workflow reference | No root license detected; observational UX/product reference only. |
-| `references/porytiles` | Tileset and tile workflow reference | MIT; useful for asset pipeline terminology and validation ideas. |
+| `references/porytiles` | Tileset and tile workflow reference | Central profile: `grunt-lucas__porytiles`; MIT; useful for asset pipeline terminology and validation ideas after attribution review. |
 | `references/rompatcher-js` | Patch format support and user-facing patching flow | MIT with third-party components noted by upstream; useful for supported patch formats and verification UX. |
 | `references/team-aquas-asset-repo` | Community asset organization, credits, and import metadata | No root license detected; assets are local reference only until asset-by-asset review. |
 | `references/universal-gba-pokedex` | Pokedex/species presentation and cross-game data navigation | MIT; validate data provenance and game-derived assumptions before reuse. |

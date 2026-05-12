@@ -865,6 +865,16 @@ struct WorkbenchSidebarPanel: View {
                             store.launchSelectedPlaytest()
                         }
                         .disabled(!action.isEnabled)
+                    } else if action.id == "build-rom" {
+                        Button(action.title, systemImage: action.systemImage) {
+                            store.runSelectedDecompBuild()
+                        }
+                        .disabled(!action.isEnabled)
+                    } else if action.id == "cancel-build" {
+                        Button(action.title, systemImage: action.systemImage) {
+                            store.cancelSelectedDecompBuild()
+                        }
+                        .disabled(!action.isEnabled)
                     } else if action.id == "capture-screenshot" {
                         Button(action.title, systemImage: action.systemImage) {
                             store.captureSelectedPlaytest(kind: .screenshot)
@@ -881,7 +891,7 @@ struct WorkbenchSidebarPanel: View {
                     }
                 }
 
-                Text("Build, validate, patch apply, and export stay preview only.")
+                Text("Build runs only selected declared make targets. Validate, patch apply, export, conversion, and source writes stay locked.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

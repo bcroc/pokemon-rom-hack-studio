@@ -14,6 +14,71 @@ public enum ToolchainHealthStatus: String, Codable, Equatable, CaseIterable {
     case notApplicable
 }
 
+public enum ToolchainHealthActionKind: String, Codable, Equatable, CaseIterable {
+    case copyCommand
+    case copyPath
+    case rerunGuidance
+}
+
+public struct ToolchainHealthAction: Codable, Equatable, Identifiable {
+    public let id: String
+    public let kind: ToolchainHealthActionKind
+    public let title: String
+    public let detail: String
+    public let command: String?
+    public let payload: String?
+    public let isPreviewOnly: Bool
+
+    public init(
+        id: String,
+        kind: ToolchainHealthActionKind,
+        title: String,
+        detail: String,
+        command: String? = nil,
+        payload: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.detail = detail
+        self.command = command
+        self.payload = payload
+        self.isPreviewOnly = true
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case title
+        case detail
+        case command
+        case payload
+        case isPreviewOnly
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        kind = try container.decode(ToolchainHealthActionKind.self, forKey: .kind)
+        title = try container.decode(String.self, forKey: .title)
+        detail = try container.decode(String.self, forKey: .detail)
+        command = try container.decodeIfPresent(String.self, forKey: .command)
+        payload = try container.decodeIfPresent(String.self, forKey: .payload)
+        isPreviewOnly = true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(title, forKey: .title)
+        try container.encode(detail, forKey: .detail)
+        try container.encodeIfPresent(command, forKey: .command)
+        try container.encodeIfPresent(payload, forKey: .payload)
+        try container.encode(true, forKey: .isPreviewOnly)
+    }
+}
+
 public struct ToolchainHealthMatrixRow: Codable, Equatable, Identifiable {
     public let id: String
     public let category: ToolchainHealthCategory
@@ -24,6 +89,7 @@ public struct ToolchainHealthMatrixRow: Codable, Equatable, Identifiable {
     public let source: SourceSpan?
     public let resolvedPath: String?
     public let diagnostics: [Diagnostic]
+    public let actions: [ToolchainHealthAction]
 
     public init(
         id: String,
@@ -34,7 +100,8 @@ public struct ToolchainHealthMatrixRow: Codable, Equatable, Identifiable {
         detail: String,
         source: SourceSpan? = nil,
         resolvedPath: String? = nil,
-        diagnostics: [Diagnostic] = []
+        diagnostics: [Diagnostic] = [],
+        actions: [ToolchainHealthAction] = []
     ) {
         self.id = id
         self.category = category
@@ -45,6 +112,34 @@ public struct ToolchainHealthMatrixRow: Codable, Equatable, Identifiable {
         self.source = source
         self.resolvedPath = resolvedPath
         self.diagnostics = diagnostics
+        self.actions = actions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case category
+        case title
+        case subject
+        case status
+        case detail
+        case source
+        case resolvedPath
+        case diagnostics
+        case actions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        category = try container.decode(ToolchainHealthCategory.self, forKey: .category)
+        title = try container.decode(String.self, forKey: .title)
+        subject = try container.decode(String.self, forKey: .subject)
+        status = try container.decode(ToolchainHealthStatus.self, forKey: .status)
+        detail = try container.decode(String.self, forKey: .detail)
+        source = try container.decodeIfPresent(SourceSpan.self, forKey: .source)
+        resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
+        diagnostics = try container.decodeIfPresent([Diagnostic].self, forKey: .diagnostics) ?? []
+        actions = try container.decodeIfPresent([ToolchainHealthAction].self, forKey: .actions) ?? []
     }
 }
 
@@ -266,8 +361,47 @@ public enum ToolchainHealthMatrixBuilder {
             detail: tool.resolvedPath ?? "No executable discovered for \(requiredBy).",
             source: SourceSpan(relativePath: sourcePath, startLine: 1),
             resolvedPath: tool.resolvedPath,
-            diagnostics: diagnostic.map { [$0] } ?? []
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: toolActions(tool: tool, requiredBy: requiredBy, sourcePath: sourcePath)
         )
+    }
+
+    private static func toolActions(
+        tool: ToolAvailability,
+        requiredBy: String,
+        sourcePath: String
+    ) -> [ToolchainHealthAction] {
+        if let resolvedPath = tool.resolvedPath {
+            return [
+                copyPathAction(
+                    id: "copy-tool-path-\(tool.name)",
+                    title: "Copy tool path",
+                    path: resolvedPath,
+                    detail: "Copies the discovered \(tool.name) path for manual inspection."
+                )
+            ]
+        }
+
+        var actions = [
+            rerunGuidanceAction(
+                id: "rerun-after-\(tool.name)-setup",
+                title: "Set up \(tool.name)",
+                detail: "Install or expose \(tool.name) on PATH outside PokemonHackStudio, then rerun health for \(requiredBy)."
+            )
+        ]
+
+        if sourcePath == "Makefile" {
+            actions.append(
+                copyPathAction(
+                    id: "copy-tool-source-\(tool.name)",
+                    title: "Copy declaring file",
+                    path: sourcePath,
+                    detail: "Copies the file that declared the \(tool.name) requirement."
+                )
+            )
+        }
+
+        return actions
     }
 
     private static func localToolRow(
@@ -310,8 +444,50 @@ public enum ToolchainHealthMatrixBuilder {
             detail: detail,
             source: SourceSpan(relativePath: tool.path, startLine: 1),
             resolvedPath: exists ? url.path : nil,
-            diagnostics: diagnostic.map { [$0] } ?? []
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: localToolActions(tool: tool, exists: exists, executable: executable)
         )
+    }
+
+    private static func localToolActions(
+        tool: LocalToolRequirement,
+        exists: Bool,
+        executable: Bool
+    ) -> [ToolchainHealthAction] {
+        if executable {
+            return [
+                copyPathAction(
+                    id: "copy-local-tool-path-\(tool.name)",
+                    title: "Copy tool path",
+                    path: tool.path,
+                    detail: "Copies the project-local \(tool.name) path for manual inspection."
+                )
+            ]
+        }
+
+        let detail = exists
+            ? "\(tool.path) exists but is not executable; fix permissions or rebuild the local tool outside PokemonHackStudio, then rerun health."
+            : "\(tool.path) is missing; build or restore the local tool outside PokemonHackStudio, then rerun health."
+        var actions = [
+            rerunGuidanceAction(
+                id: "rerun-local-tool-\(tool.name)",
+                title: "Prepare \(tool.name)",
+                detail: detail
+            )
+        ]
+
+        if !exists {
+            actions.append(
+                copyCommandAction(
+                    id: "copy-tools-build-command-\(tool.name)",
+                    title: "Copy tool build command",
+                    command: "make tools",
+                    detail: "Copies the common decomp tool-build command for manual terminal use; PokemonHackStudio will not run it."
+                )
+            )
+        }
+
+        return actions
     }
 
     private static func romHeaderRows(
@@ -391,6 +567,14 @@ public enum ToolchainHealthMatrixBuilder {
         let expectation = headerExpectation(for: target.target, profile: index.profile)
         let url = root.appendingPathComponent(outputPath)
         guard fileManager.fileExists(atPath: url.path) else {
+            let commandActions = target.target.command.isEmpty ? [] : [
+                copyCommandAction(
+                    id: "copy-build-command-\(target.target.id)",
+                    title: "Copy build command",
+                    command: target.target.command.joined(separator: " "),
+                    detail: "Copies the declared project build command for manual terminal use; PokemonHackStudio will not run it."
+                )
+            ]
             return ToolchainHealthMatrixRow(
                 id: "rom-header:\(target.target.id)",
                 category: .romHeaders,
@@ -406,7 +590,14 @@ public enum ToolchainHealthMatrixBuilder {
                         message: "Cannot inspect ROM header because \(outputPath) does not exist.",
                         span: SourceSpan(relativePath: outputPath, startLine: 1)
                     )
-                ]
+                ],
+                actions: [
+                    rerunGuidanceAction(
+                        id: "rerun-build-\(target.target.id)",
+                        title: "Refresh build output",
+                        detail: "Build the ROM outside PokemonHackStudio, then rerun this health check to inspect \(outputPath)."
+                    )
+                ] + commandActions
             )
         }
 
@@ -425,6 +616,19 @@ public enum ToolchainHealthMatrixBuilder {
                         code: "ROM_HEADER_UNREADABLE",
                         message: "Could not read GBA header bytes from \(outputPath).",
                         span: SourceSpan(relativePath: outputPath, startLine: 1)
+                    )
+                ],
+                actions: [
+                    copyPathAction(
+                        id: "copy-unreadable-rom-path-\(target.target.id)",
+                        title: "Copy ROM path",
+                        path: outputPath,
+                        detail: "Copies the unreadable ROM output path for manual inspection."
+                    ),
+                    rerunGuidanceAction(
+                        id: "rerun-unreadable-rom-\(target.target.id)",
+                        title: "Rebuild and rerun",
+                        detail: "Rebuild the ROM outside PokemonHackStudio, then rerun health to inspect the header bytes."
                     )
                 ]
             )
@@ -447,7 +651,21 @@ public enum ToolchainHealthMatrixBuilder {
             status: status,
             detail: "Found title \(header.title), code \(header.gameCode), maker \(header.makerCode), revision \(header.revision). Expected \(expectation.summary).",
             source: SourceSpan(relativePath: outputPath, startLine: 1),
-            diagnostics: diagnostic.map { [$0] } ?? []
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: mismatches.isEmpty ? [
+                copyPathAction(
+                    id: "copy-rom-path-\(target.target.id)",
+                    title: "Copy ROM path",
+                    path: outputPath,
+                    detail: "Copies the inspected ROM output path for manual review."
+                )
+            ] : [
+                rerunGuidanceAction(
+                    id: "rerun-header-\(target.target.id)",
+                    title: "Rebuild and recheck header",
+                    detail: "Review Makefile/header constants, rebuild outside PokemonHackStudio, then rerun health to confirm \(expectation.summary)."
+                )
+            ]
         )
     }
 
@@ -524,7 +742,23 @@ public enum ToolchainHealthMatrixBuilder {
                     : "Conversion inputs are previewed only; \(hasGBAGFX ? "gbagfx is executable" : "gbagfx is not executable") at \(gbagfx.path).",
                 source: SourceSpan(relativePath: gbagfx.path, startLine: 1),
                 resolvedPath: fileManager.fileExists(atPath: gbagfxURL.path) ? gbagfxURL.path : nil,
-                diagnostics: conversionDiagnostic.map { [$0] } ?? []
+                diagnostics: conversionDiagnostic.map { [$0] } ?? [],
+                actions: hasGBAGFX
+                    ? [
+                        copyPathAction(
+                            id: "copy-gbagfx-path",
+                            title: "Copy gbagfx path",
+                            path: gbagfx.path,
+                            detail: "Copies the detected project-local converter path for manual inspection."
+                        )
+                    ]
+                    : [
+                        rerunGuidanceAction(
+                            id: "rerun-gbagfx-setup",
+                            title: "Set up gbagfx then rerun",
+                            detail: "Build or install the project-local gbagfx tool outside PokemonHackStudio, then rerun health."
+                        )
+                    ]
             ),
             ToolchainHealthMatrixRow(
                 id: "graphics-conversion:generated-freshness",
@@ -537,7 +771,14 @@ public enum ToolchainHealthMatrixBuilder {
                 diagnostics: graphicsReport.diagnostics.filter {
                     $0.code == "GRAPHICS_GENERATED_ARTIFACT_MISSING"
                         || $0.code == "GRAPHICS_GENERATED_ARTIFACT_STALE"
-                }
+                },
+                actions: missingGenerated == 0 && staleGenerated == 0 ? [] : [
+                    rerunGuidanceAction(
+                        id: "rerun-graphics-conversion-check",
+                        title: "Refresh generated graphics",
+                        detail: "Run the project's graphics conversion/build workflow outside PokemonHackStudio, then rerun diagnostics."
+                    )
+                ]
             ),
             ToolchainHealthMatrixRow(
                 id: "graphics-conversion:palette-prerequisites",
@@ -549,7 +790,14 @@ public enum ToolchainHealthMatrixBuilder {
                     ? "Palette and indexed-image prerequisites are within the current read-only checks."
                     : "\(paletteWarnings.count) palette or 4bpp prerequisite warning(s) need review.",
                 source: SourceSpan(relativePath: inventory.rootRelativePath, startLine: 1),
-                diagnostics: paletteWarnings
+                diagnostics: paletteWarnings,
+                actions: paletteWarnings.isEmpty ? [] : [
+                    rerunGuidanceAction(
+                        id: "review-palette-prerequisites",
+                        title: "Review source graphics",
+                        detail: "Fix palette or indexed-image prerequisites in the source project, then rerun graphics diagnostics."
+                    )
+                ]
             )
         ]
     }
@@ -578,7 +826,14 @@ public enum ToolchainHealthMatrixBuilder {
                         message: "No generated files matched \($0.relativePath).",
                         span: SourceSpan(relativePath: $0.relativePath, startLine: 1)
                     )
-                }
+                },
+                actions: generatedMissing == 0 ? [] : [
+                    rerunGuidanceAction(
+                        id: "rerun-generated-output-check",
+                        title: "Refresh generated outputs",
+                        detail: "Regenerate project outputs outside PokemonHackStudio, then rerun health to refresh these pattern checks."
+                    )
+                ]
             )
         ]
 
@@ -600,7 +855,14 @@ public enum ToolchainHealthMatrixBuilder {
                     diagnostics: graphicsReport.diagnostics.filter {
                         $0.code == "GRAPHICS_GENERATED_ARTIFACT_MISSING"
                             || $0.code == "GRAPHICS_GENERATED_ARTIFACT_STALE"
-                    }
+                    },
+                    actions: missing == 0 && stale == 0 ? [] : [
+                        rerunGuidanceAction(
+                            id: "rerun-generated-graphics-check",
+                            title: "Refresh graphics outputs",
+                            detail: "Regenerate graphics outputs outside PokemonHackStudio, then rerun health to confirm freshness."
+                        )
+                    ]
                 )
             )
         }
@@ -796,6 +1058,49 @@ public enum ToolchainHealthMatrixBuilder {
         case .binaryROM, .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
             false
         }
+    }
+
+    private static func copyCommandAction(
+        id: String,
+        title: String,
+        command: String,
+        detail: String
+    ) -> ToolchainHealthAction {
+        ToolchainHealthAction(
+            id: id,
+            kind: .copyCommand,
+            title: title,
+            detail: detail,
+            command: command
+        )
+    }
+
+    private static func copyPathAction(
+        id: String,
+        title: String,
+        path: String,
+        detail: String
+    ) -> ToolchainHealthAction {
+        ToolchainHealthAction(
+            id: id,
+            kind: .copyPath,
+            title: title,
+            detail: detail,
+            payload: path
+        )
+    }
+
+    private static func rerunGuidanceAction(
+        id: String,
+        title: String,
+        detail: String
+    ) -> ToolchainHealthAction {
+        ToolchainHealthAction(
+            id: id,
+            kind: .rerunGuidance,
+            title: title,
+            detail: detail
+        )
     }
 }
 

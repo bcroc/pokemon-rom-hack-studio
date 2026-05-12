@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The live baseline includes `PHS-T68`, `PHS-T69`, `PHS-T70`, and `PHS-T71`; choose new work from the remaining Active Board candidate rows.
+No implementation row is currently active. The live baseline includes `PHS-T68`, `PHS-T69`, `PHS-T70`, `PHS-T71`, `PHS-T72`, `PHS-T74`, `PHS-T80`, and `PHS-T81`; choose new work from the remaining Active Board candidate rows.
 
 ## Active Board
 
@@ -79,6 +79,20 @@ No implementation row is currently active. The live baseline includes `PHS-T68`,
 | PHS-T69 | Done | Playtest Capture Visibility | Build/Patch/Playtest now promotes the latest screenshot or savestate capture artifact in the Playtest tab, shows file-existence-aware Open and Reveal actions for created artifacts, and keeps capture outputs limited to ignored `.pokemonhackstudio/playtests/` files. |
 | PHS-T70 | Done | Clickable Map Title Switcher | The Maps editor title now opens a searchable map switcher popover from the current map name, routes selection through existing dirty-map navigation guards, and keeps source-write behavior unchanged. |
 | PHS-T71 | Done | Add New Map Toolbar Option | The Maps editor toolbar now has a plus action beside the current map selector that opens the existing preview-only Duplicate Map Plan workflow panel for the selected map without changing map selection, dirty state, or source-write behavior. |
+| PHS-T72 | Done | Species Graphics Import Activation | Pokemon species source asset Import now stages PNG and palette replacements into drafts with provenance, byte counts, SHA1, validation status, preview/apply guards, source hash/size checks, and backups; bulk graphics package import/convert remains plan-only. |
+| PHS-T73 | Candidate | Patch Apply And ROM Export | Activate patch apply/export from existing manifests with checksum/header policy, backup/export manifests, ignored output paths, and explicit user action. |
+| PHS-T74 | Done | Integrated Build Runner | Build/Patch/Playtest now runs selected declared decomp `make` targets from the app with live stdout/stderr logs, cancellation, ignored `.pokemonhackstudio/builds/<target-id>/` run artifacts, and post-run build-output verification while keeping source mutation, generated conversion, patch apply/export, and arbitrary commands out of scope. |
+| PHS-T75 | Candidate | Sprite And Palette Authoring | Activate Pokemon/trainer sprite and palette import workflows on top of the validated species asset draft path, including palette-fit diagnostics and explicit apply gates. |
+| PHS-T76 | Candidate | Poryscript-Compatible Authoring | Add `.pory` detection/import/export or compiler-planning support without copying reference semantics or bypassing existing script source gates. |
+| PHS-T77 | Candidate | Map Duplication And Visual Export Apply | Turn existing duplicate-map and visual-export plans into explicit source-tree or ignored-artifact writers with preview/apply/discard proof. |
+| PHS-T78 | Candidate | Modern Expansion Adapters | Complete editable coverage for Expansion-specific tables such as `ItemInfo`, generated learnsets, and form-change data. |
+| PHS-T79 | Candidate | Binary Mutation Workbench | Implement direct ROM byte editing, repointing, and free-space management for binary-only hacks behind backups and mutation-plan style review. |
+| PHS-T80 | Done | Guided Toolchain Setup Actions | Toolchain health rows now expose preview-only setup/remediation actions with copyable commands or paths plus rerun guidance in core reports, app health rows, and exported Build/Patch/Playtest JSON without invoking builds, converters, installers, patch writers, emulators, or source writes. |
+| PHS-T81 | Done | GameCube Resource Workbench | Resources now accepts explicit `.iso`/`.gcm` inputs, loads the existing direct `resource-index` parser into a read-only GameCube entry, exposes full FST/FSYS/LZSS item browsing and nested search, and keeps GameCube media excluded from auto-loaded resource libraries. |
+| PHS-T82 | Candidate | Playtest Debugger And Access-Log Planning | Extend the mGBA handoff lane with debugger, GDB, Lua, break/watchpoint, and access-log planning surfaces without embedding the emulator, mutating ROMs, or changing existing launch/capture behavior. |
+| PHS-T83 | Candidate | Deep Related-Record Context Panels | Add richer read-only relationship panels across maps, species, trainers, moves, items, and resources, building on existing navigation/backlink work without adding new write paths. |
+| PHS-T84 | Candidate | Shared Script Command Editing | Follow up map-local script editing with safe project-wide/shared script command mutation planning for native script sources, separate from Poryscript integration and existing generated/shared-file gates. |
+| PHS-T85 | Candidate | Full-Suite Stabilization | Close historical validation debt by making the full SwiftPM test suite green and updating proof notes where prior rows relied on targeted tests because of unrelated failures. |
 
 ## Recent Progress
 
@@ -137,6 +151,9 @@ No implementation row is currently active. The live baseline includes `PHS-T68`,
 - `PHS-T68` hardened the species asset draft import seam before UI activation: shared graphics metadata parsing now backs species PNG and palette checks, invalid asset bytes block mutation-plan applyability, staged source targets stay under `graphics/pokemon/<species>/` source PNG/`.pal` paths with source hash/size checks, and the workbench still keeps Import disabled while showing staged draft byte counts.
 - `PHS-T70` made map switching available directly from the editor chrome: clicking the current map name opens the reusable searchable map browser, clean selections switch immediately, and dirty selections defer through the existing Preview/Discard/Cancel guard.
 - `PHS-T71` added a Maps toolbar plus action beside the current map selector that jumps to the existing Duplicate Map Plan workflow panel, preserving the selected map and any staged dirty edits while keeping map creation apply disabled.
+- `PHS-T72` activates the first real graphics import path by enabling Pokemon species source asset imports only for existing indexed local source PNG/`.pal` targets; imported bytes carry source path, file name, byte count, SHA1, detected kind, and validation status, then flow through the existing Species draft, mutation preview, hash/size applyability, explicit apply, and backup path.
+- `PHS-T80` added safe guided toolchain setup actions: health matrix rows carry preview-only copy-command, copy-path, and rerun-guidance payloads; Build/Patch/Playtest renders those actions with copy controls and includes them in copied report JSON; no build, converter, installer, emulator, patch writer, or source-write command is invoked.
+- `PHS-T81` made direct GameCube resource inspection app-visible without changing auto-load policy: Resources can load an explicit `.iso` or `.gcm`, render the parsed Colosseum/XD/Box/Channel entry as read-only, browse all FST/FSYS/LZSS items beyond the ProjectIndex cap, and filter nested item paths, kinds, categories, offsets, sizes, and diagnostics.
 - Dev-loop timing captured during `PHS-T36`: warm direct `map-visual` CLI smokes remained fast (`pokeemerald` `MAP_PETALBURG_CITY` in 0.15s; `pokefirered` `MAP_BATTLE_COLOSSEUM_2P` in 0.12s), while `make validate` took 37.84s and `make verify` took 17.71s with the Xcode bundle phase still copying 2 local source projects every build. `PHS-T39` later replaced that recopy with an unchanged-bundle reuse path.
 - `PHS-T25` made related-data navigation app-visible without inventing a new graph UI: Resources row actions now focus the target module and row/search context for maps, layouts, scripts, source paths, Pokemon/trainer data, graphics, generated build outputs, text, and items; store-owned resource selection supports backlinks from other modules; and Data > Pokemon now links evolution targets plus species assets back into existing workbench surfaces.
 - `PHS-T14` finished the Build/Patch/Playtest preview workflow: `patch-manifest` accepts `--base-rom`, reports selected base ROM path/SHA1/size/candidate match, distinguishes base ROM mismatch, and the app now has a Patch tab with safe patch/base ROM selectors, project/resource base ROM options, manifest/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON while keeping apply/export/build/run disabled.
@@ -524,7 +541,7 @@ For each completed row, record the focused commands that proved the slice. Gener
   - Review-remediation proof: `swift test --package-path PokemonHackStudio --filter 'PokemonDataCompatibilityTests|PokemonSpeciesCatalogTests|TrainerCatalogTests'` (20 tests; compatibility matrix tutor/evolution/Pokedex status, Pokedex escaping/numeric validation, species/trainer mutation paths passed)
   - Review-remediation app proof: `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS,arch=arm64' test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testMovesCompatibilityBatchPreviewApplyAndDiscardFlow`
   - Review-remediation full proof: `make test` (181 SwiftPM tests), `make validate`, and `make verify`
-  - Source-write posture: Pokedex strings now render through a shared C-string encoder; all Pokedex numeric fields validate before apply; Moves compatibility edits now surface as a visible Pokemon compatibility batch before apply; species asset import controls stay disabled until `PHS-T68` defines format-specific validation.
+  - Source-write posture: Pokedex strings now render through a shared C-string encoder; all Pokedex numeric fields validate before apply; Moves compatibility edits now surface as a visible Pokemon compatibility batch before apply; species asset import controls stay disabled after `PHS-T68` validation until a later activation row enables user-selected imports.
   - `swift test --package-path PokemonHackStudio --filter 'PokemonSpeciesCatalogTests|TrainerCatalogTests|PokemonDataCompatibilityTests'` (19 tests; evolution apply/reload, complex evolution validation, Pokedex text/scale edits, tutor persistence, trainer party removal, and compatibility metadata passed)
   - `cd PokemonHackStudio && xcodegen generate`
   - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS,arch=arm64' build-for-testing` (passed after shared picker extraction compile fixes)
@@ -538,6 +555,17 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make validate`
   - `make verify` (passed; regenerated Xcode project, built/signed the macOS app)
   - Manual app smoke: opened Trainers on repo-local `pokeemerald`, confirmed searchable constant pickers for all fields, species icons in party list, "Reset to Defaults" for moves, and correct IV/nature display.
+- `PHS-T80`:
+  - `swift test --package-path PokemonHackStudio --filter 'ToolchainHealthMatrixTests|PokemonDataCompatibilityTests'` (isolated staged PHS-T80 patch: 9 tests; current dirty checkout: 10 tests; preview-only action payloads, missing-tool guidance, graphics/generated rerun guidance, and backwards JSON decoding passed)
+  - `git diff --check`
+  - Source-write posture: toolchain actions only copy commands/paths or describe rerun guidance; PokemonHackStudio still does not run builds, converters, installers, patch writers, emulators, or source writes through this health surface.
+- `PHS-T81`:
+  - `swift test --package-path PokemonHackStudio --filter GenIIIResourceTests` (5 tests; direct synthetic GameCube `resource-index` parsing passed while auto-loaded Resources still excluded GameCube rows)
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS,arch=arm64' test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testExplicitGameCubeResourcePathLoadsReadOnlyEntryAndFiltersNestedItems -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testOpeningGameCubeProjectIndexesExplicitResourceWithoutAutoLoadingGameCubeMedia` (passed)
+  - `make test` (191 SwiftPM tests; passed)
+  - `git diff --check`
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: GameCube `.iso`/`.gcm` inputs remain explicit local inputs, read-only in the app and ProjectIndex, and excluded from auto-loaded resource libraries; no export/apply/mutation-plan path was added.
 - `PHS-T41`:
   - `swift test --package-path PokemonHackStudio --filter SourceIndexTests.testWildEncountersJSONIndexesEncountersByMap` (1 test; passed)
   - `make test` (112 tests; passed)
@@ -737,3 +765,19 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`; Xcode emitted the existing CoreSimulator out-of-date warning before the successful macOS build)
   - `git diff --check`
   - Source-write posture: the toolbar plus action only changes app selection chrome by opening the existing workflow panel; no CLI, core parser, mutation-plan, source-write, apply/export, ROM, reference, or bundled-fallback behavior changed.
+- `PHS-T72`:
+  - `swift test --package-path PokemonHackStudio --filter PokemonSpeciesCatalogTests` (17 tests; passed; provenance-preserving species asset import planning, existing asset validation, source-hash drift, wrong-kind, and palette-policy coverage)
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination 'platform=macOS' test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testSpeciesAssetImportStagesFrontPNGWithoutWritingSourceBeforeApply -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testSpeciesAssetImportStagesPaletteForPreview -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testSpeciesAssetImportMalformedOrWrongKindBlocksApplyability -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testSpeciesAssetImportSourceDriftAfterPreviewBlocksApply` (passed; Xcode observer 208.671s; Xcode emitted the existing multiple-destination warning)
+  - `make test` (196 SwiftPM tests; passed)
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - `git diff --check`
+  - Source-write posture: one Pokemon species source asset import path is active through draft/provenance/preview/apply/backups; missing or unindexed assets, bundled fallback roots, generated `.4bpp`/`.gbapal` outputs, ROM bytes, references, cache files, bulk graphics packages, and external converters remain non-writable.
+- `PHS-T74`:
+  - `swift test --package-path PokemonHackStudio --filter BuildPatchPlaytestValidationTests` (23 tests; passed; build-runner success, failed exit, blocked non-`make`/missing-tool gates, cancellation, log artifacts, and output verification covered)
+  - `cd PokemonHackStudio && xcodegen generate` (regenerated `PokemonHackStudio.xcodeproj` for the new core file)
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio-PHST74 -destination 'platform=macOS,arch=arm64' test -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testDecompBuildRunnerUsesSelectedTargetAndStoresLiveLogs -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testDecompBuildActionReflectsRunningAndCancelState` (passed; Xcode observer 114.139s)
+  - `git diff --check`
+  - `make test` (196 SwiftPM tests; passed)
+  - First `make verify` attempt was blocked by Xcode's shared `DerivedData/PokemonHackStudio` build database lock while another app-hosted test held the path; after the competing test released the lock, rerun `make verify` passed.
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: the app runs only selected declared decomp `make` targets and writes ignored `.pokemonhackstudio/builds/<target-id>/` logs; source edits, generated conversion, patch apply/export, ROM export, arbitrary commands, and mutation-plan apply behavior remain outside this runner.

@@ -444,7 +444,7 @@ public enum GenIIIResourceRegistry {
             role: role,
             parseStatus: index.diagnostics.contains { $0.severity == .error } ? .partial : .parsed,
             adapterID: "gen3.gamecube-disc",
-            writePolicy: .mutationPlanOnly,
+            writePolicy: .readOnly,
             modules: [.rom, .graphics, .pokemon, .trainers, .items, .moves, .text, .diagnostics],
             resourceCount: items.count,
             items: items,
@@ -782,7 +782,7 @@ public enum GenIIIResourceRegistry {
                 role: .missingInput,
                 parseStatus: .missing,
                 adapterID: "gen3.gamecube-disc",
-                writePolicy: .mutationPlanOnly,
+                writePolicy: .readOnly,
                 modules: [.rom, .diagnostics],
                 resourceCount: 0,
                 diagnostics: [

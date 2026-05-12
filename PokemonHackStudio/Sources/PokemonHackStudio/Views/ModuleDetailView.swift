@@ -37,8 +37,14 @@ struct ModuleDetailView: View {
                 entries: store.filteredResourceLibraryEntries,
                 assetCatalog: store.selectedAssetCatalog,
                 romInspector: store.selectedROMInspectorReport,
+                gameCubeEntry: store.explicitGameCubeResourceEntry,
+                gameCubeLoadStatus: store.gameCubeResourceLoadStatus,
                 assets: store.filteredResourceAssetRows,
                 assetLoadStatus: store.assetCatalogLoadStatus,
+                gameCubeResourcePath: Binding(
+                    get: { store.selectedGameCubeResourcePath },
+                    set: { store.selectedGameCubeResourcePath = $0 }
+                ),
                 selectedAssetID: Binding(
                     get: { store.selectedResourceAssetID },
                     set: { store.requestResourceAssetSelection($0) }
@@ -55,6 +61,12 @@ struct ModuleDetailView: View {
                     get: { store.resourceAssetSortMode },
                     set: { store.resourceAssetSortMode = $0 }
                 ),
+                onChooseGameCubeResource: {
+                    store.chooseGameCubeResourceImage()
+                },
+                onLoadGameCubeResource: {
+                    store.loadSelectedGameCubeResourcePath()
+                },
                 onLoadAssetCatalog: {
                     store.loadSelectedAssetCatalogIfNeeded()
                 },
@@ -172,6 +184,12 @@ struct ModuleDetailView: View {
                 onUpdateDraft: store.updateSelectedSpeciesDraft,
                 onFocusSpecies: { speciesID in
                     store.focusSpecies(speciesID)
+                },
+                onImportAsset: { kind, url in
+                    store.importSelectedSpeciesAsset(kind: kind, from: url)
+                },
+                assetImportBlockedReason: { kind in
+                    store.selectedSpeciesAssetImportBlockedReason(kind: kind)
                 },
                 onNavigateToResourceAsset: store.navigateToResourceAsset
             )

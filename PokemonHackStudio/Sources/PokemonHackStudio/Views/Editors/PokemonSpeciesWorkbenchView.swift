@@ -14,6 +14,8 @@ struct PokemonSpeciesWorkbenchView: View {
     let onLoadCatalog: () -> Void
     let onUpdateDraft: (PokemonHackCore.SpeciesEditDraft) -> Void
     let onFocusSpecies: (String) -> Void
+    let onImportAsset: (PokemonHackCore.SpeciesAssetKind, URL) -> Void
+    let assetImportBlockedReason: (PokemonHackCore.SpeciesAssetKind) -> String?
     let onNavigateToResourceAsset: (String) -> Void
 
     @State private var sourceExpanded = false
@@ -530,8 +532,13 @@ struct PokemonSpeciesWorkbenchView: View {
                     asset: asset,
                     rootPath: rootPath,
                     draftData: draft?.assetData[asset.kind],
+                    importProvenance: draft?.assetImports[asset.kind],
+                    importBlockedReason: assetImportBlockedReason(asset.kind),
                     onOpenResource: {
                         onNavigateToResourceAsset(asset.relativePath)
+                    },
+                    onImport: {
+                        importAsset(kind: asset.kind)
                     }
                 )
             }
@@ -820,15 +827,13 @@ struct PokemonSpeciesWorkbenchView: View {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.png]
-        panel.message = "Select a replacement \(kind.rawValue) sprite (PNG)"
+        panel.allowedFileTypes = kind.isSpriteAsset ? ["png"] : ["pal", "gbapal"]
+        panel.message = kind.isSpriteAsset
+            ? "Select a replacement \(kind.title) sprite PNG"
+            : "Select a replacement \(kind.title) palette"
 
         if panel.runModal() == .OK, let url = panel.url {
-            if let data = try? Data(contentsOf: url) {
-                updateDraft { draft in
-                    draft.assetData[kind] = data
-                }
-            }
+            onImportAsset(kind, url)
         }
     }
 
@@ -1241,7 +1246,10 @@ private struct SpeciesAssetTile: View {
     let asset: PokemonHackCore.SpeciesAsset
     let rootPath: String?
     let draftData: Data?
+    let importProvenance: PokemonHackCore.SpeciesAssetImportProvenance?
+    let importBlockedReason: String?
     let onOpenResource: () -> Void
+    let onImport: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1262,16 +1270,29 @@ private struct SpeciesAssetTile: View {
             .buttonStyle(.borderless)
             .help("Open this asset in Resources")
 
-            Button("Import...", systemImage: "square.and.arrow.down") {}
+            Button("Import...", systemImage: "square.and.arrow.down") {
+                onImport()
+            }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(true)
-            .help("Asset import is tracked as a future row pending format-specific validation.")
+            .disabled(importBlockedReason != nil)
+            .help(importBlockedReason ?? "Import stages draft bytes only; preview the mutation plan before apply.")
+
+            if let importBlockedReason {
+                Text(importBlockedReason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let draftData {
                 Text("Draft staged: \(draftData.count) bytes. Preview mutations to validate asset policy.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+
+            if let importProvenance {
+                SpeciesAssetImportProvenanceView(provenance: importProvenance)
             }
 
             Text(asset.relativePath)
@@ -1282,6 +1303,47 @@ private struct SpeciesAssetTile: View {
         }
         .padding(12)
         .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct SpeciesAssetImportProvenanceView: View {
+    let provenance: PokemonHackCore.SpeciesAssetImportProvenance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                StatusPill(state: validationState)
+                Text("\(provenance.sourceFileName) · \(provenance.byteCount) bytes")
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
+            Text("SHA1 \(provenance.sha1)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Text("Detected \(provenance.detectedKind.rawValue); validation \(provenance.status.rawValue).")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ForEach(provenance.diagnostics.prefix(2)) { diagnostic in
+                Text(diagnostic.message)
+                    .font(.caption2)
+                    .foregroundStyle(diagnostic.severity == .error ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var validationState: ValidationState {
+        switch provenance.status {
+        case .ready:
+            return .valid
+        case .warning:
+            return .warning
+        case .blocked:
+            return .error
+        }
     }
 }
 

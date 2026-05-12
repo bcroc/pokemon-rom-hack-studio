@@ -70,6 +70,15 @@ private struct BuildReportRowExportPayload: Codable {
     let path: String
     let symbol: String
     let tags: [String]
+    let actions: [BuildReportRowActionExportPayload]
+}
+
+private struct BuildReportRowActionExportPayload: Codable {
+    let kind: String
+    let title: String
+    let detail: String
+    let command: String?
+    let payload: String?
 }
 
 private struct PlaytestReportExportPayload: Codable {
@@ -182,8 +191,10 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID?
     @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = ""
     @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets
+    @Published var selectedGameCubeResourcePath: String = ""
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
+    @Published var selectedDecompBuildTargetID: String = ""
     @Published var scriptReadinessTargetMode: ScriptReadinessTargetMode = .map
     @Published var selectedScriptReadinessLabel: String = ""
     @Published var selectedScriptSourceID: String = ""
@@ -219,6 +230,8 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var workspaceAutosavePending = false
     @Published private(set) var recentProjectRoots: [String]
     @Published private(set) var resourceLibrary: ResourceLibraryViewState?
+    @Published private(set) var explicitGameCubeResourceEntry: ResourceLibraryEntryViewState?
+    @Published private(set) var gameCubeResourceLoadStatus: GameCubeResourceLoadStatus = .idle
     @Published private(set) var selectedScriptReadinessReport: ScriptReadinessReportViewState?
     @Published private(set) var sourceGraphLoadStatus: SourceGraphLoadStatus = .idle
     @Published private(set) var assetCatalogLoadStatus: ResourceAssetCatalogLoadStatus = .idle
@@ -249,6 +262,9 @@ final class WorkbenchStore: ObservableObject {
     @Published private var graphicsDraftsByKey: [String: PokemonHackCore.GraphicsEditDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
     @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
+    @Published private var buildRunResultsByID: [String: BuildRunResultViewState] = [:]
+    @Published private var buildRunLogLinesByID: [String: [BuildRunLogLineViewState]] = [:]
+    @Published private(set) var runningBuildTargetID: String?
 
     let userSettings: WorkbenchUserSettings
     let targets: [BuildTarget]
@@ -285,6 +301,7 @@ final class WorkbenchStore: ObservableObject {
     private var assetCatalogTask: Task<Void, Never>?
     private var mapCatalogTask: Task<Void, Never>?
     private var mapVisualTask: Task<Void, Never>?
+    private var decompBuildTask: Task<Void, Never>?
     private var mapVisualSharedCacheDataByID: [String: Data] = [:]
     private var resourceAssetRowsCache: ResourceAssetRowsCache?
     private var pendingRelatedMapTargetID: String?
@@ -847,6 +864,16 @@ final class WorkbenchStore: ObservableObject {
         return playtestCaptureResultsByID[selectedIndexedProject.id]
     }
 
+    var selectedBuildRunResult: BuildRunResultViewState? {
+        guard let selectedIndexedProject else { return nil }
+        return buildRunResultsByID[selectedIndexedProject.id]
+    }
+
+    var selectedBuildRunLogLines: [BuildRunLogLineViewState] {
+        guard let selectedIndexedProject else { return [] }
+        return buildRunLogLinesByID[selectedIndexedProject.id] ?? []
+    }
+
     var selectedLatestPlaytestCaptureArtifact: PlaytestArtifactViewState? {
         selectedPlaytestCaptureResult?.primaryArtifact
     }
@@ -855,15 +882,35 @@ final class WorkbenchStore: ObservableObject {
         selectedBuildReport?.playtest.isRunnable == true
     }
 
+    var selectedRunnableBuildTargets: [BuildTargetValidationViewState] {
+        selectedBuildReport?.buildTargets.filter { $0.command.split(separator: " ").first == "make" } ?? []
+    }
+
+    var selectedEffectiveDecompBuildTargetID: String {
+        if selectedRunnableBuildTargets.contains(where: { $0.id == selectedDecompBuildTargetID }) {
+            return selectedDecompBuildTargetID
+        }
+        return selectedRunnableBuildTargets.first?.id ?? ""
+    }
+
+    var canRunSelectedDecompBuild: Bool {
+        guard runningBuildTargetID == nil else { return false }
+        guard !selectedEffectiveDecompBuildTargetID.isEmpty else { return false }
+        guard let selectedIndexedProject, projectIndexesByID[selectedIndexedProject.id] != nil else { return false }
+        return true
+    }
+
     func buildWorkflowActions(includePatchActions: Bool) -> [BuildWorkflowActionViewState] {
         Self.buildWorkflowActions(
+            canRunBuild: canRunSelectedDecompBuild,
+            isBuildRunning: runningBuildTargetID != nil,
             canLaunchPlaytest: canLaunchSelectedPlaytest,
             includePatchActions: includePatchActions
         )
     }
 
     var fixtureBuildWorkflowActions: [BuildWorkflowActionViewState] {
-        Self.buildWorkflowActions(canLaunchPlaytest: false, includePatchActions: false)
+        Self.buildWorkflowActions(canRunBuild: false, isBuildRunning: false, canLaunchPlaytest: false, includePatchActions: false)
             .map { action in
                 BuildWorkflowActionViewState(
                     id: action.id,
@@ -898,6 +945,16 @@ final class WorkbenchStore: ObservableObject {
         return romInspectorReportsByID[selectedIndexedProject.id]
     }
 
+    private var resourceLibraryEntriesForWorkbench: [ResourceLibraryEntryViewState] {
+        var entries = resourceLibrary?.entries ?? []
+        if let explicitGameCubeResourceEntry,
+           !entries.contains(where: { $0.id == explicitGameCubeResourceEntry.id })
+        {
+            entries.insert(explicitGameCubeResourceEntry, at: 0)
+        }
+        return entries
+    }
+
     var selectedDiagnosticRows: [IndexedDiagnosticRow] {
         guard let selectedIndexedProject else { return [] }
         let sourceDiagnostics = selectedSourceIndex?.diagnostics.map {
@@ -918,7 +975,8 @@ final class WorkbenchStore: ObservableObject {
         let itemDiagnostics = selectedItemCatalog?.diagnostics.map {
             Self.diagnostic(from: $0, rootPath: selectedIndexedProject.rootPath)
         } ?? []
-        let resourceDiagnostics = resourceLibrary?.allDiagnostics ?? []
+        let resourceDiagnostics = (resourceLibrary?.allDiagnostics ?? [])
+            + (explicitGameCubeResourceEntry.map { $0.diagnostics } ?? [])
         let assetDiagnostics = selectedAssetCatalog?.diagnostics ?? []
         return selectedIndexedProject.diagnostics
             + sourceDiagnostics
@@ -1128,8 +1186,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var filteredResourceLibraryEntries: [ResourceLibraryEntryViewState] {
-        guard let resourceLibrary else { return [] }
-        return filter(resourceEntries: resourceLibrary.entries)
+        filter(resourceEntries: resourceLibraryEntriesForWorkbench)
     }
 
     var filteredResourceAssetRows: [ResourceAssetRowViewState] {
@@ -1218,7 +1275,7 @@ final class WorkbenchStore: ObservableObject {
         if let selected = filteredResourceLibraryEntries.first(where: { $0.id == selectedResourceLibraryEntryID }) {
             return selected
         }
-        return filteredResourceLibraryEntries.first ?? resourceLibrary?.entries.first
+        return filteredResourceLibraryEntries.first ?? resourceLibraryEntriesForWorkbench.first
     }
 
     var selectedScriptSource: PokemonHackCore.ScriptOutlineSource? {
@@ -1459,14 +1516,23 @@ final class WorkbenchStore: ObservableObject {
                         || $0.message.localizedCaseInsensitiveContains(searchText)
                         || $0.source.path.localizedCaseInsensitiveContains(searchText)
                 }
-                || (userSettings.resourceSearchMatchesNestedItems && entry.items.contains { item in
-                    item.title.localizedCaseInsensitiveContains(searchText)
-                        || item.path.localizedCaseInsensitiveContains(searchText)
-                        || item.kind.localizedCaseInsensitiveContains(searchText)
-                        || item.category.localizedCaseInsensitiveContains(searchText)
-                        || item.tags.contains { $0.localizedCaseInsensitiveContains(searchText) }
-                })
+                || ((userSettings.resourceSearchMatchesNestedItems || entry.platform == GenIIIResourcePlatform.gameCube.rawValue)
+                    && entry.items.contains { item in
+                        Self.resourceItemMatchesSearch(item, searchText: searchText)
+                    })
         }
+    }
+
+    private static func resourceItemMatchesSearch(_ item: ResourceLibraryItemViewState, searchText: String) -> Bool {
+        item.title.localizedCaseInsensitiveContains(searchText)
+            || item.path.localizedCaseInsensitiveContains(searchText)
+            || item.kind.localizedCaseInsensitiveContains(searchText)
+            || item.category.localizedCaseInsensitiveContains(searchText)
+            || item.locationSummary.localizedCaseInsensitiveContains(searchText)
+            || item.sizeSummary.localizedCaseInsensitiveContains(searchText)
+            || item.checksumSummary.localizedCaseInsensitiveContains(searchText)
+            || item.source.path.localizedCaseInsensitiveContains(searchText)
+            || item.tags.contains { $0.localizedCaseInsensitiveContains(searchText) }
     }
 
     static func filterAndSort(
@@ -2830,6 +2896,15 @@ final class WorkbenchStore: ObservableObject {
             } else {
                 romInspectorReportsByID.removeValue(forKey: summary.id)
             }
+            if Self.isGameCubeProfile(index.profile) {
+                selectedGameCubeResourcePath = standardizedPath
+                let entry = GenIIIResourceRegistry.resourceIndex(path: standardizedPath, role: .localInput, fileManager: fileManager)
+                let viewState = Self.resourceEntryViewState(from: entry)
+                explicitGameCubeResourceEntry = viewState
+                selectedResourceLibraryEntryID = viewState.id
+                selectedResourceLibraryMode = .entries
+                gameCubeResourceLoadStatus = .loaded(itemCount: viewState.items.count)
+            }
             let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
             buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
             graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
@@ -3380,6 +3455,64 @@ final class WorkbenchStore: ObservableObject {
         latestSpeciesBatchEditPlans = []
         latestSpeciesBatchApplyResult = nil
         scheduleDraftAutosave()
+    }
+
+    func selectedSpeciesAssetImportBlockedReason(kind: PokemonHackCore.SpeciesAssetKind) -> String? {
+        guard let selectedIndexedProject else {
+            return "Open an editable source project before importing assets."
+        }
+        guard !Self.pathIsBundledAssetRoot(selectedIndexedProject.rootPath) else {
+            return "Bundled fallback projects are read-only; open the local source tree to import assets."
+        }
+        guard let detail = selectedSpeciesDetail else {
+            return "Select a Pokemon before importing assets."
+        }
+        guard let asset = detail.assets.first(where: { $0.kind == kind }) else {
+            return "\(kind.title) has no indexed source asset row."
+        }
+        guard asset.exists else {
+            return "\(kind.title) source asset is missing; create the source path before importing a replacement."
+        }
+        guard selectedSpeciesDraft != nil else {
+            return "\(detail.speciesID) is read-only for this project profile."
+        }
+        let lowercased = asset.relativePath.lowercased()
+        if asset.relativePath.contains("..") || asset.relativePath.hasPrefix("/") {
+            return "\(kind.title) source path is unsafe."
+        }
+        if lowercased.contains(".4bpp") || lowercased.hasSuffix(".gbapal") || lowercased.contains("/build/") {
+            return "\(kind.title) imports must target source PNG or .pal files, not generated outputs."
+        }
+        if kind.isSpriteAsset && !lowercased.hasSuffix(".png") {
+            return "\(kind.title) imports must target a PNG source path."
+        }
+        if kind.isPaletteAsset && !lowercased.hasSuffix(".pal") {
+            return "\(kind.title) imports must target a .pal source path."
+        }
+        return nil
+    }
+
+    @discardableResult
+    func importSelectedSpeciesAsset(
+        kind: PokemonHackCore.SpeciesAssetKind,
+        from sourceURL: URL
+    ) -> PokemonHackCore.SpeciesAssetImportProvenance? {
+        guard selectedSpeciesAssetImportBlockedReason(kind: kind) == nil,
+              var draft = selectedSpeciesDraft,
+              let data = try? Data(contentsOf: sourceURL)
+        else {
+            return nil
+        }
+
+        let provenance = PokemonHackCore.SpeciesAssetImportValidator.provenance(
+            sourcePath: sourceURL.path,
+            expectedKind: kind,
+            data: data
+        )
+        draft.assetData[kind] = data
+        draft.assetImports[kind] = provenance
+        updateSelectedSpeciesDraft(draft)
+        return provenance
     }
 
     func speciesCompatibilityValue(
@@ -4274,6 +4407,46 @@ final class WorkbenchStore: ObservableObject {
         return coreResourceLibrary
     }
 
+    func chooseGameCubeResourceImage() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedFileTypes = ["iso", "gcm"]
+        if panel.runModal() == .OK, let url = panel.url {
+            selectedGameCubeResourcePath = url.standardizedFileURL.path
+            loadSelectedGameCubeResourcePath()
+        }
+    }
+
+    func loadSelectedGameCubeResourcePath() {
+        let trimmed = selectedGameCubeResourcePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            explicitGameCubeResourceEntry = nil
+            selectedResourceLibraryEntryID = ""
+            gameCubeResourceLoadStatus = .idle
+            return
+        }
+
+        let entry = GenIIIResourceRegistry.resourceIndex(
+            path: trimmed,
+            role: .localInput,
+            fileManager: fileManager
+        )
+        guard entry.platform == .gameCube else {
+            explicitGameCubeResourceEntry = nil
+            selectedResourceLibraryEntryID = ""
+            gameCubeResourceLoadStatus = .failed("Select a supported .iso or .gcm GameCube disc image.")
+            return
+        }
+
+        let viewState = Self.resourceEntryViewState(from: entry)
+        explicitGameCubeResourceEntry = viewState
+        selectedResourceLibraryEntryID = viewState.id
+        selectedResourceLibraryMode = .entries
+        gameCubeResourceLoadStatus = .loaded(itemCount: viewState.items.count)
+    }
+
     func refreshHealthChecks() {
         guard !projectIndexesByID.isEmpty else {
             refreshProjectIndexes()
@@ -4302,6 +4475,19 @@ final class WorkbenchStore: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
     }
 
+    private func appendBuildRunLog(_ event: PokemonHackCore.DecompBuildLogEvent, projectID: String) {
+        var lines = buildRunLogLinesByID[projectID] ?? []
+        lines.append(
+            BuildRunLogLineViewState(
+                id: event.id,
+                stream: event.stream.rawValue,
+                message: event.message,
+                emittedAt: event.emittedAt
+            )
+        )
+        buildRunLogLinesByID[projectID] = Array(lines.suffix(400))
+    }
+
     func exportSettingsSnapshotToPasteboard() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(userSettings.exportSnapshot(), forType: .string)
@@ -4324,6 +4510,12 @@ final class WorkbenchStore: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
+    }
+
+    func copyBuildReportRowActionToPasteboard(_ action: BuildReportRowAction) {
+        guard let value = action.copyValue else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     func copyGraphicsImportPackagePlanJSONToPasteboard() {
@@ -4358,6 +4550,70 @@ final class WorkbenchStore: ObservableObject {
             rootPath: selectedIndexedProject.rootPath,
             artifactRootPath: (artifactRoot ?? workspaceRoot).path
         )
+    }
+
+    func runSelectedDecompBuild(
+        artifactRoot: URL? = nil,
+        runner: @escaping (
+            PokemonHackCore.ProjectIndex,
+            String,
+            URL?,
+            FileManager,
+            @escaping ToolAvailabilityResolver,
+            @escaping DecompBuildLogHandler
+        ) async -> PokemonHackCore.DecompBuildResult = { index, targetID, artifactRoot, fileManager, toolResolver, logHandler in
+            await PokemonHackCore.DecompBuildRunner.run(
+                index: index,
+                targetID: targetID,
+                artifactRoot: artifactRoot,
+                fileManager: fileManager,
+                toolResolver: toolResolver,
+                logHandler: logHandler
+            )
+        }
+    ) {
+        guard runningBuildTargetID == nil,
+              let selectedIndexedProject,
+              let index = projectIndexesByID[selectedIndexedProject.id] else {
+            return
+        }
+        let targetID = selectedEffectiveDecompBuildTargetID
+        guard !targetID.isEmpty else { return }
+
+        selectedDecompBuildTargetID = targetID
+        runningBuildTargetID = targetID
+        buildRunLogLinesByID[selectedIndexedProject.id] = []
+        buildRunResultsByID.removeValue(forKey: selectedIndexedProject.id)
+
+        let project = selectedIndexedProject
+        let resolvedArtifactRoot = artifactRoot ?? workspaceRoot
+        decompBuildTask = Task { @MainActor in
+            let result = await runner(
+                index,
+                targetID,
+                resolvedArtifactRoot,
+                .default,
+                toolResolver
+            ) { [weak self] event in
+                Task { @MainActor in
+                    self?.appendBuildRunLog(event, projectID: project.id)
+                }
+            }
+
+            guard projectIndexesByID[project.id] != nil else { return }
+            buildRunResultsByID[project.id] = Self.buildRunResult(
+                from: result,
+                rootPath: project.rootPath
+            )
+            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+            buildReportsByID[project.id] = Self.buildReport(from: index, project: project, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
+            runningBuildTargetID = nil
+            decompBuildTask = nil
+        }
+    }
+
+    func cancelSelectedDecompBuild() {
+        decompBuildTask?.cancel()
     }
 
     func captureSelectedPlaytest(
@@ -4752,6 +5008,15 @@ final class WorkbenchStore: ObservableObject {
 
     private static func pathIsBundledAssetRoot(_ path: String) -> Bool {
         URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains(bundledAssetsDirectoryName)
+    }
+
+    private static func isGameCubeProfile(_ profile: PokemonHackCore.GameProfile) -> Bool {
+        switch profile {
+        case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
+            return true
+        default:
+            return false
+        }
     }
 
     private static let bundledAssetsDirectoryName = "PokemonHackStudioAssets"
@@ -5807,7 +6072,8 @@ final class WorkbenchStore: ObservableObject {
                     row.resolvedPath ?? ""
                 ],
                 healthCategory: WorkbenchHealthCheckCategory(rawValue: row.category.rawValue),
-                healthStatus: WorkbenchHealthCheckStatus(rawValue: row.status.rawValue)
+                healthStatus: WorkbenchHealthCheckStatus(rawValue: row.status.rawValue),
+                actions: row.actions.map(buildReportRowAction)
             )
         }
 
@@ -5847,6 +6113,28 @@ final class WorkbenchStore: ObservableObject {
         case .error:
             .error
         }
+    }
+
+    private static func buildReportRowAction(
+        from action: PokemonHackCore.ToolchainHealthAction
+    ) -> BuildReportRowAction {
+        let kind: BuildReportRowAction.Kind
+        switch action.kind {
+        case .copyCommand:
+            kind = .copyCommand
+        case .copyPath:
+            kind = .copyPath
+        case .rerunGuidance:
+            kind = .rerunGuidance
+        }
+        return BuildReportRowAction(
+            id: action.id,
+            kind: kind,
+            title: action.title,
+            detail: action.detail,
+            command: action.command,
+            payload: action.payload
+        )
     }
 
     private static func playtestHandoffPlan(
@@ -5929,6 +6217,59 @@ final class WorkbenchStore: ObservableObject {
             processID: result.processID.map { "PID \($0)" } ?? result.status.rawValue,
             artifacts: artifacts,
             source: SourceLocation(path: sourcePath, symbol: "mGBA", line: 1)
+        )
+    }
+
+    private static func buildRunResult(
+        from result: PokemonHackCore.DecompBuildResult,
+        rootPath: String
+    ) -> BuildRunResultViewState {
+        let status: ValidationState
+        switch result.status {
+        case .succeeded:
+            status = .valid
+        case .blocked, .cancelled:
+            status = .warning
+        case .failed:
+            status = .error
+        }
+        let outputDetail: String
+        if let output = result.output {
+            let checksum = output.sha1.map { "sha1 \($0.prefix(8))" } ?? "checksum unavailable"
+            outputDetail = output.exists
+                ? "\(output.relativePath) exists; \(checksum); checksum \(output.checksumStatus.rawValue); freshness \(output.freshnessStatus.rawValue)."
+                : "\(output.relativePath) is still missing; checksum \(output.checksumStatus.rawValue); freshness \(output.freshnessStatus.rawValue)."
+        } else {
+            outputDetail = "No output artifact is declared for this target."
+        }
+        let diagnostics = result.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let artifacts = result.artifacts.map { artifact in
+            BuildRunArtifactViewState(
+                id: artifact.id,
+                kind: artifact.kind.rawValue,
+                path: artifact.relativePath,
+                absolutePath: artifact.absolutePath,
+                detail: artifact.detail,
+                exists: artifact.exists,
+                source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
+            )
+        }
+        let command = result.command.joined(separator: " ")
+        let sourcePath = result.output?.relativePath ?? rootPath
+        return BuildRunResultViewState(
+            id: "build-run:\(result.targetID ?? rootPath)",
+            title: result.targetName ?? "Build run",
+            status: status,
+            statusLabel: result.status.rawValue,
+            detail: result.diagnostics.last?.message ?? "Build \(result.status.rawValue).",
+            command: command,
+            processID: result.processID.map { "PID \($0)" } ?? result.status.rawValue,
+            exitCode: result.exitCode.map { "Exit \($0)" } ?? "No exit code",
+            outputPath: result.output?.relativePath,
+            outputDetail: outputDetail,
+            artifacts: artifacts,
+            diagnostics: diagnostics,
+            source: SourceLocation(path: sourcePath, symbol: command.isEmpty ? "Build" : command, line: 1)
         )
     }
 
@@ -6317,7 +6658,16 @@ final class WorkbenchStore: ObservableObject {
             status: row.status.rawValue,
             path: row.source.path,
             symbol: row.source.symbol,
-            tags: row.tags
+            tags: row.tags,
+            actions: row.actions.map {
+                BuildReportRowActionExportPayload(
+                    kind: $0.kind.rawValue,
+                    title: $0.title,
+                    detail: $0.detail,
+                    command: $0.command,
+                    payload: $0.payload
+                )
+            }
         )
     }
 
@@ -6935,16 +7285,25 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private static func buildWorkflowActions(
+        canRunBuild: Bool,
+        isBuildRunning: Bool,
         canLaunchPlaytest: Bool,
         includePatchActions: Bool
     ) -> [BuildWorkflowActionViewState] {
         var actions = [
             BuildWorkflowActionViewState(
                 id: "build-rom",
-                title: "Build ROM",
+                title: isBuildRunning ? "Building..." : "Build ROM",
                 systemImage: "hammer",
-                isEnabled: false,
-                isPreviewLocked: true
+                isEnabled: canRunBuild,
+                isPreviewLocked: false
+            ),
+            BuildWorkflowActionViewState(
+                id: "cancel-build",
+                title: "Cancel Build",
+                systemImage: "xmark.circle",
+                isEnabled: isBuildRunning,
+                isPreviewLocked: false
             ),
             BuildWorkflowActionViewState(
                 id: "open-playtest",

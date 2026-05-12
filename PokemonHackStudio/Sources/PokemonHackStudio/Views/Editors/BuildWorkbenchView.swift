@@ -102,6 +102,8 @@ struct BuildWorkbenchView: View {
         rows: [BuildReportRow]
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            buildRunnerSection(report: report)
+
             ForEach(BuildReportSection.allCases.filter { $0 != .diagnostics && $0 != .patchManifest }) { section in
                 let sectionRows = rows.filter { $0.section == section }
                 EditorSection(title: section.rawValue) {
@@ -110,7 +112,10 @@ struct BuildWorkbenchView: View {
                             emptySection(section, rows: rows)
                         } else {
                             ForEach(sectionRows) { row in
-                                BuildReportRowView(row: row)
+                                BuildReportRowView(
+                                    row: row,
+                                    copyAction: store.copyBuildReportRowActionToPasteboard
+                                )
                             }
                         }
                     }
@@ -121,13 +126,79 @@ struct BuildWorkbenchView: View {
                 EditorSection(title: BuildReportSection.diagnostics.rawValue) {
                     VStack(spacing: 10) {
                         ForEach(rows.filter { $0.section == .diagnostics }) { row in
-                            BuildReportRowView(row: row)
+                            BuildReportRowView(
+                                row: row,
+                                copyAction: store.copyBuildReportRowActionToPasteboard
+                            )
                         }
                     }
                 }
             }
 
             workflowActions(includePatchActions: false)
+        }
+    }
+
+    private func buildRunnerSection(report: BuildPatchPlaytestReportViewState) -> some View {
+        EditorSection(title: "Build Runner") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Picker(
+                        "Target",
+                        selection: Binding(
+                            get: { store.selectedEffectiveDecompBuildTargetID },
+                            set: { store.selectedDecompBuildTargetID = $0 }
+                        )
+                    ) {
+                        if store.selectedRunnableBuildTargets.isEmpty {
+                            Text("No make targets").tag("")
+                        } else {
+                            ForEach(store.selectedRunnableBuildTargets) { target in
+                                Text("\(target.name) - \(target.command)").tag(target.id)
+                            }
+                        }
+                    }
+                    .frame(minWidth: 280)
+
+                    if store.runningBuildTargetID == nil {
+                        Button("Build", systemImage: "hammer") {
+                            store.runSelectedDecompBuild()
+                        }
+                        .disabled(!store.canRunSelectedDecompBuild)
+                    } else {
+                        Button("Cancel", systemImage: "xmark.circle") {
+                            store.cancelSelectedDecompBuild()
+                        }
+                    }
+                    Spacer()
+                }
+
+                Text("Runs only the selected declared decomp make target. Source edits, patch apply/export, conversion, and repair actions remain outside this runner.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if !store.selectedBuildRunLogLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(store.selectedBuildRunLogLines.suffix(12)) { line in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(line.stream)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 54, alignment: .leading)
+                                Text(line.message)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+
+                if let result = store.selectedBuildRunResult {
+                    BuildRunResultView(result: result)
+                }
+            }
         }
     }
 
@@ -214,7 +285,10 @@ struct BuildWorkbenchView: View {
                         emptyPatchManifest
                     } else {
                         ForEach(rows.filter { $0.section == .patchManifest }) { row in
-                            BuildReportRowView(row: row)
+                            BuildReportRowView(
+                                row: row,
+                                copyAction: store.copyBuildReportRowActionToPasteboard
+                            )
                         }
                     }
                 }
@@ -234,7 +308,10 @@ struct BuildWorkbenchView: View {
                 EditorSection(title: "Diagnostics") {
                     VStack(spacing: 10) {
                         ForEach(rows.filter { $0.section == .diagnostics }) { row in
-                            BuildReportRowView(row: row)
+                            BuildReportRowView(
+                                row: row,
+                                copyAction: store.copyBuildReportRowActionToPasteboard
+                            )
                         }
                     }
                 }
@@ -373,7 +450,7 @@ struct BuildWorkbenchView: View {
                     Spacer()
                 }
 
-                Text("Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Build, validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
+                Text("Build runs only the selected declared make target. Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -385,6 +462,16 @@ struct BuildWorkbenchView: View {
         if action.id == "open-playtest" {
             Button(action.title, systemImage: action.systemImage) {
                 store.launchSelectedPlaytest()
+            }
+            .disabled(!action.isEnabled)
+        } else if action.id == "build-rom" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.runSelectedDecompBuild()
+            }
+            .disabled(!action.isEnabled)
+        } else if action.id == "cancel-build" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.cancelSelectedDecompBuild()
             }
             .disabled(!action.isEnabled)
         } else if action.id == "capture-screenshot" {
@@ -624,8 +711,68 @@ private struct LatestPlaytestCaptureCard: View {
     }
 }
 
+private struct BuildRunResultView: View {
+    let result: BuildRunResultViewState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                StatusPill(state: result.status)
+                Text(result.title)
+                    .font(.headline)
+                Text(result.processID)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(result.exitCode)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            Text(result.outputDetail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            ForEach(result.artifacts) { artifact in
+                HStack(spacing: 8) {
+                    Image(systemName: artifact.exists ? "doc.text" : "doc.badge.clock")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(artifact.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text(artifact.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+
+            if !result.diagnostics.isEmpty {
+                ForEach(result.diagnostics) { diagnostic in
+                    HStack(alignment: .top, spacing: 8) {
+                        StatusPill(state: diagnostic.severity)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(diagnostic.title)
+                                .font(.caption.weight(.semibold))
+                            Text(diagnostic.message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct BuildReportRowView: View {
     let row: BuildReportRow
+    var copyAction: (BuildReportRowAction) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -643,6 +790,17 @@ private struct BuildReportRowView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 SourceLocationView(source: row.source)
+                if !row.actions.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(row.actions) { action in
+                            BuildReportActionRow(
+                                action: action,
+                                copy: { copyAction(action) }
+                            )
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
 
             Spacer()
@@ -651,6 +809,45 @@ private struct BuildReportRowView: View {
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct BuildReportActionRow: View {
+    let action: BuildReportRowAction
+    let copy: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(action.kind.rawValue)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(action.title)
+                    .font(.caption.weight(.semibold))
+                Text(action.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let value = action.copyValue {
+                    Text(value)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 8)
+            if action.copyValue != nil {
+                Button("Copy", systemImage: "doc.on.doc") {
+                    copy()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Copy \(action.kind.rawValue.lowercased())")
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 

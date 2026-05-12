@@ -202,6 +202,34 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(appliedData, pngData)
     }
 
+    func testSpeciesAssetImportProvenanceIsPreservedInMutationPlan() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        let importPath = root.appendingPathComponent("incoming/front.png").path
+        let pngData = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let provenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: importPath,
+            expectedKind: .front,
+            data: pngData
+        )
+        draft.assetData[.front] = pngData
+        draft.assetImports[.front] = provenance
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertEqual(plan.draft.assetImports[.front]?.sourcePath, importPath)
+        XCTAssertEqual(plan.draft.assetImports[.front]?.detectedKind, .png)
+        XCTAssertEqual(plan.draft.assetImports[.front]?.status, .ready)
+        XCTAssertEqual(plan.draft.assetImports[.front]?.byteCount, pngData.count)
+        XCTAssertEqual(plan.changes.first { $0.path == "graphics/pokemon/treecko/front.png" }?.newData, pngData)
+    }
+
     func testSpeciesMutationPlannerStagesFireRedAssetChanges() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url

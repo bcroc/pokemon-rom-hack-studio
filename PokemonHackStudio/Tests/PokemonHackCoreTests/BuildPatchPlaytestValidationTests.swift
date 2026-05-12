@@ -129,6 +129,130 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(report.generatedArtifacts.first(where: { $0.relativePath == "build" })?.matchCount, 1)
     }
 
+    func testDecompBuildRunnerRunsMakeTargetWritesLogsAndVerifiesOutput() async throws {
+        let root = try makeTemporaryRoot()
+        let make = root.appendingPathComponent("tools/make")
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try writeExecutable(
+            """
+            #!/bin/sh
+            echo "building target"
+            echo "warning line" >&2
+            printf abc > pokeemerald.gba
+            exit 0
+            """,
+            to: make
+        )
+        let events = DecompBuildLogEventCollector()
+
+        let result = await DecompBuildRunner.run(
+            index: makeIndex(
+                root: root,
+                documents: [SourceDocument(relativePath: "src/main.c", kind: .cSource, exists: true)],
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            targetID: "emerald-build",
+            artifactRoot: root,
+            toolResolver: availableTools(["make": make.path]),
+            logHandler: events.append
+        )
+
+        XCTAssertEqual(result.status, .succeeded)
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.output?.exists, true)
+        XCTAssertEqual(result.output?.checksumStatus, .matched)
+        let loggedEvents = events.values
+        XCTAssertTrue(loggedEvents.contains { $0.stream == .stdout && $0.message == "building target" })
+        XCTAssertTrue(loggedEvents.contains { $0.stream == .stderr && $0.message == "warning line" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/builds/emerald-build/stdout.log").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/builds/emerald-build/stderr.log").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/builds/emerald-build/run.log").path))
+    }
+
+    func testDecompBuildRunnerReportsFailedMakeExit() async throws {
+        let root = try makeTemporaryRoot()
+        let make = root.appendingPathComponent("tools/make")
+        try writeExecutable("#!/bin/sh\necho nope >&2\nexit 2\n", to: make)
+
+        let result = await DecompBuildRunner.run(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            targetID: "emerald-build",
+            artifactRoot: root,
+            toolResolver: availableTools(["make": make.path])
+        )
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.exitCode, 2)
+        XCTAssertEqual(result.output?.exists, false)
+    }
+
+    func testDecompBuildRunnerBlocksUnsupportedCommandAndMissingTool() async throws {
+        let root = try makeTemporaryRoot()
+        let nonMake = await DecompBuildRunner.run(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "custom-build", name: "Custom", kind: .build, command: ["sh", "build.sh"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            targetID: "custom-build",
+            artifactRoot: root,
+            toolResolver: availableTools(["sh": "/bin/sh"])
+        )
+        XCTAssertEqual(nonMake.status, .blocked)
+        XCTAssertTrue(nonMake.diagnostics.contains { $0.code == "BUILD_COMMAND_NOT_SUPPORTED" })
+
+        let missingMake = await DecompBuildRunner.run(
+            index: makeIndex(
+                root: root,
+                buildTargets: [
+                    BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+                ]
+            ),
+            targetID: "emerald-build",
+            artifactRoot: root,
+            toolResolver: availableTools([:])
+        )
+        XCTAssertEqual(missingMake.status, .blocked)
+        XCTAssertTrue(missingMake.diagnostics.contains { $0.code == "BUILD_TOOL_MISSING" })
+    }
+
+    func testDecompBuildRunnerCancelsRunningMakeTarget() async throws {
+        let root = try makeTemporaryRoot()
+        let make = root.appendingPathComponent("tools/make")
+        try writeExecutable("#!/bin/sh\necho started\nsleep 5\nprintf abc > pokeemerald.gba\n", to: make)
+        let index = makeIndex(
+            root: root,
+            buildTargets: [
+                BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+            ]
+        )
+        let resolver = availableTools(["make": make.path])
+        let task = Task {
+            await DecompBuildRunner.run(
+                index: index,
+                targetID: "emerald-build",
+                artifactRoot: root,
+                toolResolver: resolver
+            )
+        }
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        task.cancel()
+        let result = await task.value
+
+        XCTAssertEqual(result.status, .cancelled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("pokeemerald.gba").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/builds/emerald-build/run.log").path))
+    }
+
     func testPatchReportWrapsParserAndReportsUnknownOrMalformedPatches() throws {
         let ips = Data("PATCH".utf8)
             + Data([0x00, 0x00, 0x01, 0x00, 0x02, 0xAA, 0xBB])
@@ -647,6 +771,23 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
 
     private func setModificationDate(_ date: Date, for url: URL) throws {
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    }
+}
+
+private final class DecompBuildLogEventCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [DecompBuildLogEvent] = []
+
+    var values: [DecompBuildLogEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
+
+    func append(_ event: DecompBuildLogEvent) {
+        lock.lock()
+        events.append(event)
+        lock.unlock()
     }
 }
 

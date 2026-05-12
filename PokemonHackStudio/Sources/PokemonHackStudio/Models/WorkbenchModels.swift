@@ -530,6 +530,39 @@ struct BuildTargetValidationViewState: Identifiable {
     let source: SourceLocation
 }
 
+struct BuildRunLogLineViewState: Identifiable {
+    let id: String
+    let stream: String
+    let message: String
+    let emittedAt: Date
+}
+
+struct BuildRunArtifactViewState: Identifiable {
+    let id: String
+    let kind: String
+    let path: String
+    let absolutePath: String
+    let detail: String
+    let exists: Bool
+    let source: SourceLocation
+}
+
+struct BuildRunResultViewState: Identifiable {
+    let id: String
+    let title: String
+    let status: ValidationState
+    let statusLabel: String
+    let detail: String
+    let command: String
+    let processID: String
+    let exitCode: String
+    let outputPath: String?
+    let outputDetail: String
+    let artifacts: [BuildRunArtifactViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let source: SourceLocation
+}
+
 struct GeneratedArtifactValidationViewState: Identifiable {
     let id: String
     let title: String
@@ -618,6 +651,7 @@ struct BuildReportRow: Identifiable {
     let tags: [String]
     let healthCategory: WorkbenchHealthCheckCategory?
     let healthStatus: WorkbenchHealthCheckStatus?
+    let actions: [BuildReportRowAction]
 
     init(
         id: String,
@@ -629,7 +663,8 @@ struct BuildReportRow: Identifiable {
         source: SourceLocation,
         tags: [String] = [],
         healthCategory: WorkbenchHealthCheckCategory? = nil,
-        healthStatus: WorkbenchHealthCheckStatus? = nil
+        healthStatus: WorkbenchHealthCheckStatus? = nil,
+        actions: [BuildReportRowAction] = []
     ) {
         self.id = id
         self.section = section
@@ -641,6 +676,7 @@ struct BuildReportRow: Identifiable {
         self.tags = tags
         self.healthCategory = healthCategory
         self.healthStatus = healthStatus
+        self.actions = actions
     }
 
     init(target: BuildTargetValidationViewState) {
@@ -719,6 +755,25 @@ struct BuildReportRow: Identifiable {
             source: diagnostic.source,
             tags: [diagnostic.title, diagnostic.message]
         )
+    }
+}
+
+struct BuildReportRowAction: Identifiable {
+    enum Kind: String {
+        case copyCommand = "Copy Command"
+        case copyPath = "Copy Path"
+        case rerunGuidance = "Rerun Guidance"
+    }
+
+    let id: String
+    let kind: Kind
+    let title: String
+    let detail: String
+    let command: String?
+    let payload: String?
+
+    var copyValue: String? {
+        command ?? payload
     }
 }
 
@@ -1244,6 +1299,32 @@ enum ResourceAssetCatalogLoadStatus: Equatable {
         case .failed:
             .warning
         case .idle, .loading, .loaded:
+            .valid
+        }
+    }
+}
+
+enum GameCubeResourceLoadStatus: Equatable {
+    case idle
+    case loaded(itemCount: Int)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No GameCube media loaded"
+        case .loaded(let itemCount):
+            itemCount == 1 ? "1 GameCube resource indexed" : "\(itemCount) GameCube resources indexed"
+        case .failed(let message):
+            "GameCube resource failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .idle, .loaded:
             .valid
         }
     }

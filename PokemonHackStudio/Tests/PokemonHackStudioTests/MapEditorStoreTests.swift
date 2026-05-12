@@ -414,6 +414,62 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExplicitGameCubeResourcePathLoadsReadOnlyEntryAndFiltersNestedItems() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let image = temp.url.appendingPathComponent("Pokemon Colosseum.iso")
+        try writeSyntheticGameCubeDisc(to: image)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.refreshResourceLibrary()
+        XCTAssertFalse(store.filteredResourceLibraryEntries.contains { $0.platform == "gameCube" })
+
+        store.selectedGameCubeResourcePath = image.path
+        store.loadSelectedGameCubeResourcePath()
+
+        let entry = try XCTUnwrap(store.explicitGameCubeResourceEntry)
+        XCTAssertEqual(entry.platform, "gameCube")
+        XCTAssertEqual(entry.family, "colosseum")
+        XCTAssertEqual(entry.writePolicy, "readOnly")
+        XCTAssertEqual(store.gameCubeResourceLoadStatus, .loaded(itemCount: entry.items.count))
+        XCTAssertTrue(entry.items.contains { $0.path == "files/common.fsys" && $0.kind == "archive" })
+        XCTAssertTrue(entry.items.contains { $0.path.contains("common_rel.fdat") && $0.kind == "pokemonTable" })
+        XCTAssertTrue(entry.items.contains { $0.path.contains("msg_shop.bin") && $0.kind == "text" })
+        XCTAssertEqual(store.selectedResourceLibraryMode, .entries)
+        XCTAssertEqual(store.selectedResourceLibraryEntryID, entry.id)
+
+        store.searchText = "0x2080"
+        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+
+        store.searchText = "pokemonTable"
+        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+
+        store.searchText = "msg_shop"
+        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+    }
+
+    @MainActor
+    func testOpeningGameCubeProjectIndexesExplicitResourceWithoutAutoLoadingGameCubeMedia() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let image = temp.url.appendingPathComponent("Pokemon Colosseum.gcm")
+        try writeSyntheticGameCubeDisc(to: image)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: image.path)
+
+        let project = try XCTUnwrap(store.selectedIndexedProject)
+        let entry = try XCTUnwrap(store.explicitGameCubeResourceEntry)
+        XCTAssertEqual(project.profile, "pokemonColosseum")
+        XCTAssertEqual(project.writePolicy, "readOnly")
+        XCTAssertEqual(entry.path, image.path)
+        XCTAssertEqual(entry.writePolicy, "readOnly")
+        XCTAssertTrue(entry.items.contains { $0.path == "files/common.fsys" })
+    }
+
+    @MainActor
     func testResourceAssetNavigationResolvesLayoutAndReportTargets() async throws {
         let root = try makeVisualProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -1268,6 +1324,118 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testSpeciesAssetImportStagesFrontPNGWithoutWritingSourceBeforeApply() async throws {
+        let root = try makePokemonProject()
+        let originalData = Data("old-front".utf8)
+        try write(originalData, to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+        let importURL = root.appendingPathComponent("incoming/front.png")
+        let importedData = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        try write(importedData, to: importURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+        let provenance = try XCTUnwrap(store.importSelectedSpeciesAsset(kind: .front, from: importURL))
+
+        XCTAssertEqual(provenance.detectedKind, .png)
+        XCTAssertEqual(provenance.status, .ready)
+        XCTAssertEqual(provenance.byteCount, importedData.count)
+        XCTAssertEqual(store.selectedSpeciesDraft?.assetData[.front], importedData)
+        XCTAssertEqual(store.selectedSpeciesDraft?.assetImports[.front]?.sourcePath, importURL.path)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png")), originalData)
+
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        let appliedChange = try XCTUnwrap(result.appliedChanges.first { $0.path == "graphics/pokemon/treecko/front.png" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: appliedChange.backupPath))
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png")), importedData)
+    }
+
+    @MainActor
+    func testSpeciesAssetImportStagesPaletteForPreview() async throws {
+        let root = try makePokemonProject()
+        try write(testJASCPalette(colorCount: 16), to: root.appendingPathComponent("graphics/pokemon/treecko/normal.pal"))
+        let importURL = root.appendingPathComponent("incoming/normal.pal")
+        let importedData = testJASCPalette(colorCount: 16)
+        try write(importedData, to: importURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+        let provenance = try XCTUnwrap(store.importSelectedSpeciesAsset(kind: .normalPalette, from: importURL))
+        store.previewSelectedSpeciesMutationPlan()
+
+        XCTAssertEqual(provenance.detectedKind, .palette)
+        XCTAssertEqual(provenance.status, .ready)
+        XCTAssertEqual(store.selectedSpeciesDraft?.assetData[.normalPalette], importedData)
+        XCTAssertTrue(store.latestSpeciesEditPlan?.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" } == true)
+        XCTAssertTrue(store.latestSpeciesEditPlan?.isApplyable == true)
+    }
+
+    @MainActor
+    func testSpeciesAssetImportMalformedOrWrongKindBlocksApplyability() async throws {
+        let root = try makePokemonProject()
+        try write(Data("old-front".utf8), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+        let importURL = root.appendingPathComponent("incoming/front.pal")
+        try write(testJASCPalette(colorCount: 16), to: importURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+        let provenance = try XCTUnwrap(store.importSelectedSpeciesAsset(kind: .front, from: importURL))
+        store.previewSelectedSpeciesMutationPlan()
+
+        XCTAssertEqual(provenance.detectedKind, .palette)
+        XCTAssertEqual(provenance.status, .blocked)
+        XCTAssertTrue(provenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_KIND_MISMATCH" })
+        XCTAssertTrue(store.latestSpeciesEditPlan?.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_INVALID" } == true)
+        XCTAssertEqual(store.latestSpeciesEditPlan?.changes.count, 0)
+        XCTAssertFalse(store.canApplySelectedSpeciesMutationPlan)
+    }
+
+    @MainActor
+    func testSpeciesAssetImportSourceDriftAfterPreviewBlocksApply() async throws {
+        let root = try makePokemonProject()
+        try write(Data("old-front".utf8), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+        let importURL = root.appendingPathComponent("incoming/front.png")
+        try write(testPNGData(width: 64, height: 64, paletteColorCount: 16), to: importURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+        store.importSelectedSpeciesAsset(kind: .front, from: importURL)
+        store.previewSelectedSpeciesMutationPlan()
+
+        try write(Data("changed-front".utf8), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+
+        XCTAssertFalse(store.canApplySelectedSpeciesMutationPlan)
+        XCTAssertTrue(
+            store.latestSpeciesEditPlan?.validateApplyability().diagnostics.contains {
+                $0.code == "SPECIES_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH"
+            } == true
+        )
+    }
+
+    @MainActor
     func testBuildReportFixtureFallbackWithoutLoadedProject() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
@@ -1358,6 +1526,103 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(result.processID, "PID 7331")
         XCTAssertTrue(result.artifacts.contains { $0.kind == "runLog" && $0.path.hasSuffix("/run.log") })
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/run.log").path))
+    }
+
+    @MainActor
+    func testDecompBuildRunnerUsesSelectedTargetAndStoresLiveLogs() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "make"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: "/usr/bin/make")
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: root.path)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+
+        store.runSelectedDecompBuild(artifactRoot: root) { index, targetID, artifactRoot, _, _, logHandler in
+            let root = URL(fileURLWithPath: index.root.path)
+            logHandler(DecompBuildLogEvent(stream: .stdout, message: "building \(targetID)"))
+            return DecompBuildResult(
+                status: .succeeded,
+                projectRootPath: index.root.path,
+                targetID: targetID,
+                targetName: "Build ROM",
+                command: ["make"],
+                processID: 9001,
+                exitCode: 0,
+                artifacts: [
+                    DecompBuildArtifact(
+                        kind: .stdout,
+                        relativePath: ".pokemonhackstudio/builds/\(targetID)/stdout.log",
+                        absolutePath: (artifactRoot ?? root).appendingPathComponent(".pokemonhackstudio/builds/\(targetID)/stdout.log").path,
+                        exists: true,
+                        detail: "stdout"
+                    )
+                ],
+                output: BuildOutputValidation(
+                    relativePath: "pokeemerald.gba",
+                    absolutePath: root.appendingPathComponent("pokeemerald.gba").path,
+                    exists: true,
+                    checksumStatus: .expectationMissing,
+                    freshnessStatus: .unknown
+                ),
+                diagnostics: []
+            )
+        }
+
+        let result = try await waitForBuildRunResult(store)
+        XCTAssertEqual(result.status, .valid)
+        XCTAssertEqual(result.processID, "PID 9001")
+        XCTAssertTrue(store.selectedBuildRunLogLines.contains { $0.stream == "stdout" && $0.message == "building \(targetID)" })
+        XCTAssertNil(store.runningBuildTargetID)
+    }
+
+    @MainActor
+    func testDecompBuildActionReflectsRunningAndCancelState() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "make"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: "/usr/bin/make")
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+        store.openProject(path: root.path)
+
+        XCTAssertTrue(store.canRunSelectedDecompBuild)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "build-rom" }?.isEnabled, true)
+
+        store.runSelectedDecompBuild(artifactRoot: root) { index, targetID, _, _, _, _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return DecompBuildResult(
+                status: Task.isCancelled ? .cancelled : .succeeded,
+                projectRootPath: index.root.path,
+                targetID: targetID,
+                targetName: targetID,
+                command: ["make"],
+                artifacts: [],
+                diagnostics: []
+            )
+        }
+
+        XCTAssertNotNil(store.runningBuildTargetID)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "build-rom" }?.isEnabled, false)
+        XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "cancel-build" }?.isEnabled, true)
+
+        store.cancelSelectedDecompBuild()
+        let result = try await waitForBuildRunResult(store)
+        XCTAssertEqual(result.statusLabel, "cancelled")
+        XCTAssertNil(store.runningBuildTargetID)
     }
 
     @MainActor
@@ -2759,6 +3024,28 @@ final class MapEditorStoreTests: XCTestCase {
         try write(data, to: url)
     }
 
+    private func testPNGData(width: UInt32, height: UInt32, paletteColorCount: Int? = nil) -> Data {
+        var data = Data([137, 80, 78, 71, 13, 10, 26, 10])
+        var ihdr = Data()
+        ihdr.appendUInt32BE(width)
+        ihdr.appendUInt32BE(height)
+        ihdr.append(contentsOf: [8, 3, 0, 0, 0])
+        data.appendPNGChunk(type: "IHDR", payload: ihdr)
+        if let paletteColorCount {
+            data.appendPNGChunk(type: "PLTE", payload: Data(repeating: 0, count: paletteColorCount * 3))
+        }
+        data.appendPNGChunk(type: "IEND", payload: Data())
+        return data
+    }
+
+    private func testJASCPalette(colorCount: Int) -> Data {
+        let colors = (0..<colorCount).map { index -> String in
+            let channel = (index * 8) % 256
+            return "\(channel) \(channel) \(channel)"
+        }
+        return Data(("JASC-PAL\n0100\n\(colorCount)\n" + colors.joined(separator: "\n") + "\n").utf8)
+    }
+
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -2772,6 +3059,78 @@ final class MapEditorStoreTests: XCTestCase {
     private func writeExecutable(_ text: String, to url: URL) throws {
         try write(text, to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    @MainActor
+    private func waitForBuildRunResult(_ store: WorkbenchStore) async throws -> BuildRunResultViewState {
+        for _ in 0..<100 {
+            if let result = store.selectedBuildRunResult {
+                return result
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTFail("Timed out waiting for build run result")
+        throw NSError(domain: "MapEditorStoreTests", code: 1)
+    }
+
+    private func writeSyntheticGameCubeDisc(to url: URL) throws {
+        var bytes = [UInt8](repeating: 0, count: 0x2400)
+        replaceASCII("GC6E", at: 0x0, in: &bytes)
+        replaceASCII("01", at: 0x4, in: &bytes)
+        replaceASCII("POKEMON COLOSSEUM", at: 0x20, in: &bytes)
+        writeBE32(0x1000, at: 0x420, in: &bytes)
+        writeBE32(0x1800, at: 0x424, in: &bytes)
+
+        let fsys = syntheticFSYSArchive()
+        let fsysOffset = 0x2000
+        bytes.replaceSubrange(fsysOffset..<(fsysOffset + fsys.count), with: fsys)
+
+        let names = Array("\0files\0common.fsys\0".utf8)
+        let entryCount = 3
+        let fstSize = entryCount * 12 + names.count
+        writeBE32(UInt32(fstSize), at: 0x428, in: &bytes)
+
+        var fst = [UInt8](repeating: 0, count: fstSize)
+        writeBE32(0x01000000, at: 0, in: &fst)
+        writeBE32(0, at: 4, in: &fst)
+        writeBE32(UInt32(entryCount), at: 8, in: &fst)
+        writeBE32(0x01000001, at: 12, in: &fst)
+        writeBE32(0, at: 16, in: &fst)
+        writeBE32(UInt32(entryCount), at: 20, in: &fst)
+        writeBE32(0x00000007, at: 24, in: &fst)
+        writeBE32(UInt32(fsysOffset), at: 28, in: &fst)
+        writeBE32(UInt32(fsys.count), at: 32, in: &fst)
+        fst.replaceSubrange((entryCount * 12)..<fstSize, with: names)
+        bytes.replaceSubrange(0x1800..<(0x1800 + fst.count), with: fst)
+
+        try write(Data(bytes), to: url)
+    }
+
+    private func syntheticFSYSArchive() -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: 0x180)
+        replaceASCII("common_rel.fdat", at: 0x10, in: &bytes)
+        replaceASCII("msg_shop.bin", at: 0x30, in: &bytes)
+        replaceASCII("LZSS", at: 0x80, in: &bytes)
+        writeBE32(8, at: 0x84, in: &bytes)
+        writeBE32(24, at: 0x88, in: &bytes)
+        replaceASCII("POKEMON1", at: 0x90, in: &bytes)
+        replaceASCII("LZSS", at: 0xB0, in: &bytes)
+        writeBE32(8, at: 0xB4, in: &bytes)
+        writeBE32(32, at: 0xB8, in: &bytes)
+        replaceASCII("TEXTDATA", at: 0xC0, in: &bytes)
+        return bytes
+    }
+
+    private func replaceASCII(_ string: String, at offset: Int, in bytes: inout [UInt8]) {
+        let replacement = Array(string.utf8)
+        bytes.replaceSubrange(offset..<(offset + replacement.count), with: replacement)
+    }
+
+    private func writeBE32(_ value: UInt32, at offset: Int, in bytes: inout [UInt8]) {
+        bytes[offset] = UInt8((value >> 24) & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 3] = UInt8(value & 0xFF)
     }
 
     private static func syntheticAssetRow(index: Int) -> ResourceAssetRowViewState {
@@ -2832,6 +3191,22 @@ final class MapEditorStoreTests: XCTestCase {
                 .joined(separator: " ")
                 .lowercased()
         )
+    }
+}
+
+private extension Data {
+    mutating func appendUInt32BE(_ value: UInt32) {
+        append(UInt8((value >> 24) & 0xff))
+        append(UInt8((value >> 16) & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+        append(UInt8(value & 0xff))
+    }
+
+    mutating func appendPNGChunk(type: String, payload: Data) {
+        appendUInt32BE(UInt32(payload.count))
+        append(contentsOf: type.utf8)
+        append(payload)
+        appendUInt32BE(0)
     }
 }
 

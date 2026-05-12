@@ -6,23 +6,29 @@ struct ResourceLibraryWorkbenchView: View {
     let entries: [ResourceLibraryEntryViewState]
     let assetCatalog: ResourceAssetCatalogViewState?
     let romInspector: BinaryROMInspectorReport?
+    let gameCubeEntry: ResourceLibraryEntryViewState?
+    let gameCubeLoadStatus: GameCubeResourceLoadStatus
     let assets: [ResourceAssetRowViewState]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
+    @Binding var gameCubeResourcePath: String
     @Binding var selectedAssetID: ResourceAssetRowViewState.ID?
     @Binding var mode: ResourceLibraryMode
     @Binding var selectedCategory: String
     @Binding var sortMode: ResourceAssetSortMode
+    let onChooseGameCubeResource: () -> Void
+    let onLoadGameCubeResource: () -> Void
     let onLoadAssetCatalog: () -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
 
     @ViewBuilder
     var body: some View {
-        if library != nil || assetCatalog != nil {
+        if library != nil || assetCatalog != nil || gameCubeEntry != nil {
             GeometryReader { proxy in
                 let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
 
                 VStack(alignment: .leading, spacing: 0) {
                     resourceMetrics(layoutMode: layoutMode)
+                    gameCubeResourceControls(layoutMode: layoutMode)
                     if let romInspector {
                         romInspectorSummary(romInspector, layoutMode: layoutMode)
                     }
@@ -47,7 +53,14 @@ struct ResourceLibraryWorkbenchView: View {
                 }
             }
         } else {
-            EmptyModuleView(title: "Resources")
+            GeometryReader { proxy in
+                let layoutMode = WorkbenchLayoutMode(contentWidth: proxy.size.width)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    gameCubeResourceControls(layoutMode: layoutMode)
+                    EmptyModuleView(title: "Resources")
+                }
+            }
         }
     }
 
@@ -56,6 +69,7 @@ struct ResourceLibraryWorkbenchView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: layoutMode.isCompact ? 145 : 170), spacing: 12)], spacing: 12) {
                 MetricCard(title: "Entries", value: "\(library?.entryCount ?? 0)", detail: "\(library?.parsedCount ?? 0) parsed")
                 MetricCard(title: "Assets", value: "\(assetCatalog?.assetCount ?? 0)", detail: assetCatalog?.profile ?? "No project")
+                MetricCard(title: "GameCube", value: "\(gameCubeEntry?.resourceCount ?? 0)", detail: gameCubeLoadStatus.label)
                 MetricCard(title: "GBA ROMs", value: "\(gbaROMCount)", detail: "Top-level inputs")
                 MetricCard(title: "Availability", value: "\(availabilityProblemCount)", detail: assetLoadStatus.label)
                 MetricCard(title: "Diagnostics", value: "\(diagnosticCount)", detail: "Library and assets")
@@ -63,6 +77,43 @@ struct ResourceLibraryWorkbenchView: View {
         }
         .padding(layoutMode.isCompact ? 14 : 24)
         .background(.regularMaterial)
+    }
+
+    private func gameCubeResourceControls(layoutMode: WorkbenchLayoutMode) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                TextField("GameCube .iso or .gcm path", text: $gameCubeResourcePath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .onSubmit {
+                        onLoadGameCubeResource()
+                    }
+
+                Button {
+                    onChooseGameCubeResource()
+                } label: {
+                    Label("Choose", systemImage: "folder")
+                }
+
+                Button {
+                    onLoadGameCubeResource()
+                } label: {
+                    Label("Load", systemImage: "opticaldisc")
+                }
+                .disabled(gameCubeResourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            HStack(spacing: 8) {
+                StatusPill(state: gameCubeLoadStatus.validationState)
+                Text(gameCubeLoadStatus.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, layoutMode.isCompact ? 14 : 24)
+        .padding(.vertical, 12)
+        .background(.thinMaterial)
     }
 
     private func romInspectorSummary(_ report: BinaryROMInspectorReport, layoutMode: WorkbenchLayoutMode) -> some View {
@@ -199,7 +250,9 @@ struct ResourceLibraryWorkbenchView: View {
     }
 
     private var diagnosticCount: Int {
-        (library?.allDiagnostics.count ?? 0) + (assetCatalog?.diagnostics.count ?? 0)
+        (library?.allDiagnostics.count ?? 0)
+            + (gameCubeEntry?.diagnostics.count ?? 0)
+            + (assetCatalog?.diagnostics.count ?? 0)
     }
 
     private var gbaROMCount: Int {

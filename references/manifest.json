@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-06T07:11:18Z",
+  "generatedAt": "2026-05-12T06:38:21.078Z",
   "policy": {
     "scope": "Read-only broad reference repositories cloned under references/ for Pokemon GBA hacking tools, assets, emulation, patching, toolchain, and decompilation workflows.",
     "tracking": "references/* is ignored; references/manifest.json is the tracked catalog.",
-    "pinning": "Each entry records the exact shallow-clone HEAD observed at pinnedAt; reference directories remain ignored and read-only during product work."
+    "pinning": "Each entry records the exact shallow-clone HEAD observed at pinnedAt; reference directories remain ignored and read-only during product work.",
+    "centralCorpus": "Mainline Gen III GBA decomps and decomp-focused tools are also cataloged under /Users/bryan/projects/reference-repos; per-entry centralReference records the current central clone while folder/head preserve the ignored local bench pin."
   },
   "references": [
     {
@@ -25,7 +26,17 @@
       },
       "usage": "Map editor and project-layout reference for Gen III ROM hacking workflows.",
       "risk": "LGPL obligations apply if code is copied or linked; keep as a read-only behavioral and UX reference unless legal review approves reuse.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "huderlem__porymap",
+        "folder": "/Users/bryan/projects/reference-repos/repos/huderlem__porymap",
+        "doc": "/Users/bryan/projects/reference-repos/docs/huderlem__porymap.md",
+        "branch": "master",
+        "head": "26b919d7ff4b54152de010abd5bf344af2ebe116",
+        "license": "LGPL-3.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "medium"
+      }
     },
     {
       "name": "poryscript",
@@ -45,7 +56,17 @@
       },
       "usage": "Scripting language/compiler reference for Pokemon disassembly projects.",
       "risk": "Compiler semantics may be project-specific; prefer conceptual reference and verify compatibility before adopting syntax or generated output assumptions.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "huderlem__poryscript",
+        "folder": "/Users/bryan/projects/reference-repos/repos/huderlem__poryscript",
+        "doc": "/Users/bryan/projects/reference-repos/docs/huderlem__poryscript.md",
+        "branch": "master",
+        "head": "fc66d839d9f043cfa6e272e1daac0ecdbbb541bd",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "porytiles",
@@ -65,7 +86,17 @@
       },
       "usage": "Tileset compiler and asset-pipeline reference for metatile workflows.",
       "risk": "Default branch is develop, so APIs and file formats may be less stable than a release branch; keep the commit pin when comparing behavior.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "grunt-lucas__porytiles",
+        "folder": "/Users/bryan/projects/reference-repos/repos/grunt-lucas__porytiles",
+        "doc": "/Users/bryan/projects/reference-repos/docs/grunt-lucas__porytiles.md",
+        "branch": "develop",
+        "head": "ee4cec38ff0842728780d5b33407486411332331",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "pokeemerald",
@@ -96,7 +127,17 @@
       },
       "usage": "Canonical Pokemon Emerald decompilation reference for source layout, build outputs, generated map data, script/data tables, and project detection.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-05T10:19:02Z"
+      "pinnedAt": "2026-05-05T10:19:02Z",
+      "centralReference": {
+        "id": "pret__pokeemerald",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokeemerald",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokeemerald.md",
+        "branch": "master",
+        "head": "a3c551fe21a6a4d4beb89a82404cf776a6dae635",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokefirered",
@@ -127,7 +168,17 @@
       },
       "usage": "Canonical Pokemon FireRed/LeafGreen decompilation reference for source layout, build target variants, positional item data, generated map data, and adapter compatibility.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-05T10:19:02Z"
+      "pinnedAt": "2026-05-05T10:19:02Z",
+      "centralReference": {
+        "id": "pret__pokefirered",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokefirered",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokefirered.md",
+        "branch": "master",
+        "head": "e060ab955b5dc9ac1c4904c2cd141683615cf477",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "agbcc",
@@ -155,7 +206,17 @@
       },
       "usage": "Toolchain reference for pret decompilation build expectations, compiler setup, and source-project validation boundaries.",
       "risk": "Mixed/copyleft toolchain source; treat as external toolchain research only and do not copy code into PokemonHackStudio.",
-      "pinnedAt": "2026-05-05T10:19:02Z"
+      "pinnedAt": "2026-05-05T10:19:02Z",
+      "centralReference": {
+        "id": "pret__agbcc",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__agbcc",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__agbcc.md",
+        "branch": "master",
+        "head": "da598c1d918402c42c0c0d7128ba14567f3175e9",
+        "license": "LicenseRef-Mixed-GCC-Newlib",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokeemerald-expansion",
@@ -254,7 +315,17 @@
       },
       "usage": "Canonical Pokemon Ruby disassembly reference for source layout, build flow, and data representation.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "pret__pokeruby",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokeruby",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokeruby.md",
+        "branch": "master",
+        "head": "63a8cbf0016b351a4e68f7036fa0b77e23d2f2c1",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokemon-game-editor",
@@ -336,7 +407,17 @@
       },
       "usage": "Palette editing and GBA color-conversion workflow reference.",
       "risk": "GPL copyleft obligations apply to copied or linked code; keep as clean-room behavior and diagnostics reference only.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "loxed__porypal",
+        "folder": "/Users/bryan/projects/reference-repos/repos/loxed__porypal",
+        "doc": "/Users/bryan/projects/reference-repos/docs/loxed__porypal.md",
+        "branch": "main",
+        "head": "3a05eb3a9e5ef69a96ae386c3f8e06b93beaf726",
+        "license": "GPL-3.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "porysuite",

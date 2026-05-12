@@ -500,14 +500,14 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
     case .assets:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "graphics/pokemon", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Pokemon assets are indexed as read-only source links.", recommendedFutureRow: nil)
+            return PokemonDataSurfaceDescriptor(sourcePath: "graphics/pokemon", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Pokemon assets are indexed as read-only source links.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
     case .cries:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Cry assets are not structurally indexed or editable yet.", recommendedFutureRow: nil)
+            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Cry assets are not structurally indexed or editable yet.", recommendedFutureRow: "PHS-T57")
         default:
             return nil
         }
@@ -554,7 +554,10 @@ private func supportsSpeciesEditing(_ profile: GameProfile) -> Bool {
 }
 
 private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
-    var fields = ["species identity changes", "new/reordered species constants", "pokedex text rewrites", "asset/cries/form rewrites"]
+    var fields = ["species identity changes", "new/reordered species constants", "asset/cries/form rewrites"]
+    if !supportsSpeciesEditing(profile) {
+        fields.append("pokedex text rewrites")
+    }
     if profile == .pokeruby {
         fields.append("Ruby/Sapphire base_stats positional apply")
     }
@@ -565,7 +568,10 @@ private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
 }
 
 private func movesUnsupportedFields(profile: GameProfile) -> [String] {
-    var fields = ["new/reordered move constants", "TM/HM/tutor compatibility edits", "contest data", "description text rewrites"]
+    var fields = ["new/reordered move constants", "contest data", "description text rewrites"]
+    if !supportsSpeciesEditing(profile) {
+        fields.append("TM/HM/tutor compatibility edits")
+    }
     if profile == .pokeemeraldExpansion {
         fields.append("Expansion gMovesInfo schema apply")
     }
@@ -593,7 +599,10 @@ private func learnsetUnsupportedFields(surface: PokemonDataCompatibilitySurface,
     case .levelUpLearnsets:
         fields = ["learnset symbol renames", "shared learnset extraction", "generated learnset directory apply"]
     case .tmhmLearnsets:
-        fields = ["TM/HM item mapping edits", "machine constant creation", "compatibility matrix bulk edits"]
+        fields = ["TM/HM item mapping edits", "machine constant creation"]
+        if !supportsSpeciesEditing(profile) {
+            fields.append("compatibility matrix bulk edits")
+        }
     case .eggMoves:
         fields = ["egg move family reshaping", "cross-species egg move validation"]
     default:
