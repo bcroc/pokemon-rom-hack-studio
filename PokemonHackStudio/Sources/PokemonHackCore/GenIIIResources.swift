@@ -4,6 +4,8 @@ import Foundation
 public enum GenIIIResourcePlatform: String, Codable, Equatable, CaseIterable {
     case gbaSource
     case gbaROM
+    case ndsSource
+    case ndsROM
     case gameCube
     case unknown
 }
@@ -33,6 +35,12 @@ public enum GenIIIGameFamily: String, Codable, Equatable, CaseIterable {
     case xdGaleOfDarkness
     case pokemonBox
     case pokemonChannel
+    case diamondPearl
+    case platinum
+    case heartGoldSoulSilver
+    case blackWhite
+    case black2White2
+    case ndsUnknown
     case unknown
 }
 
@@ -233,14 +241,23 @@ public enum GenIIIResourceRegistry {
         "pokefirered",
         "pokeruby",
         "pokesapphire",
-        "pokeemerald-expansion"
+        "pokeemerald-expansion",
+        "pokediamond",
+        "pokeplatinum",
+        "pokeheartgold",
+        "pokesoulsilver",
+        "pmd-sky"
     ]
 
     private static let referenceResourceNames: Set<String> = [
         "pokeemerald",
         "pokefirered",
         "pokeruby",
-        "pokeemerald-expansion"
+        "pokeemerald-expansion",
+        "pokediamond",
+        "pokeplatinum",
+        "pokeheartgold",
+        "pmd-sky"
     ]
 
     public static func load(
@@ -343,7 +360,7 @@ public enum GenIIIResourceRegistry {
             return []
         }
 
-        let supportedExtensions: Set<String> = ["gba"]
+        let supportedExtensions: Set<String> = ["gba", "nds"]
         return contents.compactMap { url in
             guard
                 (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
@@ -395,6 +412,11 @@ public enum GenIIIResourceRegistry {
     }
 
     private static func entry(from index: ProjectIndex, role: GenIIIResourceRole, fileManager: FileManager) -> GenIIIResourceEntry {
+        if index.profile == .ndsROM,
+           let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager) {
+            return report.resourceEntry
+        }
+
         let items = resourceItems(from: index, fileManager: fileManager)
         let diagnostics = index.diagnostics + resourceDiagnostics(from: index, fileManager: fileManager)
 
@@ -453,6 +475,51 @@ public enum GenIIIResourceRegistry {
     }
 
     private static func resourceItems(from index: ProjectIndex, fileManager: FileManager) -> [GenIIIResourceItem] {
+        if index.profile == .ndsROM,
+           let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager) {
+            return report.resourceEntry.items
+        }
+
+        if isNDSSourceProfile(index.profile),
+           let sourceTree = try? NDSDecompSourceTreeIndexBuilder.build(root: URL(fileURLWithPath: index.root.path), fileManager: fileManager) {
+            let pathItems = sourceTree.paths.map { path in
+                GenIIIResourceItem(
+                    id: "nds-source:\(path.role.rawValue):\(path.relativePath)",
+                    path: path.relativePath,
+                    kind: path.kind.rawValue,
+                    category: "NDS \(path.role.rawValue)"
+                )
+            }
+            let variantItems = sourceTree.variants.map { variant in
+                GenIIIResourceItem(
+                    id: "nds-variant:\(variant.id)",
+                    path: variant.outputPath ?? variant.id,
+                    kind: variant.title,
+                    category: "NDS Variant",
+                    sha1: variant.checksumPath
+                )
+            }
+            let buildItems = sourceTree.buildTargets.map { target in
+                GenIIIResourceItem(
+                    id: "nds-build-target:\(target.id)",
+                    path: target.outputPath ?? target.command.joined(separator: " "),
+                    kind: target.kind.rawValue,
+                    category: "NDS Build Target"
+                )
+            }
+            let catalog = NDSDataCatalogBuilder.build(index: index, fileManager: fileManager)
+            let catalogItems = catalog.records.map { record in
+                GenIIIResourceItem(
+                    id: "nds-data:\(record.id)",
+                    path: record.relativePath,
+                    kind: record.format.rawValue,
+                    category: "NDS Data \(record.domain.rawValue)",
+                    size: record.byteCount
+                )
+            }
+            return pathItems + variantItems + buildItems + catalogItems
+        }
+
         if index.profile == .binaryROM {
             let url = URL(fileURLWithPath: index.root.path)
             let sha1 = smallFileSHA1(url: url)
@@ -553,6 +620,10 @@ public enum GenIIIResourceRegistry {
             return variantsFromBuildTargetsAndSHA1(index: index, fileManager: fileManager)
         case .binaryROM:
             return variantsForGBAImage(path: index.root.path)
+        case .ndsROM:
+            return variantsForNDSImage(path: index.root.path)
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+            return variantsForNDSSource(index: index, fileManager: fileManager)
         case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
             return variants(for: index.profile, title: URL(fileURLWithPath: index.root.path).lastPathComponent)
         case .unknown:
@@ -611,6 +682,34 @@ public enum GenIIIResourceRegistry {
         return [GenIIIResourceVariant(id: image.gameCode ?? "gba-rom", title: title)]
     }
 
+    private static func variantsForNDSImage(path: String) -> [GenIIIResourceVariant] {
+        guard
+            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let header = NDSROMHeaderParser.parse(path: path, data: data).header
+        else {
+            return [GenIIIResourceVariant(id: "nds-rom", title: URL(fileURLWithPath: path).lastPathComponent)]
+        }
+        return [GenIIIResourceVariant(id: header.gameCode.isEmpty ? "nds-rom" : header.gameCode, title: header.displayTitle)]
+    }
+
+    private static func variantsForNDSSource(index: ProjectIndex, fileManager: FileManager) -> [GenIIIResourceVariant] {
+        guard let sourceTree = try? NDSDecompSourceTreeIndexBuilder.build(
+            root: URL(fileURLWithPath: index.root.path),
+            fileManager: fileManager
+        ) else {
+            return []
+        }
+
+        return sourceTree.variants.map {
+            GenIIIResourceVariant(
+                id: $0.id,
+                title: $0.title,
+                outputPath: $0.outputPath,
+                checksumPath: $0.checksumPath
+            )
+        }
+    }
+
     private static func checksumPath(forOutputPath outputPath: String?, checksumPaths: Set<String>) -> String? {
         guard let outputPath else { return nil }
         let basename = URL(fileURLWithPath: outputPath).deletingPathExtension().lastPathComponent.lowercased()
@@ -634,7 +733,10 @@ public enum GenIIIResourceRegistry {
         if requestedRole == .referenceSource || index.root.path.hasPrefix(workspaceRoot.appendingPathComponent("references").path + "/") {
             return .referenceSource
         }
-        if index.profile == .binaryROM {
+        if pathIsCentralReferenceRoot(index.root.path) {
+            return .referenceSource
+        }
+        if index.profile == .binaryROM || index.profile == .ndsROM {
             return .localInput
         }
         return requestedRole == .localInput ? .editableSource : requestedRole
@@ -644,8 +746,12 @@ public enum GenIIIResourceRegistry {
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
             return .gbaSource
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+            return .ndsSource
         case .binaryROM:
             return .gbaROM
+        case .ndsROM:
+            return .ndsROM
         case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
             return .gameCube
         case .unknown:
@@ -663,6 +769,14 @@ public enum GenIIIResourceRegistry {
             return .fireRedLeafGreen
         case .pokeemeraldExpansion:
             return .emeraldExpansion
+        case .pokediamond:
+            return .diamondPearl
+        case .pokeplatinum:
+            return .platinum
+        case .pokeheartgold:
+            return .heartGoldSoulSilver
+        case .pmdSky:
+            return .ndsUnknown
         case .pokemonColosseum:
             return .colosseum
         case .pokemonXD:
@@ -673,6 +787,8 @@ public enum GenIIIResourceRegistry {
             return .pokemonChannel
         case .binaryROM:
             return familyForGBAROM(path: path)
+        case .ndsROM:
+            return familyForNDSROM(path: path)
         case .gameCubeMedia, .unknown:
             return .unknown
         }
@@ -700,6 +816,16 @@ public enum GenIIIResourceRegistry {
         }
     }
 
+    private static func familyForNDSROM(path: String) -> GenIIIGameFamily {
+        guard
+            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let header = NDSROMHeaderParser.parse(path: path, data: data).header
+        else {
+            return .ndsUnknown
+        }
+        return NDSResourceEntryFactory.family(for: header.gameCode)
+    }
+
     private static func title(for index: ProjectIndex, fileManager: FileManager) -> String {
         if index.profile == .binaryROM {
             let url = URL(fileURLWithPath: index.root.path)
@@ -709,7 +835,38 @@ public enum GenIIIResourceRegistry {
             }
             return url.lastPathComponent
         }
+        if index.profile == .ndsROM {
+            let url = URL(fileURLWithPath: index.root.path)
+            if let data = try? Data(contentsOf: url),
+               let header = NDSROMHeaderParser.parse(path: url.path, data: data).header {
+                return header.displayTitle
+            }
+            return url.lastPathComponent
+        }
+        if isNDSSourceProfile(index.profile) {
+            return index.adapterName
+        }
         return URL(fileURLWithPath: index.root.path).lastPathComponent
+    }
+
+    private static func isNDSSourceProfile(_ profile: GameProfile) -> Bool {
+        switch profile {
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func pathIsCentralReferenceRoot(_ path: String) -> Bool {
+        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        guard let projectsIndex = components.firstIndex(of: "projects"),
+              components.indices.contains(projectsIndex + 2)
+        else {
+            return false
+        }
+        return components[projectsIndex + 1] == "reference-repos"
+            && components[projectsIndex + 2] == "repos"
     }
 
     private static func titleForGBACode(_ code: String?) -> String? {

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-12T06:38:21.078Z",
+  "generatedAt": "2026-05-12T07:06:39.007Z",
   "policy": {
     "scope": "Read-only broad reference repositories cloned under references/ for Pokemon GBA hacking tools, assets, emulation, patching, toolchain, and decompilation workflows.",
     "tracking": "references/* is ignored; references/manifest.json is the tracked catalog.",
-    "pinning": "Each entry records the exact shallow-clone HEAD observed at pinnedAt; reference directories remain ignored and read-only during product work.",
-    "centralCorpus": "Mainline Gen III GBA decomps and decomp-focused tools are also cataloged under /Users/bryan/projects/reference-repos; per-entry centralReference records the current central clone while folder/head preserve the ignored local bench pin."
+    "pinning": "Each entry records the central clone HEAD observed at generatedAt. Historical local pins may be recovered from git history; reference clone roots are now centralized.",
+    "centralCorpus": "The central /Users/bryan/projects/reference-repos corpus is canonical for reference clones and metadata; references/* entries in this workspace are compatibility aliases to central clone roots, while active repo-root decomp working trees remain in place."
   },
   "references": [
     {
@@ -44,7 +44,7 @@
       "repoUrl": "https://github.com/huderlem/poryscript.git",
       "folder": "references/poryscript",
       "branch": "master",
-      "head": "ae917083df2b4a86be11a1bb308eef2cacb5222c",
+      "head": "fc66d839d9f043cfa6e272e1daac0ecdbbb541bd",
       "cloneDepth": 1,
       "license": {
         "spdx": "MIT",
@@ -74,7 +74,7 @@
       "repoUrl": "https://github.com/grunt-lucas/porytiles.git",
       "folder": "references/porytiles",
       "branch": "develop",
-      "head": "689ca12c92731214d3730e802d87f2525dbfc3f7",
+      "head": "ee4cec38ff0842728780d5b33407486411332331",
       "cloneDepth": 1,
       "license": {
         "spdx": "MIT",
@@ -236,7 +236,17 @@
       },
       "usage": "Large feature-expansion reference for modernized pokeemerald mechanics, data structures, and content organization.",
       "risk": "No detected repository license; treat as read-only reference only. Large upstream surface may include generated or third-party assets.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "rh-hideout__pokeemerald-expansion",
+        "folder": "/Users/bryan/projects/reference-repos/repos/rh-hideout__pokeemerald-expansion",
+        "doc": "/Users/bryan/projects/reference-repos/docs/rh-hideout__pokeemerald-expansion.md",
+        "branch": "master",
+        "head": "7377e8839681e75d083cffd9e8a6f74737f7528b",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "hex-maniac-advance",
@@ -256,7 +266,17 @@
       },
       "usage": "ROM inspection and editing UX/reference implementation for GBA Pokemon data discovery.",
       "risk": "Editor behavior can encode assumptions about ROM variants; validate against target ROM formats before borrowing parsing logic.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "haven1433__hexmaniacadvance",
+        "folder": "/Users/bryan/projects/reference-repos/repos/haven1433__hexmaniacadvance",
+        "doc": "/Users/bryan/projects/reference-repos/docs/haven1433__hexmaniacadvance.md",
+        "branch": "master",
+        "head": "877e3e5b58fd83c41303fec15d1d049b2f6901b4",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "rompatcher-js",
@@ -275,7 +295,17 @@
       },
       "usage": "Browser patching reference for IPS/BPS/UPS and related ROM patch workflows.",
       "risk": "Patch formats are security-sensitive binary parsers; keep fuzzing/error handling in mind before reusing logic.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "marcrobledo__rompatcher.js",
+        "folder": "/Users/bryan/projects/reference-repos/repos/marcrobledo__rompatcher.js",
+        "doc": "/Users/bryan/projects/reference-repos/docs/marcrobledo__rompatcher.js.md",
+        "branch": "master",
+        "head": "e90a62f256e4e69a9c52d7d8f8ea8679bd27fae2",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "mgba",
@@ -295,7 +325,17 @@
       },
       "usage": "Emulator architecture, debugging, and test-runner reference for GBA behavior.",
       "risk": "MPL file-level copyleft obligations apply to copied source; repository includes substantial emulator code and bundled license notices.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "mgba-emu__mgba",
+        "folder": "/Users/bryan/projects/reference-repos/repos/mgba-emu__mgba",
+        "doc": "/Users/bryan/projects/reference-repos/docs/mgba-emu__mgba.md",
+        "branch": "master",
+        "head": "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe",
+        "license": "MPL-2.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokeruby",
@@ -344,7 +384,17 @@
       },
       "usage": "Legacy Pokemon ROM editor reference for data tables, UI affordances, and import/export behavior.",
       "risk": "Custom restrictive license and checkout warning for case-colliding generated obj files on case-insensitive filesystems; do not copy code without review.",
-      "pinnedAt": "2026-05-05T04:25:44Z"
+      "pinnedAt": "2026-05-05T04:25:44Z",
+      "centralReference": {
+        "id": "gamer2020__pokemongameeditor",
+        "folder": "/Users/bryan/projects/reference-repos/repos/gamer2020__pokemongameeditor",
+        "doc": "/Users/bryan/projects/reference-repos/docs/gamer2020__pokemongameeditor.md",
+        "branch": "master",
+        "head": "441ff797499bd0e9b6c18f0f7493185ca001e908",
+        "license": "LicenseRef-Custom-PokemonGameEditor",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "porylive",
@@ -365,7 +415,17 @@
       },
       "usage": "Live script-editing and playtest-loop reference for decomp projects.",
       "risk": "No detected repository license; use as behavior and workflow reference only unless licensing is clarified.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "porylive__porylive",
+        "folder": "/Users/bryan/projects/reference-repos/repos/porylive__porylive",
+        "doc": "/Users/bryan/projects/reference-repos/docs/porylive__porylive.md",
+        "branch": "main",
+        "head": "70c607d51258de5185cc1c4644d29d8e19276a3a",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "porymoves",
@@ -386,7 +446,17 @@
       },
       "usage": "Moves, learnsets, and related source-data workflow reference.",
       "risk": "No detected repository license; treat as observational reference for editor coverage and workflow shape only.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "asparaguseduardo__porymoves",
+        "folder": "/Users/bryan/projects/reference-repos/repos/asparaguseduardo__porymoves",
+        "doc": "/Users/bryan/projects/reference-repos/docs/asparaguseduardo__porymoves.md",
+        "branch": "master",
+        "head": "22dd8914746fcd334d100d1ada7fa74f01dfd35a",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "porypal",
@@ -394,7 +464,7 @@
       "repoUrl": "https://github.com/Loxed/porypal.git",
       "folder": "references/porypal",
       "branch": "main",
-      "head": "4907a5d638474a2864a8b5bd6ddedccb4350895a",
+      "head": "3a05eb3a9e5ef69a96ae386c3f8e06b93beaf726",
       "cloneDepth": 1,
       "cloneFilter": "blob:none",
       "license": {
@@ -438,7 +508,17 @@
       },
       "usage": "All-in-one decomp editor workflow reference for project navigation and data-domain grouping.",
       "risk": "No detected repository license; use as observational UX/product reference only.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "jschoeny__porysuite",
+        "folder": "/Users/bryan/projects/reference-repos/repos/jschoeny__porysuite",
+        "doc": "/Users/bryan/projects/reference-repos/docs/jschoeny__porysuite.md",
+        "branch": "main",
+        "head": "545ff4c1bd68554814116380eea04ea0ece7086a",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "team-aquas-asset-repo",
@@ -459,7 +539,17 @@
       },
       "usage": "Community asset organization, credits, and import-metadata reference for Gen III art workflows.",
       "risk": "Treat assets as local reference only; do not copy, redistribute, or bundle without explicit asset-by-asset license and credit review.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "teamaquashideout__team-aquas-asset-repo",
+        "folder": "/Users/bryan/projects/reference-repos/repos/teamaquashideout__team-aquas-asset-repo",
+        "doc": "/Users/bryan/projects/reference-repos/docs/teamaquashideout__team-aquas-asset-repo.md",
+        "branch": "main",
+        "head": "e861188c2a34cad3aa25f640702f7d63cc30888c",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "libtonc",
@@ -480,7 +570,17 @@
       },
       "usage": "GBA hardware, tile, palette, and memory-layout documentation reference.",
       "risk": "Technical documentation can inform diagnostics; copied code or prose still needs attribution/reuse review.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "gbadev-org__libtonc",
+        "folder": "/Users/bryan/projects/reference-repos/repos/gbadev-org__libtonc",
+        "doc": "/Users/bryan/projects/reference-repos/docs/gbadev-org__libtonc.md",
+        "branch": "master",
+        "head": "c5af1b2cb019dcde43216596390490bc07800b21",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "gba-tools",
@@ -501,7 +601,17 @@
       },
       "usage": "GBA ROM header/toolchain utility reference for diagnostics and external-tool boundaries.",
       "risk": "GPL code must stay external/reference-only unless a future license decision approves a compatible boundary.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "devkitpro__gba-tools",
+        "folder": "/Users/bryan/projects/reference-repos/repos/devkitpro__gba-tools",
+        "doc": "/Users/bryan/projects/reference-repos/docs/devkitpro__gba-tools.md",
+        "branch": "master",
+        "head": "054d507f90d32784274b6cf7e03f1c43d02d7a57",
+        "license": "GPL-3.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "grit",
@@ -523,7 +633,17 @@
       },
       "usage": "Graphics conversion, tilemap, palette, and compression-boundary reference.",
       "risk": "GPL code and conversion internals remain reference-only; PokemonHackStudio should model external-tool plans rather than embed implementation.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "blocksds__grit",
+        "folder": "/Users/bryan/projects/reference-repos/repos/blocksds__grit",
+        "doc": "/Users/bryan/projects/reference-repos/docs/blocksds__grit.md",
+        "branch": "master",
+        "head": "cb36b4c40a3e6c4cc273c412de4ae54237590b19",
+        "license": "GPL-2.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokeemerald-jp",
@@ -544,7 +664,17 @@
       },
       "usage": "Localization/source-layout variation reference for Emerald-derived projects.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "pret__pokeemerald-jp",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokeemerald-jp",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokeemerald-jp.md",
+        "branch": "master",
+        "head": "6806c3e507da87a883b437f048969a45b38250c8",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "berry-fix",
@@ -565,7 +695,17 @@
       },
       "usage": "Patch/update workflow reference for official-style GBA fix distribution and validation.",
       "risk": "Reference-only until root licensing and bundled-tool notices are reviewed; do not copy patch assets or code.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "pret__berry-fix",
+        "folder": "/Users/bryan/projects/reference-repos/repos/pret__berry-fix",
+        "doc": "/Users/bryan/projects/reference-repos/docs/pret__berry-fix.md",
+        "branch": "master",
+        "head": "3ef79724137a41cba7d2bb51dfdedcf49d77830a",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "modern-emerald",
@@ -586,7 +726,17 @@
       },
       "usage": "Modern Emerald feature fork reference for expanded source shapes and compatibility pressure.",
       "risk": "No detected repository license and likely game-derived material; use only for schema flexibility and compatibility observations.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "resetes12__pokeemerald",
+        "folder": "/Users/bryan/projects/reference-repos/repos/resetes12__pokeemerald",
+        "doc": "/Users/bryan/projects/reference-repos/docs/resetes12__pokeemerald.md",
+        "branch": "master",
+        "head": "7ca11b375bc68caee94791d294af75ee71d1ddba",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "dynamic-pokemon-expansion",
@@ -607,7 +757,17 @@
       },
       "usage": "Feature-expansion and binary/decomp bridge reference for expanded Pokemon data expectations.",
       "risk": "Treat as reference-only until license terms are reviewed and mapped; do not copy implementation or assets.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "skeli789__dynamic-pokemon-expansion",
+        "folder": "/Users/bryan/projects/reference-repos/repos/skeli789__dynamic-pokemon-expansion",
+        "doc": "/Users/bryan/projects/reference-repos/docs/skeli789__dynamic-pokemon-expansion.md",
+        "branch": "master",
+        "head": "cdfc053a56326a13dc5311b24488445e17536b7e",
+        "license": "NOASSERTION",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "cfru-generator",
@@ -628,7 +788,17 @@
       },
       "usage": "Patch/config generation and expansion-workflow reference.",
       "risk": "Apache-2.0 permits reuse with obligations, but keep clean-room unless a future reuse decision is documented.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "brandawg93__cfru-generator",
+        "folder": "/Users/bryan/projects/reference-repos/repos/brandawg93__cfru-generator",
+        "doc": "/Users/bryan/projects/reference-repos/docs/brandawg93__cfru-generator.md",
+        "branch": "main",
+        "head": "9df736bb25b9897b62aeb069b81bfee215fe63fb",
+        "license": "Apache-2.0",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "pokemapexport",
@@ -649,7 +819,17 @@
       },
       "usage": "Map export workflow reference for visual map outputs and asset boundaries.",
       "risk": "GPL code remains reference-only; exported asset behavior must be designed independently.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "sirsnorealot__pokemapexport",
+        "folder": "/Users/bryan/projects/reference-repos/repos/sirsnorealot__pokemapexport",
+        "doc": "/Users/bryan/projects/reference-repos/docs/sirsnorealot__pokemapexport.md",
+        "branch": "main",
+        "head": "50377461b7fcb4ff16df1ad3b9ec959750cb8799",
+        "license": "GPL-3.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "universal-gba-pokedex",
@@ -670,7 +850,17 @@
       },
       "usage": "Pokedex/species presentation and cross-game data navigation reference.",
       "risk": "MIT allows reuse with attribution, but Pokemon/data assumptions still need compatibility validation and clean-room parsing.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "thejazz123__universal-gba-pokedex",
+        "folder": "/Users/bryan/projects/reference-repos/repos/thejazz123__universal-gba-pokedex",
+        "doc": "/Users/bryan/projects/reference-repos/docs/thejazz123__universal-gba-pokedex.md",
+        "branch": "main",
+        "head": "71e18741b740d0ae2e4320035e6bb207c6ffd26e",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "frame",
@@ -691,7 +881,17 @@
       },
       "usage": "ROM data model and editor architecture reference for binary/source-adjacent workflows.",
       "risk": "MIT allows reuse with attribution, but keep architecture-level until a specific reuse review is approved.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "merilec__frame",
+        "folder": "/Users/bryan/projects/reference-repos/repos/merilec__frame",
+        "doc": "/Users/bryan/projects/reference-repos/docs/merilec__frame.md",
+        "branch": "master",
+        "head": "e914afdbcdcc9f51ecae835ec67797546ac76ebb",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     },
     {
       "name": "porydelete",
@@ -712,7 +912,17 @@
       },
       "usage": "Safe source-tree cleanup/deletion workflow reference for generated and linked decomp artifacts.",
       "risk": "GPL code remains reference-only; adopt safety checks conceptually through independent Swift models.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "volromhacking__porydelete",
+        "folder": "/Users/bryan/projects/reference-repos/repos/volromhacking__porydelete",
+        "doc": "/Users/bryan/projects/reference-repos/docs/volromhacking__porydelete.md",
+        "branch": "main",
+        "head": "1f47ce498891406725d84dbb746aeef99eb65c99",
+        "license": "GPL-3.0",
+        "reuseClass": "reference_only",
+        "licenseRisk": "high"
+      }
     },
     {
       "name": "pokedata",
@@ -733,7 +943,17 @@
       },
       "usage": "Pokemon data aggregation and export/reference dataset workflow for editor cross-links.",
       "risk": "MIT allows reuse with attribution, but data provenance and game-derived content need separate review.",
-      "pinnedAt": "2026-05-06T07:11:18Z"
+      "pinnedAt": "2026-05-06T07:11:18Z",
+      "centralReference": {
+        "id": "tarnatlon__pokedata",
+        "folder": "/Users/bryan/projects/reference-repos/repos/tarnatlon__pokedata",
+        "doc": "/Users/bryan/projects/reference-repos/docs/tarnatlon__pokedata.md",
+        "branch": "master",
+        "head": "f094326f66d78d1d45dfe13cd25b9a88d26857de",
+        "license": "MIT",
+        "reuseClass": "adapt_with_attribution",
+        "licenseRisk": "low"
+      }
     }
   ],
   "failedClones": []

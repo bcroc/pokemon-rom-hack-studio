@@ -2602,7 +2602,8 @@ private struct SpeciesCatalogDescriptor {
                 supportsEditing: false,
                 constants: classicConstants
             )
-        case .binaryROM, .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
+        case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky,
+             .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
             return nil
         }
     }

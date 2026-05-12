@@ -1,8 +1,8 @@
 # Reference Synthesis
 
-PokemonHackStudio is intended to become an all-in-one, Apple Silicon native Pokemon Generation III ROM hacking workbench. The reference repos are a product and compatibility map, not a source pool. Default adoption is clean-room Swift implementation unless a future license review explicitly approves copying code, schemas, assets, tests, or UI text.
+PokemonHackStudio is intended to become an all-in-one, Apple Silicon native Pokemon GBA + NDS ROM hacking workbench. The reference repos are a product and compatibility map, not a source pool. Default adoption is clean-room Swift implementation unless a future license review explicitly approves copying code, schemas, assets, tests, or UI text.
 
-The May 12, 2026 central reference-corpus refresh added current central profiles for the mainline Gen III GBA decomps and decomp-focused tools: `pret__pokeruby`, `pret__pokeemerald`, `pret__pokefirered`, `pret__agbcc`, `huderlem__porymap`, `huderlem__poryscript`, `grunt-lucas__porytiles`, and `loxed__porypal`. Use those central profiles for current HEAD/license posture, and use the ignored `references/` bench only as PokemonHackStudio's local pinned snapshot.
+The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/reference-repos` canonical for PokemonHackStudio reference metadata and clones. Use `docs/index.json` and per-repo central profiles there for current HEAD, license posture, reuse class, and tags. The ignored local `references/*` paths are compatibility aliases to central clone roots, while active editable decomp source trees in the PokemonHackStudio working folder remain local project inputs.
 
 ## Product Direction
 
@@ -46,6 +46,8 @@ The May 12, 2026 central reference-corpus refresh added current central profiles
 | porydelete | Safe cleanup/deletion affordances | Use for source-tree safety checks and mutation-plan deletes | GPL-3.0; behavioral reference only |
 | PokeData | Cross-linked Pokemon data/export surfaces | Use for source graph cross-links and import/export provenance checks | MIT; provenance review needed |
 | PkmGCTools / public FSYS notes | GameCube disc resource inventory, Colosseum/XD FSYS and compressed-member behavior | Use as conceptual compatibility research for clean-room Swift parsers | Not cloned; no code, schemas, or assets copied |
+| pret NDS decomps (`pokediamond`, `pokeplatinum`, `pokeheartgold`) | Gen IV source-tree shapes, NitroFS roots, build metadata, expected output names, and version-specific directories | Use for NDS decomp detection and read-only source catalog planning | No code, schemas, tests, or assets copied; reference-only local corpus |
+| DSPRE, PokEditor-v2, Pokeweb, SkyTemple | NDS ROM editor workflows, NitroFS/NARC tooling expectations, and external-tool boundary pressure | Use for UX/toolchain planning and format orientation only | High-risk/observational; V1 uses clean-room Swift parsers with synthetic fixtures |
 
 ## Feature Matrix
 
@@ -60,6 +62,7 @@ The May 12, 2026 central reference-corpus refresh added current central profiles
 | Moves/learnsets/Pokedex | PoryMoves, Universal-GBA-Pokedex, PokeData, Expansion | Moves and learnset source graph, Pokedex explorer, cross-linked species/move/evolution views |
 | Binary ROM graph | HMA, PGE | ROM image inspector, runs, anchors, pointers, free-space and repoint planning |
 | GameCube resource graph | PkmGCTools, public FSYS notes, HMA/PGE workflow posture | Disc header, FST, DOL, FSYS archive, LZSS member, and unsupported-resource inventory |
+| NDS resource graph | pret NDS decomps, DSPRE/PokEditor/Pokeweb/SkyTemple workflow posture | `.nds` header, NitroFS FNT/FAT browser, overlay table facts, NARC archive/member inventory, pret-style NDS source-tree index, read-only Gen IV data catalog rows, read-only diagnostics |
 | Patch pipeline | RomPatcher.js, HMA, mGBA | IPS/BPS/UPS/APS-GBA parse/apply/export, checksum validation, patch manifests |
 | Build and validation | pokeemerald, pokefirered, pokeruby, Expansion, agbcc | Make target previews, toolchain checks, generated freshness, diagnostics, build logs, memory usage |
 | Playtest/debug | mGBA, Expansion tests | Run Hack, headless test plan, screenshots, savestates, symbols, break/watchpoints |
@@ -98,6 +101,21 @@ Initial adapters/parsers:
 - `GameCubeDiscParser`
 - `FSYSArchiveParser`
 
+### 3A. NDS Resource Graph
+
+NDS support extends the resource library and project profile model with read-only `.nds` inputs and read-only pret-style NDS source-tree roots. The first native Swift parser surface covers the NDS header, NitroFS FNT/FAT file listing, ARM9/ARM7 overlay table metadata, and NARC archive/member listings. The source-tree index surface detects Diamond/Pearl, Platinum, HeartGold/SoulSilver, and PMD-Sky roots, then reports markers, variants, checksums, NitroFS manifests, and build-target metadata without enabling editors or rebuilds. The first Gen IV data catalog adds read-only source/path rows for Platinum, HeartGold/SoulSilver, and Diamond/Pearl while keeping PMD-Sky as spin-off inventory only. Source-tree workflows stay the target path for Gen IV editing, while binary-only NDS writes remain disabled until mutation-plan models exist.
+
+Initial adapters/parsers:
+
+- `NDSROMAdapter`
+- `NDSDecompAdapter`
+- `NDSROMHeaderParser`
+- `NitroFSIndexBuilder`
+- `NDSOverlayTableIndexBuilder`
+- `NARCParser`
+- `NDSDecompSourceTreeIndexBuilder`
+- `NDSDataCatalogBuilder`
+
 ### 4. Build And Patch Pipeline
 
 The build lane previews and later executes project-local make targets. The patch lane parses and validates patch files, then creates patch manifests and export plans. BPS should be the preferred shareable patch format because it carries source and target checksums.
@@ -117,6 +135,9 @@ The playtest lane starts as an external mGBA handoff and can later become an emb
 7. Headless playtest plan that can later call mGBA.
 8. Unified Gen III resource library with GameCube disc/archive parser path.
 9. Source-first GBA asset catalog with fast cached Resources navigation across maps, layouts, scripts, text, species, trainers, items, moves, learnsets, evolutions, Pokedex, graphics, palettes, audio, generated outputs, and ROM metadata.
+10. Read-only NDS ROM resource inspector for `.nds` header facts, NitroFS files, overlay metadata, and NARC archives.
+11. Read-only NDS source-tree detector for pret Diamond/Pearl, Platinum, HeartGold/SoulSilver, and PMD-Sky roots.
+12. Read-only Gen IV source data catalog for Platinum, HeartGold/SoulSilver, and Diamond/Pearl source/path summaries, with PMD-Sky spin-off inventory diagnostics.
 
 ## Reference Follow-Up State
 
@@ -141,4 +162,5 @@ Current follow-up work is tracked on the live board, especially `PHS-T57` compat
 - Store project-relative paths and source spans in diagnostics and mutation plans.
 - Show save/layout/text/capacity warnings before writes.
 - Treat GameCube disc images and FSYS/LZSS members as read-only local inputs until a later mutation/export policy exists.
+- Treat NDS ROMs, NDS source-tree roots, NitroFS files, overlay tables, and NARC members as read-only local inputs until a later mutation/export policy exists.
 - Keep mGBA, GPL tools, LGPL tools, custom-licensed code, and unlicensed game assets behind clear distribution boundaries.

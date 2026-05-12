@@ -269,6 +269,7 @@ public enum GenIIIAssetCatalogBuilder {
         "gcm",
         "ips",
         "iso",
+        "nds",
         "o",
         "sav",
         "sgm",
@@ -284,7 +285,7 @@ public enum GenIIIAssetCatalogBuilder {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         do {
             let index = try GameAdapterRegistry.index(path: url.path, fileManager: fileManager)
-            if index.profile == .binaryROM {
+            if index.profile == .binaryROM || index.profile == .ndsROM || index.profile.platform == .nds {
                 return build(resourceEntry: GenIIIResourceRegistry.resourceIndex(path: url.path, fileManager: fileManager))
             }
             let identity = CacheProjectIdentity(index: index)
@@ -335,7 +336,9 @@ public enum GenIIIAssetCatalogBuilder {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         guard
             let index = try? GameAdapterRegistry.index(path: url.path, fileManager: fileManager),
-            index.profile != .binaryROM
+            index.profile != .binaryROM,
+            index.profile != .ndsROM,
+            index.profile.platform != .nds
         else {
             return nil
         }
@@ -993,7 +996,7 @@ public enum GenIIIAssetCatalogBuilder {
     }
 
     private static func resourceItemAsset(_ item: GenIIIResourceItem, entry: GenIIIResourceEntry) -> GenIIIAsset {
-        let category = entry.platform == .gbaROM ? GenIIIAssetCategory.rom : .media
+        let category = resourceItemCategory(item, entry: entry)
         return GenIIIAsset(
             id: "resource:\(entry.id):\(item.id)",
             title: URL(fileURLWithPath: item.path).lastPathComponent.isEmpty ? item.kind : URL(fileURLWithPath: item.path).lastPathComponent,
@@ -1014,6 +1017,47 @@ public enum GenIIIAssetCatalogBuilder {
             diagnostics: entry.diagnostics,
             navigationTarget: GenIIIAssetNavigationTarget(module: .rom, identifier: entry.id)
         )
+    }
+
+    private static func resourceItemCategory(_ item: GenIIIResourceItem, entry: GenIIIResourceEntry) -> GenIIIAssetCategory {
+        if entry.platform == .gbaROM || entry.platform == .ndsROM {
+            return .rom
+        }
+        if entry.platform == .ndsSource {
+            if item.category.hasPrefix("NDS Data ") {
+                return category(forNDSDataDomain: String(item.category.dropFirst("NDS Data ".count)))
+            }
+            if item.category == "NDS Build Target" || item.category == "NDS Variant" {
+                return .generated
+            }
+            return .source
+        }
+        return .media
+    }
+
+    private static func category(forNDSDataDomain domain: String) -> GenIIIAssetCategory {
+        switch domain {
+        case NDSDataDomain.species.rawValue, NDSDataDomain.personal.rawValue:
+            return .species
+        case NDSDataDomain.moves.rawValue:
+            return .moves
+        case NDSDataDomain.items.rawValue:
+            return .items
+        case NDSDataDomain.trainers.rawValue:
+            return .trainers
+        case NDSDataDomain.encounters.rawValue:
+            return .encounters
+        case NDSDataDomain.text.rawValue:
+            return .text
+        case NDSDataDomain.scripts.rawValue:
+            return .scripts
+        case NDSDataDomain.maps.rawValue:
+            return .maps
+        case NDSDataDomain.resources.rawValue:
+            return .source
+        default:
+            return .source
+        }
     }
 
     private static func safeSourceInventory(

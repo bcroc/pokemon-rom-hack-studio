@@ -69,6 +69,7 @@ public enum SourceKind: String, Codable, Equatable, CaseIterable {
 }
 
 public enum SourceRole: String, Codable, Equatable, CaseIterable {
+    case marker
     case source
     case generated
     case artifact
@@ -176,6 +177,11 @@ public enum CoreCapability: String, Codable, Equatable, CaseIterable {
     case trainerEditor
     case speciesEditor
     case binaryROMGraph
+    case ndsROMInspection
+    case ndsSourceTreeIndex
+    case ndsDataCatalog
+    case nitroFSIndex
+    case narcInspection
     case patchPlanning
     case buildRunner
     case playtestBridge
@@ -317,6 +323,11 @@ public struct ProjectIndex: Codable, Equatable {
 }
 
 extension ProjectIndex: @unchecked Sendable {}
+
+public extension ProjectIndex {
+    var platform: GamePlatform { profile.platform }
+    var projectKind: ProjectKind { profile.projectKind }
+}
 
 public protocol GameAdapter {
     var id: String { get }
@@ -540,6 +551,112 @@ public struct BinaryROMAdapter: GameAdapter {
     }
 }
 
+public struct NDSROMAdapter: GameAdapter {
+    public let id = "nds.binary-rom"
+    public let displayName = "Nintendo DS binary ROM"
+    public let supportedProfiles: [GameProfile] = [.ndsROM]
+    public let supportedModules: [EditorModule] = [.rom, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .ndsROMInspection, .nitroFSIndex, .narcInspection, .diagnostics]
+    public let writePolicy: WritePolicy = .readOnly
+
+    public init() {}
+
+    public static func isSupportedROM(_ root: URL, fileManager: FileManager = .default) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+            && root.pathExtension.lowercased() == "nds"
+    }
+
+    public func canOpen(root: URL, fileManager: FileManager = .default) -> Bool {
+        Self.isSupportedROM(root, fileManager: fileManager)
+    }
+
+    public func index(root: URL, fileManager: FileManager = .default) throws -> ProjectIndex {
+        guard canOpen(root: root, fileManager: fileManager) else {
+            throw PokemonHackCoreError.unsupportedProject(root.path)
+        }
+
+        let data = (try? Data(contentsOf: root)) ?? Data()
+        let headerResult = NDSROMHeaderParser.parse(path: root.path, data: data)
+        var diagnostics = headerResult.diagnostics
+        diagnostics.append(
+            Diagnostic(
+                severity: .info,
+                code: "NDS_ROM_READ_ONLY",
+                message: "Nintendo DS ROM workflows are read-only until NDS mutation plans are designed."
+            )
+        )
+
+        let document = SourceDocument(
+            relativePath: root.lastPathComponent,
+            kind: .rom,
+            role: .localInput,
+            exists: true
+        )
+
+        return ProjectIndex(
+            root: SourceLocation(path: root.standardizedFileURL.path, exists: true),
+            profile: .ndsROM,
+            adapterID: id,
+            adapterName: headerResult.header?.displayTitle ?? displayName,
+            editorModules: supportedModules,
+            capabilities: capabilities,
+            writePolicy: writePolicy,
+            documents: [document],
+            diagnostics: diagnostics
+        )
+    }
+}
+
+public struct NDSDecompAdapter: GameAdapter {
+    public let id = "nds.source-tree"
+    public let displayName = "Nintendo DS source tree"
+    public let supportedProfiles: [GameProfile] = [.pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky]
+    public let supportedModules: [EditorModule] = [.rom, .build, .diagnostics]
+    public let capabilities: [CoreCapability] = [.resourceIndex, .ndsSourceTreeIndex, .ndsDataCatalog, .diagnostics]
+    public let writePolicy: WritePolicy = .readOnly
+
+    public init() {}
+
+    public func canOpen(root: URL, fileManager: FileManager = .default) -> Bool {
+        NDSDecompSourceTreeIndexBuilder.detectProfile(at: root, fileManager: fileManager) != nil
+    }
+
+    public func index(root: URL, fileManager: FileManager = .default) throws -> ProjectIndex {
+        let sourceIndex = try NDSDecompSourceTreeIndexBuilder.build(root: root, fileManager: fileManager)
+
+        return ProjectIndex(
+            root: SourceLocation(path: root.standardizedFileURL.path, exists: true),
+            profile: sourceIndex.profile,
+            adapterID: idFor(profile: sourceIndex.profile),
+            adapterName: sourceIndex.displayName,
+            editorModules: supportedModules,
+            capabilities: capabilities,
+            writePolicy: writePolicy,
+            documents: sourceIndex.documents,
+            generatedOutputs: sourceIndex.generatedOutputs,
+            diagnostics: sourceIndex.diagnostics,
+            buildTargets: sourceIndex.buildTargets
+        )
+    }
+
+    private func idFor(profile: GameProfile) -> String {
+        switch profile {
+        case .pokediamond:
+            return "pret.pokediamond"
+        case .pokeplatinum:
+            return "pret.pokeplatinum"
+        case .pokeheartgold:
+            return "pret.pokeheartgold"
+        case .pmdSky:
+            return "pret.pmd-sky"
+        default:
+            return id
+        }
+    }
+}
+
 public struct GameCubeDiscAdapter: GameAdapter {
     public let id = "gen3.gamecube-disc"
     public let displayName = "Generation III GameCube disc"
@@ -633,6 +750,8 @@ public enum GameAdapterRegistry {
     public static var all: [any GameAdapter] {
         [
             GameCubeDiscAdapter(),
+            NDSROMAdapter(),
+            NDSDecompAdapter(),
             ExpansionAdapter(),
             RubySapphireAdapter(),
             FireRedAdapter(),

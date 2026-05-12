@@ -105,9 +105,8 @@ struct DashboardView: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     StatusPill(state: project.status)
                     StatusPill(state: store.projectIndexStatus.validationState)
-                    Text(project.writePolicy)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    DashboardResourceTag(text: project.originLabel)
+                    DashboardResourceTag(text: project.writePolicy)
                 }
             }
 
@@ -294,9 +293,9 @@ private struct ResourceLibraryRow: View {
                     Text(entry.title)
                         .font(.headline)
                     StatusPill(state: entry.status)
-                    Text(entry.platform)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                    DashboardResourceTag(text: entry.platform)
+                    DashboardResourceTag(text: entry.role)
+                    DashboardResourceTag(text: entry.writePolicy)
                 }
                 Text("\(entry.variantSummary) · \(entry.moduleSummary)")
                     .font(.subheadline)
@@ -332,12 +331,30 @@ private struct ResourceLibraryRow: View {
         switch entry.platform {
         case "gbaSource":
             "folder"
+        case "ndsSource":
+            "folder.badge.gearshape"
         case "gbaROM":
+            "memorychip"
+        case "ndsROM":
             "memorychip"
         case "gameCube":
             "opticaldisc"
         default:
             "questionmark.folder"
         }
+    }
+}
+
+private struct DashboardResourceTag: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.secondary.opacity(0.12), in: Capsule())
+            .foregroundStyle(.secondary)
     }
 }

@@ -1952,7 +1952,7 @@ final class WorkbenchStore: ObservableObject {
 
         let resourceRoots = coreResourceLibrary.entries
             .filter { entry in
-                (entry.platform == .gbaSource || entry.platform == .gbaROM)
+                (entry.platform == .gbaSource || entry.platform == .gbaROM || entry.platform == .ndsSource || entry.platform == .ndsROM)
                     && !entry.path.isEmpty
                     && !Self.pathIsBundledAssetRoot(entry.path)
                     && (userSettings.includeReferenceRootsInResources || !Self.pathIsReferenceRoot(entry.path))
@@ -4969,7 +4969,7 @@ final class WorkbenchStore: ObservableObject {
     private func defaultProjectRoots() -> [String] {
         #if DEBUG
         guard userSettings.includeDefaultDebugProjects else { return [] }
-        return ["pokeemerald", "pokefirered"]
+        return ["pokeemerald", "pokefirered", "pokediamond", "pokeplatinum", "pokeheartgold", "pokesoulsilver", "pmd-sky"]
             .map { workspaceRoot.appendingPathComponent($0).path }
             .filter { fileManager.fileExists(atPath: $0) }
         #else
@@ -5003,7 +5003,17 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private static func pathIsReferenceRoot(_ path: String) -> Bool {
-        URL(fileURLWithPath: path).standardizedFileURL.pathComponents.contains("references")
+        let components = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        if components.contains("references") {
+            return true
+        }
+        guard let projectsIndex = components.firstIndex(of: "projects"),
+              components.indices.contains(projectsIndex + 2)
+        else {
+            return false
+        }
+        return components[projectsIndex + 1] == "reference-repos"
+            && components[projectsIndex + 2] == "repos"
     }
 
     private static func pathIsBundledAssetRoot(_ path: String) -> Bool {
@@ -5017,6 +5027,10 @@ final class WorkbenchStore: ObservableObject {
         default:
             return false
         }
+    }
+
+    private static func isNDSSourceProject(_ index: PokemonHackCore.ProjectIndex) -> Bool {
+        index.platform == .nds && index.projectKind == .sourceTree
     }
 
     private static let bundledAssetsDirectoryName = "PokemonHackStudioAssets"
@@ -5125,8 +5139,10 @@ final class WorkbenchStore: ObservableObject {
     private static func summary(from index: PokemonHackCore.ProjectIndex) -> IndexedProjectSummary {
         let rootURL = URL(fileURLWithPath: index.root.path)
         let origin = projectOrigin(for: index)
-        let sourceSurfaces = index.documents.map { surface(from: $0) }
-        let generatedOutputs = index.generatedOutputs.map { surface(from: $0) }
+        let displayWritePolicy = writePolicyDisplayValue(for: index)
+        let isReadOnlyProject = displayWritePolicy == PokemonHackCore.WritePolicy.readOnly.rawValue
+        let sourceSurfaces = index.documents.map { surface(from: $0, isReadOnlyProject: isReadOnlyProject) }
+        let generatedOutputs = index.generatedOutputs.map { surface(from: $0, isReadOnlyProject: isReadOnlyProject) }
         let diagnostics = index.diagnostics.map { diagnostic(from: $0, rootPath: index.root.path) }
         let buildTargets = index.buildTargets.map { target in
             IndexedBuildTargetPreview(
@@ -5150,7 +5166,7 @@ final class WorkbenchStore: ObservableObject {
             menuSubtitle: "\(origin.detail) · \(index.adapterName) · \(index.profile.rawValue)",
             profile: index.profile.rawValue,
             adapterName: index.adapterName,
-            writePolicy: index.writePolicy.rawValue,
+            writePolicy: displayWritePolicy,
             status: status(for: diagnostics, missingSourceDocuments: missingSourceDocuments),
             sourceDocumentCount: index.documents.count,
             existingSourceDocumentCount: existingSourceDocuments,
@@ -5171,10 +5187,17 @@ final class WorkbenchStore: ObservableObject {
         if index.documents.allSatisfy({ $0.role == .localInput }) {
             return ("Local Input", "Local ROM/media input")
         }
-        if rootURL.pathComponents.contains("references") {
+        if pathIsReferenceRoot(rootURL.path) {
             return ("Reference", "Read-only reference source")
         }
+        if isNDSSourceProject(index) {
+            return ("Local Source", "Read-only NDS source root")
+        }
         return ("Editable", "Editable source root")
+    }
+
+    private static func writePolicyDisplayValue(for index: PokemonHackCore.ProjectIndex) -> String {
+        isNDSSourceProject(index) ? PokemonHackCore.WritePolicy.readOnly.rawValue : index.writePolicy.rawValue
     }
 
     private static func buildReport(
@@ -5788,7 +5811,7 @@ final class WorkbenchStore: ObservableObject {
             family: entry.family.rawValue,
             profile: entry.profile.rawValue,
             role: entry.role.rawValue,
-            writePolicy: entry.writePolicy.rawValue,
+            writePolicy: resourceEntryWritePolicyDisplayValue(for: entry),
             parseStatus: entry.parseStatus.rawValue,
             status: status,
             variantSummary: variants.isEmpty ? "No variants detected" : variants,
@@ -5799,6 +5822,10 @@ final class WorkbenchStore: ObservableObject {
             diagnostics: diagnostics,
             source: SourceLocation(path: path, symbol: entry.adapterID ?? entry.profile.rawValue, line: 1)
         )
+    }
+
+    private static func resourceEntryWritePolicyDisplayValue(for entry: PokemonHackCore.GenIIIResourceEntry) -> String {
+        entry.platform == .ndsSource ? PokemonHackCore.WritePolicy.readOnly.rawValue : entry.writePolicy.rawValue
     }
 
     private static func resourceItemViewState(
@@ -6687,16 +6714,19 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
-    private static func surface(from document: SourceDocument) -> IndexedSourceSurface {
+    private static func surface(from document: SourceDocument, isReadOnlyProject: Bool = false) -> IndexedSourceSurface {
         let title = URL(fileURLWithPath: document.relativePath).lastPathComponent
         let displayTitle = title.isEmpty ? document.relativePath : title
         let role = document.role.rawValue
         let kind = document.kind.rawValue
+        let subtitle = isReadOnlyProject && document.role == .source
+            ? "\(kind) · \(role) · readOnly"
+            : "\(kind) · \(role)"
 
         return IndexedSourceSurface(
             id: "\(role):\(document.relativePath)",
             title: displayTitle,
-            subtitle: "\(kind) · \(role)",
+            subtitle: subtitle,
             kind: kind,
             role: role,
             exists: document.exists,

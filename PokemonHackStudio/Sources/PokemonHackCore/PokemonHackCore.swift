@@ -25,12 +25,60 @@ public enum GameProfile: String, Codable, Equatable, CaseIterable, Sendable {
     case pokeruby
     case pokeemeraldExpansion
     case binaryROM
+    case ndsROM
+    case pokediamond
+    case pokeplatinum
+    case pokeheartgold
+    case pmdSky
     case pokemonColosseum
     case pokemonXD
     case pokemonBox
     case pokemonChannel
     case gameCubeMedia
     case unknown
+}
+
+public enum GamePlatform: String, Codable, Equatable, CaseIterable, Sendable {
+    case gba
+    case nds
+    case gameCube
+    case unknown
+}
+
+public enum ProjectKind: String, Codable, Equatable, CaseIterable, Sendable {
+    case sourceTree
+    case binaryROM
+    case discImage
+    case unknown
+}
+
+public extension GameProfile {
+    var platform: GamePlatform {
+        switch self {
+        case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion, .binaryROM:
+            return .gba
+        case .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+            return .nds
+        case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
+            return .gameCube
+        case .unknown:
+            return .unknown
+        }
+    }
+
+    var projectKind: ProjectKind {
+        switch self {
+        case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion,
+             .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+            return .sourceTree
+        case .binaryROM, .ndsROM:
+            return .binaryROM
+        case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
+            return .discImage
+        case .unknown:
+            return .unknown
+        }
+    }
 }
 
 public struct SourceLocation: Codable, Equatable {
@@ -257,7 +305,7 @@ public enum ProjectInspector {
             root: SourceLocation(path: root.path, exists: true),
             profile: profile,
             editorModules: modulesAvailable(at: root, fileManager: fileManager),
-            issues: validationIssues(at: root, fileManager: fileManager)
+            issues: validationIssues(at: root, profile: profile, fileManager: fileManager)
         )
     }
 
@@ -270,8 +318,16 @@ public enum ProjectInspector {
             return GameCubeDiscParser.detectProfile(at: root, fileManager: fileManager)
         }
 
+        if NDSROMAdapter.isSupportedROM(root, fileManager: fileManager) {
+            return .ndsROM
+        }
+
         if BinaryROMAdapter.isSupportedROM(root, fileManager: fileManager) {
             return .binaryROM
+        }
+
+        if let ndsDecompProfile = NDSDecompSourceTreeIndexBuilder.detectProfile(at: root, fileManager: fileManager) {
+            return ndsDecompProfile
         }
 
         guard hasRequiredProjectSkeleton(at: root, fileManager: fileManager) else {
@@ -322,6 +378,10 @@ public enum ProjectInspector {
     }
 
     private static func modulesAvailable(at root: URL, fileManager: FileManager) -> [EditorModule] {
+        if NDSDecompSourceTreeIndexBuilder.detectProfile(at: root, fileManager: fileManager) != nil {
+            return [.rom, .build, .diagnostics]
+        }
+
         var modules: [EditorModule] = []
         if fileManager.fileExists(atPath: root.appendingPathComponent("data/maps/map_groups.json").path) {
             modules.append(.maps)
@@ -351,7 +411,12 @@ public enum ProjectInspector {
         if directoryExists(root.appendingPathComponent("data/text"), fileManager: fileManager) {
             modules.append(.text)
         }
-        if GameCubeDiscParser.isSupportedDiscImage(root) || BinaryROMAdapter.isSupportedROM(root, fileManager: fileManager) {
+        if NDSROMAdapter.isSupportedROM(root, fileManager: fileManager) {
+            modules.append(.rom)
+        } else if NDSDecompSourceTreeIndexBuilder.detectProfile(at: root, fileManager: fileManager) != nil {
+            modules.append(.rom)
+        } else if GameCubeDiscParser.isSupportedDiscImage(root)
+            || BinaryROMAdapter.isSupportedROM(root, fileManager: fileManager) {
             modules.append(.rom)
             modules.append(.patches)
             modules.append(.playtest)
@@ -361,11 +426,16 @@ public enum ProjectInspector {
         return modules
     }
 
-    private static func validationIssues(at root: URL, fileManager: FileManager) -> [ValidationIssue] {
-        [
+    private static func validationIssues(at root: URL, profile: GameProfile, fileManager: FileManager) -> [ValidationIssue] {
+        if profile.platform != .gba || profile.projectKind != .sourceTree {
+            return []
+        }
+
+        let requiredPaths = [
             "Makefile",
             "data/maps/map_groups.json"
-        ].compactMap { relativePath in
+        ]
+        return requiredPaths.compactMap { (relativePath: String) -> ValidationIssue? in
             let url = root.appendingPathComponent(relativePath)
             guard !fileManager.fileExists(atPath: url.path) else {
                 return nil

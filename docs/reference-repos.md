@@ -1,10 +1,12 @@
 # Reference Repositories
 
-The `references/` directory is a research bench for Pokemon GBA hacking tools, emulation, patching, and decompilation workflows. Reference repos should inform architecture and compatibility, but they are not owned product code.
+The central `/Users/bryan/projects/reference-repos` corpus is the canonical research bench for Pokemon hacking tools, emulation, patching, decompilation workflows, and related DS/Gen III compatibility references. The local `references/` entries in this repo are ignored compatibility aliases to those central clone roots. Reference repos should inform architecture and compatibility, but they are not owned product code.
 
 ## Strategy
 
 - Keep reference repos read-only during product work unless a task explicitly asks to update or inspect them.
+- Use `/Users/bryan/projects/reference-repos/docs/index.json` and the central markdown profiles as the source of truth for current HEAD, license posture, reuse class, and Finder `ref.*` tags.
+- Keep active editable decomp source trees in the PokemonHackStudio working folder when they are project inputs; the central corpus stores a reference copy/clone and metadata, not the live working tree.
 - Use references to understand file formats, editor ergonomics, patch formats, build expectations, and user workflows.
 - Summarize learned patterns in docs or issues before adopting them.
 - Prefer clean-room implementation in `PokemonHackCore` when the needed behavior is small or domain-specific.
@@ -16,9 +18,9 @@ Detailed feature synthesis, adoption decisions, and the current implementation l
 
 ## Current References
 
-The May 6, 2026 broad sweep expanded the ignored `references/` bench to 30 pinned shallow clones. Only `references/manifest.json` is tracked; all clone directories remain local read-only research material.
+The May 6, 2026 broad sweep created a 30-repo local reference bench. The May 12, 2026 centralization moved that bench into `/Users/bryan/projects/reference-repos`: central clone roots now live under `repos/<owner>__<repo>`, central profiles live under `docs/<owner>__<repo>.md`, and the central index tags every PokemonHackStudio-relevant resource with `ref.family.pokemonhackstudio` plus domain/reuse/license-risk tags.
 
-The May 12, 2026 central-corpus refresh also cataloged the mainline Gen III GBA decomps and decomp-focused tools in `/Users/bryan/projects/reference-repos`: `pret__pokeruby`, `pret__pokeemerald`, `pret__pokefirered`, `pret__agbcc`, `huderlem__porymap`, `huderlem__poryscript`, `grunt-lucas__porytiles`, and `loxed__porypal`. `references/manifest.json` records those central paths and current central HEADs under each entry's `centralReference` while preserving the ignored local bench pins.
+Only `references/manifest.json` is tracked in this repo. The ignored `references/*` paths are compatibility symlinks to central clone roots, and each manifest entry records its central profile and current central HEAD under `centralReference`.
 
 | Path | Primary Use | Notes |
 | --- | --- | --- |
@@ -52,6 +54,23 @@ The May 12, 2026 central-corpus refresh also cataloged the mainline Gen III GBA 
 | `references/rompatcher-js` | Patch format support and user-facing patching flow | MIT with third-party components noted by upstream; useful for supported patch formats and verification UX. |
 | `references/team-aquas-asset-repo` | Community asset organization, credits, and import metadata | No root license detected; assets are local reference only until asset-by-asset review. |
 | `references/universal-gba-pokedex` | Pokedex/species presentation and cross-game data navigation | MIT; validate data provenance and game-derived assumptions before reuse. |
+
+## NDS References Observed Locally
+
+The May 12, 2026 NDS planning sweep found these central references under `/Users/bryan/projects/reference-repos`. They are orientation material only; current NDS support uses clean-room Swift parsers and synthetic tests for ROM containers plus read-only source-tree detection for pret-style DS decomps.
+
+| Central Path | Primary Use | Notes |
+| --- | --- | --- |
+| `/Users/bryan/projects/reference-repos/repos/pret__pokediamond` | Diamond/Pearl source-tree shape and NitroFS/build layout | `Makefile`, `CMakeLists.txt`, `config.mk`, `filesystem.mk`, `rom.rsf`, `arm9/`, `arm7/`, `files/`, `graphics/`, `include/`, and `build/diamond.us` / `build/pearl.us` outputs. Detects as read-only `pokediamond`; reference-only. |
+| `/Users/bryan/projects/reference-repos/repos/pret__pokeplatinum` | Platinum source-tree shape and Meson/Make build expectations | `Makefile`, `meson.build`, `src/`, `asm/`, `res/`, `generated/`, `include/`, and `platinum.us/`. Detects as read-only `pokeplatinum`; reference-only. |
+| `/Users/bryan/projects/reference-repos/repos/pret__pokeheartgold` | HeartGold/SoulSilver source-tree shape and filesystem metadata | `Makefile`, `CMakeLists.txt`, `config.mk`, `filesystem.mk`, `rom.rsf`, `main.lsf`, `src/`, `asm/`, `files/`, `include/`, `heartgold.us/`, and `soulsilver.us/`. Detects as read-only `pokeheartgold`; reference-only. |
+| `/Users/bryan/projects/reference-repos/repos/pret__pmd-sky` | DS-era decomp source-tree pressure outside mainline Pokemon RPGs | Detects as read-only `pmdSky`; spin-off reference only; do not use as Gen IV RPG schema truth. |
+| `/Users/bryan/projects/reference-repos/repos/DSPRE` | DS Pokemon ROM editor UX/tool boundary reference | Treat as observational and external-tool oriented; do not copy code or UI text. |
+| `/Users/bryan/projects/reference-repos/repos/PokEditor-v2` | DS editor lineage and binary data workflow reference | Treat as high-risk/read-only reference. |
+| `/Users/bryan/projects/reference-repos/repos/Pokeweb` | Web/editor workflow reference for DS-era data | Observational only. |
+| `/Users/bryan/projects/reference-repos/repos/SkyTemple` | NDS/PMD resource tooling and plugin workflow reference | Spin-off resource tooling reference; keep behind clean-room/external-tool boundaries. |
+
+No local `pokemodding/pokeblack`, Tinke, CTRMap, standalone ndspy, BlocksDS, or nitromods clone was found in this sweep.
 
 ## Researched But Not Cloned
 
@@ -87,6 +106,7 @@ If a feature depends on a reference implementation, document whether the adoptio
 - Use mGBA as the emulator integration reference, especially around launch, debug, and patch-loading expectations.
 - Use pret decomp repos as the truth for source layout, build outputs, generated artifact policy, table shapes, and project detection.
 - Use GameCube resource references only for interoperability vocabulary and high-level format expectations; local `.iso`/`.gcm` inputs remain user-supplied and read-only.
+- Use local NDS decomp/tool references only for source-tree shapes, build conventions, and format orientation; local `.nds` inputs remain user-supplied and read-only.
 - Use `agbcc` only to understand toolchain/build boundaries; PokemonHackStudio should invoke or validate external tools rather than embedding compiler internals.
 
 Any durable decision learned from references should move into `docs/product-architecture.md`, a future design note, or a tracked implementation issue.

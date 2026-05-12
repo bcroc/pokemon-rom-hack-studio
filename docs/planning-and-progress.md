@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-No implementation row is currently active. The live baseline includes `PHS-T68`, `PHS-T69`, `PHS-T70`, `PHS-T71`, `PHS-T72`, `PHS-T74`, `PHS-T80`, and `PHS-T81`; choose new work from the remaining Active Board candidate rows.
+No implementation row is currently active. The live baseline includes `PHS-T68`, `PHS-T69`, `PHS-T70`, `PHS-T71`, `PHS-T72`, `PHS-T74`, `PHS-T80`, `PHS-T81`, `PHS-T86`, `PHS-T87`, and `PHS-T88`; choose new work from the remaining Active Board candidate rows.
 
 ## Active Board
 
@@ -93,6 +93,9 @@ No implementation row is currently active. The live baseline includes `PHS-T68`,
 | PHS-T83 | Candidate | Deep Related-Record Context Panels | Add richer read-only relationship panels across maps, species, trainers, moves, items, and resources, building on existing navigation/backlink work without adding new write paths. |
 | PHS-T84 | Candidate | Shared Script Command Editing | Follow up map-local script editing with safe project-wide/shared script command mutation planning for native script sources, separate from Poryscript integration and existing generated/shared-file gates. |
 | PHS-T85 | Candidate | Full-Suite Stabilization | Close historical validation debt by making the full SwiftPM test suite green and updating proof notes where prior rows relied on targeted tests because of unrelated failures. |
+| PHS-T86 | Done | NDS ROM Resource Inspector V1 | Platform-aware `.nds` profile detection, read-only NDS header parsing, NitroFS FNT/FAT browsing, overlay table metadata, NARC member listing, CLI `nds-inspect`/`nds-files`/`narc-inspect`, Resources/Project Hub visibility, `.nds` ignore coverage, synthetic tests, and NDS roadmap docs are implemented. |
+| PHS-T87 | Done | NDS Decomp Project Detection V1 | Pret-style DS source roots for Diamond/Pearl, Platinum, HeartGold/SoulSilver, and PMD-Sky now detect as read-only NDS source-tree projects/resources with marker paths, variant/checksum/build-output metadata, build target summaries, reference-origin labeling, Project Hub/Resources visibility, synthetic tests, and local central-reference smokes. |
+| PHS-T88 | Done | Gen IV Read-Only Data Catalog V1 | NDS source-tree roots now expose read-only Gen IV data catalog rows for Platinum, HeartGold/SoulSilver, and Diamond/Pearl, plus PMD-Sky spin-off inventory diagnostics; CLI `nds-data-catalog`, `resource-index` NDS data rows, Resources asset categories, synthetic tests, and local central-reference smokes are implemented without Gen IV editors, rebuilds, extraction, mutation plans, or binary writes. |
 
 ## Recent Progress
 
@@ -154,11 +157,15 @@ No implementation row is currently active. The live baseline includes `PHS-T68`,
 - `PHS-T72` activates the first real graphics import path by enabling Pokemon species source asset imports only for existing indexed local source PNG/`.pal` targets; imported bytes carry source path, file name, byte count, SHA1, detected kind, and validation status, then flow through the existing Species draft, mutation preview, hash/size applyability, explicit apply, and backup path.
 - `PHS-T80` added safe guided toolchain setup actions: health matrix rows carry preview-only copy-command, copy-path, and rerun-guidance payloads; Build/Patch/Playtest renders those actions with copy controls and includes them in copied report JSON; no build, converter, installer, emulator, patch writer, or source-write command is invoked.
 - `PHS-T81` made direct GameCube resource inspection app-visible without changing auto-load policy: Resources can load an explicit `.iso` or `.gcm`, render the parsed Colosseum/XD/Box/Channel entry as read-only, browse all FST/FSYS/LZSS items beyond the ProjectIndex cap, and filter nested item paths, kinds, categories, offsets, sizes, and diagnostics.
+- `PHS-T86` opened the first NDS vertical slice: `.nds` inputs now index as read-only Nintendo DS ROM projects/resources, CLI reports expose header facts, NitroFS files, overlay tables, and reachable NARC members, Resources counts top-level GBA/NDS ROM inputs, and `.nds` backups are ignored.
+- `PHS-T87` adds read-only NDS decomp/source-tree detection: pret Diamond/Pearl, Platinum, HeartGold/SoulSilver, and PMD-Sky roots route through `NDSDecompAdapter`, expose only ROM/Build/Diagnostics modules, surface marker/source/NitroFS/checksum/build-output metadata in CLI and Resources, and keep all NDS source edits, extraction, rebuilds, and ROM writes disabled.
+- `PHS-T88` adds the first Gen IV read-only source data catalog: `NDSDataCatalogBuilder` indexes source/path summaries for Platinum, HeartGold/SoulSilver, and Diamond/Pearl, exposes CLI JSON and Resources rows, keeps PMD-Sky as spin-off inventory only, and leaves all Gen IV editing, extraction, rebuild, mutation-plan apply, and binary writing disabled.
 - Dev-loop timing captured during `PHS-T36`: warm direct `map-visual` CLI smokes remained fast (`pokeemerald` `MAP_PETALBURG_CITY` in 0.15s; `pokefirered` `MAP_BATTLE_COLOSSEUM_2P` in 0.12s), while `make validate` took 37.84s and `make verify` took 17.71s with the Xcode bundle phase still copying 2 local source projects every build. `PHS-T39` later replaced that recopy with an unchanged-bundle reuse path.
 - `PHS-T25` made related-data navigation app-visible without inventing a new graph UI: Resources row actions now focus the target module and row/search context for maps, layouts, scripts, source paths, Pokemon/trainer data, graphics, generated build outputs, text, and items; store-owned resource selection supports backlinks from other modules; and Data > Pokemon now links evolution targets plus species assets back into existing workbench surfaces.
 - `PHS-T14` finished the Build/Patch/Playtest preview workflow: `patch-manifest` accepts `--base-rom`, reports selected base ROM path/SHA1/size/candidate match, distinguishes base ROM mismatch, and the app now has a Patch tab with safe patch/base ROM selectors, project/resource base ROM options, manifest/dry-run/diagnostic rows, playtest artifact rows, and Copy Report JSON while keeping apply/export/build/run disabled.
 - `PHS-T13` hardened the read-only table parser: descriptors can carry known-field metadata and opt into unknown-field warnings; table parsing now reports missing/unterminated initializers and unsupported bracketed entries with spans; field extraction only reports top-level designators so nested trainer party and TM/HM members do not become false unknown fields; and SourceIndex rows surface the diagnostics while preserving raw source bodies.
 - Reference refresh added pinned source-first refs for `pokeemerald`, `pokefirered`, and `agbcc`; `docs/reference-improvement-audit.md` now captures the comparison against current code and the prioritized follow-up rows.
+- Reference corpus centralization moved PokemonHackStudio's 30-repo reference bench into `/Users/bryan/projects/reference-repos`, tagged the central index/profiles with `ref.family.pokemonhackstudio`, and converted ignored `references/*` bench paths into compatibility aliases while leaving active working decomps and local ROM inputs in place.
 - ProjectIndex-backed dashboard slice is complete and verified.
 - Reference synthesis and product architecture docs are in place.
 - Generated `.inc` files remain generated artifacts and are not edited by map workflows.
@@ -566,6 +573,39 @@ For each completed row, record the focused commands that proved the slice. Gener
   - `git diff --check`
   - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
   - Source-write posture: GameCube `.iso`/`.gcm` inputs remain explicit local inputs, read-only in the app and ProjectIndex, and excluded from auto-loaded resource libraries; no export/apply/mutation-plan path was added.
+- `PHS-T86`:
+  - `swift test --package-path PokemonHackStudio --filter NDS` (7 tests; synthetic NDS header, NitroFS tree, overlay table, NARC parser, CLI JSON, and resource-index JSON passed)
+  - `swift test --package-path PokemonHackStudio` (204 tests; passed)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli nds-inspect "Pokemon - Diamond Version (USA) (Rev 5).nds" --json > /tmp/pokemonhack-nds-diamond-inspect.json` (local ignored backup smoke; summary: title `POKEMON D`, game code `ADAE`, 269 NitroFS files, 69 folders, 87 ARM9 overlays, 128 reachable NARC archives before the scan cap; diagnostics were read-only, scan-limit, and unsupported-magic warnings)
+  - `make validate` (passed; includes 204 SwiftPM tests and the existing CLI smoke ladder)
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: NDS ROMs, NitroFS entries, overlay tables, and NARC members are read-only local inputs; no extraction, rebuild, compression, patch export, ROM write, or mutation-plan apply path was added.
+- `PHS-T87`:
+  - `swift test --package-path PokemonHackStudio --filter NDS` (baseline before edits passed; 7 tests, 0 failures)
+  - `swift test --package-path PokemonHackStudio --filter 'NDS|ProjectInspector|CoreScaffolding'` (32 selected tests; NDS ROM parser, NDS decomp detector, adapter routing, CLI JSON, ProjectInspector, and GBA/ROM regression coverage passed)
+  - `swift test --package-path PokemonHackStudio` (208 tests; passed)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli inspect /Users/bryan/projects/reference-repos/repos/pret__pokediamond --json > /tmp/phs-pokediamond-inspect.json` (reported `profile: pokediamond`, modules `rom`, `build`, `diagnostics`, and no issues)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli resource-index /Users/bryan/projects/reference-repos/repos/pret__pokeplatinum --json > /tmp/phs-pokeplatinum-resource-index.json` (reported `platform: ndsSource`, `family: platinum`, `role: referenceSource`, and 19 resource items)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli index /Users/bryan/projects/reference-repos/repos/pret__pokediamond --json`, `pret__pokeplatinum`, `pret__pokeheartgold`, and `pret__pmd-sky` (all reported read-only NDS source-tree indexes with `NDS_DECOMP_READ_ONLY`; build target counts were 2, 2, 2, and 3)
+  - `make validate` (passed; includes 208 SwiftPM tests and the existing CLI smoke ladder)
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: NDS decomp roots are selectable/readable only; source edits, data table editors, extraction, rebuilds, compression, patch/export, playtest launch, and ROM writes remain disabled until future mutation-plan/toolchain rows land.
+- `PHS-T88`:
+  - `git status --short --branch` (baseline showed the existing dirty NDS V1/V2 implementation state, including `references/manifest.json`; unrelated dirty files were preserved)
+  - `swift test --package-path PokemonHackStudio --filter 'NDS|ProjectInspector|CoreScaffolding'` (baseline before edits passed; 32 selected tests, 0 failures)
+  - `swift test --package-path PokemonHackStudio --filter NDSDataCatalog` (7 selected tests; synthetic Platinum, HGSS, Diamond, PMD-Sky, binary `.nds`, CLI JSON, and resource/asset rows passed)
+  - `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalog|NDS|CoreScaffolding|PokemonHackCLI'` (44 selected tests; NDS data catalog, NDS ROM/decomp routing, core scaffolding, and CLI regression coverage passed)
+  - `cd PokemonHackStudio && xcodegen generate`
+  - `xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath DerivedData/PokemonHackStudio -destination platform=macOS -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testNDSSourceProjectStaysReadOnlyInProjectAndResourceSummaries test` (passed; app Resources shows NDS data rows while the project remains read-only)
+  - `swift test --package-path PokemonHackStudio` (215 tests; passed)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli nds-data-catalog /Users/bryan/projects/reference-repos/repos/pret__pokeplatinum --json` (read-only catalog smoke: `profile: pokeplatinum`, `family: platinum`, `recordCount: 15185`, `missingExpectedCount: 0`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli nds-data-catalog /Users/bryan/projects/reference-repos/repos/pret__pokeheartgold --json` (read-only catalog smoke: `profile: pokeheartgold`, `family: heartGoldSoulSilver`, `recordCount: 4090`, `missingExpectedCount: 0`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli nds-data-catalog /Users/bryan/projects/reference-repos/repos/pret__pokediamond --json` (read-only catalog smoke: `profile: pokediamond`, `family: diamondPearl`, `recordCount: 4335`, `missingExpectedCount: 0`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli nds-data-catalog /Users/bryan/projects/reference-repos/repos/pret__pmd-sky --json` (spin-off inventory smoke: `profile: pmdSky`, `family: ndsUnknown`, `recordCount: 20011`, `NDS_DATA_CATALOG_SPINOFF_DEFERRED`)
+  - `swift run --package-path PokemonHackStudio pokemonhack-cli resource-index /Users/bryan/projects/reference-repos/repos/pret__pokeplatinum --json` (reported `platform: ndsSource`, `writePolicy: readOnly`, nine `NDS Data ...` category groups, including species and items)
+  - `make validate` (passed; includes 215 SwiftPM tests and the existing CLI smoke ladder)
+  - `make verify` (passed; regenerated the Xcode project, built/signed the macOS app and CLI, and the bundle phase reported `Reused 2 PokemonHackStudio asset project(s)`)
+  - Source-write posture: Gen IV data catalog rows are read-only source/path summaries only; no Gen IV editor modules, extraction, rebuild, script compilation, mutation-plan apply, ROM export, or binary write path was added.
 - `PHS-T41`:
   - `swift test --package-path PokemonHackStudio --filter SourceIndexTests.testWildEncountersJSONIndexesEncountersByMap` (1 test; passed)
   - `make test` (112 tests; passed)

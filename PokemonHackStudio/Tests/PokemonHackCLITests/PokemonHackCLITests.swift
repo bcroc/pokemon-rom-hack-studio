@@ -148,6 +148,114 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["playtestReport"])
     }
 
+    func testNDSInspectCommandsEmitReadOnlyJSON() throws {
+        let rom = try makeTestNDSROM()
+
+        let inspect = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-inspect", rom.path, "--json"])
+        )
+        XCTAssertEqual(inspect["isReadOnly"] as? Bool, true)
+        XCTAssertNotNil(inspect["projectIndex"])
+        let header = try XCTUnwrap(inspect["header"] as? [String: Any])
+        XCTAssertEqual(header["gameCode"] as? String, "ADAE")
+        let fileSystem = try XCTUnwrap(inspect["fileSystem"] as? [String: Any])
+        XCTAssertEqual(fileSystem["fileCount"] as? Int, 2)
+        let narcArchives = try XCTUnwrap(inspect["narcArchives"] as? [[String: Any]])
+        XCTAssertEqual(narcArchives.count, 1)
+
+        let files = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-files", rom.path, "--json"])
+        )
+        XCTAssertEqual(files["fileCount"] as? Int, 2)
+        let rows = try XCTUnwrap(files["files"] as? [[String: Any]])
+        XCTAssertTrue(rows.contains { $0["path"] as? String == "sub/child.narc" })
+
+        let dispatched = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["rom-inspect", rom.path, "--json"])
+        )
+        XCTAssertNotNil(dispatched["fileSystem"])
+        XCTAssertNotNil(dispatched["narcArchives"])
+    }
+
+    func testNARCInspectCommandEmitsMemberJSON() throws {
+        let root = try makeTemporaryDirectory()
+        let narc = root.appendingPathComponent("fixture.narc")
+        try makeTestNARC().write(to: narc)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["narc-inspect", narc.path, "--json"])
+        )
+
+        XCTAssertEqual(result["memberCount"] as? Int, 2)
+        let members = try XCTUnwrap(result["members"] as? [[String: Any]])
+        XCTAssertEqual(members.first?["path"] as? String, "first.bin")
+    }
+
+    func testResourceIndexCommandSurfacesNDSROMResources() throws {
+        let rom = try makeTestNDSROM()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", rom.path, "--json"])
+        )
+
+        XCTAssertEqual(result["platform"] as? String, "ndsROM")
+        XCTAssertEqual(result["family"] as? String, "diamondPearl")
+        XCTAssertEqual(result["writePolicy"] as? String, "readOnly")
+        let items = try XCTUnwrap(result["items"] as? [[String: Any]])
+        XCTAssertTrue(items.contains { $0["category"] as? String == "NitroFS File" })
+        XCTAssertTrue(items.contains { $0["category"] as? String == "NARC Member" })
+    }
+
+    func testIndexAndResourceIndexCommandsSurfaceNDSSourceTrees() throws {
+        let root = try makeTestNDSDecompRoot()
+
+        let index = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["index", root.path, "--json"])
+        )
+        XCTAssertEqual(index["profile"] as? String, "pokeplatinum")
+        XCTAssertEqual(index["writePolicy"] as? String, "readOnly")
+        let capabilities = try XCTUnwrap(index["capabilities"] as? [String])
+        XCTAssertTrue(capabilities.contains("ndsSourceTreeIndex"))
+        XCTAssertTrue(capabilities.contains("ndsDataCatalog"))
+        XCTAssertFalse(capabilities.contains("buildRunner"))
+
+        let resource = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
+        )
+        XCTAssertEqual(resource["platform"] as? String, "ndsSource")
+        XCTAssertEqual(resource["profile"] as? String, "pokeplatinum")
+        XCTAssertEqual(resource["writePolicy"] as? String, "readOnly")
+        let items = try XCTUnwrap(resource["items"] as? [[String: Any]])
+        XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Variant" })
+        XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Build Target" })
+        XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Data species" })
+    }
+
+    func testNDSDataCatalogCommandEmitsReadOnlyJSON() throws {
+        let root = try makeTestNDSDecompRoot()
+
+        let catalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", root.path, "--json"])
+        )
+        XCTAssertEqual(catalog["profile"] as? String, "pokeplatinum")
+        XCTAssertEqual(catalog["family"] as? String, "platinum")
+        XCTAssertEqual(catalog["isReadOnly"] as? Bool, true)
+        let summary = try XCTUnwrap(catalog["summary"] as? [String: Any])
+        XCTAssertGreaterThan(summary["recordCount"] as? Int ?? 0, 0)
+        let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
+        XCTAssertTrue(records.contains { $0["domain"] as? String == "species" && $0["relativePath"] as? String == "res/pokemon/abra/data.json" })
+        let diagnostics = try XCTUnwrap(catalog["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_READ_ONLY" })
+
+        let rom = try makeTestNDSROM()
+        let romCatalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", rom.path, "--json"])
+        )
+        XCTAssertEqual(romCatalog["profile"] as? String, "ndsROM")
+        let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_DEFERRED" })
+    }
+
     func testMoveCatalogCommandEmitsPreviewJSON() throws {
         let root = try makeMoveCatalogProject()
 
@@ -222,6 +330,124 @@ final class PokemonHackCLITests: XCTestCase {
         bytes[0x103] = 0x08
         try Data(bytes).write(to: rom)
         return rom
+    }
+
+    private func makeTestNDSROM() throws -> URL {
+        let root = try makeTemporaryDirectory()
+        let rom = root.appendingPathComponent("fixture.nds")
+        var data = Data(repeating: 0, count: 0x900)
+        writeASCII("POKEMON D", into: &data, at: 0x00, length: 12)
+        writeASCII("ADAE", into: &data, at: 0x0C, length: 4)
+        writeASCII("01", into: &data, at: 0x10, length: 2)
+        data[0x14] = 0x09
+        writeUInt32LE(0x200, into: &data, at: 0x20)
+        writeUInt32LE(0x20, into: &data, at: 0x2C)
+        writeUInt32LE(0x220, into: &data, at: 0x30)
+        writeUInt32LE(0x20, into: &data, at: 0x3C)
+
+        let fnt = makeTestFNT()
+        writeUInt32LE(0x300, into: &data, at: 0x40)
+        writeUInt32LE(UInt32(fnt.count), into: &data, at: 0x44)
+        data.replaceSubrange(0x300..<(0x300 + fnt.count), with: fnt)
+
+        let narc = makeTestNARC()
+        var fat = Data()
+        appendUInt32LE(0x400, to: &fat)
+        appendUInt32LE(0x404, to: &fat)
+        appendUInt32LE(0x500, to: &fat)
+        appendUInt32LE(UInt32(0x500 + narc.count), to: &fat)
+        writeUInt32LE(0x380, into: &data, at: 0x48)
+        writeUInt32LE(UInt32(fat.count), into: &data, at: 0x4C)
+        data.replaceSubrange(0x380..<(0x380 + fat.count), with: fat)
+        writeUInt32LE(0x700, into: &data, at: 0x68)
+        writeUInt16LE(0x5678, into: &data, at: 0x15E)
+
+        data.replaceSubrange(0x400..<0x404, with: Data("ROOT".utf8))
+        data.replaceSubrange(0x500..<(0x500 + narc.count), with: narc)
+        try data.write(to: rom)
+        return rom
+    }
+
+    private func makeTestNDSDecompRoot() throws -> URL {
+        let root = try makeTemporaryDirectory().appendingPathComponent("pokeplatinum")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "rom: build/pokeplatinum.us.nds\n".write(to: root.appendingPathComponent("Makefile"), atomically: true, encoding: .utf8)
+        try "project('pokeplatinum')\n".write(to: root.appendingPathComponent("meson.build"), atomically: true, encoding: .utf8)
+        try "option('revision')\n".write(to: root.appendingPathComponent("meson.options"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("platinum.us"), withIntermediateDirectories: true)
+        try "path,sha1\n".write(to: root.appendingPathComponent("platinum.us/filesys.csv"), atomically: true, encoding: .utf8)
+        try "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  filesys\n".write(to: root.appendingPathComponent("platinum.us/filesys.sha1"), atomically: true, encoding: .utf8)
+        try "cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n".write(to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("asm"), withIntermediateDirectories: true)
+        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
+        try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
+        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("res/trainers/data/youngster.json"))
+        try write("[{\"slot\":1}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
+        try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
+        try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
+        try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
+        try write(Data([0x01]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
+        return root
+    }
+
+    private func makeTestFNT() -> Data {
+        var rootEntries = Data()
+        appendFNTFile("root.bin", to: &rootEntries)
+        appendFNTDirectory("sub", directoryID: 0xF001, to: &rootEntries)
+        rootEntries.append(0)
+
+        var childEntries = Data()
+        appendFNTFile("child.narc", to: &childEntries)
+        childEntries.append(0)
+
+        var fnt = Data()
+        appendUInt32LE(16, to: &fnt)
+        appendUInt16LE(0, to: &fnt)
+        appendUInt16LE(2, to: &fnt)
+        appendUInt32LE(UInt32(16 + rootEntries.count), to: &fnt)
+        appendUInt16LE(1, to: &fnt)
+        appendUInt16LE(0xF000, to: &fnt)
+        fnt.append(rootEntries)
+        fnt.append(childEntries)
+        return fnt
+    }
+
+    private func makeTestNARC() -> Data {
+        let payload = Data([0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33])
+        var fat = Data("BTAF".utf8)
+        appendUInt32LE(28, to: &fat)
+        appendUInt16LE(2, to: &fat)
+        appendUInt16LE(0, to: &fat)
+        appendUInt32LE(0, to: &fat)
+        appendUInt32LE(4, to: &fat)
+        appendUInt32LE(4, to: &fat)
+        appendUInt32LE(UInt32(payload.count), to: &fat)
+
+        var namesData = Data()
+        appendUInt32LE(8, to: &namesData)
+        appendUInt16LE(0, to: &namesData)
+        appendUInt16LE(1, to: &namesData)
+        appendFNTFile("first.bin", to: &namesData)
+        appendFNTFile("second.bin", to: &namesData)
+        namesData.append(0)
+        var fnt = Data("BTNF".utf8)
+        appendUInt32LE(UInt32(8 + namesData.count), to: &fnt)
+        fnt.append(namesData)
+
+        var image = Data("GMIF".utf8)
+        appendUInt32LE(UInt32(8 + payload.count), to: &image)
+        image.append(payload)
+
+        let fileSize = UInt32(16 + fat.count + fnt.count + image.count)
+        var header = Data("NARC".utf8)
+        appendUInt16LE(0xFFFE, to: &header)
+        appendUInt16LE(0x0100, to: &header)
+        appendUInt32LE(fileSize, to: &header)
+        appendUInt16LE(0x10, to: &header)
+        appendUInt16LE(3, to: &header)
+        return header + fat + fnt + image
     }
 
     private func makeMoveCatalogProject() throws -> URL {
@@ -334,6 +560,11 @@ final class PokemonHackCLITests: XCTestCase {
         try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    private func write(_ data: Data, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url)
+    }
+
     private func writePNG(width: UInt32, height: UInt32, paletteColors: Int, to url: URL) throws {
         var data = Data([137, 80, 78, 71, 13, 10, 26, 10])
         appendChunk("IHDR", payload: pngIHDR(width: width, height: height), to: &data)
@@ -363,6 +594,46 @@ final class PokemonHackCLITests: XCTestCase {
         data.append(UInt8((value >> 16) & 0xff))
         data.append(UInt8((value >> 8) & 0xff))
         data.append(UInt8(value & 0xff))
+    }
+
+    private func appendFNTFile(_ name: String, to data: inout Data) {
+        data.append(UInt8(name.utf8.count))
+        data.append(Data(name.utf8))
+    }
+
+    private func appendFNTDirectory(_ name: String, directoryID: UInt16, to data: inout Data) {
+        data.append(UInt8(0x80 | name.utf8.count))
+        data.append(Data(name.utf8))
+        appendUInt16LE(directoryID, to: &data)
+    }
+
+    private func writeASCII(_ string: String, into data: inout Data, at offset: Int, length: Int) {
+        let bytes = Array(string.utf8.prefix(length))
+        data.replaceSubrange(offset..<(offset + bytes.count), with: bytes)
+    }
+
+    private func writeUInt16LE(_ value: UInt16, into data: inout Data, at offset: Int) {
+        data[offset] = UInt8(value & 0xff)
+        data[offset + 1] = UInt8((value >> 8) & 0xff)
+    }
+
+    private func writeUInt32LE(_ value: UInt32, into data: inout Data, at offset: Int) {
+        data[offset] = UInt8(value & 0xff)
+        data[offset + 1] = UInt8((value >> 8) & 0xff)
+        data[offset + 2] = UInt8((value >> 16) & 0xff)
+        data[offset + 3] = UInt8((value >> 24) & 0xff)
+    }
+
+    private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8(value & 0xff))
+        data.append(UInt8((value >> 8) & 0xff))
+    }
+
+    private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0xff))
+        data.append(UInt8((value >> 8) & 0xff))
+        data.append(UInt8((value >> 16) & 0xff))
+        data.append(UInt8((value >> 24) & 0xff))
     }
 
     private func decodeJSON(_ json: String) throws -> [String: Any] {

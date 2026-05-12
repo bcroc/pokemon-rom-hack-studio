@@ -63,6 +63,14 @@ struct PokemonHackCLI {
             return try romGraph(arguments: Array(arguments.dropFirst()))
         case "rom-inspect":
             return try romInspect(arguments: Array(arguments.dropFirst()))
+        case "nds-inspect":
+            return try ndsInspect(arguments: Array(arguments.dropFirst()))
+        case "nds-files":
+            return try ndsFiles(arguments: Array(arguments.dropFirst()))
+        case "narc-inspect":
+            return try narcInspect(arguments: Array(arguments.dropFirst()))
+        case "nds-data-catalog":
+            return try ndsDataCatalog(arguments: Array(arguments.dropFirst()))
         case "toolchain-health":
             return try toolchainHealth(arguments: Array(arguments.dropFirst()))
         case "references":
@@ -284,7 +292,39 @@ struct PokemonHackCLI {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
         }
+        if (try? GameAdapterRegistry.index(path: path).profile) == .ndsROM {
+            return try encode(NDSROMInspectorReportBuilder.build(path: path))
+        }
         return try encode(BinaryROMInspectorReportBuilder.build(path: path))
+    }
+
+    private static func ndsInspect(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(NDSROMInspectorReportBuilder.build(path: path))
+    }
+
+    private static func ndsFiles(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(NDSROMInspectorReportBuilder.files(path: path))
+    }
+
+    private static func narcInspect(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        return try encode(NARCParser.parse(path: path, data: data))
+    }
+
+    private static func ndsDataCatalog(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(NDSDataCatalogBuilder.build(path: path))
     }
 
     private static func toolchainHealth(arguments: [String]) throws -> String {
@@ -474,7 +514,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

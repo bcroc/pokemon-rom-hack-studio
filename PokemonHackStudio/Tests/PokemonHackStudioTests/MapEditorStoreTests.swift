@@ -414,6 +414,37 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testNDSSourceProjectStaysReadOnlyInProjectAndResourceSummaries() async throws {
+        let root = try makeNDSSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        let project = try XCTUnwrap(store.selectedIndexedProject)
+        XCTAssertEqual(project.profile, "pokediamond")
+        XCTAssertEqual(project.originLabel, "Local Source")
+        XCTAssertEqual(project.writePolicy, "readOnly")
+        XCTAssertTrue(project.menuSubtitle.contains("Read-only NDS source root"))
+        XCTAssertTrue(project.sourceSurfaces.contains { $0.source.path == "Makefile" })
+
+        let entry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
+        XCTAssertEqual(entry.platform, "ndsSource")
+        XCTAssertEqual(entry.role, "editableSource")
+        XCTAssertEqual(entry.writePolicy, "readOnly")
+        XCTAssertTrue(entry.items.contains { $0.path == "filesystem.mk" && $0.category.hasPrefix("NDS ") })
+        XCTAssertTrue(entry.items.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "NDS Data species" })
+        XCTAssertTrue(entry.items.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "NDS Data maps" })
+        XCTAssertTrue(store.filteredResourceLibraryEntries.contains { $0.id == entry.id })
+
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        XCTAssertTrue(assetCatalog.rows.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "species" })
+        XCTAssertTrue(assetCatalog.rows.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "maps" })
+        XCTAssertFalse(entry.moduleSummary.contains("pokemon"))
+    }
+
+    @MainActor
     func testExplicitGameCubeResourcePathLoadsReadOnlyEntryAndFiltersNestedItems() throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -2554,6 +2585,28 @@ final class MapEditorStoreTests: XCTestCase {
         bytes[0x103] = 0x08
         try Data(bytes).write(to: rom)
         return rom
+    }
+
+    private func makeNDSSourceProject() throws -> URL {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url
+
+        try write("diamond: ; @echo build\n", to: root.appendingPathComponent("Makefile"))
+        try write("GAME_VERSION ?= DIAMOND\n", to: root.appendingPathComponent("config.mk"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("rom.rsf"))
+        try write("FILESYSTEM_ROOT := files\n", to: root.appendingPathComponent("filesystem.mk"))
+        try write("0" + String(repeating: "a", count: 39) + "  pokediamond.us.nds\n", to: root.appendingPathComponent("pokediamond.us.sha1"))
+        try write("arm9 source\n", to: root.appendingPathComponent("arm9/main.c"))
+        try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
+        try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
+        try write("arm7 source\n", to: root.appendingPathComponent("arm7/main.s"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
+        try write("// header\n", to: root.appendingPathComponent("include/config.h"))
+
+        return root
     }
 
     private func makeSourceIndexProject() throws -> URL {

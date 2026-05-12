@@ -70,7 +70,8 @@ struct ResourceLibraryWorkbenchView: View {
                 MetricCard(title: "Entries", value: "\(library?.entryCount ?? 0)", detail: "\(library?.parsedCount ?? 0) parsed")
                 MetricCard(title: "Assets", value: "\(assetCatalog?.assetCount ?? 0)", detail: assetCatalog?.profile ?? "No project")
                 MetricCard(title: "GameCube", value: "\(gameCubeEntry?.resourceCount ?? 0)", detail: gameCubeLoadStatus.label)
-                MetricCard(title: "GBA ROMs", value: "\(gbaROMCount)", detail: "Top-level inputs")
+                MetricCard(title: "Source Roots", value: "\(sourceRootCount)", detail: "GBA/NDS sources")
+                MetricCard(title: "ROM Inputs", value: "\(romInputCount)", detail: "Top-level GBA/NDS")
                 MetricCard(title: "Availability", value: "\(availabilityProblemCount)", detail: assetLoadStatus.label)
                 MetricCard(title: "Diagnostics", value: "\(diagnosticCount)", detail: "Library and assets")
             }
@@ -255,8 +256,12 @@ struct ResourceLibraryWorkbenchView: View {
             + (assetCatalog?.diagnostics.count ?? 0)
     }
 
-    private var gbaROMCount: Int {
-        library?.entries.filter { $0.platform == "gbaROM" }.count ?? 0
+    private var romInputCount: Int {
+        library?.entries.filter { $0.platform == "gbaROM" || $0.platform == "ndsROM" }.count ?? 0
+    }
+
+    private var sourceRootCount: Int {
+        library?.entries.filter { $0.platform == "gbaSource" || $0.platform == "ndsSource" }.count ?? 0
     }
 
     private var availabilityProblemCount: Int {
@@ -352,6 +357,8 @@ private struct ResourceLibraryDetailRow: View {
                             .lineLimit(1)
                         StatusPill(state: entry.status)
                         ResourceTag(text: entry.platform)
+                        ResourceTag(text: entry.role)
+                        ResourceTag(text: entry.writePolicy)
                     }
 
                     Text("\(entry.variantSummary) · \(entry.moduleSummary)")
@@ -401,7 +408,11 @@ private struct ResourceLibraryDetailRow: View {
         switch entry.platform {
         case "gbaSource":
             "folder"
+        case "ndsSource":
+            "folder.badge.gearshape"
         case "gbaROM":
+            "memorychip"
+        case "ndsROM":
             "memorychip"
         case "gameCube":
             "opticaldisc"
@@ -449,8 +460,14 @@ private struct ResourceLibraryItemRow: View {
 
     private var iconName: String {
         switch item.category {
-        case "GBA ROM":
+        case "GBA ROM", "NDS ROM":
             "memorychip"
+        case "NDS Header":
+            "info.circle"
+        case "NitroFS Folder":
+            "folder"
+        case "NitroFS File", "NARC Archive", "NARC Member":
+            "shippingbox"
         case "Pokemon Data", "pokemonTable":
             "sparkles"
         case "Text", "text":

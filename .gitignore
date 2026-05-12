@@ -1,5 +1,6 @@
 # Local game assets and generated ROM outputs
 *.gba
+*.nds
 *.sav
 *.sgm
 *.sa1
@@ -27,6 +28,11 @@ xcuserdata/
 /agbcc/
 /pokeemerald/
 /pokefirered/
+/pokediamond/
+/pokeplatinum/
+/pokeheartgold/
+/pokesoulsilver/
+/pmd-sky/
 
 # Read-only external research clones; keep only the manifest tracked
 /references/*
