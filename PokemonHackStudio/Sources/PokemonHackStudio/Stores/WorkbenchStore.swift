@@ -352,7 +352,15 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var selectedIndexedProject: IndexedProjectSummary? {
-        indexedProjects.first { $0.id == selectedProjectID } ?? indexedProjects.first
+        indexedProjects.first { $0.id == selectedProjectID } ?? defaultIndexedProject
+    }
+
+    private var defaultIndexedProject: IndexedProjectSummary? {
+        indexedProjects.first(where: Self.isEditableIndexedProject) ?? indexedProjects.first
+    }
+
+    private static func isEditableIndexedProject(_ project: IndexedProjectSummary) -> Bool {
+        project.originLabel == "Editable"
     }
 
     var recentMapTargets: [WorkbenchRecentTarget] {
@@ -837,6 +845,10 @@ final class WorkbenchStore: ObservableObject {
     var selectedPlaytestCaptureResult: PlaytestCaptureResultViewState? {
         guard let selectedIndexedProject else { return nil }
         return playtestCaptureResultsByID[selectedIndexedProject.id]
+    }
+
+    var selectedLatestPlaytestCaptureArtifact: PlaytestArtifactViewState? {
+        selectedPlaytestCaptureResult?.primaryArtifact
     }
 
     var canLaunchSelectedPlaytest: Bool {
@@ -1945,7 +1957,7 @@ final class WorkbenchStore: ObservableObject {
         mapVisualSharedCacheDataByID = [:]
         resourceAssetRowsCache = nil
         if !summaries.contains(where: { $0.id == selectedProjectID }) {
-            selectedProjectID = summaries.first?.id ?? ""
+            selectedProjectID = summaries.first(where: Self.isEditableIndexedProject)?.id ?? summaries.first?.id ?? ""
             resetPatchManifestReportForProjectChange()
             resetGraphicsImportPackagePlanForProjectChange()
         }
@@ -2235,6 +2247,10 @@ final class WorkbenchStore: ObservableObject {
             recordRecentTarget(recentMapTarget(for: mapID, source: source))
             return true
         }
+    }
+
+    func openNewMapPlanFromToolbar() {
+        selectedMapWorkbenchTab = .workflow
     }
 
     func requestSpeciesSelection(_ speciesID: String) {
@@ -4276,6 +4292,16 @@ final class WorkbenchStore: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: selectedIndexedProject.rootPath)])
     }
 
+    func openPlaytestArtifact(_ artifact: PlaytestArtifactViewState) {
+        guard artifact.canOpenOrReveal, let absolutePath = artifact.absolutePath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: absolutePath))
+    }
+
+    func revealPlaytestArtifact(_ artifact: PlaytestArtifactViewState) {
+        guard artifact.canOpenOrReveal, let absolutePath = artifact.absolutePath else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
+    }
+
     func exportSettingsSnapshotToPasteboard() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(userSettings.exportSnapshot(), forType: .string)
@@ -4329,7 +4355,8 @@ final class WorkbenchStore: ObservableObject {
         )
         playtestLaunchResultsByID[selectedIndexedProject.id] = Self.playtestLaunchResult(
             from: result,
-            rootPath: selectedIndexedProject.rootPath
+            rootPath: selectedIndexedProject.rootPath,
+            artifactRootPath: (artifactRoot ?? workspaceRoot).path
         )
     }
 
@@ -4354,7 +4381,8 @@ final class WorkbenchStore: ObservableObject {
         )
         playtestCaptureResultsByID[selectedIndexedProject.id] = Self.playtestCaptureResult(
             from: result,
-            rootPath: selectedIndexedProject.rootPath
+            rootPath: selectedIndexedProject.rootPath,
+            artifactRootPath: (artifactRoot ?? workspaceRoot).path
         )
     }
 
@@ -5835,7 +5863,10 @@ final class WorkbenchStore: ObservableObject {
                 id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
                 kind: artifact.kind.rawValue,
                 path: artifact.relativePath,
+                absolutePath: nil,
                 detail: artifact.detail,
+                exists: false,
+                isPrimaryCaptureArtifact: false,
                 source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
             )
         }
@@ -5855,7 +5886,8 @@ final class WorkbenchStore: ObservableObject {
 
     private static func playtestLaunchResult(
         from result: PokemonHackCore.PlaytestLaunchResult,
-        rootPath: String
+        rootPath: String,
+        artifactRootPath: String
     ) -> PlaytestLaunchResultViewState {
         let status: ValidationState
         let detail: String
@@ -5876,7 +5908,10 @@ final class WorkbenchStore: ObservableObject {
                 id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
                 kind: artifact.kind.rawValue,
                 path: artifact.relativePath,
+                absolutePath: artifactAbsolutePath(relativePath: artifact.relativePath, artifactRootPath: artifactRootPath),
                 detail: artifact.exists ? "\(artifact.detail) Created." : artifact.detail,
+                exists: artifact.exists,
+                isPrimaryCaptureArtifact: false,
                 source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
             )
         }
@@ -5899,7 +5934,8 @@ final class WorkbenchStore: ObservableObject {
 
     private static func playtestCaptureResult(
         from result: PokemonHackCore.PlaytestCaptureResult,
-        rootPath: String
+        rootPath: String,
+        artifactRootPath: String
     ) -> PlaytestCaptureResultViewState {
         let status: ValidationState
         let detail: String
@@ -5920,7 +5956,10 @@ final class WorkbenchStore: ObservableObject {
                 id: "\(artifact.kind.rawValue):\(artifact.relativePath)",
                 kind: artifact.kind.rawValue,
                 path: artifact.relativePath,
+                absolutePath: artifactAbsolutePath(relativePath: artifact.relativePath, artifactRootPath: artifactRootPath),
                 detail: artifact.exists ? "\(artifact.detail) Created." : artifact.detail,
+                exists: artifact.exists,
+                isPrimaryCaptureArtifact: artifact.kind == primaryCaptureArtifactKind(for: result.captureKind),
                 source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
             )
         }
@@ -5940,6 +5979,21 @@ final class WorkbenchStore: ObservableObject {
             artifacts: artifacts,
             source: SourceLocation(path: sourcePath, symbol: "mGBA", line: 1)
         )
+    }
+
+    private static func artifactAbsolutePath(relativePath: String, artifactRootPath: String) -> String {
+        URL(fileURLWithPath: artifactRootPath).appendingPathComponent(relativePath).path
+    }
+
+    private static func primaryCaptureArtifactKind(
+        for kind: PokemonHackCore.PlaytestCaptureKind
+    ) -> PokemonHackCore.PlaytestSessionArtifactKind {
+        switch kind {
+        case .screenshot:
+            return .screenshot
+        case .saveState:
+            return .saveState
+        }
     }
 
     private static func patchManifestReportViewState(

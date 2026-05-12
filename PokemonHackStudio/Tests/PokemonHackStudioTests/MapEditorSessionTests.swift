@@ -570,6 +570,66 @@ final class MapEditorSessionTests: XCTestCase {
         XCTAssertEqual(pixel(in: image, x: 0, y: 8), [0, 0, 0, 0])
     }
 
+    @MainActor
+    func testEventSpriteRendererKeepsObjectSpritesUprightInFlippedCanvas() throws {
+        let root = URL(fileURLWithPath: "/tmp/PokemonHackStudioTests")
+        let relativeSpritePath = "graphics/object_events/pics/people/test-\(UUID().uuidString).png"
+        let spritePath = root.appendingPathComponent(relativeSpritePath)
+        try FileManager.default.createDirectory(at: spritePath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try twoToneSpritePNGData().write(to: spritePath)
+        defer {
+            try? FileManager.default.removeItem(at: spritePath)
+        }
+        XCTAssertTrue(NSImage(contentsOfFile: spritePath.path)?.isValid == true)
+
+        let sprite = MapEventSpriteDescriptor(
+            graphicsID: "OBJ_EVENT_GFX_BOY_1",
+            imageAssetPath: relativeSpritePath,
+            frameWidth: 16,
+            frameHeight: 16,
+            width: 16,
+            height: 16
+        )
+        let document = makeDocument(eventOptions: MapEventOptionsCatalog(objectSprites: [sprite]))
+        let event: MapEventDescriptor = try XCTUnwrap(document.events.first)
+        let image = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 80,
+            pixelsHigh: 80,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        image.size = NSSize(width: 80, height: 80)
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: image))
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.clear(CGRect(x: 0, y: 0, width: 80, height: 80))
+        context.cgContext.translateBy(x: 0, y: 80)
+        context.cgContext.scaleBy(x: 1, y: -1)
+        MapEventSpriteRenderer.drawEvent(
+            event,
+            document: document,
+            tileRect: NSRect(x: 24, y: 24, width: 32, height: 32),
+            tileSize: 32,
+            opacity: 1,
+            selected: false,
+            fallbackColor: .systemBlue
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        let colorRows = spriteColorRows(in: image)
+
+        XCTAssertFalse(colorRows.red.isEmpty)
+        XCTAssertFalse(colorRows.blue.isEmpty)
+        XCTAssertLessThan(colorRows.red.min() ?? .max, colorRows.blue.min() ?? .min)
+    }
+
     func testIndexedPNGParserInflatesZlibWrappedIndexedRows() throws {
         let image = try XCTUnwrap(IndexedPNGParser.parse(data: Data(zlibWrappedIndexedPNGFixture())))
 
@@ -825,6 +885,12 @@ final class MapEditorSessionTests: XCTestCase {
         [UInt8](repeating: paletteIndex, count: 8 * 8)
     }
 
+    private func twoToneSpritePNGData() throws -> Data {
+        try XCTUnwrap(Data(base64Encoded: """
+        iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAgMAAABinRfyAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAJUExURf8AAAAA/////xSXxWgAAAABYktHRAJmC3xkAAAAB3RJTUUH6gUMAhQA1BehtwAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNS0xMlQwMjoyMDowMCswMDowMHjRU2IAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDUtMTJUMDI6MjA6MDArMDA6MDAJjOveAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA1LTEyVDAyOjIwOjAwKzAwOjAwXpnKAQAAABBjYU52AAAAEAAAAAgAAAAAAAAAAFzpI24AAAAQSURBVAjXY2AgEoQCAREEANTQCqEa0kzlAAAAAElFTkSuQmCC
+        """))
+    }
+
     private func pixel(in image: NSImage, x: Int, y: Int) -> [Int] {
         guard let data = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: data)
@@ -834,6 +900,23 @@ final class MapEditorSessionTests: XCTestCase {
         var pixel = [Int](repeating: 0, count: 4)
         rep.getPixel(&pixel, atX: x, y: y)
         return Array(pixel.prefix(4))
+    }
+
+    private func spriteColorRows(in rep: NSBitmapImageRep) -> (red: [Int], blue: [Int]) {
+        var red: Set<Int> = []
+        var blue: Set<Int> = []
+        var pixel = [Int](repeating: 0, count: 4)
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                rep.getPixel(&pixel, atX: x, y: y)
+                if pixel[0] > 220, pixel[1] < 40, pixel[2] < 40, pixel[3] > 220 {
+                    red.insert(y)
+                } else if pixel[0] < 40, pixel[1] < 40, pixel[2] > 220, pixel[3] > 220 {
+                    blue.insert(y)
+                }
+            }
+        }
+        return (red.sorted(), blue.sorted())
     }
 
     private func zlibWrappedIndexedPNGFixture() -> [UInt8] {

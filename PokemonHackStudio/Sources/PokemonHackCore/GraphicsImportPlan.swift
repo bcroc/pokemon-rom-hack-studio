@@ -289,8 +289,8 @@ public enum GraphicsImportPackagePlanBuilder {
                     kind: kind,
                     sizeBytes: UInt64(data.count),
                     sha1: sha1Hex(data),
-                    png: relativePath.lowercased().hasSuffix(".png") ? pngMetadata(from: data) : nil,
-                    palette: paletteMetadata(from: data, path: relativePath)
+                    png: relativePath.lowercased().hasSuffix(".png") ? GraphicsMetadataParser.pngMetadata(from: data) : nil,
+                    palette: GraphicsMetadataParser.paletteMetadata(from: data, path: relativePath)
                 )
             )
         }
@@ -466,80 +466,4 @@ public enum GraphicsImportPackagePlanBuilder {
         Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func paletteMetadata(from data: Data, path: String) -> GraphicsPaletteMetadata? {
-        let lowercased = path.lowercased()
-        if lowercased.hasSuffix(".gbapal") {
-            return GraphicsPaletteMetadata(format: "GBA", colorCount: data.count / 2, hasSlotZero: data.count >= 2)
-        }
-
-        guard lowercased.hasSuffix(".pal"), let text = String(data: data, encoding: .utf8) else { return nil }
-        let lines = text
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard lines.first == "JASC-PAL", lines.count >= 3, let declaredCount = Int(lines[2]) else {
-            return nil
-        }
-        let colorLines = lines.dropFirst(3).prefix(declaredCount)
-        let precisionLoss = colorLines.reduce(0) { count, line in
-            let channels = line.split(separator: " ").compactMap { Int($0) }
-            return count + (channels.count >= 3 && channels.prefix(3).contains(where: { $0 % 8 != 0 }) ? 1 : 0)
-        }
-        return GraphicsPaletteMetadata(
-            format: "JASC-PAL",
-            colorCount: min(declaredCount, colorLines.count),
-            gbaPrecisionLossCount: precisionLoss,
-            hasSlotZero: !colorLines.isEmpty
-        )
-    }
-
-    private static func pngMetadata(from data: Data) -> GraphicsPNGMetadata? {
-        let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
-        guard data.count >= 33, Array(data.prefix(8)) == signature else { return nil }
-        var offset = 8
-        var width: Int?
-        var height: Int?
-        var bitDepth: Int?
-        var colorType: Int?
-        var paletteCount: Int?
-        var hasTransparency = false
-        while offset + 8 <= data.count {
-            let length = Int(readUInt32BE(data, offset: offset))
-            let typeStart = offset + 4
-            let dataStart = offset + 8
-            let dataEnd = dataStart + length
-            let next = dataEnd + 4
-            guard dataEnd <= data.count, next <= data.count else { break }
-            let type = String(decoding: data[typeStart..<typeStart + 4], as: UTF8.self)
-            if type == "IHDR", length >= 13 {
-                width = Int(readUInt32BE(data, offset: dataStart))
-                height = Int(readUInt32BE(data, offset: dataStart + 4))
-                bitDepth = Int(data[dataStart + 8])
-                colorType = Int(data[dataStart + 9])
-            } else if type == "PLTE" {
-                paletteCount = length / 3
-            } else if type == "tRNS" {
-                hasTransparency = true
-            } else if type == "IEND" {
-                break
-            }
-            offset = next
-        }
-        guard let width, let height, let bitDepth, let colorType else { return nil }
-        return GraphicsPNGMetadata(
-            width: width,
-            height: height,
-            bitDepth: bitDepth,
-            colorType: colorType,
-            paletteColorCount: paletteCount,
-            hasTransparencyChunk: hasTransparency
-        )
-    }
-
-    private static func readUInt32BE(_ data: Data, offset: Int) -> UInt32 {
-        (UInt32(data[offset]) << 24)
-            | (UInt32(data[offset + 1]) << 16)
-            | (UInt32(data[offset + 2]) << 8)
-            | UInt32(data[offset + 3])
-    }
 }

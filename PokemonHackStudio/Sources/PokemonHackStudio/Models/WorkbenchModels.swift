@@ -586,14 +586,25 @@ struct PlaytestCaptureResultViewState: Identifiable {
     let processID: String
     let artifacts: [PlaytestArtifactViewState]
     let source: SourceLocation
+
+    var primaryArtifact: PlaytestArtifactViewState? {
+        artifacts.first(where: \.isPrimaryCaptureArtifact)
+    }
 }
 
 struct PlaytestArtifactViewState: Identifiable {
     let id: String
     let kind: String
     let path: String
+    let absolutePath: String?
     let detail: String
+    let exists: Bool
+    let isPrimaryCaptureArtifact: Bool
     let source: SourceLocation
+
+    var canOpenOrReveal: Bool {
+        exists && absolutePath != nil
+    }
 }
 
 struct BuildReportRow: Identifiable {

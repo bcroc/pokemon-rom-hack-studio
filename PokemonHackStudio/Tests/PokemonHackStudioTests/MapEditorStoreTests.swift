@@ -973,6 +973,44 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshProjectIndexesDefaultsToEditableProjectWhenMixedRootsDiscovered() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let editable = try makeFireRedProject(named: "pokefirered", under: temp.url)
+        let reference = try makeFireRedProject(named: "pokefirered", under: temp.url.appendingPathComponent("references"))
+        let rom = try makeStandaloneGBAROM(named: "standalone.gba", under: temp.url)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let seedSettings = WorkbenchUserSettings(defaults: defaults)
+        seedSettings.includeDefaultDebugProjects = false
+        let seedStore = WorkbenchStore(userDefaults: defaults, userSettings: seedSettings, autoLoadProjects: false)
+        seedStore.openProject(path: rom.path)
+        seedStore.openProject(path: reference.path)
+        seedStore.openProject(path: editable.path)
+
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.refreshProjectIndexes()
+
+        let editableProject = try XCTUnwrap(store.indexedProjects.first { $0.rootPath == editable.path })
+        let referenceProject = try XCTUnwrap(store.indexedProjects.first { $0.rootPath == reference.path })
+        let romProject = try XCTUnwrap(store.indexedProjects.first { $0.rootPath == rom.path })
+        XCTAssertEqual(editableProject.originLabel, "Editable")
+        XCTAssertEqual(referenceProject.originLabel, "Reference")
+        XCTAssertEqual(romProject.originLabel, "Local Input")
+        XCTAssertEqual(store.selectedIndexedProject?.originLabel, "Editable")
+        XCTAssertNotEqual(store.selectedIndexedProject?.id, referenceProject.id)
+        XCTAssertNotEqual(store.selectedIndexedProject?.id, romProject.id)
+
+        store.selectedProjectID = romProject.id
+        store.refreshProjectIndexes()
+
+        XCTAssertEqual(store.selectedIndexedProject?.id, romProject.id)
+        XCTAssertEqual(store.selectedIndexedProject?.originLabel, "Local Input")
+    }
+
+    @MainActor
     func testResourceAssetFilteringHandlesLargeSyntheticCatalog() throws {
         let rows = (0..<50_000).map(Self.syntheticAssetRow)
         let index = ResourceAssetCatalogIndex(rows: rows)
@@ -1357,8 +1395,48 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(result.status, .valid)
         XCTAssertEqual(result.processID, "PID 7444")
         XCTAssertEqual(result.title, "mGBA savestate capture")
+        let primary = try XCTUnwrap(result.primaryArtifact)
+        XCTAssertEqual(primary.kind, "saveState")
+        XCTAssertEqual(primary.absolutePath, root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate.ss0").path)
+        XCTAssertTrue(primary.exists)
+        XCTAssertTrue(primary.canOpenOrReveal)
+        XCTAssertEqual(store.selectedLatestPlaytestCaptureArtifact?.id, primary.id)
         XCTAssertTrue(result.artifacts.contains { $0.kind == "saveState" && $0.path.hasSuffix("/savestate.ss0") && $0.detail.contains("Created") })
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/savestate-capture.log").path))
+    }
+
+    @MainActor
+    func testPlaytestScreenshotCaptureTracksMissingPrimaryArtifactWithoutFileActions() throws {
+        let root = try makeSourceIndexProject()
+        let rom = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: rom)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "mgba"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: emulator.path)
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+
+        store.openProject(path: root.path)
+
+        store.captureSelectedPlaytest(kind: .screenshot, artifactRoot: root) { _ in
+            7555
+        }
+
+        let result = try XCTUnwrap(store.selectedPlaytestCaptureResult)
+        let primary = try XCTUnwrap(result.primaryArtifact)
+        XCTAssertEqual(primary.kind, "screenshot")
+        XCTAssertEqual(primary.absolutePath, root.appendingPathComponent(".pokemonhackstudio/playtests/pokeemerald/screenshot.png").path)
+        XCTAssertFalse(primary.exists)
+        XCTAssertFalse(primary.canOpenOrReveal)
+        XCTAssertEqual(store.selectedLatestPlaytestCaptureArtifact?.id, primary.id)
     }
 
     @MainActor
@@ -1522,6 +1600,63 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
         XCTAssertNil(store.pendingMapNavigation)
         XCTAssertFalse(store.mapEditorSession.isDirty)
+    }
+
+    @MainActor
+    func testMapTitleSwitcherUsesMapSelectionPathForCleanSelection() async throws {
+        let store = try await makeLoadedStore()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+
+        let didSelect = store.requestMapSelection("MAP_ROUTE2", source: "Map title", deferredSearch: .preserve)
+
+        XCTAssertTrue(didSelect)
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertEqual(store.recentMapTargets.first?.target, .map("MAP_ROUTE2"))
+        XCTAssertTrue(store.recentMapTargets.first?.subtitle.contains("Map title") == true)
+    }
+
+    @MainActor
+    func testMapTitleSwitcherSelectionUsesDirtyNavigationGuard() async throws {
+        let store = try await makeLoadedStore()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+
+        let didSelect = store.requestMapSelection("MAP_ROUTE2", source: "Map title", deferredSearch: .preserve)
+
+        XCTAssertFalse(didSelect)
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertEqual(store.pendingMapNavigation, .map("MAP_ROUTE2"))
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE2")
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.mapEditorSession.isDirty)
+        XCTAssertEqual(store.recentMapTargets.first?.target, .map("MAP_ROUTE2"))
+        XCTAssertTrue(store.recentMapTargets.first?.subtitle.contains("Map title") == true)
+    }
+
+    @MainActor
+    func testNewMapToolbarActionOpensWorkflowPlanWithoutChangingSelectionOrDirtyState() async throws {
+        let store = try await makeLoadedStore()
+
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        store.selectedMapWorkbenchTab = .overviewLayers
+        store.selectBrush(rawValue: 0x0033)
+        store.paintMapCell(x: 0, y: 0)
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+
+        store.openNewMapPlanFromToolbar()
+
+        XCTAssertEqual(store.selectedMapWorkbenchTab, .workflow)
+        XCTAssertEqual(store.selectedMapID, "MAP_ROUTE1")
+        XCTAssertTrue(store.mapEditorSession.isDirty)
+        XCTAssertNil(store.pendingMapNavigation)
     }
 
     @MainActor
@@ -2139,6 +2274,21 @@ final class MapEditorStoreTests: XCTestCase {
         try write("[]\n", to: root.appendingPathComponent("src/data/wild_encounters.json"))
 
         return root
+    }
+
+    private func makeStandaloneGBAROM(named name: String, under parent: URL) throws -> URL {
+        let rom = parent.appendingPathComponent(name)
+        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x80
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        try Data(bytes).write(to: rom)
+        return rom
     }
 
     private func makeSourceIndexProject() throws -> URL {

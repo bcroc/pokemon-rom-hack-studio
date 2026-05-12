@@ -182,20 +182,154 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
         var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
 
-        let dummyData = "DUMMY PNG".data(using: .utf8)!
-        draft.assetData[.front] = dummyData
+        let pngData = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        draft.assetData[.front] = pngData
 
         let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
 
         XCTAssertTrue(plan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
         let change = try XCTUnwrap(plan.changes.first { $0.path == "graphics/pokemon/treecko/front.png" })
-        XCTAssertEqual(change.newData, dummyData)
+        XCTAssertEqual(change.newData, pngData)
         XCTAssertEqual(change.summary, "Replace front asset")
+        XCTAssertEqual(change.originalByteCount, 4)
+        XCTAssertNotNil(change.originalSHA1)
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
 
         _ = try SpeciesMutationApplier.apply(plan: plan)
 
         let appliedData = try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
-        XCTAssertEqual(appliedData, dummyData)
+        XCTAssertEqual(appliedData, pngData)
+    }
+
+    func testSpeciesMutationPlannerStagesFireRedAssetChanges() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeFireRedProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        let pngData = testPNGData(width: 32, height: 64, paletteColorCount: 16)
+        draft.assetData[.back] = pngData
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let change = try XCTUnwrap(plan.changes.first { $0.path == "graphics/pokemon/treecko/back.png" })
+        XCTAssertEqual(change.newData, pngData)
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+    }
+
+    func testSpeciesMutationPlannerRejectsMalformedAssetPNG() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.assetData[.front] = Data("DUMMY PNG".utf8)
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(plan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_INVALID" })
+        XCTAssertFalse(plan.isApplyable)
+    }
+
+    func testSpeciesMutationPlannerRejectsWrongKindAssetData() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        var spriteDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        spriteDraft.assetData[.front] = testJASCPalette(colorCount: 16)
+        let spritePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: spriteDraft)
+        XCTAssertFalse(spritePlan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
+        XCTAssertTrue(spritePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_INVALID" })
+        XCTAssertFalse(spritePlan.isApplyable)
+
+        var paletteDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        paletteDraft.assetData[.normalPalette] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let palettePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: paletteDraft)
+        XCTAssertFalse(palettePlan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(palettePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PALETTE_INVALID" })
+        XCTAssertFalse(palettePlan.isApplyable)
+    }
+
+    func testSpeciesMutationPlannerValidatesPaletteAssetPolicy() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.assetData[.normalPalette] = testJASCPalette(colorCount: 16)
+        let validPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(validPlan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(validPlan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(validPlan.isApplyable)
+
+        draft.assetData[.normalPalette] = testJASCPalette(colorCount: 17)
+        let overLimitPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertFalse(overLimitPlan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(overLimitPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PALETTE_OVER_LIMIT" })
+        XCTAssertFalse(overLimitPlan.isApplyable)
+
+        draft.assetData[.normalPalette] = testJASCPalette(colorCount: 0)
+        let missingSlotPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertFalse(missingSlotPlan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(missingSlotPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PALETTE_SLOT_ZERO_MISSING" })
+        XCTAssertFalse(missingSlotPlan.isApplyable)
+
+        draft.assetData[.normalPalette] = Data("not a palette".utf8)
+        let malformedPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertFalse(malformedPlan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(malformedPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PALETTE_INVALID" })
+        XCTAssertFalse(malformedPlan.isApplyable)
+    }
+
+    func testSpeciesMutationPlannerBlocksAssetApplyAfterSourceHashChanges() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        try write(testPNGData(width: 32, height: 32, paletteColorCount: 16), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testSpeciesMutationPlannerKeepsAssetTargetsOnSourcePaths() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        draft.assetData[.normalPalette] = testJASCPalette(colorCount: 16)
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(
+            plan.changes.map(\.path).filter { $0.hasPrefix("graphics/pokemon/treecko/") }.sorted(),
+            [
+                "graphics/pokemon/treecko/front.png",
+                "graphics/pokemon/treecko/normal.pal"
+            ]
+        )
+        XCTAssertFalse(plan.changes.contains { $0.path.contains(".4bpp") || $0.path.hasSuffix(".gbapal") || $0.path.contains("/build/") })
     }
 
     func testSpeciesMutationPlannerRendersFireRedTMHMMacros() throws {
@@ -385,6 +519,28 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         )
     }
 
+    private func testPNGData(width: UInt32, height: UInt32, paletteColorCount: Int? = nil) -> Data {
+        var data = Data([137, 80, 78, 71, 13, 10, 26, 10])
+        var ihdr = Data()
+        ihdr.appendUInt32BE(width)
+        ihdr.appendUInt32BE(height)
+        ihdr.append(contentsOf: [8, 3, 0, 0, 0])
+        data.appendPNGChunk(type: "IHDR", payload: ihdr)
+        if let paletteColorCount {
+            data.appendPNGChunk(type: "PLTE", payload: Data(repeating: 0, count: paletteColorCount * 3))
+        }
+        data.appendPNGChunk(type: "IEND", payload: Data())
+        return data
+    }
+
+    private func testJASCPalette(colorCount: Int) -> Data {
+        let colors = (0..<colorCount).map { index -> String in
+            let channel = (index * 8) % 256
+            return "\(channel) \(channel) \(channel)"
+        }
+        return Data(("JASC-PAL\n0100\n\(colorCount)\n" + colors.joined(separator: "\n") + "\n").utf8)
+    }
+
     private func writeClassicConstants(at root: URL) throws {
         try write(
             """
@@ -535,6 +691,22 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let missingRowPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: grovyleDraft)
         XCTAssertTrue(missingRowPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_SPAN_MISSING" })
         XCTAssertFalse(missingRowPlan.isApplyable)
+    }
+}
+
+private extension Data {
+    mutating func appendUInt32BE(_ value: UInt32) {
+        append(UInt8((value >> 24) & 0xff))
+        append(UInt8((value >> 16) & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+        append(UInt8(value & 0xff))
+    }
+
+    mutating func appendPNGChunk(type: String, payload: Data) {
+        appendUInt32BE(UInt32(payload.count))
+        append(contentsOf: type.utf8)
+        append(payload)
+        appendUInt32BE(0)
     }
 }
 

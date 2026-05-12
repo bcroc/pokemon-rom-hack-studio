@@ -278,8 +278,19 @@ struct BuildWorkbenchView: View {
                 EditorSection(title: "Capture Result") {
                     VStack(spacing: 10) {
                         BuildReportRowView(row: BuildReportRow(captureResult: captureResult))
+                        if let artifact = captureResult.primaryArtifact {
+                            LatestPlaytestCaptureCard(
+                                artifact: artifact,
+                                open: { store.openPlaytestArtifact(artifact) },
+                                reveal: { store.revealPlaytestArtifact(artifact) }
+                            )
+                        }
                         ForEach(captureResult.artifacts) { artifact in
-                            PlaytestArtifactRow(artifact: artifact)
+                            PlaytestArtifactRow(
+                                artifact: artifact,
+                                open: { store.openPlaytestArtifact(artifact) },
+                                reveal: { store.revealPlaytestArtifact(artifact) }
+                            )
                         }
                     }
                 }
@@ -526,10 +537,12 @@ private struct PatchDryRunPlanView: View {
 
 private struct PlaytestArtifactRow: View {
     let artifact: PlaytestArtifactViewState
+    var open: (() -> Void)? = nil
+    var reveal: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "doc.badge.clock")
+            Image(systemName: artifact.isPrimaryCaptureArtifact ? "photo.on.rectangle" : "doc.badge.clock")
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
 
@@ -542,9 +555,72 @@ private struct PlaytestArtifactRow: View {
             }
 
             Spacer()
+
+            if artifact.canOpenOrReveal {
+                HStack(spacing: 6) {
+                    Button("Open", systemImage: "arrow.up.right.square") {
+                        open?()
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Open artifact")
+
+                    Button("Reveal", systemImage: "folder") {
+                        reveal?()
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Reveal in Finder")
+                }
+            }
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct LatestPlaytestCaptureCard: View {
+    let artifact: PlaytestArtifactViewState
+    let open: () -> Void
+    let reveal: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: artifact.kind == "screenshot" ? "photo" : "square.and.arrow.down")
+                .foregroundStyle(.blue)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Latest Capture")
+                    .font(.headline)
+                Text(artifact.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Text(artifact.detail)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                Button("Open", systemImage: "arrow.up.right.square", action: open)
+                    .labelStyle(.iconOnly)
+                    .disabled(!artifact.canOpenOrReveal)
+                    .help("Open latest capture")
+
+                Button("Reveal", systemImage: "folder", action: reveal)
+                    .labelStyle(.iconOnly)
+                    .disabled(!artifact.canOpenOrReveal)
+                    .help("Reveal latest capture in Finder")
+            }
+        }
+        .padding(12)
+        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.blue.opacity(0.25), lineWidth: 1)
+        )
     }
 }
 

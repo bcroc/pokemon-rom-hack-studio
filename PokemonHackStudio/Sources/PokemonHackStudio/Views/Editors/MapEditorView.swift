@@ -31,6 +31,8 @@ struct MapEditorView: View {
     @State private var fitMapToView = false
     @State private var canvasViewportSize: CGSize = .zero
     @State private var viewportSnapshot = MapCanvasViewport.zero
+    @State private var isMapSwitcherPresented = false
+    @State private var mapSwitcherSearchText = ""
 
     init(store: WorkbenchStore, records: [WorkbenchRecord], catalog: MapCatalogViewState?) {
         self.store = store
@@ -246,9 +248,15 @@ struct MapEditorView: View {
 
     private func editorToolbar(layoutMode: MapEditorLayoutMode, catalog: MapCatalogViewState) -> some View {
         HStack(spacing: 8) {
-            Label(selectedMapName(in: catalog), systemImage: "map")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
+            mapTitleSwitcher(catalog)
+
+            Button("Add New Map", systemImage: "plus") {
+                store.openNewMapPlanFromToolbar()
+            }
+            .labelStyle(.iconOnly)
+            .help("Plan a new map from the selected map")
+            .accessibilityLabel("Add new map")
+            .disabled(store.selectedMapID.isEmpty)
 
             Divider()
 
@@ -295,6 +303,40 @@ struct MapEditorView: View {
             }
         }
         .frame(height: 34)
+    }
+
+    private func mapTitleSwitcher(_ catalog: MapCatalogViewState) -> some View {
+        Button {
+            if !isMapSwitcherPresented {
+                mapSwitcherSearchText = ""
+            }
+            isMapSwitcherPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "map")
+                Text(selectedMapName(in: catalog))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.subheadline.weight(.semibold))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Switch map")
+        .accessibilityLabel("Switch map")
+        .popover(isPresented: $isMapSwitcherPresented, arrowEdge: .bottom) {
+            MapBrowserView(
+                catalog: catalog,
+                selectedMapID: store.selectedMapID,
+                searchText: $mapSwitcherSearchText
+            ) { mapID in
+                store.requestMapSelection(mapID, source: "Map title", deferredSearch: .preserve)
+                isMapSwitcherPresented = false
+            }
+            .frame(width: 360, height: 460)
+        }
     }
 
     private var mapCommandMenu: some View {

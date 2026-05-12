@@ -1268,6 +1268,12 @@ private struct SpeciesAssetTile: View {
             .disabled(true)
             .help("Asset import is tracked as a future row pending format-specific validation.")
 
+            if let draftData {
+                Text("Draft staged: \(draftData.count) bytes. Preview mutations to validate asset policy.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             Text(asset.relativePath)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)

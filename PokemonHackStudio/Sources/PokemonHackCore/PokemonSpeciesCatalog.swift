@@ -381,6 +381,19 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
         case .shinyPalette: "shiny.pal"
         }
     }
+
+    var isSpriteAsset: Bool {
+        switch self {
+        case .front, .back, .icon, .footprint, .animFront:
+            return true
+        case .normalPalette, .shinyPalette:
+            return false
+        }
+    }
+
+    var isPaletteAsset: Bool {
+        !isSpriteAsset
+    }
 }
 
 public struct SpeciesAsset: Codable, Equatable, Identifiable {
@@ -1544,6 +1557,7 @@ public enum SpeciesMutationPlanner {
         }
 
         var diagnostics = plannerDiagnostics(catalog: catalog, species: species, draft: draft)
+        diagnostics.append(contentsOf: assetDiagnostics(catalog: catalog, species: species, draft: draft, root: root, fileManager: fileManager))
         var changes: [SpeciesEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -1810,6 +1824,104 @@ public enum SpeciesMutationPlanner {
         }
     }
 
+    private static func assetDiagnostics(
+        catalog: ProjectSpeciesCatalog,
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft,
+        root: URL,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        let directory = speciesAssetDirectory(for: draft.speciesID)
+        return SpeciesAssetKind.allCases.flatMap { kind -> [Diagnostic] in
+            guard let data = draft.assetData[kind] else { return [] }
+            let path = "\(directory)/\(kind.filename)"
+            var diagnostics = validateAssetPath(kind: kind, path: path, species: species)
+            if species.assets.first(where: { $0.kind == kind }) == nil {
+                diagnostics.append(assetDiagnostic(
+                    .error,
+                    "SPECIES_ASSET_SOURCE_UNINDEXED",
+                    "\(draft.speciesID) has no indexed \(kind.title) asset source row.",
+                    path: path,
+                    species: species
+                ))
+            }
+            if !fileManager.fileExists(atPath: root.appendingPathComponent(path).path) {
+                diagnostics.append(assetDiagnostic(
+                    .error,
+                    "SPECIES_ASSET_SOURCE_MISSING",
+                    "\(draft.speciesID) \(kind.title) source asset is missing: \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+            diagnostics.append(contentsOf: validateAssetData(kind: kind, data: data, path: path, species: species))
+            return diagnostics
+        }
+    }
+
+    private static func validateAssetPath(kind: SpeciesAssetKind, path: String, species: SpeciesDetail) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let lowercased = path.lowercased()
+        if path.contains("..") || path.hasPrefix("/") {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PATH_UNSAFE", "Pokemon asset import path must stay inside the project source tree.", path: path, species: species))
+        }
+        if lowercased.contains(".4bpp") || lowercased.hasSuffix(".gbapal") || lowercased.contains("/build/") {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_GENERATED_OUTPUT_BLOCKED", "Pokemon asset imports must target source PNG or palette files, not generated outputs.", path: path, species: species))
+        }
+        if kind.isSpriteAsset, !lowercased.hasSuffix(".png") {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_KIND_PATH_MISMATCH", "\(kind.title) imports must target a PNG source path.", path: path, species: species))
+        }
+        if kind.isPaletteAsset, !lowercased.hasSuffix(".pal") {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_KIND_PATH_MISMATCH", "\(kind.title) imports must target a palette source path.", path: path, species: species))
+        }
+        return diagnostics
+    }
+
+    private static func validateAssetData(kind: SpeciesAssetKind, data: Data, path: String, species: SpeciesDetail) -> [Diagnostic] {
+        guard !data.isEmpty else {
+            return [assetDiagnostic(.error, "SPECIES_ASSET_DATA_EMPTY", "\(kind.title) import data is empty.", path: path, species: species)]
+        }
+
+        if kind.isSpriteAsset {
+            guard let png = GraphicsMetadataParser.pngMetadata(from: data), png.width > 0, png.height > 0 else {
+                return [assetDiagnostic(.error, "SPECIES_ASSET_PNG_INVALID", "\(kind.title) import must be a valid PNG with readable IHDR metadata.", path: path, species: species)]
+            }
+            var diagnostics: [Diagnostic] = []
+            if let paletteColorCount = png.paletteColorCount, paletteColorCount > 16 {
+                diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PNG_PALETTE_OVER_LIMIT", "\(kind.title) PNG declares \(paletteColorCount) palette colors; Gen III sprite sources must fit 16 colors.", path: path, species: species))
+            }
+            if png.paletteColorCount == nil {
+                diagnostics.append(assetDiagnostic(.warning, "SPECIES_ASSET_PNG_PALETTE_UNVERIFIED", "\(kind.title) PNG has no PLTE chunk; palette fit must be reviewed before conversion.", path: path, species: species))
+            }
+            return diagnostics
+        }
+
+        guard let palette = GraphicsMetadataParser.paletteMetadata(from: data, path: path)
+            ?? GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+        else {
+            return [assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_INVALID", "\(kind.title) import must be a JASC .pal file or supported GBA palette bytes.", path: path, species: species)]
+        }
+
+        var diagnostics: [Diagnostic] = []
+        if !palette.hasSlotZero {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_SLOT_ZERO_MISSING", "\(kind.title) palette must include slot 0.", path: path, species: species))
+        }
+        if palette.colorCount > 16 {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_OVER_LIMIT", "\(kind.title) palette has \(palette.colorCount) colors; Gen III species palettes must fit 16 colors.", path: path, species: species))
+        }
+        if palette.colorCount < 16 {
+            diagnostics.append(assetDiagnostic(.warning, "SPECIES_ASSET_PALETTE_UNDER_LIMIT", "\(kind.title) palette has \(palette.colorCount) colors; expected species palettes normally carry 16 colors.", path: path, species: species))
+        }
+        if palette.gbaPrecisionLossCount > 0 {
+            diagnostics.append(assetDiagnostic(.warning, "SPECIES_ASSET_PALETTE_PRECISION_LOSS", "\(kind.title) palette has \(palette.gbaPrecisionLossCount) color(s) that lose precision in GBA 15-bit color.", path: path, species: species))
+        }
+        return diagnostics
+    }
+
+    private static func assetDiagnostic(_ severity: DiagnosticSeverity, _ code: String, _ message: String, path: String, species: SpeciesDetail) -> Diagnostic {
+        Diagnostic(severity: severity, code: code, message: message, span: SourceSpan(relativePath: path, startLine: species.sourceSpan.startLine))
+    }
+
     private static func appendUnknown(
         _ symbols: [String],
         group: SpeciesConstantGroup,
@@ -1854,8 +1966,9 @@ public enum SpeciesMutationPlanner {
         root: URL,
         fileManager: FileManager
     ) -> [SpeciesEditFileChange] {
-        let directory = "graphics/pokemon/\(assetSlug(for: draft.speciesID))"
-        return draft.assetData.compactMap { kind, newData in
+        let directory = speciesAssetDirectory(for: draft.speciesID)
+        return SpeciesAssetKind.allCases.compactMap { kind in
+            guard let newData = draft.assetData[kind] else { return nil }
             let path = "\(directory)/\(kind.filename)"
             let url = root.appendingPathComponent(path)
             let originalData = try? Data(contentsOf: url)
@@ -1870,6 +1983,10 @@ public enum SpeciesMutationPlanner {
                 textPreview: nil
             )
         }
+    }
+
+    private static func speciesAssetDirectory(for speciesID: String) -> String {
+        "graphics/pokemon/\(assetSlug(for: speciesID))"
     }
 
     private static func pokedexChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {

@@ -68,7 +68,15 @@ enum MapEventSpriteRenderer {
             )
         ).fill()
 
-        image.draw(in: destination, from: sourceRect(sprite: sprite, image: image), operation: .sourceOver, fraction: opacity)
+        if let context = NSGraphicsContext.current?.cgContext {
+            context.saveGState()
+            context.translateBy(x: 0, y: destination.minY + destination.maxY)
+            context.scaleBy(x: 1, y: -1)
+            image.draw(in: destination, from: sourceRect(sprite: sprite, image: image), operation: .sourceOver, fraction: opacity)
+            context.restoreGState()
+        } else {
+            image.draw(in: destination, from: sourceRect(sprite: sprite, image: image), operation: .sourceOver, fraction: opacity)
+        }
 
         if selected {
             NSColor.white.withAlphaComponent(opacity).setStroke()
