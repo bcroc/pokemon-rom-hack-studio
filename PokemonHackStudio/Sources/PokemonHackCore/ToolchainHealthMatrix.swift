@@ -285,10 +285,11 @@ public enum ToolchainHealthMatrixBuilder {
     ) -> [ToolchainHealthMatrixRow] {
         var rows: [ToolchainHealthMatrixRow] = []
         var seen: Set<String> = []
+        let missingSeverity: DiagnosticSeverity = index.profile.platform == .nds ? .warning : .error
 
         for target in buildReport.targets {
             guard let tool = target.commandTool else { continue }
-            if let row = toolRow(tool, requiredBy: target.target.name, sourcePath: "Makefile", seen: &seen) {
+            if let row = toolRow(tool, requiredBy: target.target.name, sourcePath: "Makefile", missingSeverity: missingSeverity, seen: &seen) {
                 rows.append(row)
             }
         }
@@ -306,7 +307,18 @@ public enum ToolchainHealthMatrixBuilder {
             }
         }
 
-        if let row = toolRow(
+        if index.profile.platform == .nds {
+            rows.append(contentsOf: ndsExternalToolRows(
+                index: index,
+                root: root,
+                fileManager: fileManager,
+                toolResolver: toolResolver,
+                seen: &seen
+            ))
+        }
+
+        if index.profile.platform != .nds,
+           let row = toolRow(
                 playtestReport.emulator,
                 requiredBy: "Playtest handoff",
                 sourcePath: root.path,
@@ -331,6 +343,399 @@ public enum ToolchainHealthMatrixBuilder {
         }
 
         return rows
+    }
+
+    private static func ndsExternalToolRows(
+        index: ProjectIndex,
+        root: URL,
+        fileManager: FileManager,
+        toolResolver: ToolAvailabilityResolver,
+        seen: inout Set<String>
+    ) -> [ToolchainHealthMatrixRow] {
+        var rows: [ToolchainHealthMatrixRow] = []
+        let makefile = makefileInspection(root: root, fileManager: fileManager)
+
+        if index.profile.projectKind == .sourceTree {
+            if let row = installationRow(
+                id: "devkitpro-root",
+                title: "devkitPro",
+                requiredBy: "NDS decomp build prerequisites",
+                path: "/opt/devkitpro",
+                missingDetail: "devkitPro was not found at /opt/devkitpro; install or expose it outside PokemonHackStudio, then rerun health.",
+                fileManager: fileManager,
+                seen: &seen
+            ) {
+                rows.append(row)
+            }
+            if let row = installationRow(
+                id: "devkitarm-root",
+                title: "DEVKITARM",
+                requiredBy: "devkitARM compiler SDK",
+                path: "/opt/devkitpro/devkitARM",
+                missingDetail: "DEVKITARM was not found at /opt/devkitpro/devkitARM; install devkitPro nds-dev/gba-dev outside PokemonHackStudio, then rerun health.",
+                fileManager: fileManager,
+                seen: &seen
+            ) {
+                rows.append(row)
+            }
+            if let row = toolRow(
+                toolResolver("arm-none-eabi-gcc"),
+                requiredBy: "devkitPro/devkitARM compiler",
+                sourcePath: "Makefile",
+                missingSeverity: .warning,
+                seen: &seen
+            ) {
+                rows.append(row)
+            }
+            if let row = toolRow(
+                toolResolver("blocksds"),
+                requiredBy: "BlocksDS command-line tooling",
+                sourcePath: "Makefile",
+                missingSeverity: .warning,
+                seen: &seen
+            ) {
+                rows.append(row)
+            }
+            if makefile.combined.contains("meson") || fileManager.fileExists(atPath: root.appendingPathComponent("meson.build").path) {
+                for toolName in ["meson", "ninja"] {
+                    if let row = toolRow(
+                        toolResolver(toolName),
+                        requiredBy: "NDS Meson build metadata",
+                        sourcePath: "meson.build",
+                        missingSeverity: .warning,
+                        seen: &seen
+                    ) {
+                        rows.append(row)
+                    }
+                }
+            }
+            if makefile.combined.contains("cmake") || fileManager.fileExists(atPath: root.appendingPathComponent("CMakeLists.txt").path) {
+                if let row = toolRow(
+                    toolResolver("cmake"),
+                    requiredBy: "NDS CMake build metadata",
+                    sourcePath: "CMakeLists.txt",
+                    missingSeverity: .warning,
+                    seen: &seen
+                ) {
+                    rows.append(row)
+                }
+            }
+        }
+
+        for toolName in [
+            "arm-none-eabi-as",
+            "arm-none-eabi-ld",
+            "arm-none-eabi-objcopy",
+            "arm-none-eabi-objdump",
+            "grit",
+            "mmutil",
+            "python3"
+        ] {
+            if let row = toolRow(
+                ndsToolAvailability(name: toolName, toolResolver: toolResolver, fileManager: fileManager),
+                requiredBy: "NDS toolchain prerequisite",
+                sourcePath: "PATH",
+                missingSeverity: .warning,
+                seen: &seen
+            ) {
+                rows.append(row)
+            }
+        }
+
+        rows.append(blocksDSDockerRow(toolResolver: toolResolver))
+        rows.append(referenceToolRow(
+            name: "DSPRE",
+            referencePath: "/Users/bryan/projects/reference-repos/repos/ds-pokemon-rom-editor__dspre",
+            requiredBy: "reference-only DS Pokemon ROM editor orientation",
+            fileManager: fileManager
+        ))
+        rows.append(referenceToolRow(
+            name: "Tinke",
+            referencePath: "/Users/bryan/projects/reference-repos/repos/tinke",
+            requiredBy: "reference-only Nitro resource editor orientation",
+            fileManager: fileManager
+        ))
+
+        for tool in ndsPathTools(toolResolver: toolResolver, fileManager: fileManager) {
+            if let row = ndsToolRow(tool, seen: &seen) {
+                rows.append(row)
+            }
+        }
+
+        return rows
+    }
+
+    private static func ndsToolAvailability(
+        name: String,
+        toolResolver: ToolAvailabilityResolver,
+        fileManager: FileManager
+    ) -> ToolAvailability {
+        availability(
+            name: name,
+            toolResolver: toolResolver,
+            fallbackPaths: ndsToolFallbackPaths(name),
+            fileManager: fileManager
+        )
+    }
+
+    private static func ndsToolFallbackPaths(_ name: String) -> [String] {
+        switch name {
+        case "grit", "mmutil":
+            ["/opt/devkitpro/tools/bin/\(name)"]
+        case "arm-none-eabi-as", "arm-none-eabi-ld", "arm-none-eabi-objcopy", "arm-none-eabi-objdump":
+            [
+                "/opt/devkitpro/devkitARM/bin/\(name)",
+                "/opt/homebrew/bin/\(name)",
+                "/usr/local/bin/\(name)"
+            ]
+        case "python3":
+            ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+        default:
+            []
+        }
+    }
+
+    private static func ndsPathTools(
+        toolResolver: ToolAvailabilityResolver,
+        fileManager: FileManager
+    ) -> [NDSToolRequirement] {
+        [
+            ndsToolRequirement(
+                name: "ndstool",
+                requiredBy: "NDS ROM/package inspection and rebuild planning",
+                availability: availability(
+                    name: "ndstool",
+                    toolResolver: toolResolver,
+                    fallbackPaths: [
+                        "/opt/devkitpro/tools/bin/ndstool",
+                        "/opt/blocksds/core/tools/ndstool"
+                    ],
+                    fileManager: fileManager
+                )
+            ),
+            ndsToolRequirement(
+                name: "ndspy",
+                requiredBy: "ndspy-compatible NDS data inspection",
+                availability: availability(
+                    name: "ndspy",
+                    toolResolver: toolResolver,
+                    fallbackPaths: [
+                        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/pokemonhackstudio/venvs/nds-tools/bin/python").path
+                    ],
+                    fileManager: fileManager
+                )
+            ),
+            ndsToolRequirement(
+                name: "melonDS",
+                requiredBy: "manual NDS playtest handoff",
+                availability: availability(
+                    name: "melonDS",
+                    toolResolver: toolResolver,
+                    fallbackPaths: [
+                        "/Applications/melonDS.app",
+                        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/melonDS.app").path
+                    ],
+                    fileManager: fileManager
+                )
+            ),
+            ndsToolRequirement(
+                name: "DeSmuME",
+                requiredBy: "manual NDS playtest handoff",
+                availability: availability(
+                    name: "DeSmuME",
+                    toolResolver: toolResolver,
+                    fallbackPaths: [
+                        "/Applications/DeSmuME.app",
+                        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/DeSmuME.app").path
+                    ],
+                    fileManager: fileManager
+                )
+            )
+        ]
+    }
+
+    private static func availability(
+        name: String,
+        toolResolver: ToolAvailabilityResolver,
+        fallbackPaths: [String],
+        fileManager: FileManager
+    ) -> ToolAvailability {
+        let resolved = toolResolver(name)
+        if resolved.isAvailable {
+            return resolved
+        }
+        if let path = fallbackPaths.first(where: { fileManager.fileExists(atPath: $0) }) {
+            return ToolAvailability(name: name, isAvailable: true, resolvedPath: path)
+        }
+        return resolved
+    }
+
+    private static func ndsToolRequirement(
+        name: String,
+        requiredBy: String,
+        availability: ToolAvailability
+    ) -> NDSToolRequirement {
+        NDSToolRequirement(name: name, requiredBy: requiredBy, availability: availability)
+    }
+
+    private static func ndsToolRow(
+        _ requirement: NDSToolRequirement,
+        seen: inout Set<String>
+    ) -> ToolchainHealthMatrixRow? {
+        let tool = requirement.availability
+        let key = "nds-tool:\(tool.name)"
+        guard seen.insert(key).inserted else {
+            return nil
+        }
+
+        let diagnostic = tool.isAvailable ? nil : healthDiagnostic(
+            severity: .warning,
+            code: "NDS_TOOLCHAIN_TOOL_MISSING",
+            message: "\(tool.name) is optional for \(requirement.requiredBy), but no executable or app bundle was found."
+        )
+        return ToolchainHealthMatrixRow(
+            id: "external:nds:\(requirement.name)",
+            category: .externalTools,
+            title: requirement.name,
+            subject: requirement.requiredBy,
+            status: tool.isAvailable ? .ready : .warning,
+            detail: tool.resolvedPath ?? "No executable or app bundle discovered for \(requirement.requiredBy).",
+            source: SourceSpan(relativePath: tool.resolvedPath ?? "PATH", startLine: 1),
+            resolvedPath: tool.resolvedPath,
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: toolActions(tool: tool, requiredBy: requirement.requiredBy, sourcePath: "PATH")
+        )
+    }
+
+    private static func blocksDSDockerRow(toolResolver: ToolAvailabilityResolver) -> ToolchainHealthMatrixRow {
+        let docker = toolResolver("docker")
+        let image = "skylyrac/blocksds:slim-latest"
+        let diagnostic = docker.isAvailable ? nil : healthDiagnostic(
+            severity: .warning,
+            code: "NDS_BLOCKSDS_DOCKER_MISSING",
+            message: "Docker was not found on PATH; BlocksDS Docker image \(image) must be prepared manually outside PokemonHackStudio."
+        )
+        return ToolchainHealthMatrixRow(
+            id: "external:nds:blocksds-docker",
+            category: .externalTools,
+            title: "BlocksDS Docker image",
+            subject: "optional containerized NDS toolchain",
+            status: docker.isAvailable ? .ready : .warning,
+            detail: docker.isAvailable
+                ? "Docker is available for manual BlocksDS image inspection. PokemonHackStudio will not inspect, pull, or run \(image)."
+                : "Use Docker image \(image) for BlocksDS on macOS; PokemonHackStudio will not inspect, pull, or run it.",
+            source: SourceSpan(relativePath: image, startLine: 1),
+            resolvedPath: docker.resolvedPath,
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: [
+                copyCommandAction(
+                    id: "copy-blocksds-inspect",
+                    title: "Copy BlocksDS inspect command",
+                    command: "docker image inspect \(image)",
+                    detail: "Copies a manual Docker image inspection command; PokemonHackStudio will not run Docker."
+                ),
+                copyCommandAction(
+                    id: "copy-blocksds-pull",
+                    title: "Copy BlocksDS pull command",
+                    command: "docker image pull \(image)",
+                    detail: "Copies the manual Docker pull command; PokemonHackStudio will not pull images."
+                ),
+                rerunGuidanceAction(
+                    id: "rerun-after-blocksds-docker-setup",
+                    title: "Prepare BlocksDS Docker manually",
+                    detail: "Pull the BlocksDS Docker image outside PokemonHackStudio, then rerun health."
+                )
+            ]
+        )
+    }
+
+    private static func referenceToolRow(
+        name: String,
+        referencePath: String,
+        requiredBy: String,
+        fileManager: FileManager
+    ) -> ToolchainHealthMatrixRow {
+        let exists = fileManager.fileExists(atPath: referencePath)
+        return ToolchainHealthMatrixRow(
+            id: "external:nds:reference:\(name.lowercased())",
+            category: .externalTools,
+            title: name,
+            subject: requiredBy,
+            status: exists ? .ready : .warning,
+            detail: exists
+                ? "Reference checkout exists at \(referencePath); it is read-only research material, not an executable dependency."
+                : "Reference checkout was not found at \(referencePath); this does not block preview-only NDS health.",
+            source: SourceSpan(relativePath: referencePath, startLine: 1),
+            resolvedPath: exists ? referencePath : nil,
+            diagnostics: exists ? [] : [
+                healthDiagnostic(
+                    severity: .warning,
+                    code: "NDS_REFERENCE_TOOL_MISSING",
+                    message: "\(name) reference checkout was not found at \(referencePath).",
+                    span: SourceSpan(relativePath: referencePath, startLine: 1)
+                )
+            ],
+            actions: exists ? [
+                copyPathAction(
+                    id: "copy-\(name.lowercased())-reference-path",
+                    title: "Copy reference path",
+                    path: referencePath,
+                    detail: "Copies the read-only reference checkout path for manual inspection."
+                )
+            ] : [
+                rerunGuidanceAction(
+                    id: "rerun-after-\(name.lowercased())-reference-sync",
+                    title: "Refresh reference corpus",
+                    detail: "Sync reference repositories outside PokemonHackStudio if you need this read-only comparison path, then rerun health."
+                )
+            ]
+        )
+    }
+
+    private static func installationRow(
+        id: String,
+        title: String,
+        requiredBy: String,
+        path: String,
+        missingDetail: String,
+        fileManager: FileManager,
+        seen: inout Set<String>
+    ) -> ToolchainHealthMatrixRow? {
+        let key = "install:\(path)"
+        guard seen.insert(key).inserted else {
+            return nil
+        }
+        let exists = fileManager.fileExists(atPath: path)
+        let diagnostic = exists ? nil : healthDiagnostic(
+            severity: .warning,
+            code: "NDS_TOOLCHAIN_INSTALL_MISSING",
+            message: "\(title) was not found at \(path)."
+        )
+        return ToolchainHealthMatrixRow(
+            id: "external:nds:\(id)",
+            category: .externalTools,
+            title: title,
+            subject: requiredBy,
+            status: exists ? .ready : .warning,
+            detail: exists ? "\(title) root exists at \(path)." : missingDetail,
+            source: SourceSpan(relativePath: path, startLine: 1),
+            resolvedPath: exists ? path : nil,
+            diagnostics: diagnostic.map { [$0] } ?? [],
+            actions: exists ? [
+                copyPathAction(
+                    id: "copy-\(id)-path",
+                    title: "Copy \(title) path",
+                    path: path,
+                    detail: "Copies the discovered \(title) path for manual inspection."
+                )
+            ] : [
+                rerunGuidanceAction(
+                    id: "rerun-after-\(id)-setup",
+                    title: "Set up \(title)",
+                    detail: missingDetail
+                )
+            ]
+        )
     }
 
     private static func toolRow(
@@ -496,6 +901,10 @@ public enum ToolchainHealthMatrixBuilder {
         buildReport: BuildValidationReport,
         fileManager: FileManager
     ) -> [ToolchainHealthMatrixRow] {
+        if index.profile.platform == .nds {
+            return ndsROMHeaderRows(index: index, root: root, buildReport: buildReport, fileManager: fileManager)
+        }
+
         guard isDecompProfile(index.profile) else {
             return [
                 ToolchainHealthMatrixRow(
@@ -669,12 +1078,240 @@ public enum ToolchainHealthMatrixBuilder {
         )
     }
 
+    private static func ndsROMHeaderRows(
+        index: ProjectIndex,
+        root: URL,
+        buildReport: BuildValidationReport,
+        fileManager: FileManager
+    ) -> [ToolchainHealthMatrixRow] {
+        if index.profile == .ndsROM {
+            guard let data = try? Data(contentsOf: root) else {
+                return [
+                    ToolchainHealthMatrixRow(
+                        id: "rom-header:nds-rom",
+                        category: .romHeaders,
+                        title: "NDS ROM header",
+                        subject: index.adapterName,
+                        status: .warning,
+                        detail: "NDS ROM header bytes could not be read.",
+                        source: SourceSpan(relativePath: root.path, startLine: 1),
+                        diagnostics: [
+                            healthDiagnostic(
+                                severity: .warning,
+                                code: "NDS_HEADER_UNREADABLE",
+                                message: "Could not read NDS header bytes from \(root.path).",
+                                span: SourceSpan(relativePath: root.path, startLine: 1)
+                            )
+                        ],
+                        actions: [
+                            copyPathAction(
+                                id: "copy-nds-rom-path",
+                                title: "Copy NDS ROM path",
+                                path: root.path,
+                                detail: "Copies the selected NDS ROM path for manual inspection."
+                            )
+                        ]
+                    )
+                ]
+            }
+
+            let parsed = NDSROMHeaderParser.parse(path: root.path, data: data)
+            guard let header = parsed.header else {
+                return [
+                    ToolchainHealthMatrixRow(
+                        id: "rom-header:nds-rom",
+                        category: .romHeaders,
+                        title: "NDS ROM header",
+                        subject: index.adapterName,
+                        status: .warning,
+                        detail: "NDS ROM header could not be parsed.",
+                        source: SourceSpan(relativePath: root.path, startLine: 1),
+                        diagnostics: parsed.diagnostics,
+                        actions: [
+                            copyPathAction(
+                                id: "copy-unreadable-nds-rom-path",
+                                title: "Copy NDS ROM path",
+                                path: root.path,
+                                detail: "Copies the selected NDS ROM path for manual inspection."
+                            )
+                        ]
+                    )
+                ]
+            }
+            return [
+                ToolchainHealthMatrixRow(
+                    id: "rom-header:nds-rom",
+                    category: .romHeaders,
+                    title: "NDS ROM header",
+                    subject: index.adapterName,
+                    status: parsed.diagnostics.contains { $0.severity == .error } ? .warning : .ready,
+                    detail: "Read title \(header.title.isEmpty ? "unknown" : header.title), code \(header.gameCode.isEmpty ? "unknown" : header.gameCode), maker \(header.makerCode.isEmpty ? "unknown" : header.makerCode), unit \(header.unitCodeDescription).",
+                    source: SourceSpan(relativePath: root.path, startLine: 1),
+                    diagnostics: parsed.diagnostics,
+                    actions: [
+                        copyPathAction(
+                            id: "copy-nds-rom-path",
+                            title: "Copy NDS ROM path",
+                            path: root.path,
+                            detail: "Copies the inspected NDS ROM path for manual review."
+                        )
+                    ]
+                )
+            ]
+        }
+
+        let ndsTargets = buildReport.targets.filter { $0.target.outputPath?.lowercased().hasSuffix(".nds") == true }
+        if ndsTargets.isEmpty {
+            return [
+                ToolchainHealthMatrixRow(
+                    id: "rom-header:nds-no-targets",
+                    category: .romHeaders,
+                    title: "NDS ROM header",
+                    subject: index.adapterName,
+                    status: .notApplicable,
+                    detail: "No NDS build target declares a .nds output for header inspection.",
+                    source: SourceSpan(relativePath: root.path, startLine: 1)
+                )
+            ]
+        }
+
+        return ndsTargets.map { target in
+            ndsBuildOutputHeaderRow(target: target, root: root, fileManager: fileManager)
+        }
+    }
+
+    private static func ndsBuildOutputHeaderRow(
+        target: BuildTargetValidation,
+        root: URL,
+        fileManager: FileManager
+    ) -> ToolchainHealthMatrixRow {
+        guard let outputPath = target.target.outputPath else {
+            return ToolchainHealthMatrixRow(
+                id: "rom-header:\(target.target.id):missing-output-path",
+                category: .romHeaders,
+                title: "NDS built ROM header",
+                subject: target.target.name,
+                status: .notApplicable,
+                detail: "This target does not declare an NDS ROM output path.",
+                source: SourceSpan(relativePath: "Makefile", startLine: 1)
+            )
+        }
+
+        let output = root.appendingPathComponent(outputPath)
+        let commandActions = target.target.command.isEmpty ? [] : [
+            copyCommandAction(
+                id: "copy-nds-build-command-\(target.target.id)",
+                title: "Copy build command",
+                command: target.target.command.joined(separator: " "),
+                detail: "Copies the declared NDS build command for manual terminal use; PokemonHackStudio will not run it."
+            )
+        ]
+        guard fileManager.fileExists(atPath: output.path) else {
+            return ToolchainHealthMatrixRow(
+                id: "rom-header:\(target.target.id)",
+                category: .romHeaders,
+                title: "NDS built ROM header",
+                subject: target.target.name,
+                status: .warning,
+                detail: "NDS output is missing, so header bytes were not inspected.",
+                source: SourceSpan(relativePath: outputPath, startLine: 1),
+                diagnostics: [
+                    healthDiagnostic(
+                        severity: .warning,
+                        code: "NDS_HEADER_OUTPUT_MISSING",
+                        message: "Cannot inspect NDS header because \(outputPath) does not exist.",
+                        span: SourceSpan(relativePath: outputPath, startLine: 1)
+                    )
+                ],
+                actions: [
+                    rerunGuidanceAction(
+                        id: "rerun-nds-build-\(target.target.id)",
+                        title: "Refresh NDS build output",
+                        detail: "Build the NDS ROM outside PokemonHackStudio, then rerun this health check to inspect \(outputPath)."
+                    )
+                ] + commandActions
+            )
+        }
+
+        guard let data = try? Data(contentsOf: output) else {
+            return ToolchainHealthMatrixRow(
+                id: "rom-header:\(target.target.id)",
+                category: .romHeaders,
+                title: "NDS built ROM header",
+                subject: target.target.name,
+                status: .warning,
+                detail: "NDS output exists, but header bytes could not be read.",
+                source: SourceSpan(relativePath: outputPath, startLine: 1),
+                diagnostics: [
+                    healthDiagnostic(
+                        severity: .warning,
+                        code: "NDS_HEADER_UNREADABLE",
+                        message: "Could not read NDS header bytes from \(outputPath).",
+                        span: SourceSpan(relativePath: outputPath, startLine: 1)
+                    )
+                ],
+                actions: [
+                    copyPathAction(
+                        id: "copy-unreadable-nds-output-\(target.target.id)",
+                        title: "Copy NDS output path",
+                        path: outputPath,
+                        detail: "Copies the unreadable NDS output path for manual inspection."
+                    )
+                ]
+            )
+        }
+
+        let parsed = NDSROMHeaderParser.parse(path: outputPath, data: data)
+        guard let header = parsed.header else {
+            return ToolchainHealthMatrixRow(
+                id: "rom-header:\(target.target.id)",
+                category: .romHeaders,
+                title: "NDS built ROM header",
+                subject: target.target.name,
+                status: .warning,
+                detail: "NDS output exists, but the header could not be parsed.",
+                source: SourceSpan(relativePath: outputPath, startLine: 1),
+                diagnostics: parsed.diagnostics,
+                actions: [
+                    rerunGuidanceAction(
+                        id: "rerun-unreadable-nds-output-\(target.target.id)",
+                        title: "Rebuild and rerun",
+                        detail: "Rebuild the NDS ROM outside PokemonHackStudio, then rerun health to inspect the header bytes."
+                    )
+                ]
+            )
+        }
+
+        return ToolchainHealthMatrixRow(
+            id: "rom-header:\(target.target.id)",
+            category: .romHeaders,
+            title: "NDS built ROM header",
+            subject: target.target.name,
+            status: parsed.diagnostics.contains { $0.severity == .error } ? .warning : .ready,
+            detail: "Found title \(header.title.isEmpty ? "unknown" : header.title), code \(header.gameCode.isEmpty ? "unknown" : header.gameCode), maker \(header.makerCode.isEmpty ? "unknown" : header.makerCode), unit \(header.unitCodeDescription).",
+            source: SourceSpan(relativePath: outputPath, startLine: 1),
+            diagnostics: parsed.diagnostics,
+            actions: [
+                copyPathAction(
+                    id: "copy-nds-output-path-\(target.target.id)",
+                    title: "Copy NDS output path",
+                    path: outputPath,
+                    detail: "Copies the inspected NDS ROM output path for manual review."
+                )
+            ]
+        )
+    }
+
     private static func graphicsConversionRows(
         index: ProjectIndex,
         root: URL,
         graphicsReport: GraphicsDiagnosticsReport?,
         fileManager: FileManager
     ) -> [ToolchainHealthMatrixRow] {
+        if index.profile.platform == .nds {
+            return ndsGraphicsConversionRows(index: index, root: root)
+        }
+
         guard isDecompProfile(index.profile) else {
             return [
                 ToolchainHealthMatrixRow(
@@ -802,11 +1439,36 @@ public enum ToolchainHealthMatrixBuilder {
         ]
     }
 
+    private static func ndsGraphicsConversionRows(index: ProjectIndex, root: URL) -> [ToolchainHealthMatrixRow] {
+        [
+            ToolchainHealthMatrixRow(
+                id: "graphics-conversion:nds-preview-only",
+                category: .graphicsConversion,
+                title: "NDS graphics conversion",
+                subject: index.adapterName,
+                status: .notApplicable,
+                detail: "NDS graphics conversion, decompression, extraction, and rebuild steps are not enabled; this health slice reports prerequisite availability only.",
+                source: SourceSpan(relativePath: root.path, startLine: 1),
+                actions: [
+                    rerunGuidanceAction(
+                        id: "review-nds-mutation-plan-design",
+                        title: "Plan NDS conversion workflow",
+                        detail: "Design a preview/apply model before enabling NDS extraction, conversion, rebuild, or ROM output writes."
+                    )
+                ]
+            )
+        ]
+    }
+
     private static func generatedArtifactRows(
         index: ProjectIndex,
         buildReport: BuildValidationReport,
         graphicsReport: GraphicsDiagnosticsReport?
     ) -> [ToolchainHealthMatrixRow] {
+        if index.profile.platform == .nds {
+            return ndsGeneratedArtifactRows(index: index, buildReport: buildReport)
+        }
+
         let generatedGroups = buildReport.generatedArtifacts
         let generatedPresent = generatedGroups.filter(\.exists).count
         let generatedMissing = generatedGroups.count - generatedPresent
@@ -868,6 +1530,115 @@ public enum ToolchainHealthMatrixBuilder {
         }
 
         return rows
+    }
+
+    private static func ndsGeneratedArtifactRows(
+        index: ProjectIndex,
+        buildReport: BuildValidationReport
+    ) -> [ToolchainHealthMatrixRow] {
+        guard index.profile.projectKind == .sourceTree else {
+            return [
+                ToolchainHealthMatrixRow(
+                    id: "generated:nds-rom-input",
+                    category: .generatedArtifacts,
+                    title: "NDS generated outputs",
+                    subject: index.adapterName,
+                    status: .notApplicable,
+                    detail: "Standalone NDS ROM inputs do not declare source-tree generated outputs.",
+                    source: SourceSpan(relativePath: index.root.path, startLine: 1)
+                )
+            ]
+        }
+
+        var rows: [ToolchainHealthMatrixRow] = []
+        let generatedGroups = buildReport.generatedArtifacts
+        let generatedPresent = generatedGroups.filter(\.exists).count
+        let generatedMissing = generatedGroups.count - generatedPresent
+        rows.append(
+            ToolchainHealthMatrixRow(
+                id: "generated:nds-adapter-outputs",
+                category: .generatedArtifacts,
+                title: "NDS declared outputs",
+                subject: index.adapterName,
+                status: generatedMissing == 0 ? .ready : .warning,
+                detail: "\(generatedPresent)/\(generatedGroups.count) declared NDS generated-output path(s) currently exist; freshness is preview-only until a rebuild is run outside PokemonHackStudio.",
+                source: SourceSpan(relativePath: index.root.path, startLine: 1),
+                diagnostics: generatedGroups.filter { !$0.exists }.map {
+                    healthDiagnostic(
+                        severity: .warning,
+                        code: "NDS_GENERATED_ARTIFACT_MISSING",
+                        message: "No generated NDS artifact matched \($0.relativePath).",
+                        span: SourceSpan(relativePath: $0.relativePath, startLine: 1)
+                    )
+                },
+                actions: generatedMissing == 0 ? [] : [
+                    rerunGuidanceAction(
+                        id: "rerun-nds-generated-output-check",
+                        title: "Refresh NDS generated outputs",
+                        detail: "Build or regenerate outputs outside PokemonHackStudio, then rerun health to refresh these path checks."
+                    )
+                ]
+            )
+        )
+
+        let outputTargets = buildReport.targets.filter { $0.target.outputPath?.lowercased().hasSuffix(".nds") == true }
+        for target in outputTargets {
+            rows.append(ndsBuildOutputArtifactRow(target: target))
+        }
+
+        return rows
+    }
+
+    private static func ndsBuildOutputArtifactRow(target: BuildTargetValidation) -> ToolchainHealthMatrixRow {
+        guard let output = target.output else {
+            return ToolchainHealthMatrixRow(
+                id: "generated:nds-build-output:\(target.target.id)",
+                category: .generatedArtifacts,
+                title: "NDS build output",
+                subject: target.target.name,
+                status: .notApplicable,
+                detail: "This NDS target does not declare an output artifact.",
+                source: SourceSpan(relativePath: target.target.outputPath ?? "Makefile", startLine: 1)
+            )
+        }
+
+        let status: ToolchainHealthStatus = output.exists ? .ready : .warning
+        let detail = output.exists
+            ? "NDS output exists at \(output.relativePath); checksum status \(output.checksumStatus.rawValue), freshness \(output.freshnessStatus.rawValue)."
+            : "NDS output is missing at \(output.relativePath); checksum and freshness checks are waiting on a manual rebuild."
+        let commandActions = target.target.command.isEmpty ? [] : [
+            copyCommandAction(
+                id: "copy-nds-output-build-command-\(target.target.id)",
+                title: "Copy build command",
+                command: target.target.command.joined(separator: " "),
+                detail: "Copies the declared NDS build command for manual terminal use; PokemonHackStudio will not run it."
+            )
+        ]
+        return ToolchainHealthMatrixRow(
+            id: "generated:nds-build-output:\(target.target.id)",
+            category: .generatedArtifacts,
+            title: "NDS build output",
+            subject: target.target.name,
+            status: status,
+            detail: detail,
+            source: SourceSpan(relativePath: output.relativePath, startLine: 1),
+            resolvedPath: output.exists ? output.absolutePath : nil,
+            diagnostics: target.diagnostics.filter { $0.code == "BUILD_OUTPUT_MISSING" || $0.code == "BUILD_OUTPUT_SHA1_MISMATCH" },
+            actions: output.exists ? [
+                copyPathAction(
+                    id: "copy-nds-build-output-\(target.target.id)",
+                    title: "Copy NDS output path",
+                    path: output.relativePath,
+                    detail: "Copies the detected NDS output path for manual inspection."
+                )
+            ] : [
+                rerunGuidanceAction(
+                    id: "rerun-nds-output-\(target.target.id)",
+                    title: "Build and rerun",
+                    detail: "Run the declared build outside PokemonHackStudio, then rerun health to inspect this output."
+                )
+            ] + commandActions
+        )
     }
 
     private static func graphicsArtifacts(_ tileset: GraphicsTilesetDiagnostics) -> [GraphicsArtifactStatus] {
@@ -1109,6 +1880,12 @@ private struct LocalToolRequirement {
     let name: String
     let path: String
     let requiredBy: String
+}
+
+private struct NDSToolRequirement {
+    let name: String
+    let requiredBy: String
+    let availability: ToolAvailability
 }
 
 private struct MakefileInspection {

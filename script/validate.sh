@@ -39,6 +39,7 @@ run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$PAT
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-import-plan "$PATCH_SMOKE_DIR/blocked-playtest" "$PATCH_SMOKE_DIR/graphics-pack" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-graph "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-inspect "$PATCH_SMOKE_DIR/test.gba" --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest-debug-plan "$PATCH_SMOKE_DIR/test.gba" --json
 
 if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli inspect "$POKEEMERALD_DIR" --json
@@ -58,6 +59,7 @@ if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-import-plan "$POKEEMERALD_DIR" "$PATCH_SMOKE_DIR/graphics-pack" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli build "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest "$POKEEMERALD_DIR" --headless --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest-debug-plan "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-outline "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-readiness "$POKEEMERALD_DIR" --map MAP_MAUVILLE_CITY --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKEEMERALD_DIR" --json

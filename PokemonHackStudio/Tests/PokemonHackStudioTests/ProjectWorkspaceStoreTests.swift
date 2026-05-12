@@ -1,6 +1,5 @@
 import PokemonHackCore
 import XCTest
-@testable import PokemonHackStudio
 
 final class ProjectWorkspaceStoreTests: XCTestCase {
     private var temporaryDirectories: [ProjectWorkspaceTemporaryDirectory] = []
@@ -13,7 +12,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     @MainActor
     func testDataDraftsSaveReloadPreviewApplyAndClear() async throws {
         let root = try makeUnifiedDataProject()
-        let firstStore = try makeStore()
+        let firstStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
 
         firstStore.openProject(path: root.path)
         firstStore.loadSelectedSpeciesCatalogIfNeeded()
@@ -49,7 +48,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertTrue(firstStore.saveDraftsNow())
         XCTAssertEqual(firstStore.savedDraftCount, 4)
 
-        let reloadedStore = try makeStore()
+        let reloadedStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
         reloadedStore.openProject(path: root.path)
         reloadedStore.loadSelectedSpeciesCatalogIfNeeded()
         try await waitForSelectedSpeciesCatalog(reloadedStore)
@@ -100,7 +99,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     @MainActor
     func testMapDraftSaveReloadPreviewAndDiscard() async throws {
         let root = try makeVisualProject()
-        let firstStore = try makeStore()
+        let firstStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
 
         firstStore.openProject(path: root.path)
         firstStore.selection = .maps
@@ -112,7 +111,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(firstStore.currentDraftCount, 1)
         XCTAssertTrue(firstStore.saveDraftsNow())
 
-        let reloadedStore = try makeStore()
+        let reloadedStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
         reloadedStore.openProject(path: root.path)
         reloadedStore.loadSelectedModuleDataIfNeeded()
         try await waitForSelectedMapVisual(reloadedStore, mapID: "MAP_ROUTE1")
@@ -130,7 +129,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     @MainActor
     func testGraphicsDraftSaveReloadPreviewApplyAndClear() async throws {
         let root = try makeVisualProject()
-        let firstStore = try makeStore()
+        let firstStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
 
         firstStore.openProject(path: root.path)
         firstStore.selection = .graphics
@@ -150,7 +149,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertTrue(firstStore.saveDraftsNow())
         XCTAssertEqual(firstStore.savedDraftCount, 1)
 
-        let reloadedStore = try makeStore()
+        let reloadedStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
         reloadedStore.openProject(path: root.path)
         reloadedStore.selection = .graphics
         reloadedStore.loadSelectedModuleDataIfNeeded()
@@ -171,12 +170,58 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     }
 
     @MainActor
-    private func makeStore() throws -> WorkbenchStore {
+    func testNDSDataDraftSaveReloadPreviewApplyAndClear() async throws {
+        let root = try makeNDSSourceProject()
+        let firstStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+
+        firstStore.openProject(path: root.path)
+        firstStore.selectWorkbenchModule(.resources)
+        firstStore.loadSelectedAssetCatalogIfNeeded()
+        let firstCatalog = try await waitForSelectedAssetCatalog(firstStore)
+        let sourceRow = try XCTUnwrap(firstCatalog.rows.first { $0.path == "arm9/src/pokemon.c" })
+        firstStore.requestResourceAssetSelection(sourceRow.id)
+        firstStore.updateSelectedNDSDataDraftText("void Pokemon_Load(void) { /* saved */ }\n")
+
+        XCTAssertTrue(firstStore.selectedNDSDataIsDirty)
+        XCTAssertEqual(firstStore.currentDraftCounts.ndsData, 1)
+        XCTAssertTrue(firstStore.saveDraftsNow())
+        XCTAssertEqual(firstStore.savedDraftCount, 1)
+
+        let reloadedStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+        reloadedStore.openProject(path: root.path)
+        reloadedStore.selectWorkbenchModule(.resources)
+        reloadedStore.loadSelectedAssetCatalogIfNeeded()
+        let reloadedCatalog = try await waitForSelectedAssetCatalog(reloadedStore)
+        let reloadedRow = try XCTUnwrap(reloadedCatalog.rows.first { $0.path == "arm9/src/pokemon.c" })
+        reloadedStore.requestResourceAssetSelection(reloadedRow.id)
+
+        XCTAssertTrue(reloadedStore.selectedNDSDataIsDirty)
+        reloadedStore.previewSelectedNDSDataMutationPlan()
+        XCTAssertTrue(reloadedStore.canApplySelectedNDSDataMutationPlan)
+        reloadedStore.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(reloadedStore.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("arm9/src/pokemon.c"), encoding: .utf8),
+            "void Pokemon_Load(void) { /* saved */ }\n"
+        )
+
+        XCTAssertTrue(reloadedStore.saveDraftsNow())
+        XCTAssertEqual(reloadedStore.savedDraftCount, 0)
+        XCTAssertEqual(try ProjectWorkspacePersistence.loadAutosave(root: root)?.drafts.counts.total, 0)
+    }
+
+    @MainActor
+    private func makeStore(workspaceRoot: URL) throws -> WorkbenchStore {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ProjectWorkspaceStoreTests.\(UUID().uuidString)"))
         let settings = WorkbenchUserSettings(defaults: defaults)
         settings.includeDefaultDebugProjects = false
         settings.includeRecentProjectsInRefresh = false
-        return WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+        return WorkbenchStore(
+            userDefaults: defaults,
+            userSettings: settings,
+            workspaceRoot: workspaceRoot,
+            autoLoadProjects: false
+        )
     }
 
     @MainActor
@@ -234,6 +279,15 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForSelectedAssetCatalog(_ store: WorkbenchStore) async throws -> ResourceAssetCatalogViewState {
+        for _ in 0..<80 {
+            if let catalog = store.selectedAssetCatalog { return catalog }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.assetCatalogTimedOut
+    }
+
+    @MainActor
     private func selectGeneralMetatilesRow(_ store: WorkbenchStore) throws {
         let row = try XCTUnwrap(
             store.filteredGraphicsReportRows.first {
@@ -258,6 +312,28 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         try writeTrainerSources(root: root)
         try writeMoveSources(root: root)
         try writeItemSources(root: root)
+        return root
+    }
+
+    private func makeNDSSourceProject() throws -> URL {
+        let temp = try ProjectWorkspaceTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url
+
+        try write("diamond: ; @echo build\n", to: root.appendingPathComponent("Makefile"))
+        try write("GAME_VERSION ?= DIAMOND\n", to: root.appendingPathComponent("config.mk"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("rom.rsf"))
+        try write("FILESYSTEM_ROOT := files\n", to: root.appendingPathComponent("filesystem.mk"))
+        try write("0" + String(repeating: "a", count: 39) + "  pokediamond.us.nds\n", to: root.appendingPathComponent("pokediamond.us.sha1"))
+        try write("arm9 source\n", to: root.appendingPathComponent("arm9/main.c"))
+        try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
+        try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
+        try write("arm7 source\n", to: root.appendingPathComponent("arm7/main.s"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
+        try write("// header\n", to: root.appendingPathComponent("include/config.h"))
+
         return root
     }
 
@@ -677,4 +753,5 @@ private enum StoreTestError: Error {
     case itemCatalogTimedOut
     case mapVisualTimedOut
     case graphicsReportTimedOut
+    case assetCatalogTimedOut
 }

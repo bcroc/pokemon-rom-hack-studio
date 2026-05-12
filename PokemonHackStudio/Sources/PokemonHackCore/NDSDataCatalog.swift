@@ -20,7 +20,7 @@ public enum NDSDataSourceRole: String, Codable, Equatable, CaseIterable, Sendabl
     case binaryContainer
 }
 
-public enum NDSDataSourceFormat: String, Codable, Equatable, CaseIterable, Sendable {
+public enum NDSDataSourceFormat: String, Codable, Equatable, Hashable, CaseIterable, Sendable {
     case json
     case csv
     case cSource
@@ -30,6 +30,42 @@ public enum NDSDataSourceFormat: String, Codable, Equatable, CaseIterable, Senda
     case directory
     case text
     case unknown
+}
+
+public enum NDSDataContainerKind: String, Codable, Equatable, CaseIterable, Sendable {
+    case narc
+    case unpackedArchiveDirectory
+}
+
+public struct NDSDataContainerSummary: Codable, Equatable {
+    public let kind: NDSDataContainerKind
+    public let memberCount: Int
+    public let namedMemberCount: Int
+    public let unnamedMemberCount: Int
+    public let byteCount: UInt64?
+    public let sampleMemberPaths: [String]
+    public let isReadOnly: Bool
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        kind: NDSDataContainerKind,
+        memberCount: Int,
+        namedMemberCount: Int,
+        unnamedMemberCount: Int,
+        byteCount: UInt64?,
+        sampleMemberPaths: [String],
+        isReadOnly: Bool = true,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.kind = kind
+        self.memberCount = memberCount
+        self.namedMemberCount = namedMemberCount
+        self.unnamedMemberCount = unnamedMemberCount
+        self.byteCount = byteCount
+        self.sampleMemberPaths = sampleMemberPaths
+        self.isReadOnly = isReadOnly
+        self.diagnostics = diagnostics
+    }
 }
 
 public struct NDSDataDomainCount: Codable, Equatable, Identifiable {
@@ -80,6 +116,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let sourceSpan: SourceSpan?
     public let facts: [SourceIndexFact]
     public let preview: String?
+    public let containerSummary: NDSDataContainerSummary?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -96,6 +133,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         sourceSpan: SourceSpan? = nil,
         facts: [SourceIndexFact] = [],
         preview: String? = nil,
+        containerSummary: NDSDataContainerSummary? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.id = id
@@ -111,6 +149,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.sourceSpan = sourceSpan
         self.facts = facts
         self.preview = preview
+        self.containerSummary = containerSummary
         self.diagnostics = diagnostics
     }
 }
@@ -160,21 +199,28 @@ public enum NDSDataCatalogBuilder {
         let root = SourceLocation(path: rootURL.path, exists: fileManager.fileExists(atPath: rootURL.path))
 
         if index.profile == .ndsROM {
+            let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager)
+            let records = report.map { romContainerRecords(report: $0) } ?? []
+            var diagnostics = [readOnlyDiagnostic(), binaryReadOnlyDiagnostic()]
+            if let report {
+                diagnostics.append(contentsOf: report.diagnostics)
+            } else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .warning,
+                        code: "NDS_DATA_CATALOG_BINARY_SUMMARY_FAILED",
+                        message: "NDS ROM NARC summaries could not be built from this binary input."
+                    )
+                )
+            }
             return catalog(
                 root: root,
                 profile: index.profile,
                 family: family(for: index, fileManager: fileManager),
                 adapterID: index.adapterID,
                 adapterName: index.adapterName,
-                records: [],
-                diagnostics: [
-                    readOnlyDiagnostic(),
-                    Diagnostic(
-                        severity: .info,
-                        code: "NDS_DATA_CATALOG_BINARY_DEFERRED",
-                        message: "Binary NDS data catalogs are deferred to a later NARC-backed read-only lane."
-                    )
-                ]
+                records: records,
+                diagnostics: diagnostics + records.flatMap(\.diagnostics)
             )
         }
 
@@ -239,9 +285,11 @@ public enum NDSDataCatalogBuilder {
             )
         }
 
-        let records = uniqueRecords(descriptors.flatMap { descriptor in
-            catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-        }).sorted(by: recordSort)
+        let records = uniqueRecords(
+            descriptors.flatMap { descriptor in
+                catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+            } + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+        ).sorted(by: recordSort)
 
         return catalog(
             root: root,
@@ -428,8 +476,11 @@ public enum NDSDataCatalogBuilder {
     ) -> NDSDataCatalogRecord {
         let url = root.appendingPathComponent(relativePath)
         let format = descriptor.format ?? (isDirectory ? .directory : format(for: relativePath))
-        let byteCount = exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil
-        let recordCount = exists ? shallowRecordCount(url: url, format: format, isDirectory: isDirectory, fileManager: fileManager) : nil
+        let containerSummary = exists
+            ? containerSummary(url: url, relativePath: relativePath, format: format, isDirectory: isDirectory, fileManager: fileManager)
+            : nil
+        let byteCount = containerSummary?.byteCount ?? (exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil)
+        let recordCount = containerSummary?.memberCount ?? (exists ? shallowRecordCount(url: url, format: format, isDirectory: isDirectory, fileManager: fileManager) : nil)
         var diagnostics: [Diagnostic] = []
 
         if !exists {
@@ -453,8 +504,9 @@ public enum NDSDataCatalogBuilder {
                 )
             )
         }
+        diagnostics.append(contentsOf: containerSummary?.diagnostics ?? [])
 
-        let facts = factsForRecord(format: format, role: descriptor.role, byteCount: byteCount, recordCount: recordCount)
+        let facts = factsForRecord(format: format, role: descriptor.role, byteCount: byteCount, recordCount: recordCount, containerSummary: containerSummary)
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
             domain: descriptor.domain,
@@ -467,7 +519,8 @@ public enum NDSDataCatalogBuilder {
             byteCount: byteCount,
             sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
             facts: facts,
-            preview: preview(url: url, format: format),
+            preview: containerPreview(containerSummary) ?? preview(url: url, format: format),
+            containerSummary: containerSummary,
             diagnostics: diagnostics
         )
     }
@@ -489,6 +542,148 @@ public enum NDSDataCatalogBuilder {
         return uniqueRecords(descriptors.flatMap { descriptor in
             catalogRecords(for: descriptor, root: root, fileManager: fileManager)
         }).sorted(by: recordSort)
+    }
+
+    private static func discoveredContainerRecords(for profile: GameProfile, root: URL, fileManager: FileManager) -> [NDSDataCatalogRecord] {
+        switch profile {
+        case .pokeplatinum:
+            return literalNARCRecords(root: root, searchRoot: "res/prebuilt", fileManager: fileManager)
+        case .pokeheartgold:
+            return literalNARCRecords(root: root, searchRoot: "files", fileManager: fileManager)
+        case .pokediamond:
+            return unpackedArchiveDirectoryRecords(root: root, searchRoot: "files", fileManager: fileManager)
+        default:
+            return []
+        }
+    }
+
+    private static func literalNARCRecords(root: URL, searchRoot: String, fileManager: FileManager) -> [NDSDataCatalogRecord] {
+        let searchURL = root.appendingPathComponent(searchRoot)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: searchURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let enumerator = fileManager.enumerator(
+                at: searchURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              )
+        else {
+            return []
+        }
+
+        var paths: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                if excludedDirectoryNames.contains(url.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard url.pathExtension.lowercased() == "narc" else { continue }
+            paths.append(relativePath(for: url, root: root))
+        }
+
+        return paths
+            .sorted()
+            .prefix(maxDiscoveredContainerRecords)
+            .map { relativePath in
+                containerRecord(
+                    relativePath: relativePath,
+                    root: root,
+                    domain: domain(forContainerPath: relativePath),
+                    format: .narc,
+                    isDirectory: false,
+                    fileManager: fileManager
+                )
+            }
+    }
+
+    private static func unpackedArchiveDirectoryRecords(root: URL, searchRoot: String, fileManager: FileManager) -> [NDSDataCatalogRecord] {
+        let searchURL = root.appendingPathComponent(searchRoot)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: searchURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let enumerator = fileManager.enumerator(
+                at: searchURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              )
+        else {
+            return []
+        }
+
+        var paths: [String] = []
+        while let url = enumerator.nextObject() as? URL {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory == true else { continue }
+            if excludedDirectoryNames.contains(url.lastPathComponent) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard hasImmediateUnpackedArchiveSignal(url: url, fileManager: fileManager) else { continue }
+            paths.append(relativePath(for: url, root: root))
+            enumerator.skipDescendants()
+        }
+
+        return paths
+            .sorted()
+            .prefix(maxDiscoveredContainerRecords)
+            .map { relativePath in
+                containerRecord(
+                    relativePath: relativePath,
+                    root: root,
+                    domain: domain(forContainerPath: relativePath),
+                    format: .directory,
+                    isDirectory: true,
+                    fileManager: fileManager
+                )
+            }
+    }
+
+    private static func containerRecord(
+        relativePath: String,
+        root: URL,
+        domain: NDSDataDomain,
+        format: NDSDataSourceFormat,
+        isDirectory: Bool,
+        fileManager: FileManager
+    ) -> NDSDataCatalogRecord {
+        record(
+            for: CatalogPathDescriptor(domain, relativePath, role: .binaryContainer, format: format),
+            relativePath: relativePath,
+            root: root,
+            exists: true,
+            isDirectory: isDirectory,
+            fileManager: fileManager
+        )
+    }
+
+    private static func romContainerRecords(report: NDSROMInspectorReport) -> [NDSDataCatalogRecord] {
+        report.narcArchives.map { archive in
+            let domain = domain(forContainerPath: archive.path)
+            let summary = containerSummary(for: archive.index, byteCount: archive.size)
+            return NDSDataCatalogRecord(
+                id: "\(domain.rawValue):\(archive.path)",
+                domain: domain,
+                title: title(for: archive.path, domain: domain),
+                relativePath: archive.path,
+                format: .narc,
+                role: .binaryContainer,
+                exists: true,
+                recordCount: summary.memberCount,
+                byteCount: archive.size,
+                sourceSpan: SourceSpan(relativePath: archive.path, startLine: 1),
+                facts: factsForRecord(
+                    format: .narc,
+                    role: .binaryContainer,
+                    byteCount: archive.size,
+                    recordCount: summary.memberCount,
+                    containerSummary: summary
+                ),
+                preview: containerPreview(summary),
+                containerSummary: summary,
+                diagnostics: archive.index.diagnostics
+            )
+        }.sorted(by: recordSort)
     }
 
     private static func uniqueRecords(_ records: [NDSDataCatalogRecord]) -> [NDSDataCatalogRecord] {
@@ -547,16 +742,130 @@ public enum NDSDataCatalogBuilder {
         return count
     }
 
+    private static func containerSummary(
+        url: URL,
+        relativePath: String,
+        format: NDSDataSourceFormat,
+        isDirectory: Bool,
+        fileManager: FileManager
+    ) -> NDSDataContainerSummary? {
+        if format == .narc, !isDirectory, let data = try? Data(contentsOf: url) {
+            return containerSummary(for: NARCParser.parse(path: relativePath, data: data), byteCount: UInt64(data.count))
+        }
+        if isDirectory {
+            return unpackedArchiveSummary(url: url, fileManager: fileManager)
+        }
+        return nil
+    }
+
+    private static func containerSummary(for index: NARCIndex, byteCount: UInt64?) -> NDSDataContainerSummary {
+        let namedCount = index.members.filter { $0.name != nil }.count
+        return NDSDataContainerSummary(
+            kind: .narc,
+            memberCount: index.memberCount,
+            namedMemberCount: namedCount,
+            unnamedMemberCount: max(index.memberCount - namedCount, 0),
+            byteCount: byteCount,
+            sampleMemberPaths: Array(index.members.prefix(maxContainerSampleMembers).map(\.path)),
+            diagnostics: index.diagnostics
+        )
+    }
+
+    private static func unpackedArchiveSummary(url: URL, fileManager: FileManager) -> NDSDataContainerSummary? {
+        guard hasImmediateUnpackedArchiveSignal(url: url, fileManager: fileManager) else {
+            return nil
+        }
+        let files = recursiveMemberFiles(url: url, fileManager: fileManager)
+        let candidates = files.filter { !isArchiveMarker($0.relativePath) }
+        let narcNamedMembers = candidates.filter { isUnpackedArchiveMember($0.relativePath) }
+        let members = narcNamedMembers.isEmpty ? candidates : narcNamedMembers
+        guard !members.isEmpty else {
+            return NDSDataContainerSummary(
+                kind: .unpackedArchiveDirectory,
+                memberCount: 0,
+                namedMemberCount: 0,
+                unnamedMemberCount: 0,
+                byteCount: 0,
+                sampleMemberPaths: [],
+                diagnostics: []
+            )
+        }
+        let unnamedCount = members.filter { isUnpackedArchiveMember($0.relativePath) }.count
+        let byteCount = members.reduce(UInt64(0)) { $0 + ($1.byteCount ?? 0) }
+        return NDSDataContainerSummary(
+            kind: .unpackedArchiveDirectory,
+            memberCount: members.count,
+            namedMemberCount: max(members.count - unnamedCount, 0),
+            unnamedMemberCount: unnamedCount,
+            byteCount: byteCount,
+            sampleMemberPaths: Array(members.prefix(maxContainerSampleMembers).map(\.relativePath)),
+            diagnostics: []
+        )
+    }
+
+    private static func recursiveMemberFiles(url: URL, fileManager: FileManager) -> [(relativePath: String, byteCount: UInt64?)] {
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        var members: [(relativePath: String, byteCount: UInt64?)] = []
+        while let fileURL = enumerator.nextObject() as? URL {
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                if excludedDirectoryNames.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            members.append((relativePath(for: fileURL, root: url), fileByteCount(fileURL, fileManager: fileManager)))
+        }
+        return members.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+    }
+
+    private static func hasImmediateUnpackedArchiveSignal(url: URL, fileManager: FileManager) -> Bool {
+        guard let contents = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey], options: []) else {
+            return false
+        }
+        return contents.contains { item in
+            let name = item.lastPathComponent.lowercased()
+            return isArchiveMarker(name) || isUnpackedArchiveMember(name)
+        }
+    }
+
+    private static func isArchiveMarker(_ relativePath: String) -> Bool {
+        let name = URL(fileURLWithPath: relativePath).lastPathComponent.lowercased()
+        return name == ".narcignore" || name == ".knarcignore" || name == "narcignore" || name == "knarcignore"
+    }
+
+    private static func isUnpackedArchiveMember(_ relativePath: String) -> Bool {
+        URL(fileURLWithPath: relativePath).lastPathComponent.lowercased().hasPrefix("narc_")
+    }
+
+    private static func containerPreview(_ summary: NDSDataContainerSummary?) -> String? {
+        guard let summary, !summary.sampleMemberPaths.isEmpty else { return nil }
+        return summary.sampleMemberPaths.joined(separator: ", ")
+    }
+
     private static func factsForRecord(
         format: NDSDataSourceFormat,
         role: NDSDataSourceRole,
         byteCount: UInt64?,
-        recordCount: Int?
+        recordCount: Int?,
+        containerSummary: NDSDataContainerSummary? = nil
     ) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Format", value: format.rawValue),
             SourceIndexFact(label: "Role", value: role.rawValue)
         ]
+        if let containerSummary {
+            facts.append(SourceIndexFact(label: "Container", value: containerSummary.kind.rawValue))
+            facts.append(SourceIndexFact(label: "Members", value: "\(containerSummary.memberCount)"))
+            facts.append(SourceIndexFact(label: "Named Members", value: "\(containerSummary.namedMemberCount)"))
+            facts.append(SourceIndexFact(label: "Unnamed Members", value: "\(containerSummary.unnamedMemberCount)"))
+        }
         if let recordCount {
             facts.append(SourceIndexFact(label: "Shallow Count", value: "\(recordCount)"))
         }
@@ -651,11 +960,51 @@ public enum NDSDataCatalogBuilder {
         }
     }
 
+    private static func domain(forContainerPath relativePath: String) -> NDSDataDomain {
+        let lower = relativePath.lowercased()
+        if lower.contains("personal") || lower.contains("/pms") {
+            return .personal
+        }
+        if lower.contains("waza") || lower.contains("move") || lower.contains("kowaza") {
+            return .moves
+        }
+        if lower.contains("item") || lower.contains("bag") {
+            return .items
+        }
+        if lower.contains("trainer") || lower.contains("/tr_") || lower.contains("/trmsg") || lower.contains("trtbl") {
+            return .trainers
+        }
+        if lower.contains("encount") || lower.contains("encdata") || lower.contains("enc_") {
+            return .encounters
+        }
+        if lower.contains("msg") || lower.contains("text") || lower.contains("font") {
+            return .text
+        }
+        if lower.contains("script") || lower.contains("scr_") || lower.contains("scrseq") {
+            return .scripts
+        }
+        if lower.contains("map") || lower.contains("fielddata") || lower.contains("/field/") {
+            return .maps
+        }
+        if lower.contains("/pokemon/") || lower.contains("pokezukan") || lower.contains("zukan") {
+            return .species
+        }
+        return .resources
+    }
+
     private static func readOnlyDiagnostic() -> Diagnostic {
         Diagnostic(
             severity: .info,
             code: "NDS_DATA_CATALOG_READ_ONLY",
-            message: "Gen IV/NDS data catalogs are read-only; no editors, rebuilds, extraction, or binary writes are enabled."
+            message: "Gen IV/NDS data catalogs are preview-first; semantic editors, rebuilds, extraction, and binary writes remain disabled."
+        )
+    }
+
+    private static func binaryReadOnlyDiagnostic() -> Diagnostic {
+        Diagnostic(
+            severity: .info,
+            code: "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY",
+            message: "NDS ROM data catalogs summarize reachable NARC containers only; extraction, decompression, rebuilds, and binary writes remain disabled."
         )
     }
 
@@ -673,6 +1022,9 @@ public enum NDSDataCatalogBuilder {
         "build",
         "DerivedData"
     ]
+
+    private static let maxDiscoveredContainerRecords = 256
+    private static let maxContainerSampleMembers = 8
 }
 
 private struct CatalogPathDescriptor {

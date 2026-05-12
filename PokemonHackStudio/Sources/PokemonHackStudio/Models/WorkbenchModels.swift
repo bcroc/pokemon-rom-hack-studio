@@ -1,5 +1,18 @@
 import Foundation
+import CoreGraphics
 import PokemonHackCore
+
+struct MapCanvasViewportRequest: Equatable, Identifiable {
+    let id: String
+    let centerX: CGFloat
+    let centerY: CGFloat
+
+    init(id: String = UUID().uuidString, centerX: CGFloat, centerY: CGFloat) {
+        self.id = id
+        self.centerX = centerX
+        self.centerY = centerY
+    }
+}
 
 enum WorkbenchModuleGroup: String, CaseIterable, Identifiable, Hashable {
     case workspace = "Workspace"
@@ -370,7 +383,7 @@ struct BuildWorkflowActionViewState: Identifiable, Equatable {
     let isPreviewLocked: Bool
 }
 
-enum BuildReportSection: String, CaseIterable, Identifiable {
+enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
     case buildTargets = "Build Targets"
     case generatedArtifacts = "Generated Artifacts"
     case toolchain = "Toolchain Readiness"
@@ -406,12 +419,14 @@ struct BuildPatchPlaytestReportViewState: Identifiable {
     let projectTitle: String
     let rootPath: String
     let profile: String
+    let isNDS: Bool
     let status: ValidationState
     let buildTargets: [BuildTargetValidationViewState]
     let generatedArtifacts: [GeneratedArtifactValidationViewState]
     let toolchain: ToolchainReadinessViewState
     let healthMatrix: ToolchainHealthMatrixViewState
     let playtest: PlaytestHandoffPlanViewState
+    let playtestDebug: PlaytestDebugPlanViewState
     let baseROMOptions: [BaseROMOptionViewState]
     let diagnostics: [IndexedDiagnosticRow]
 
@@ -421,6 +436,7 @@ struct BuildPatchPlaytestReportViewState: Identifiable {
             + toolchain.rows
             + healthMatrix.rows
             + [BuildReportRow(playtest: playtest)]
+            + playtestDebug.rows
             + diagnostics.map(BuildReportRow.init(diagnostic:))
     }
 }
@@ -510,6 +526,7 @@ struct PatchDryRunPlanViewState: Identifiable {
 
 struct ToolchainHealthMatrixViewState: Identifiable {
     let id: String
+    let isNDS: Bool
     let status: ValidationState
     let detail: String
     let readyCount: Int
@@ -517,6 +534,36 @@ struct ToolchainHealthMatrixViewState: Identifiable {
     let errorCount: Int
     let notApplicableCount: Int
     let rows: [BuildReportRow]
+    let ndsGroups: [NDSToolchainHealthGroupViewState]
+}
+
+struct NDSToolchainHealthGroupViewState: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let rows: [BuildReportRow]
+
+    var readyCount: Int {
+        rows.filter { $0.healthStatus == .ready }.count
+    }
+
+    var warningCount: Int {
+        rows.filter { $0.healthStatus == .warning }.count
+    }
+
+    var notApplicableCount: Int {
+        rows.filter { $0.healthStatus == .notApplicable }.count
+    }
+
+    var status: ValidationState {
+        if rows.contains(where: { $0.status == .error }) {
+            return .error
+        }
+        if rows.contains(where: { $0.status == .warning }) {
+            return .warning
+        }
+        return .valid
+    }
 }
 
 struct BuildTargetValidationViewState: Identifiable {
@@ -592,6 +639,36 @@ struct PlaytestHandoffPlanViewState: Identifiable {
     let status: ValidationState
     let detail: String
     let source: SourceLocation
+}
+
+struct PlaytestDebugCapabilityViewState: Identifiable {
+    let id: String
+    let toolName: String
+    let status: ValidationState
+    let statusLabel: String
+    let resolvedPath: String?
+    let supportedActions: [String]
+    let command: String
+    let detail: String
+    let source: SourceLocation
+}
+
+struct PlaytestDebugPlanViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let detail: String
+    let command: String
+    let isRunnable: Bool
+    let isLaunchEnabled: Bool
+    let artifacts: [PlaytestArtifactViewState]
+    let capabilities: [PlaytestDebugCapabilityViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let source: SourceLocation
+
+    var rows: [BuildReportRow] {
+        capabilities.map(BuildReportRow.init(debugCapability:))
+            + diagnostics.map(BuildReportRow.init(diagnostic:))
+    }
 }
 
 struct PlaytestLaunchResultViewState: Identifiable {
@@ -718,6 +795,19 @@ struct BuildReportRow: Identifiable {
         )
     }
 
+    init(debugCapability: PlaytestDebugCapabilityViewState) {
+        self.init(
+            id: "playtest-debug:\(debugCapability.id)",
+            section: .playtest,
+            title: debugCapability.toolName,
+            subtitle: debugCapability.statusLabel,
+            detail: debugCapability.detail,
+            status: debugCapability.status,
+            source: debugCapability.source,
+            tags: [debugCapability.toolName, debugCapability.command, debugCapability.supportedActions.joined(separator: " ")]
+        )
+    }
+
     init(launchResult: PlaytestLaunchResultViewState) {
         self.init(
             id: "playtest-launch:\(launchResult.id)",
@@ -759,7 +849,7 @@ struct BuildReportRow: Identifiable {
 }
 
 struct BuildReportRowAction: Identifiable {
-    enum Kind: String {
+    enum Kind: String, Equatable {
         case copyCommand = "Copy Command"
         case copyPath = "Copy Path"
         case rerunGuidance = "Rerun Guidance"
@@ -1659,6 +1749,27 @@ struct ResourceLibraryItemViewState: Identifiable {
     let checksumSummary: String
     let source: SourceLocation
     let tags: [String]
+}
+
+struct NDSDataResourceEditorViewState {
+    let recordID: String
+    let text: String
+    let semanticFields: [NDSDataSemanticFieldViewState]
+    let canEdit: Bool
+    let isDirty: Bool
+    let canPreview: Bool
+    let canApply: Bool
+    let canDiscard: Bool
+    let blockedReason: String?
+    let applyBlockedReason: String?
+}
+
+struct NDSDataSemanticFieldViewState: Identifiable {
+    let id: String
+    let key: String
+    let label: String
+    let value: String
+    let valueKind: String
 }
 
 enum MapCatalogLoadStatus: Equatable {

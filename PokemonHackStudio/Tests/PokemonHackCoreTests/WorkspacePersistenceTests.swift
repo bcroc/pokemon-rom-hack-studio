@@ -61,6 +61,9 @@ final class WorkspacePersistenceTests: XCTestCase {
                             )
                         ]
                     )
+                ],
+                ndsDataDrafts: [
+                    NDSDataEditDraft(recordID: "species:res/pokemon/abra/data.json", editedText: "{\"base_hp\":26}\n")
                 ]
             )
         )
@@ -73,7 +76,8 @@ final class WorkspacePersistenceTests: XCTestCase {
         XCTAssertEqual(loaded.drafts.counts.items, 1)
         XCTAssertEqual(loaded.drafts.counts.maps, 1)
         XCTAssertEqual(loaded.drafts.counts.graphics, 1)
-        XCTAssertEqual(loaded.drafts.counts.total, 4)
+        XCTAssertEqual(loaded.drafts.counts.ndsData, 1)
+        XCTAssertEqual(loaded.drafts.counts.total, 5)
         XCTAssertTrue(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio/project.json").path))
     }
 

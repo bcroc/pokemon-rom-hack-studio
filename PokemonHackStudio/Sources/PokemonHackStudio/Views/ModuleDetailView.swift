@@ -70,7 +70,13 @@ struct ModuleDetailView: View {
                 onLoadAssetCatalog: {
                     store.loadSelectedAssetCatalogIfNeeded()
                 },
-                onNavigateToAsset: store.navigateToAsset
+                onNavigateToAsset: store.navigateToAsset,
+                ndsDataEditor: store.selectedNDSDataEditor,
+                onUpdateNDSDataDraft: store.updateSelectedNDSDataDraftText,
+                onUpdateNDSDataSemanticField: store.updateSelectedNDSDataSemanticField,
+                onPreviewNDSDataMutationPlan: store.previewSelectedNDSDataMutationPlan,
+                onApplyNDSDataMutationPlan: store.applySelectedNDSDataMutationPlan,
+                onDiscardNDSDataEdits: store.discardNDSDataEdits
             )
         case .maps:
             MapEditorView(
@@ -338,6 +344,12 @@ struct ModuleDetailView: View {
                 previewBlockedReason: store.graphicsPreviewBlockedReason,
                 applyBlockedReason: store.graphicsApplyBlockedReason
             )
+        case .resources:
+            MutationPlanPanelContext.ndsData(
+                plan: store.latestNDSDataEditPlan,
+                result: store.latestNDSDataApplyResult,
+                editor: store.selectedNDSDataEditor
+            )
         default:
             nil
         }
@@ -359,6 +371,8 @@ struct ModuleDetailView: View {
             store.previewSelectedItemMutationPlan()
         case .graphics:
             store.previewSelectedGraphicsMutationPlan()
+        case .resources:
+            store.previewSelectedNDSDataMutationPlan()
         default:
             store.previewSelectedMapMutationPlan()
         }
@@ -380,6 +394,8 @@ struct ModuleDetailView: View {
             store.applySelectedItemMutationPlan()
         case .graphics:
             store.applySelectedGraphicsMutationPlan()
+        case .resources:
+            store.applySelectedNDSDataMutationPlan()
         default:
             store.applySelectedMapMutationPlan()
         }
@@ -401,6 +417,8 @@ struct ModuleDetailView: View {
             store.discardItemEdits()
         case .graphics:
             store.discardGraphicsEdits()
+        case .resources:
+            store.discardNDSDataEdits()
         default:
             store.discardMapEdits()
         }

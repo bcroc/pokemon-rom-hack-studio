@@ -58,7 +58,7 @@ struct BuildWorkbenchView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Ship Preview")
                     .font(.largeTitle.weight(.semibold))
-                Text("\(project.title) guided previews for build readiness, patch checks, generated outputs, toolchain health, and playtest handoff.")
+                Text(headerDetail(project: project, report: report))
                     .foregroundStyle(.secondary)
                 Text(report.rootPath)
                     .font(.system(.caption, design: .monospaced))
@@ -104,7 +104,14 @@ struct BuildWorkbenchView: View {
         VStack(alignment: .leading, spacing: 18) {
             buildRunnerSection(report: report)
 
-            ForEach(BuildReportSection.allCases.filter { $0 != .diagnostics && $0 != .patchManifest }) { section in
+            if report.isNDS {
+                ndsToolchainOverview(report: report)
+            }
+
+            let skippedSections: Set<BuildReportSection> = report.isNDS
+                ? [.diagnostics, .patchManifest, .healthMatrix]
+                : [.diagnostics, .patchManifest]
+            ForEach(BuildReportSection.allCases.filter { !skippedSections.contains($0) }) { section in
                 let sectionRows = rows.filter { $0.section == section }
                 EditorSection(title: section.rawValue) {
                     VStack(spacing: 10) {
@@ -173,7 +180,7 @@ struct BuildWorkbenchView: View {
                     Spacer()
                 }
 
-                Text("Runs only the selected declared decomp make target. Source edits, patch apply/export, conversion, and repair actions remain outside this runner.")
+                Text(report.isNDS ? ndsRunnerGuidance : gbaRunnerGuidance)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -330,12 +337,43 @@ struct BuildWorkbenchView: View {
                         ContentUnavailableView(
                             "No Planned Artifacts",
                             systemImage: "doc.badge.clock",
-                            description: Text("The selected adapter did not expose playtest artifacts.")
+                            description: Text(report.isNDS ? "NDS emulator readiness is manual-only in this slice; the app does not create melonDS or DeSmuME launch artifacts." : "The selected adapter did not expose playtest artifacts.")
                         )
                     } else {
                         ForEach(report.playtest.artifacts) { artifact in
                             PlaytestArtifactRow(artifact: artifact)
                         }
+                    }
+                }
+            }
+
+            EditorSection(title: "Debug And Access-Log Plan") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        StatusPill(state: report.playtestDebug.status)
+                        Text(report.playtestDebug.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+
+                    if !report.playtestDebug.command.isEmpty {
+                        Text(report.playtestDebug.command)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    ForEach(report.playtestDebug.capabilities) { capability in
+                        BuildReportRowView(
+                            row: BuildReportRow(debugCapability: capability),
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+
+                    ForEach(report.playtestDebug.artifacts) { artifact in
+                        PlaytestArtifactRow(artifact: artifact)
                     }
                 }
             }
@@ -450,9 +488,60 @@ struct BuildWorkbenchView: View {
                     Spacer()
                 }
 
-                Text("Build runs only the selected declared make target. Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows.")
+                Text(selectedWorkflowGuidance)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func headerDetail(project: IndexedProjectSummary, report: BuildPatchPlaytestReportViewState) -> String {
+        if report.isNDS {
+            return "\(project.title) NDS toolchain readiness, manual setup guidance, header facts, and declared-output checks. Build, extraction, emulator launch, and ROM writes stay disabled."
+        }
+        return "\(project.title) guided previews for build readiness, patch checks, generated outputs, toolchain health, and playtest handoff."
+    }
+
+    private var selectedWorkflowGuidance: String {
+        if store.selectedBuildReport?.isNDS == true {
+            return "NDS actions are manual setup and rerun guidance only. PokemonHackStudio does not install tools, run Docker, build NDS ROMs, launch melonDS/DeSmuME, extract assets, apply mutation plans, export ROMs, or write binary/source outputs from this surface."
+        }
+        return "Build runs only the selected declared make target. Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows."
+    }
+
+    private var gbaRunnerGuidance: String {
+        "Runs only the selected declared decomp make target. Source edits, patch apply/export, conversion, and repair actions remain outside this runner."
+    }
+
+    private var ndsRunnerGuidance: String {
+        "NDS builds are preview-only here. Use the toolchain rows for detected paths, copyable manual commands, and rerun guidance; PokemonHackStudio will not run make, Meson, Ninja, Docker, extraction, or rebuild steps for NDS projects."
+    }
+
+    private func ndsToolchainOverview(report: BuildPatchPlaytestReportViewState) -> some View {
+        EditorSection(title: "NDS Toolchain Health") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    StatusPill(state: report.healthMatrix.status)
+                    Text("\(report.healthMatrix.readyCount) ready")
+                        .font(.caption.weight(.semibold))
+                    Text("\(report.healthMatrix.warningCount) warnings")
+                        .font(.caption.weight(.semibold))
+                    Text("\(report.healthMatrix.notApplicableCount) not applicable")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                }
+
+                Text("Preview-only NDS readiness: detected paths and copyable manual setup/rerun guidance only. No installs, builds, Docker runs, extraction, emulator launch, mutation apply, ROM export, or binary/source writes are performed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(report.healthMatrix.ndsGroups) { group in
+                    NDSToolchainHealthGroupView(
+                        group: group,
+                        copyAction: store.copyBuildReportRowActionToPasteboard
+                    )
+                }
             }
         }
     }
@@ -809,6 +898,35 @@ private struct BuildReportRowView: View {
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct NDSToolchainHealthGroupView: View {
+    let group: NDSToolchainHealthGroupViewState
+    let copyAction: (BuildReportRowAction) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                StatusPill(state: group.status)
+                Text(group.title)
+                    .font(.headline)
+                Text("\(group.readyCount) ready · \(group.warningCount) warnings · \(group.notApplicableCount) not applicable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            Text(group.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(group.rows) { row in
+                BuildReportRowView(row: row, copyAction: copyAction)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

@@ -223,6 +223,154 @@ final class ToolchainHealthMatrixTests: XCTestCase {
         XCTAssertTrue(report.diagnostics.contains { $0.code == "GRAPHICS_CONVERSION_TOOL_MISSING" })
     }
 
+    func testNDSHealthMatrixReportsPreviewOnlyMissingToolsAndGeneratedGuidance() throws {
+        let root = try makeTemporaryRoot()
+        try write("rom:\n\tmake rom\n", to: root.appendingPathComponent("Makefile"))
+        try write("project('pokeplatinum')\n", to: root.appendingPathComponent("meson.build"))
+
+        let index = makeNDSIndex(
+            root: root,
+            generatedOutputs: [
+                SourceDocument(relativePath: "build/pokeplatinum.us.nds", kind: .generated, role: .artifact, exists: false)
+            ],
+            buildTargets: [
+                BuildTarget(id: "platinum-rom", name: "Build Platinum ROM", kind: .build, command: ["make", "rom"], outputPath: "build/pokeplatinum.us.nds")
+            ]
+        )
+        let buildReport = BuildValidationReportBuilder.build(index: index, toolResolver: availableTools([:]))
+        let playtestReport = PlaytestHandoffReportBuilder.build(index: index, toolResolver: availableTools([:]))
+
+        let report = ToolchainHealthMatrixBuilder.build(
+            index: index,
+            toolResolver: availableTools([:]),
+            buildReport: buildReport,
+            playtestReport: playtestReport
+        )
+
+        XCTAssertEqual(report.profile, .pokeplatinum)
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:devkitpro-root" })
+        XCTAssertTrue(report.rows.contains { $0.id == "external:arm-none-eabi-gcc" && $0.status == .warning })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:blocksds-docker" })
+        XCTAssertTrue(report.rows.contains { $0.id == "external:meson" && $0.status == .warning })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:ndstool" })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:python3" })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:reference:dspre" })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:reference:tinke" })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:melonDS" })
+        XCTAssertFalse(report.rows.contains { $0.id == "external:mgba" })
+        XCTAssertEqual(report.rows.first { $0.id == "rom-header:platinum-rom" }?.status, .warning)
+        XCTAssertTrue(report.rows.first { $0.id == "rom-header:platinum-rom" }?.actions.contains { $0.kind == .copyCommand && $0.command == "make rom" } == true)
+        XCTAssertEqual(report.rows.first { $0.id == "graphics-conversion:nds-preview-only" }?.status, .notApplicable)
+        XCTAssertEqual(report.rows.first { $0.id == "generated:nds-build-output:platinum-rom" }?.status, .warning)
+        XCTAssertTrue(report.rows.flatMap(\.actions).allSatisfy(\.isPreviewOnly))
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "NDS_TOOLCHAIN_TOOL_MISSING" || $0.code == "NDS_BLOCKSDS_DOCKER_MISSING" })
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "NDS_HEADER_OUTPUT_MISSING" })
+    }
+
+    func testNDSHealthMatrixMarksDiscoveredToolsReadyWithoutLaunchingThem() throws {
+        let root = try makeTemporaryRoot()
+        try write("rom:\n\tmake rom\n", to: root.appendingPathComponent("Makefile"))
+        try write("project('pokeplatinum')\n", to: root.appendingPathComponent("meson.build"))
+        try write(ndsROM(title: "POKEMON PL", gameCode: "CPUE", makerCode: "01"), to: root.appendingPathComponent("build/pokeplatinum.us.nds"))
+
+        let tools = availableTools([
+            "make": "/usr/bin/make",
+            "arm-none-eabi-gcc": "/opt/devkitpro/devkitARM/bin/arm-none-eabi-gcc",
+            "blocksds": "/opt/blocksds/bin/blocksds",
+            "meson": "/usr/local/bin/meson",
+            "ninja": "/usr/local/bin/ninja",
+            "ndstool": "/opt/devkitpro/tools/bin/ndstool",
+            "ndspy": "/usr/local/bin/ndspy",
+            "python3": "/usr/bin/python3",
+            "docker": "/usr/local/bin/docker",
+            "melonDS": "/Applications/melonDS.app",
+            "DeSmuME": "/Applications/DeSmuME.app"
+        ])
+        let index = makeNDSIndex(
+            root: root,
+            generatedOutputs: [
+                SourceDocument(relativePath: "build/pokeplatinum.us.nds", kind: .generated, role: .artifact, exists: true)
+            ],
+            buildTargets: [
+                BuildTarget(id: "platinum-rom", name: "Build Platinum ROM", kind: .build, command: ["make", "rom"], outputPath: "build/pokeplatinum.us.nds")
+            ]
+        )
+        let buildReport = BuildValidationReportBuilder.build(index: index, toolResolver: tools)
+        let playtestReport = PlaytestHandoffReportBuilder.build(index: index, toolResolver: tools)
+
+        let report = ToolchainHealthMatrixBuilder.build(
+            index: index,
+            toolResolver: tools,
+            buildReport: buildReport,
+            playtestReport: playtestReport
+        )
+
+        for id in [
+            "external:make",
+            "external:arm-none-eabi-gcc",
+            "external:meson",
+            "external:ninja",
+            "external:nds:ndstool",
+            "external:nds:ndspy",
+            "external:python3",
+            "external:nds:melonDS",
+            "external:nds:DeSmuME"
+        ] {
+            let row = try XCTUnwrap(report.rows.first { $0.id == id }, id)
+            XCTAssertEqual(row.status, .ready, id)
+            XCTAssertTrue(row.actions.contains { $0.kind == .copyPath }, id)
+        }
+        let blocksDSRow = try XCTUnwrap(report.rows.first { $0.id == "external:nds:blocksds-docker" })
+        XCTAssertEqual(blocksDSRow.status, .ready)
+        XCTAssertTrue(blocksDSRow.detail.contains("will not inspect, pull, or run"))
+        XCTAssertTrue(blocksDSRow.actions.contains { $0.command == "docker image inspect skylyrac/blocksds:slim-latest" })
+        XCTAssertTrue(blocksDSRow.actions.contains { $0.command == "docker image pull skylyrac/blocksds:slim-latest" })
+        XCTAssertTrue(blocksDSRow.actions.allSatisfy(\.isPreviewOnly))
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:reference:dspre" })
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:reference:tinke" })
+        XCTAssertEqual(report.rows.first { $0.id == "rom-header:platinum-rom" }?.status, .ready)
+        XCTAssertEqual(report.rows.first { $0.id == "generated:nds-build-output:platinum-rom" }?.status, .ready)
+        XCTAssertTrue(report.rows.flatMap(\.actions).allSatisfy(\.isPreviewOnly))
+    }
+
+    func testNDSROMHealthMatrixReportsHeaderAndManualEmulatorGuidanceOnly() throws {
+        let root = try makeTemporaryRoot()
+        let rom = root.appendingPathComponent("sample.nds")
+        try write(ndsROM(title: "POKEMON D", gameCode: "ADAE", makerCode: "01"), to: rom)
+        let tools = availableTools(["ndstool": "/usr/local/bin/ndstool", "melonDS": "/Applications/melonDS.app"])
+        let index = ProjectIndex(
+            root: SourceLocation(path: rom.path, exists: true),
+            profile: .ndsROM,
+            adapterID: "nds.binary-rom",
+            adapterName: "Pokemon Diamond",
+            editorModules: [.rom, .diagnostics],
+            capabilities: [.resourceIndex, .ndsROMInspection, .nitroFSIndex, .narcInspection, .diagnostics],
+            writePolicy: .readOnly,
+            documents: [SourceDocument(relativePath: rom.lastPathComponent, kind: .binary, role: .localInput, exists: true)],
+            generatedOutputs: [],
+            diagnostics: [],
+            buildTargets: []
+        )
+        let buildReport = BuildValidationReportBuilder.build(index: index, toolResolver: tools)
+        let playtestReport = PlaytestHandoffReportBuilder.build(index: index, toolResolver: tools)
+
+        let report = ToolchainHealthMatrixBuilder.build(
+            index: index,
+            toolResolver: tools,
+            buildReport: buildReport,
+            playtestReport: playtestReport
+        )
+
+        XCTAssertEqual(report.rows.first { $0.id == "rom-header:nds-rom" }?.status, .ready)
+        XCTAssertTrue(report.rows.first { $0.id == "rom-header:nds-rom" }?.detail.contains("ADAE") == true)
+        XCTAssertEqual(report.rows.first { $0.id == "generated:nds-rom-input" }?.status, .notApplicable)
+        XCTAssertEqual(report.rows.first { $0.id == "external:nds:ndstool" }?.status, .ready)
+        XCTAssertEqual(report.rows.first { $0.id == "external:nds:melonDS" }?.status, .ready)
+        XCTAssertNotNil(report.rows.first { $0.id == "external:nds:DeSmuME" })
+        XCTAssertFalse(report.rows.contains { $0.id == "external:mgba" })
+        XCTAssertTrue(report.rows.flatMap(\.actions).allSatisfy(\.isPreviewOnly))
+    }
+
     func testHealthMatrixRowsDecodeOlderJSONWithoutActions() throws {
         let json = """
         {
@@ -282,6 +430,29 @@ final class ToolchainHealthMatrixTests: XCTestCase {
         )
     }
 
+    private func makeNDSIndex(
+        root: URL,
+        generatedOutputs: [SourceDocument] = [],
+        buildTargets: [BuildTarget] = []
+    ) -> ProjectIndex {
+        ProjectIndex(
+            root: SourceLocation(path: root.path, exists: true),
+            profile: .pokeplatinum,
+            adapterID: "pret.pokeplatinum",
+            adapterName: "pokeplatinum",
+            editorModules: [.rom, .build, .diagnostics],
+            capabilities: [.resourceIndex, .ndsSourceTreeIndex, .ndsDataCatalog, .diagnostics],
+            writePolicy: .readOnly,
+            documents: [
+                SourceDocument(relativePath: "Makefile", kind: .makefile, role: .marker, exists: true),
+                SourceDocument(relativePath: "meson.build", kind: .configuration, role: .marker, exists: true)
+            ],
+            generatedOutputs: generatedOutputs,
+            diagnostics: [],
+            buildTargets: buildTargets
+        )
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let temp = try ToolchainHealthTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -303,6 +474,16 @@ final class ToolchainHealthMatrixTests: XCTestCase {
         writeASCII(gameCode, offset: 0xAC, length: 4, to: &data)
         writeASCII(makerCode, offset: 0xB0, length: 2, to: &data)
         data[0xBC] = revision
+        return data
+    }
+
+    private func ndsROM(title: String, gameCode: String, makerCode: String) -> Data {
+        var data = Data(repeating: 0, count: 0x200)
+        writeASCII(title, offset: 0x00, length: 12, to: &data)
+        writeASCII(gameCode, offset: 0x0C, length: 4, to: &data)
+        writeASCII(makerCode, offset: 0x10, length: 2, to: &data)
+        data[0x12] = 0x00
+        data[0x14] = 0x08
         return data
     }
 

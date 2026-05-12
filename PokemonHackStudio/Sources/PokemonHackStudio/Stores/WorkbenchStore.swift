@@ -106,6 +106,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
     case move
     case item
     case graphics
+    case ndsData
 
     var title: String {
         switch self {
@@ -117,6 +118,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
         case .move: "Move Changes"
         case .item: "Item Changes"
         case .graphics: "Graphics Changes"
+        case .ndsData: "NDS Data Changes"
         }
     }
 
@@ -130,6 +132,7 @@ enum WorkbenchToolbarMutationTarget: String, Equatable {
         case .move: "bolt"
         case .item: "shippingbox"
         case .graphics: "photo.on.rectangle"
+        case .ndsData: "doc.text"
         }
     }
 }
@@ -255,11 +258,14 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var latestItemApplyResult: PokemonHackCore.ItemApplyResult?
     @Published private(set) var latestGraphicsEditPlan: PokemonHackCore.GraphicsEditPlan?
     @Published private(set) var latestGraphicsApplyResult: PokemonHackCore.GraphicsApplyResult?
+    @Published private(set) var latestNDSDataEditPlan: PokemonHackCore.NDSDataEditPlan?
+    @Published private(set) var latestNDSDataApplyResult: PokemonHackCore.NDSDataApplyResult?
     @Published private var speciesDraftsByKey: [String: PokemonHackCore.SpeciesEditDraft] = [:]
     @Published private var trainerDraftsByKey: [String: PokemonHackCore.TrainerEditDraft] = [:]
     @Published private var moveDraftsByKey: [String: PokemonHackCore.MoveEditDraft] = [:]
     @Published private var itemDraftsByKey: [String: PokemonHackCore.ItemEditDraft] = [:]
     @Published private var graphicsDraftsByKey: [String: PokemonHackCore.GraphicsEditDraft] = [:]
+    @Published private var ndsDataDraftsByKey: [String: PokemonHackCore.NDSDataEditDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
     @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
     @Published private var buildRunResultsByID: [String: BuildRunResultViewState] = [:]
@@ -293,6 +299,8 @@ final class WorkbenchStore: ObservableObject {
     private var itemCatalogsByID: [String: PokemonHackCore.ProjectItemCatalog] = [:]
     private var assetCatalogsByID: [String: ResourceAssetCatalogViewState] = [:]
     private var assetCatalogFingerprintsByID: [String: String] = [:]
+    private var ndsDataCatalogsByID: [String: PokemonHackCore.ProjectNDSDataCatalog] = [:]
+    private var ndsDataCatalogFingerprintsByID: [String: String] = [:]
     private var sourceGraphTask: Task<Void, Never>?
     private var speciesCatalogTask: Task<Void, Never>?
     private var trainerCatalogTask: Task<Void, Never>?
@@ -334,13 +342,14 @@ final class WorkbenchStore: ObservableObject {
         userSettings: WorkbenchUserSettings? = nil,
         fileManager: FileManager = .default,
         toolResolver: @escaping ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
+        workspaceRoot: URL? = nil,
         autoLoadProjects: Bool = true
     ) {
         self.userDefaults = userDefaults
         self.userSettings = userSettings ?? WorkbenchUserSettings(defaults: userDefaults)
         self.fileManager = fileManager
         self.toolResolver = toolResolver
-        workspaceRoot = Self.inferredWorkspaceRoot()
+        self.workspaceRoot = workspaceRoot ?? Self.inferredWorkspaceRoot()
         recentProjectRoots = userDefaults.stringArray(forKey: Self.recentRootsKey) ?? []
 
         targets = FixtureData.targets
@@ -878,12 +887,24 @@ final class WorkbenchStore: ObservableObject {
         selectedPlaytestCaptureResult?.primaryArtifact
     }
 
+    var selectedNDSHealthActionRows: [BuildReportRow] {
+        guard selectedBuildReport?.isNDS == true else { return [] }
+        return selectedBuildReport?.healthMatrix.rows.filter { !$0.actions.isEmpty } ?? []
+    }
+
     var canLaunchSelectedPlaytest: Bool {
         selectedBuildReport?.playtest.isRunnable == true
     }
 
     var selectedRunnableBuildTargets: [BuildTargetValidationViewState] {
-        selectedBuildReport?.buildTargets.filter { $0.command.split(separator: " ").first == "make" } ?? []
+        if let profile = selectedIndexedProject?.profile,
+           Self.ndsBuildPreviewOnlyProfiles.contains(profile) {
+            return []
+        }
+        guard selectedIndexedProject?.buildTargetCount ?? 0 > 0 else {
+            return []
+        }
+        return selectedBuildReport?.buildTargets.filter { $0.command.split(separator: " ").first == "make" } ?? []
     }
 
     var selectedEffectiveDecompBuildTargetID: String {
@@ -1014,6 +1035,7 @@ final class WorkbenchStore: ObservableObject {
             || selectedMoveIsDirty
             || selectedItemIsDirty
             || selectedGraphicsIsDirty
+            || selectedNDSDataIsDirty
     }
 
     var currentDraftCounts: PokemonHackCore.SavedDraftCounts {
@@ -1105,7 +1127,19 @@ final class WorkbenchStore: ObservableObject {
                 previewBlockedReason: graphicsPreviewBlockedReason,
                 applyBlockedReason: graphicsApplyBlockedReason
             )
-        case .dashboard, .resources, .encounters, .scripts, .text, .build, .issues:
+        case .resources:
+            guard selectedNDSDataRecordID != nil else {
+                return .unavailable
+            }
+            return WorkbenchToolbarMutationState(
+                target: .ndsData,
+                canPreview: canPreviewSelectedNDSDataMutationPlan,
+                canApply: canApplySelectedNDSDataMutationPlan,
+                canDiscard: canDiscardNDSDataEdits,
+                previewBlockedReason: ndsDataPreviewBlockedReason,
+                applyBlockedReason: ndsDataApplyBlockedReason
+            )
+        case .dashboard, .encounters, .scripts, .text, .build, .issues:
             return .unavailable
         }
     }
@@ -1365,6 +1399,132 @@ final class WorkbenchStore: ObservableObject {
         return applyability.diagnostics.first?.message ?? "Resolve graphics mutation diagnostics before applying."
     }
 
+    var selectedNDSDataEditor: NDSDataResourceEditorViewState? {
+        guard let asset = selectedResourceAsset, let recordID = ndsDataRecordID(fromAssetID: asset.id) else {
+            return nil
+        }
+        let canEdit = selectedNDSDataCanEditSourceText
+        let draftText = selectedNDSDataDraft?.editedText ?? selectedNDSDataSourceText ?? ""
+        return NDSDataResourceEditorViewState(
+            recordID: recordID,
+            text: draftText,
+            semanticFields: selectedNDSDataSemanticFields(sourceText: draftText),
+            canEdit: canEdit,
+            isDirty: selectedNDSDataIsDirty,
+            canPreview: canPreviewSelectedNDSDataMutationPlan,
+            canApply: canApplySelectedNDSDataMutationPlan,
+            canDiscard: canDiscardNDSDataEdits,
+            blockedReason: ndsDataPreviewBlockedReason,
+            applyBlockedReason: ndsDataApplyBlockedReason
+        )
+    }
+
+    var selectedNDSDataDraft: PokemonHackCore.NDSDataEditDraft? {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return nil }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        if let draft = ndsDataDraftsByKey[key] {
+            return draft
+        }
+        return selectedNDSDataSourceText.map { PokemonHackCore.NDSDataEditDraft(recordID: recordID, editedText: $0) }
+    }
+
+    var selectedNDSDataSourceText: String? {
+        guard let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return nil }
+        return PokemonHackCore.NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: recordID, fileManager: fileManager)
+    }
+
+    var selectedNDSDataCanEditSourceText: Bool {
+        guard let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return false }
+        let diagnostics = PokemonHackCore.NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: recordID, fileManager: fileManager)
+        return diagnostics.allSatisfy { $0.severity != .error }
+    }
+
+    var selectedNDSDataIsDirty: Bool {
+        guard
+            let selectedIndexedProject,
+            let recordID = selectedNDSDataRecordID,
+            let sourceText = selectedNDSDataSourceText
+        else {
+            return false
+        }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        guard let draft = ndsDataDraftsByKey[key] else { return false }
+        return draft.editedText != sourceText
+    }
+
+    var canPreviewSelectedNDSDataMutationPlan: Bool {
+        selectedNDSDataIsDirty && selectedNDSDataDraft != nil
+    }
+
+    var canApplySelectedNDSDataMutationPlan: Bool {
+        latestNDSDataEditPlan?.validateApplyability(fileManager: fileManager).isApplyable == true
+    }
+
+    var canDiscardNDSDataEdits: Bool {
+        selectedNDSDataIsDirty || latestNDSDataEditPlan != nil || latestNDSDataApplyResult != nil
+    }
+
+    var ndsDataPreviewBlockedReason: String? {
+        guard selectedNDSDataRecordID != nil else { return "Select an NDS data resource row before previewing edits." }
+        guard let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return "Load an NDS source project before previewing edits." }
+        let diagnostics = PokemonHackCore.NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: recordID, fileManager: fileManager)
+        if let diagnostic = diagnostics.first(where: { $0.severity == .error }) {
+            return diagnostic.message
+        }
+        guard selectedNDSDataDraft != nil else { return "This NDS data row is not editable as UTF-8 source text." }
+        guard selectedNDSDataIsDirty else { return "Change NDS data text before previewing a mutation plan." }
+        return nil
+    }
+
+    var ndsDataApplyBlockedReason: String? {
+        guard let plan = latestNDSDataEditPlan else { return "Preview NDS data mutations before applying." }
+        let applyability = plan.validateApplyability(fileManager: fileManager)
+        if applyability.isApplyable {
+            return nil
+        }
+        return applyability.diagnostics.first?.message ?? "Resolve NDS data mutation diagnostics before applying."
+    }
+
+    private var selectedNDSDataRecordID: String? {
+        selectedResourceAsset.flatMap { ndsDataRecordID(fromAssetID: $0.id) }
+    }
+
+    private var selectedNDSDataCatalog: PokemonHackCore.ProjectNDSDataCatalog? {
+        guard let selectedIndexedProject else { return nil }
+        return ndsDataCatalog(for: selectedIndexedProject)
+    }
+
+    private func ndsDataCatalog(for project: IndexedProjectSummary) -> PokemonHackCore.ProjectNDSDataCatalog? {
+        let fingerprint = Self.assetCatalogFingerprint(rootPath: project.rootPath, fileManager: fileManager)
+        if ndsDataCatalogFingerprintsByID[project.id] == fingerprint,
+           let cached = ndsDataCatalogsByID[project.id] {
+            return cached
+        }
+        guard let catalog = try? PokemonHackCore.NDSDataCatalogBuilder.build(path: project.rootPath, fileManager: fileManager) else {
+            ndsDataCatalogsByID.removeValue(forKey: project.id)
+            ndsDataCatalogFingerprintsByID.removeValue(forKey: project.id)
+            return nil
+        }
+        ndsDataCatalogsByID[project.id] = catalog
+        ndsDataCatalogFingerprintsByID[project.id] = fingerprint
+        return catalog
+    }
+
+    private func selectedNDSDataSemanticFields(sourceText: String) -> [NDSDataSemanticFieldViewState] {
+        guard let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return [] }
+        let snapshot = PokemonHackCore.NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: recordID, fileManager: fileManager)
+        guard snapshot.canEdit else { return [] }
+        return PokemonHackCore.NDSDataSemanticEditor.fields(sourceText: sourceText, recordID: recordID).map {
+            NDSDataSemanticFieldViewState(
+                id: $0.id,
+                key: $0.key,
+                label: $0.label,
+                value: $0.value,
+                valueKind: $0.valueKind.rawValue
+            )
+        }
+    }
+
     var selectedDiagnosticBucketSummary: DiagnosticBucketSummary {
         diagnosticSummary.bucket(selectedDiagnosticBucket)
     }
@@ -1418,7 +1578,7 @@ final class WorkbenchStore: ObservableObject {
             + report.generatedArtifacts.map(\.status)
             + report.toolchain.rows.map(\.status)
             + healthMatrix.rows.map(\.status)
-            + [report.toolchain.status, healthMatrix.status, report.playtest.status]
+            + [report.toolchain.status, healthMatrix.status, report.playtest.status, report.playtestDebug.status]
             + report.diagnostics.map(\.severity)
 
         return BuildPatchPlaytestReportViewState(
@@ -1426,12 +1586,14 @@ final class WorkbenchStore: ObservableObject {
             projectTitle: report.projectTitle,
             rootPath: report.rootPath,
             profile: report.profile,
+            isNDS: report.isNDS,
             status: Self.validationStatus(for: states),
             buildTargets: report.buildTargets,
             generatedArtifacts: report.generatedArtifacts,
             toolchain: report.toolchain,
             healthMatrix: healthMatrix,
             playtest: report.playtest,
+            playtestDebug: report.playtestDebug,
             baseROMOptions: report.baseROMOptions,
             diagnostics: report.diagnostics
         )
@@ -1449,13 +1611,15 @@ final class WorkbenchStore: ObservableObject {
 
         return ToolchainHealthMatrixViewState(
             id: matrix.id,
+            isNDS: matrix.isNDS,
             status: status,
             detail: "Visible health matrix: \(ready) ready, \(warnings) warning, \(errors) error, \(notApplicable) not applicable.",
             readyCount: ready,
             warningCount: warnings,
             errorCount: errors,
             notApplicableCount: notApplicable,
-            rows: rows
+            rows: rows,
+            ndsGroups: matrix.isNDS ? ndsHealthGroups(from: rows) : []
         )
     }
 
@@ -1677,6 +1841,23 @@ final class WorkbenchStore: ObservableObject {
         "\(projectID)::graphics::\(tilesetSymbol)"
     }
 
+    private func ndsDataDraftKey(projectID: String, recordID: String) -> String {
+        "\(projectID)::nds-data::\(recordID)"
+    }
+
+    private func ndsDataRecordID(fromAssetID assetID: String) -> String? {
+        guard let range = assetID.range(of: ":nds-data:") else { return nil }
+        return String(assetID[range.upperBound...])
+    }
+
+    private static let ndsBuildPreviewOnlyProfiles: Set<String> = [
+        "ndsROM",
+        "pokediamond",
+        "pokeplatinum",
+        "pokeheartgold",
+        "pmdSky"
+    ]
+
     private func draftKeyPrefix(projectID: String, kind: String) -> String {
         "\(projectID)::\(kind)::"
     }
@@ -1691,6 +1872,7 @@ final class WorkbenchStore: ObservableObject {
         let movePrefix = draftKeyPrefix(projectID: projectID, kind: "move")
         let itemPrefix = draftKeyPrefix(projectID: projectID, kind: "item")
         let graphicsPrefix = draftKeyPrefix(projectID: projectID, kind: "graphics")
+        let ndsDataPrefix = draftKeyPrefix(projectID: projectID, kind: "nds-data")
 
         var mapDrafts = savedMapDraftsByProjectID[projectID] ?? []
         if
@@ -1730,7 +1912,11 @@ final class WorkbenchStore: ObservableObject {
                 .filter { $0.key.hasPrefix(graphicsPrefix) }
                 .map(\.value)
                 .filter { !$0.operations.isEmpty }
-                .sorted { $0.tilesetSymbol < $1.tilesetSymbol }
+                .sorted { $0.tilesetSymbol < $1.tilesetSymbol },
+            ndsDataDrafts: ndsDataDraftsByKey
+                .filter { $0.key.hasPrefix(ndsDataPrefix) }
+                .map(\.value)
+                .sorted { $0.recordID < $1.recordID }
         )
     }
 
@@ -1759,6 +1945,7 @@ final class WorkbenchStore: ObservableObject {
         moveDraftsByKey = moveDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "move")) }
         itemDraftsByKey = itemDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "item")) }
         graphicsDraftsByKey = graphicsDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "graphics")) }
+        ndsDataDraftsByKey = ndsDataDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
     }
 
@@ -2019,6 +2206,8 @@ final class WorkbenchStore: ObservableObject {
         romInspectorReportsByID = romInspectorReports
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
+        ndsDataCatalogsByID = ndsDataCatalogsByID.filter { indexes.keys.contains($0.key) }
+        ndsDataCatalogFingerprintsByID = ndsDataCatalogFingerprintsByID.filter { indexes.keys.contains($0.key) }
         savedMapDraftsByProjectID = savedMapDraftsByProjectID.filter { indexes.keys.contains($0.key) }
         mapVisualSharedCacheDataByID = [:]
         resourceAssetRowsCache = nil
@@ -2351,6 +2540,8 @@ final class WorkbenchStore: ObservableObject {
 
     func requestResourceAssetSelection(_ assetID: ResourceAssetRowViewState.ID?) {
         selectedResourceAssetID = assetID
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
         if let assetID {
             recordRecentTarget(recentResourceAssetTarget(for: assetID))
         }
@@ -2453,6 +2644,8 @@ final class WorkbenchStore: ObservableObject {
         latestItemApplyResult = nil
         latestGraphicsEditPlan = nil
         latestGraphicsApplyResult = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
         rawGraphicsImportPackagePlan = nil
         selectedGraphicsImportPackagePlan = nil
         graphicsImportPackagePlanStatus = .idle
@@ -2607,6 +2800,106 @@ final class WorkbenchStore: ObservableObject {
                     Diagnostic(
                         severity: .error,
                         code: "GRAPHICS_APPLY_FAILED",
+                        message: error.localizedDescription
+                    )
+                ]
+            )
+        }
+    }
+
+    func updateSelectedNDSDataDraftText(_ text: String) {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        guard selectedNDSDataCanEditSourceText else {
+            ndsDataDraftsByKey.removeValue(forKey: key)
+            latestNDSDataEditPlan = nil
+            latestNDSDataApplyResult = nil
+            scheduleDraftAutosaveIfNeeded()
+            return
+        }
+        if let sourceText = selectedNDSDataSourceText, text == sourceText {
+            ndsDataDraftsByKey.removeValue(forKey: key)
+        } else {
+            ndsDataDraftsByKey[key] = PokemonHackCore.NDSDataEditDraft(recordID: recordID, editedText: text)
+        }
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    func updateSelectedNDSDataSemanticField(key fieldKey: String, value: String) {
+        guard
+            let sourceText = selectedNDSDataDraft?.editedText ?? selectedNDSDataSourceText,
+            let recordID = selectedNDSDataRecordID
+        else {
+            return
+        }
+        let result = PokemonHackCore.NDSDataSemanticEditor.updateSourceText(
+            sourceText,
+            fieldEdit: PokemonHackCore.NDSDataSemanticFieldEdit(key: fieldKey, value: value),
+            recordID: recordID
+        )
+        guard result.diagnostics.allSatisfy({ $0.severity != .error }) else { return }
+        updateSelectedNDSDataDraftText(result.text)
+    }
+
+    func discardNDSDataEdits() {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else {
+            latestNDSDataEditPlan = nil
+            latestNDSDataApplyResult = nil
+            return
+        }
+        ndsDataDraftsByKey.removeValue(forKey: ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID))
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    func previewSelectedNDSDataMutationPlan() {
+        guard let catalog = selectedNDSDataCatalog, let draft = selectedNDSDataDraft else {
+            latestNDSDataEditPlan = nil
+            latestNDSDataApplyResult = nil
+            return
+        }
+        latestNDSDataEditPlan = PokemonHackCore.NDSDataMutationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+        latestNDSDataApplyResult = nil
+    }
+
+    func applySelectedNDSDataMutationPlan() {
+        if latestNDSDataEditPlan == nil {
+            previewSelectedNDSDataMutationPlan()
+        }
+
+        guard let plan = latestNDSDataEditPlan else { return }
+        let projectIDBeforeApply = selectedProjectID
+        let recordIDBeforeApply = plan.recordID
+
+        do {
+            let result = try PokemonHackCore.NDSDataMutationApplier.apply(plan: plan, fileManager: fileManager)
+            latestNDSDataApplyResult = result
+            guard !result.appliedChanges.isEmpty else { return }
+            if !projectIDBeforeApply.isEmpty {
+                ndsDataDraftsByKey.removeValue(
+                    forKey: ndsDataDraftKey(projectID: projectIDBeforeApply, recordID: recordIDBeforeApply)
+                )
+            }
+            ndsDataCatalogsByID.removeValue(forKey: projectIDBeforeApply)
+            ndsDataCatalogFingerprintsByID.removeValue(forKey: projectIDBeforeApply)
+            loadSelectedAssetCatalogIfNeeded(force: true)
+            if indexedProjects.contains(where: { $0.id == projectIDBeforeApply }) {
+                selectedProjectID = projectIDBeforeApply
+            }
+            latestNDSDataEditPlan = nil
+            latestNDSDataApplyResult = result
+            scheduleDraftAutosaveIfNeeded()
+        } catch {
+            latestNDSDataApplyResult = PokemonHackCore.NDSDataApplyResult(
+                backupRootPath: plan.backupRelativeRoot,
+                appliedChanges: [],
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_APPLY_FAILED",
                         message: error.localizedDescription
                     )
                 ]
@@ -2917,6 +3210,8 @@ final class WorkbenchStore: ObservableObject {
             itemCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogsByID.removeValue(forKey: summary.id)
             assetCatalogFingerprintsByID.removeValue(forKey: summary.id)
+            ndsDataCatalogsByID.removeValue(forKey: summary.id)
+            ndsDataCatalogFingerprintsByID.removeValue(forKey: summary.id)
             selectedResourceAssetID = nil
             pendingRelatedMapTargetID = nil
             pendingResourceAssetFocus = nil
@@ -3010,6 +3305,8 @@ final class WorkbenchStore: ObservableObject {
             previewSelectedItemMutationPlan()
         case .graphics:
             previewSelectedGraphicsMutationPlan()
+        case .ndsData:
+            previewSelectedNDSDataMutationPlan()
         case .none:
             break
         }
@@ -3031,6 +3328,8 @@ final class WorkbenchStore: ObservableObject {
             applySelectedItemMutationPlan()
         case .graphics:
             applySelectedGraphicsMutationPlan()
+        case .ndsData:
+            applySelectedNDSDataMutationPlan()
         case .none:
             break
         }
@@ -3052,6 +3351,8 @@ final class WorkbenchStore: ObservableObject {
             discardItemEdits()
         case .graphics:
             discardGraphicsEdits()
+        case .ndsData:
+            discardNDSDataEdits()
         case .none:
             break
         }
@@ -4297,6 +4598,8 @@ final class WorkbenchStore: ObservableObject {
         latestItemApplyResult = nil
         latestGraphicsEditPlan = nil
         latestGraphicsApplyResult = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
 
         do {
             try ProjectWorkspacePersistence.discardAutosave(root: root, fileManager: fileManager)
@@ -4377,6 +4680,9 @@ final class WorkbenchStore: ObservableObject {
         }
         for draft in workspace.drafts.graphicsDrafts where !draft.operations.isEmpty {
             graphicsDraftsByKey[graphicsDraftKey(projectID: projectID, tilesetSymbol: draft.tilesetSymbol)] = draft
+        }
+        for draft in workspace.drafts.ndsDataDrafts {
+            ndsDataDraftsByKey[ndsDataDraftKey(projectID: projectID, recordID: draft.recordID)] = draft
         }
         savedMapDraftsByProjectID[projectID] = workspace.drafts.mapDrafts
         restoreSelectedMapDraftIfAvailable(projectID: projectID)
@@ -4649,6 +4955,10 @@ final class WorkbenchStore: ObservableObject {
         }
 
         let fingerprint = Self.assetCatalogFingerprint(rootPath: project.rootPath, fileManager: fileManager)
+        if force {
+            ndsDataCatalogsByID.removeValue(forKey: project.id)
+            ndsDataCatalogFingerprintsByID.removeValue(forKey: project.id)
+        }
         if
             !force,
             assetCatalogFingerprintsByID[project.id] == fingerprint,
@@ -4681,6 +4991,7 @@ final class WorkbenchStore: ObservableObject {
                 let viewState = Self.assetCatalogViewState(from: catalog, project: projectSummary)
                 assetCatalogsByID[projectID] = viewState
                 assetCatalogFingerprintsByID[projectID] = fingerprint
+                _ = self.ndsDataCatalog(for: projectSummary)
                 resourceAssetRowsCache = nil
                 resolvePendingResourceAssetFocusIfNeeded()
                 assetCatalogLoadStatus = .loaded(viewState.assetCount)
@@ -5225,6 +5536,14 @@ final class WorkbenchStore: ObservableObject {
         let toolchain = toolchainReadiness(from: buildReport, playtestReport: playtestReport)
         let healthMatrix = toolchainHealthMatrix(from: healthReport, rootPath: project.rootPath)
         let playtest = playtestHandoffPlan(from: playtestReport, rootPath: project.rootPath)
+        let playtestDebug = playtestDebugPlan(
+            from: PlaytestDebugPlanBuilder.build(
+                handoff: playtestReport,
+                fileManager: fileManager,
+                toolResolver: toolResolver
+            ),
+            rootPath: project.rootPath
+        )
         let baseROMOptions = baseROMOptions(from: buildReport, rootPath: project.rootPath)
         let diagnostics = (buildReport.diagnostics + playtestReport.diagnostics + healthReport.diagnostics).map {
             diagnostic(from: $0, rootPath: project.rootPath)
@@ -5233,7 +5552,7 @@ final class WorkbenchStore: ObservableObject {
             + generatedArtifacts.map(\.status)
             + toolchain.rows.map(\.status)
             + healthMatrix.rows.map(\.status)
-            + [toolchain.status, healthMatrix.status, playtest.status]
+            + [toolchain.status, healthMatrix.status, playtest.status, playtestDebug.status]
             + diagnostics.map(\.severity)
 
         return BuildPatchPlaytestReportViewState(
@@ -5241,12 +5560,14 @@ final class WorkbenchStore: ObservableObject {
             projectTitle: project.title,
             rootPath: project.rootPath,
             profile: project.profile,
+            isNDS: index.profile.platform == .nds,
             status: validationStatus(for: states),
             buildTargets: buildTargets,
             generatedArtifacts: generatedArtifacts,
             toolchain: toolchain,
             healthMatrix: healthMatrix,
             playtest: playtest,
+            playtestDebug: playtestDebug,
             baseROMOptions: baseROMOptions,
             diagnostics: diagnostics
         )
@@ -6108,14 +6429,99 @@ final class WorkbenchStore: ObservableObject {
         let summary = report.summary.all
         return ToolchainHealthMatrixViewState(
             id: "health:\(report.rootPath)",
+            isNDS: report.profile.platform == .nds,
             status: status,
             detail: "Preview-only matrix: \(summary.ready) ready, \(summary.warnings) warning, \(summary.errors) error, \(summary.notApplicable) not applicable.",
             readyCount: summary.ready,
             warningCount: summary.warnings,
             errorCount: summary.errors,
             notApplicableCount: summary.notApplicable,
-            rows: rows
+            rows: rows,
+            ndsGroups: report.profile.platform == .nds ? ndsHealthGroups(from: rows) : []
         )
+    }
+
+    private static func ndsHealthGroups(from rows: [BuildReportRow]) -> [NDSToolchainHealthGroupViewState] {
+        let groups: [(id: String, title: String, detail: String, matches: (BuildReportRow) -> Bool)] = [
+            (
+                "build-sdks",
+                "Build SDKs",
+                "devkitPro, devkitARM, BlocksDS, build-system, and compiler prerequisites.",
+                { row in
+                    row.healthCategory == .externalTools && (
+                        row.title.localizedCaseInsensitiveContains("devkit")
+                            || row.title.localizedCaseInsensitiveContains("arm-none-eabi")
+                            || row.title.localizedCaseInsensitiveContains("BlocksDS")
+                            || row.title == "make"
+                            || row.title == "meson"
+                            || row.title == "ninja"
+                            || row.title == "cmake"
+                            || row.title == "grit"
+                            || row.title == "mmutil"
+                    )
+                }
+            ),
+            (
+                "packaging-inspection",
+                "Packaging/Inspection",
+                "NDS ROM/package inspection prerequisites such as ndstool.",
+                { row in
+                    row.healthCategory == .externalTools
+                        && row.title.localizedCaseInsensitiveContains("ndstool")
+                }
+            ),
+            (
+                "python-ndspy",
+                "Python/ndspy-compatible",
+                "Python and ndspy-compatible inspection tooling.",
+                { row in
+                    row.healthCategory == .externalTools
+                        && (row.title == "python3" || row.title.localizedCaseInsensitiveContains("ndspy"))
+                }
+            ),
+            (
+                "manual-emulators",
+                "Manual Emulators",
+                "melonDS and DeSmuME are detected for manual use only; the app does not launch them.",
+                { row in
+                    row.healthCategory == .externalTools
+                        && (row.title.localizedCaseInsensitiveContains("melonDS") || row.title.localizedCaseInsensitiveContains("DeSmuME"))
+                }
+            ),
+            (
+                "reference-tools",
+                "Reference Tools",
+                "Read-only reference checkouts for clean-room orientation.",
+                { row in
+                    row.id.contains("reference")
+                        || row.title.localizedCaseInsensitiveContains("DSPRE")
+                        || row.title.localizedCaseInsensitiveContains("Tinke")
+                }
+            ),
+            (
+                "headers",
+                "Headers",
+                "NDS header facts and manual rerun guidance for missing declared ROM outputs.",
+                { row in row.healthCategory == .romHeaders }
+            ),
+            (
+                "declared-outputs",
+                "Declared Outputs",
+                "Declared NDS generated outputs and checksum artifacts.",
+                { row in row.healthCategory == .generatedArtifacts }
+            )
+        ]
+
+        return groups.compactMap { group in
+            let groupRows = rows.filter(group.matches)
+            guard !groupRows.isEmpty else { return nil }
+            return NDSToolchainHealthGroupViewState(
+                id: group.id,
+                title: group.title,
+                detail: group.detail,
+                rows: groupRows
+            )
+        }
     }
 
     private static func healthCategoryTitle(_ category: PokemonHackCore.ToolchainHealthCategory) -> String {
@@ -6197,6 +6603,69 @@ final class WorkbenchStore: ObservableObject {
             detail: detail,
             source: SourceLocation(path: romPath ?? rootPath, symbol: report.emulator.name, line: 1)
         )
+    }
+
+    private static func playtestDebugPlan(
+        from plan: PokemonHackCore.PlaytestDebugPlan,
+        rootPath: String
+    ) -> PlaytestDebugPlanViewState {
+        let diagnostics = plan.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = validationStatus(
+            for: diagnostics.map(\.severity)
+                + plan.capabilities.map { validationState(for: $0.status) }
+        )
+        let romPath = plan.romCandidate?.relativePath ?? plan.romCandidate?.absolutePath
+        let artifacts = plan.artifacts.map { artifact in
+            PlaytestArtifactViewState(
+                id: "debug:\(artifact.kind.rawValue):\(artifact.relativePath)",
+                kind: artifact.kind.rawValue,
+                path: artifact.relativePath,
+                absolutePath: nil,
+                detail: artifact.detail,
+                exists: false,
+                isPrimaryCaptureArtifact: false,
+                source: SourceLocation(path: artifact.relativePath, symbol: artifact.kind.rawValue, line: 1)
+            )
+        }
+        let capabilities = plan.capabilities.map { capability in
+            PlaytestDebugCapabilityViewState(
+                id: capability.id,
+                toolName: capability.toolName,
+                status: validationState(for: capability.status),
+                statusLabel: capability.status.rawValue,
+                resolvedPath: capability.resolvedPath,
+                supportedActions: capability.supportedActions,
+                command: capability.commandPreview.joined(separator: " "),
+                detail: capability.detail,
+                source: SourceLocation(path: capability.resolvedPath ?? rootPath, symbol: capability.toolName, line: 1)
+            )
+        }
+        let detail = plan.isRunnable
+            ? "Debugger/access-log handoff is ready to copy or inspect; launch remains disabled in this planning slice."
+            : "Debugger/access-log handoff is planned only; review ROM and emulator readiness."
+        return PlaytestDebugPlanViewState(
+            id: "playtest-debug:\(rootPath)",
+            status: status,
+            detail: detail,
+            command: plan.commandPreview.joined(separator: " "),
+            isRunnable: plan.isRunnable,
+            isLaunchEnabled: plan.isLaunchEnabled,
+            artifacts: artifacts,
+            capabilities: capabilities,
+            diagnostics: diagnostics,
+            source: SourceLocation(path: romPath ?? rootPath, symbol: plan.emulator.name, line: 1)
+        )
+    }
+
+    private static func validationState(for status: PokemonHackCore.PlaytestDebugCapabilityStatus) -> ValidationState {
+        switch status {
+        case .ready:
+            .valid
+        case .warning:
+            .warning
+        case .notAvailable:
+            .warning
+        }
     }
 
     private static func playtestLaunchResult(

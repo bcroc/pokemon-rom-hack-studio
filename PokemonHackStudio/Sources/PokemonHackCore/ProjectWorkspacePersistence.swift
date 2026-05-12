@@ -7,18 +7,20 @@ public struct SavedDraftCounts: Codable, Equatable {
     public let items: Int
     public let maps: Int
     public let graphics: Int
+    public let ndsData: Int
 
-    public init(species: Int, trainers: Int, moves: Int, items: Int, maps: Int, graphics: Int = 0) {
+    public init(species: Int, trainers: Int, moves: Int, items: Int, maps: Int, graphics: Int = 0, ndsData: Int = 0) {
         self.species = species
         self.trainers = trainers
         self.moves = moves
         self.items = items
         self.maps = maps
         self.graphics = graphics
+        self.ndsData = ndsData
     }
 
     public var total: Int {
-        species + trainers + moves + items + maps + graphics
+        species + trainers + moves + items + maps + graphics + ndsData
     }
 }
 
@@ -43,6 +45,7 @@ public struct SavedDraftSnapshot: Codable, Equatable {
     public let itemDrafts: [ItemEditDraft]
     public let mapDrafts: [SavedMapDraftSnapshot]
     public let graphicsDrafts: [GraphicsEditDraft]
+    public let ndsDataDrafts: [NDSDataEditDraft]
 
     public init(
         speciesDrafts: [SpeciesEditDraft] = [],
@@ -50,7 +53,8 @@ public struct SavedDraftSnapshot: Codable, Equatable {
         moveDrafts: [MoveEditDraft] = [],
         itemDrafts: [ItemEditDraft] = [],
         mapDrafts: [SavedMapDraftSnapshot] = [],
-        graphicsDrafts: [GraphicsEditDraft] = []
+        graphicsDrafts: [GraphicsEditDraft] = [],
+        ndsDataDrafts: [NDSDataEditDraft] = []
     ) {
         self.speciesDrafts = speciesDrafts
         self.trainerDrafts = trainerDrafts
@@ -58,6 +62,7 @@ public struct SavedDraftSnapshot: Codable, Equatable {
         self.itemDrafts = itemDrafts
         self.mapDrafts = mapDrafts
         self.graphicsDrafts = graphicsDrafts
+        self.ndsDataDrafts = ndsDataDrafts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -67,6 +72,7 @@ public struct SavedDraftSnapshot: Codable, Equatable {
         case itemDrafts
         case mapDrafts
         case graphicsDrafts
+        case ndsDataDrafts
     }
 
     public init(from decoder: Decoder) throws {
@@ -77,6 +83,7 @@ public struct SavedDraftSnapshot: Codable, Equatable {
         itemDrafts = try container.decodeIfPresent([ItemEditDraft].self, forKey: .itemDrafts) ?? []
         mapDrafts = try container.decodeIfPresent([SavedMapDraftSnapshot].self, forKey: .mapDrafts) ?? []
         graphicsDrafts = try container.decodeIfPresent([GraphicsEditDraft].self, forKey: .graphicsDrafts) ?? []
+        ndsDataDrafts = try container.decodeIfPresent([NDSDataEditDraft].self, forKey: .ndsDataDrafts) ?? []
     }
 
     public var counts: SavedDraftCounts {
@@ -86,7 +93,8 @@ public struct SavedDraftSnapshot: Codable, Equatable {
             moves: moveDrafts.count,
             items: itemDrafts.count,
             maps: mapDrafts.count,
-            graphics: graphicsDrafts.count
+            graphics: graphicsDrafts.count,
+            ndsData: ndsDataDrafts.count
         )
     }
 

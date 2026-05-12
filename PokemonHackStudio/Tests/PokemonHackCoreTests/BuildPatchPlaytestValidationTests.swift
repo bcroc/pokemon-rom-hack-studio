@@ -473,6 +473,39 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PLAYTEST_ROM_NOT_BUILT" })
     }
 
+    func testPlaytestDebugPlanReportsExternalDebuggerCapabilitiesWithoutLaunching() throws {
+        let root = try makeTemporaryRoot()
+        let output = root.appendingPathComponent("pokeemerald.gba")
+        let emulator = root.appendingPathComponent("tools/mGBA")
+        try write(Data("abc".utf8), to: output)
+        try writeExecutable("#!/bin/sh\n", to: emulator)
+        let index = makeIndex(
+            root: root,
+            buildTargets: [
+                BuildTarget(id: "emerald-build", name: "Build ROM", kind: .build, command: ["make"], outputPath: "pokeemerald.gba")
+            ]
+        )
+
+        let plan = PlaytestDebugPlanBuilder.build(
+            index: index,
+            toolResolver: availableTools([
+                "mgba": emulator.path,
+                "EmuHawk": "/Applications/EmuHawk",
+                "visualboyadvance-m": "/usr/local/bin/visualboyadvance-m"
+            ])
+        )
+
+        XCTAssertTrue(plan.isRunnable)
+        XCTAssertFalse(plan.isLaunchEnabled)
+        XCTAssertEqual(plan.commandPreview, [emulator.path, "--gdb", output.path])
+        XCTAssertTrue(plan.artifacts.contains { $0.relativePath.hasSuffix("/debug/debug-plan.log") })
+        XCTAssertTrue(plan.artifacts.contains { $0.relativePath.hasSuffix("/debug/access.log") })
+        XCTAssertTrue(plan.capabilities.contains { $0.id == "mgba-debugger" && $0.status == .ready })
+        XCTAssertTrue(plan.capabilities.contains { $0.id == "bizhawk-automation" && $0.status == .warning })
+        XCTAssertTrue(plan.capabilities.contains { $0.id == "vba-m-debugger" && $0.status == .warning })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "PLAYTEST_DEBUG_PLAN_ONLY" })
+    }
+
     func testPlaytestLauncherStartsRunnableROMAndWritesLogs() throws {
         let root = try makeTemporaryRoot()
         let output = root.appendingPathComponent("pokeemerald.gba")

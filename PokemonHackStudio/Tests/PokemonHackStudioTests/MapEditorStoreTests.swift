@@ -1,7 +1,6 @@
 import PokemonHackCore
 import AppKit
 import XCTest
-@testable import PokemonHackStudio
 
 final class MapEditorStoreTests: XCTestCase {
     private var temporaryDirectories: [MapEditorStoreTemporaryDirectory] = []
@@ -427,6 +426,8 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(project.writePolicy, "readOnly")
         XCTAssertTrue(project.menuSubtitle.contains("Read-only NDS source root"))
         XCTAssertTrue(project.sourceSurfaces.contains { $0.source.path == "Makefile" })
+        XCTAssertTrue(store.selectedRunnableBuildTargets.isEmpty)
+        XCTAssertFalse(store.canRunSelectedDecompBuild)
 
         let entry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
         XCTAssertEqual(entry.platform, "ndsSource")
@@ -442,6 +443,133 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "species" })
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "maps" })
         XCTAssertFalse(entry.moduleSummary.contains("pokemon"))
+    }
+
+    @MainActor
+    func testNDSToolchainHealthAppSliceGroupsRowsAndKeepsActionsManualOnly() async throws {
+        let root = try makeNDSSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        let report = try XCTUnwrap(store.selectedBuildReport)
+        XCTAssertTrue(report.isNDS)
+        XCTAssertTrue(store.selectedRunnableBuildTargets.isEmpty)
+        XCTAssertFalse(store.canRunSelectedDecompBuild)
+
+        let actionStates = Dictionary(uniqueKeysWithValues: store.buildWorkflowActions(includePatchActions: true).map { ($0.id, $0.isEnabled) })
+        XCTAssertEqual(actionStates["build-rom"], false)
+        XCTAssertEqual(actionStates["open-playtest"], false)
+        XCTAssertEqual(actionStates["capture-screenshot"], false)
+        XCTAssertEqual(actionStates["capture-savestate"], false)
+
+        let groupTitles = Set(report.healthMatrix.ndsGroups.map(\.title))
+        XCTAssertTrue(groupTitles.contains("Build SDKs"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Packaging/Inspection"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Python/ndspy-compatible"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Manual Emulators"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Reference Tools"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Headers"), "\(groupTitles)")
+        XCTAssertTrue(groupTitles.contains("Declared Outputs"), "\(groupTitles)")
+
+        let groupedRows = report.healthMatrix.ndsGroups.flatMap(\.rows)
+        XCTAssertTrue(groupedRows.contains { $0.title == "devkitPro" })
+        XCTAssertTrue(groupedRows.contains { $0.title == "BlocksDS Docker image" })
+        XCTAssertTrue(groupedRows.contains { $0.title == "ndstool" })
+        XCTAssertTrue(groupedRows.contains { $0.title == "ndspy" || $0.title == "python3" })
+        XCTAssertTrue(groupedRows.contains { $0.title == "melonDS" })
+        XCTAssertTrue(groupedRows.contains { $0.title == "DeSmuME" })
+        XCTAssertTrue(groupedRows.contains { $0.healthCategory == .romHeaders })
+        XCTAssertTrue(groupedRows.contains { $0.healthCategory == .generatedArtifacts })
+
+        let actionRows = store.selectedNDSHealthActionRows
+        XCTAssertFalse(actionRows.isEmpty)
+        XCTAssertTrue(actionRows.flatMap(\.actions).allSatisfy { $0.copyValue != nil || $0.kind == .rerunGuidance })
+    }
+
+    @MainActor
+    func testNDSSourceResourceRecordEditsPreviewApplyAndBlockBinaryRows() async throws {
+        let root = try makeNDSSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let sourceRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "arm9/src/pokemon.c" })
+
+        store.requestResourceAssetSelection(sourceRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "species:arm9/src/pokemon.c")
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertTrue(editor.blockedReason?.contains("Change NDS data text") == true)
+
+        store.updateSelectedNDSDataDraftText("void Pokemon_Load(void) { /* edited */ }\n")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("arm9/src/pokemon.c"), encoding: .utf8),
+            "void Pokemon_Load(void) { /* edited */ }\n"
+        )
+
+        let binaryRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/mapmatrix/matrix.bin" })
+        store.requestResourceAssetSelection(binaryRow.id)
+
+        let blockedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertFalse(blockedEditor.canPreview)
+        XCTAssertFalse(blockedEditor.canEdit)
+        XCTAssertTrue(blockedEditor.blockedReason?.contains("binary") == true || blockedEditor.blockedReason?.contains("read-only") == true)
+
+        store.updateSelectedNDSDataDraftText("hidden draft should not be retained")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+    }
+
+    @MainActor
+    func testNDSSemanticJSONFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let speciesRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/pokemon/abra/data.json" })
+
+        store.requestResourceAssetSelection(speciesRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "species:res/pokemon/abra/data.json")
+        XCTAssertEqual(editor.semanticFields.first?.key, "base_hp")
+        XCTAssertEqual(editor.semanticFields.first?.value, "25")
+
+        store.updateSelectedNDSDataSemanticField(key: "base_hp", value: "29")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
+            "{\"base_hp\":29}\n"
+        )
     }
 
     @MainActor
@@ -2605,6 +2733,26 @@ final class MapEditorStoreTests: XCTestCase {
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
         try write("// header\n", to: root.appendingPathComponent("include/config.h"))
+
+        return root
+    }
+
+    private func makeNDSPlatinumSourceProject() throws -> URL {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url
+
+        try write("rom: build/pokeplatinum.us.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("project('pokeplatinum')\n", to: root.appendingPathComponent("meson.build"))
+        try write("path,sha1\n", to: root.appendingPathComponent("platinum.us/filesys.csv"))
+        try write("cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n", to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"))
+        try write("src\n", to: root.appendingPathComponent("src/main.c"))
+        try write("asm\n", to: root.appendingPathComponent("asm/main.s"))
+        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
+        try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
+        try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
+        try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
 
         return root
     }

@@ -872,6 +872,219 @@ public struct PlaytestHandoffReport: Codable, Equatable {
     }
 }
 
+public enum PlaytestDebugCapabilityStatus: String, Codable, Equatable {
+    case ready
+    case warning
+    case notAvailable
+}
+
+public struct PlaytestDebugCapability: Codable, Equatable, Identifiable {
+    public let id: String
+    public let toolName: String
+    public let status: PlaytestDebugCapabilityStatus
+    public let resolvedPath: String?
+    public let supportedActions: [String]
+    public let commandPreview: [String]
+    public let detail: String
+
+    public init(
+        id: String,
+        toolName: String,
+        status: PlaytestDebugCapabilityStatus,
+        resolvedPath: String?,
+        supportedActions: [String],
+        commandPreview: [String],
+        detail: String
+    ) {
+        self.id = id
+        self.toolName = toolName
+        self.status = status
+        self.resolvedPath = resolvedPath
+        self.supportedActions = supportedActions
+        self.commandPreview = commandPreview
+        self.detail = detail
+    }
+}
+
+public struct PlaytestDebugPlan: Codable, Equatable {
+    public let adapterID: String
+    public let profile: GameProfile
+    public let emulator: ToolAvailability
+    public let romCandidate: ROMCandidateStatus?
+    public let commandPreview: [String]
+    public let artifacts: [PlaytestSessionArtifact]
+    public let capabilities: [PlaytestDebugCapability]
+    public let diagnostics: [Diagnostic]
+    public let isRunnable: Bool
+    public let isLaunchEnabled: Bool
+
+    public init(
+        adapterID: String,
+        profile: GameProfile,
+        emulator: ToolAvailability,
+        romCandidate: ROMCandidateStatus?,
+        commandPreview: [String],
+        artifacts: [PlaytestSessionArtifact],
+        capabilities: [PlaytestDebugCapability],
+        diagnostics: [Diagnostic],
+        isRunnable: Bool,
+        isLaunchEnabled: Bool = false
+    ) {
+        self.adapterID = adapterID
+        self.profile = profile
+        self.emulator = emulator
+        self.romCandidate = romCandidate
+        self.commandPreview = commandPreview
+        self.artifacts = artifacts
+        self.capabilities = capabilities
+        self.diagnostics = diagnostics
+        self.isRunnable = isRunnable
+        self.isLaunchEnabled = isLaunchEnabled
+    }
+}
+
+public enum PlaytestDebugPlanBuilder {
+    public static func build(
+        index: ProjectIndex,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
+    ) -> PlaytestDebugPlan {
+        let handoff = PlaytestHandoffReportBuilder.build(
+            index: index,
+            mode: .interactive,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
+        return build(handoff: handoff, fileManager: fileManager, toolResolver: toolResolver)
+    }
+
+    public static func build(
+        handoff: PlaytestHandoffReport,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
+    ) -> PlaytestDebugPlan {
+        let executablePath = PlaytestLauncher.executablePath(for: handoff.emulator, fileManager: fileManager)
+        let romPath = handoff.romCandidate?.absolutePath
+        let command = executablePath.map { [$0, "--gdb"] + [romPath].compactMap { $0 } } ?? []
+        var diagnostics = handoff.diagnostics + [
+            diagnostic(
+                severity: .info,
+                code: "PLAYTEST_DEBUG_PLAN_ONLY",
+                message: "Debugger, GDB, Lua, and access-log actions are planned only; this report does not launch an emulator or write artifacts."
+            )
+        ]
+
+        if handoff.profile.platform != .gba {
+            diagnostics.append(
+                diagnostic(
+                    severity: .warning,
+                    code: "PLAYTEST_DEBUG_GBA_ONLY",
+                    message: "mGBA debugger planning is available for GBA ROM candidates only in this slice."
+                )
+            )
+        }
+
+        if executablePath == nil {
+            diagnostics.append(
+                diagnostic(
+                    severity: .warning,
+                    code: "PLAYTEST_DEBUG_EMULATOR_EXECUTABLE_MISSING",
+                    message: "mGBA debug command preview is blocked until an executable path is available."
+                )
+            )
+        }
+
+        return PlaytestDebugPlan(
+            adapterID: handoff.adapterID,
+            profile: handoff.profile,
+            emulator: handoff.emulator,
+            romCandidate: handoff.romCandidate,
+            commandPreview: command,
+            artifacts: plannedDebugArtifacts(romCandidate: handoff.romCandidate),
+            capabilities: debugCapabilities(
+                mgba: handoff.emulator,
+                mgbaExecutablePath: executablePath,
+                romPath: romPath,
+                toolResolver: toolResolver
+            ),
+            diagnostics: diagnostics,
+            isRunnable: handoff.isRunnable && executablePath != nil && handoff.profile.platform == .gba,
+            isLaunchEnabled: false
+        )
+    }
+
+    private static func plannedDebugArtifacts(romCandidate: ROMCandidateStatus?) -> [PlaytestSessionArtifact] {
+        let stem = romCandidate?.relativePath.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "playtest"
+        let root = ".pokemonhackstudio/playtests/\(stem)/debug"
+        return [
+            PlaytestSessionArtifact(kind: .runLog, relativePath: "\(root)/debug-plan.log", detail: "Planned debugger/access-log session notes."),
+            PlaytestSessionArtifact(kind: .stdout, relativePath: "\(root)/debug-stdout.log", detail: "Planned debugger standard output capture."),
+            PlaytestSessionArtifact(kind: .stderr, relativePath: "\(root)/debug-stderr.log", detail: "Planned debugger standard error capture."),
+            PlaytestSessionArtifact(kind: .runLog, relativePath: "\(root)/access.log", detail: "Planned emulator memory/access log output.")
+        ]
+    }
+
+    private static func debugCapabilities(
+        mgba: ToolAvailability,
+        mgbaExecutablePath: String?,
+        romPath: String?,
+        toolResolver: ToolAvailabilityResolver
+    ) -> [PlaytestDebugCapability] {
+        let mgbaCommand = mgbaExecutablePath.map { [$0, "--gdb"] + [romPath].compactMap { $0 } } ?? []
+        let mgbaStatus: PlaytestDebugCapabilityStatus = mgbaExecutablePath == nil ? .notAvailable : .ready
+        var capabilities = [
+            PlaytestDebugCapability(
+                id: "mgba-debugger",
+                toolName: "mGBA",
+                status: mgbaStatus,
+                resolvedPath: mgbaExecutablePath ?? mgba.resolvedPath,
+                supportedActions: ["debugger", "gdb", "lua", "screenshot", "savestate", "access-log-plan"],
+                commandPreview: mgbaCommand,
+                detail: mgbaExecutablePath == nil
+                    ? "mGBA was not resolved to an executable debug target."
+                    : "mGBA can be used as the primary external debugger and GDB/Lua bridge."
+            )
+        ]
+
+        capabilities.append(optionalCapability(
+            id: "bizhawk-automation",
+            toolName: "EmuHawk",
+            availability: toolResolver("EmuHawk"),
+            supportedActions: ["automation", "lua", "movie", "memory-watch"],
+            detailWhenAvailable: "BizHawk is available as an optional automation/debugging reference target.",
+            detailWhenMissing: "BizHawk/EmuHawk was not found; this optional automation path remains unavailable."
+        ))
+        capabilities.append(optionalCapability(
+            id: "vba-m-debugger",
+            toolName: "visualboyadvance-m",
+            availability: toolResolver("visualboyadvance-m"),
+            supportedActions: ["debugger", "logging", "link-check"],
+            detailWhenAvailable: "VisualBoyAdvance-M is available as an optional alternate debugger/logging target.",
+            detailWhenMissing: "VisualBoyAdvance-M was not found; alternate debugger/logging checks remain unavailable."
+        ))
+        return capabilities
+    }
+
+    private static func optionalCapability(
+        id: String,
+        toolName: String,
+        availability: ToolAvailability,
+        supportedActions: [String],
+        detailWhenAvailable: String,
+        detailWhenMissing: String
+    ) -> PlaytestDebugCapability {
+        PlaytestDebugCapability(
+            id: id,
+            toolName: toolName,
+            status: availability.isAvailable ? .warning : .notAvailable,
+            resolvedPath: availability.resolvedPath,
+            supportedActions: supportedActions,
+            commandPreview: availability.resolvedPath.map { [$0] } ?? [],
+            detail: availability.isAvailable ? detailWhenAvailable : detailWhenMissing
+        )
+    }
+}
+
 public enum PlaytestLaunchStatus: String, Codable, Equatable {
     case launched
     case blocked

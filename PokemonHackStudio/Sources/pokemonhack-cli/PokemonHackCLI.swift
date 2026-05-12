@@ -1,6 +1,44 @@
 import Foundation
 import PokemonHackCore
 
+private struct NDSDataEditPlanReport: Codable, Equatable {
+    let rootPath: String
+    let recordID: String
+    let changes: [NDSDataEditFileChangeReport]
+    let diagnostics: [Diagnostic]
+    let mutationPlan: MutationPlan
+    let backupRelativeRoot: String
+
+    init(plan: NDSDataEditPlan) {
+        rootPath = plan.rootPath
+        recordID = plan.recordID
+        changes = plan.changes.map(NDSDataEditFileChangeReport.init(change:))
+        diagnostics = plan.diagnostics
+        mutationPlan = plan.mutationPlan
+        backupRelativeRoot = plan.backupRelativeRoot
+    }
+}
+
+private struct NDSDataEditFileChangeReport: Codable, Equatable {
+    let id: String
+    let path: String
+    let summary: String
+    let originalSHA1: String?
+    let originalByteCount: Int
+    let newByteCount: Int
+    let textPreview: String
+
+    init(change: NDSDataEditFileChange) {
+        id = change.id
+        path = change.path
+        summary = change.summary
+        originalSHA1 = change.originalSHA1
+        originalByteCount = change.originalByteCount
+        newByteCount = change.newByteCount
+        textPreview = change.textPreview
+    }
+}
+
 @main
 struct PokemonHackCLI {
     static func main() {
@@ -71,6 +109,14 @@ struct PokemonHackCLI {
             return try narcInspect(arguments: Array(arguments.dropFirst()))
         case "nds-data-catalog":
             return try ndsDataCatalog(arguments: Array(arguments.dropFirst()))
+        case "nds-data-edit-plan":
+            return try ndsDataEditPlan(arguments: Array(arguments.dropFirst()))
+        case "nds-data-edit-apply":
+            return try ndsDataEditApply(arguments: Array(arguments.dropFirst()))
+        case "nds-data-semantic-plan":
+            return try ndsDataSemanticPlan(arguments: Array(arguments.dropFirst()))
+        case "nds-data-semantic-apply":
+            return try ndsDataSemanticApply(arguments: Array(arguments.dropFirst()))
         case "toolchain-health":
             return try toolchainHealth(arguments: Array(arguments.dropFirst()))
         case "references":
@@ -87,6 +133,8 @@ struct PokemonHackCLI {
             return try build(arguments: Array(arguments.dropFirst()))
         case "playtest":
             return try playtest(arguments: Array(arguments.dropFirst()))
+        case "playtest-debug-plan":
+            return try playtestDebugPlan(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError.unknownCommand(command)
         }
@@ -327,6 +375,89 @@ struct PokemonHackCLI {
         return try encode(NDSDataCatalogBuilder.build(path: path))
     }
 
+    private static func ndsDataEditPlan(arguments: [String]) throws -> String {
+        guard let request = try parseNDSDataEditArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let draft = try ndsDataEditDraft(recordID: request.recordID, draftFilePath: request.draftFilePath)
+        return try encode(NDSDataEditPlanReport(plan: NDSDataMutationPlanner.plan(catalog: catalog, draft: draft)))
+    }
+
+    private static func ndsDataEditApply(arguments: [String]) throws -> String {
+        guard let request = try parseNDSDataEditArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let draft = try ndsDataEditDraft(recordID: request.recordID, draftFilePath: request.draftFilePath)
+        let plan = NDSDataMutationPlanner.plan(catalog: catalog, draft: draft)
+        return try encode(try NDSDataMutationApplier.apply(plan: plan))
+    }
+
+    private static func ndsDataSemanticPlan(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataSemanticArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let draft = NDSDataSemanticEditDraft(recordID: request.recordID, fieldEdits: request.fieldEdits)
+        return try encode(NDSDataSemanticEditor.plan(catalog: catalog, draft: draft))
+    }
+
+    private static func ndsDataSemanticApply(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataSemanticArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let draft = NDSDataSemanticEditDraft(recordID: request.recordID, fieldEdits: request.fieldEdits)
+        let semanticPlan = NDSDataSemanticEditor.plan(catalog: catalog, draft: draft)
+        return try encode(try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan))
+    }
+
+    private static func parseNDSDataEditArguments(_ arguments: [String]) throws -> NDSDataEditCLIRequest? {
+        guard arguments.count == 5,
+              arguments[2] == "--draft-file",
+              arguments[4] == "--json"
+        else {
+            return nil
+        }
+        return NDSDataEditCLIRequest(projectPath: arguments[0], recordID: arguments[1], draftFilePath: arguments[3])
+    }
+
+    private static func parseNDSDataSemanticArguments(_ arguments: [String]) -> NDSDataSemanticCLIRequest? {
+        guard arguments.count >= 5,
+              arguments.last == "--json"
+        else {
+            return nil
+        }
+        let projectPath = arguments[0]
+        let recordID = arguments[1]
+        var index = 2
+        var edits: [NDSDataSemanticFieldEdit] = []
+        while index < arguments.count - 1 {
+            guard arguments[index] == "--set", index + 1 < arguments.count - 1 else {
+                return nil
+            }
+            let assignment = arguments[index + 1]
+            guard let equals = assignment.firstIndex(of: "=") else {
+                return nil
+            }
+            let key = String(assignment[..<equals])
+            let value = String(assignment[assignment.index(after: equals)...])
+            guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            edits.append(NDSDataSemanticFieldEdit(key: key, value: value))
+            index += 2
+        }
+        guard !edits.isEmpty else { return nil }
+        return NDSDataSemanticCLIRequest(projectPath: projectPath, recordID: recordID, fieldEdits: edits)
+    }
+
+    private static func ndsDataEditDraft(recordID: String, draftFilePath: String) throws -> NDSDataEditDraft {
+        let text = try String(contentsOf: URL(fileURLWithPath: draftFilePath), encoding: .utf8)
+        return NDSDataEditDraft(recordID: recordID, editedText: text)
+    }
+
     private static func toolchainHealth(arguments: [String]) throws -> String {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
@@ -492,6 +623,14 @@ struct PokemonHackCLI {
         }
     }
 
+    private static func playtestDebugPlan(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let index = try GameAdapterRegistry.index(path: path)
+        return try encode(PlaytestDebugPlanBuilder.build(index: index))
+    }
+
     private static func encode<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -514,11 +653,23 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | nds-data-edit-plan <project> <record-id> --draft-file <path> --json | nds-data-edit-apply <project> <record-id> --draft-file <path> --json | nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json | nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json | playtest-debug-plan <path> --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }
     }
+}
+
+private struct NDSDataEditCLIRequest {
+    let projectPath: String
+    let recordID: String
+    let draftFilePath: String
+}
+
+private struct NDSDataSemanticCLIRequest {
+    let projectPath: String
+    let recordID: String
+    let fieldEdits: [NDSDataSemanticFieldEdit]
 }
 
 struct ValidationReport: Encodable {

@@ -45,18 +45,6 @@ struct MapCanvasViewport: Equatable {
     var isEmpty: Bool { width <= 0 || height <= 0 || mapWidth <= 0 || mapHeight <= 0 }
 }
 
-struct MapCanvasViewportRequest: Equatable, Identifiable {
-    let id: String
-    let centerX: CGFloat
-    let centerY: CGFloat
-
-    init(id: String = UUID().uuidString, centerX: CGFloat, centerY: CGFloat) {
-        self.id = id
-        self.centerX = centerX
-        self.centerY = centerY
-    }
-}
-
 enum MapViewportGeometry {
     static let defaultZoom = 2.0
     static let unitZoom = 1.0

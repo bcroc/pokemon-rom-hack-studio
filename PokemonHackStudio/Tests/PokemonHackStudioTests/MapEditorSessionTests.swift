@@ -2,7 +2,6 @@ import AppKit
 import CoreGraphics
 import PokemonHackCore
 import XCTest
-@testable import PokemonHackStudio
 
 final class MapEditorSessionTests: XCTestCase {
     @MainActor

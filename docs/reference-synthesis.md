@@ -2,7 +2,7 @@
 
 PokemonHackStudio is intended to become an all-in-one, Apple Silicon native Pokemon GBA + NDS ROM hacking workbench. The reference repos are a product and compatibility map, not a source pool. Default adoption is clean-room Swift implementation unless a future license review explicitly approves copying code, schemas, assets, tests, or UI text.
 
-The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/reference-repos` canonical for PokemonHackStudio reference metadata and clones. Use `docs/index.json` and per-repo central profiles there for current HEAD, license posture, reuse class, and tags. The ignored local `references/*` paths are compatibility aliases to central clone roots, while active editable decomp source trees in the PokemonHackStudio working folder remain local project inputs.
+The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/reference-repos` canonical for PokemonHackStudio reference metadata and clones. Use `docs/index.json` and per-repo central profiles there for current HEAD, license posture, reuse class, and tags. The ignored local `references/*` paths are compatibility aliases to central clone roots, while active editable decomp source trees in the PokemonHackStudio working folder remain local project inputs. The later May 12 expansion added central profiles for additional NDS, Gen III binary extraction, CFRU, devkitPro, tilemap, and alternate emulator/debugger references without adding product code. Selected DS/NDS and emulator/tooling entries now also have local `references/*` compatibility aliases, while binary-extraction, CFRU, and devkitPro additions remain central-profile-first.
 
 ## Product Direction
 
@@ -47,7 +47,16 @@ The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/re
 | PokeData | Cross-linked Pokemon data/export surfaces | Use for source graph cross-links and import/export provenance checks | MIT; provenance review needed |
 | PkmGCTools / public FSYS notes | GameCube disc resource inventory, Colosseum/XD FSYS and compressed-member behavior | Use as conceptual compatibility research for clean-room Swift parsers | Not cloned; no code, schemas, or assets copied |
 | pret NDS decomps (`pokediamond`, `pokeplatinum`, `pokeheartgold`) | Gen IV source-tree shapes, NitroFS roots, build metadata, expected output names, and version-specific directories | Use for NDS decomp detection and read-only source catalog planning | No code, schemas, tests, or assets copied; reference-only local corpus |
-| DSPRE, PokEditor-v2, Pokeweb, SkyTemple | NDS ROM editor workflows, NitroFS/NARC tooling expectations, and external-tool boundary pressure | Use for UX/toolchain planning and format orientation only | High-risk/observational; V1 uses clean-room Swift parsers with synthetic fixtures |
+| DSPRE, PokEditor-v2, Pokeweb, SkyTemple | NDS ROM editor workflows, NitroFS/NARC tooling expectations, and external-tool boundary pressure | Use current central profile `ds-pokemon-rom-editor__dspre` for live DSPRE behavior, keep `adastra-ld__ds-pokemon-rom-editor` as lineage/stable-reference context, and use all as UX/toolchain planning inputs only | High-risk/observational; V1 uses clean-room Swift parsers with synthetic fixtures |
+| ndspy | NDS ROM, NitroFS, overlay, NARC, compression, BMG, sound, and texture-container behavior | Use central profile `roadrunnerwmc__ndspy` to pressure-test clean-room NDS parser terminology and edge cases | GPL-3.0; reference-only |
+| NitroPaint | DS graphics/resource editor coverage for NCLR, NCGR, NSCR, NCER, NANR, NFTR, BMG, NSBMD, NSBTX, and compression | Use central profile `garhoogin__nitropaint` for NDS graphics catalog and preview vocabulary | BSD-2-Clause; adaptation requires attribution review |
+| DS Pokemon Rom Editor / Pokemon DS Map Studio / PPRE | Gen IV/V editor UX around extracted directories, NARC pack/unpack, maps, scripts, trainers, personal data, learnsets, and historical generator workflows | Use central profiles `adastra-ld__ds-pokemon-rom-editor`, `trifindo__pokemon-ds-map-studio`, and `projectpokemon__ppre` as observational editor/workflow pressure | No root license detected or high-risk lineage; reference-only |
+| pkmn-rom-extract | Modern Rust Gen III binary ROM asset extraction across titles, languages, and revisions | Use central profile `ayashibox__pkmn-rom-extract` to pressure-test standalone binary asset catalog assumptions | MIT OR Apache-2.0; adaptation still needs attribution review |
+| Complete Fire Red Upgrade | FireRed binary-expansion ecosystem, config gates, battle hooks, patch/build expectations, and save-expansion pressure | Use central profile `skeli789__complete-fire-red-upgrade` as a high-risk CFRU compatibility reference | No root license detected and game-derived/binary dependencies; reference-only |
+| devkitPro libgba/buildscripts | GBA library, hardware headers, setup, package/build scripts, and devkitARM health-check expectations | Use central profiles `devkitpro__libgba` and `devkitpro__buildscripts` for external toolchain diagnostics only | LGPL-style/custom or no root license; reference-only |
+| Tilemap Studio, BizHawk, VisualBoyAdvance-M | Tilemap editor UX, emulator automation, alternate debugger/logging, link behavior, savestates, and playtest assumptions | Use central profiles `rangi42__tilemap-studio`, `tasemulators__bizhawk`, and `visualboyadvance-m__visualboyadvance-m` to avoid mGBA/Porytiles-only assumptions | LGPL/GPL/mixed-license; external or behavioral reference-only |
+| Gen V candidate references (`pokeblack`, SwissArmyKnife, CTRMap-CE, Pokeweb) | BW/BW2 source-tree pressure, map containers, text/script/zone entities, encounters, hotswap/project workflows, and plugin-style level editing | Queue in central corpus before product adoption; use only to shape future Gen V source/project detection and readiness rows | High-risk or unknown until profiled; reference-only by default |
+| DS container/audio/text candidates (TinkeDSi, NitroStudio2, Kuriimu2, EveryFileExplorer, dsdecmp) | NARC/BMG/SDAT/graphics/container browsing, text encodings, compression behavior, and broad Nintendo format vocabulary | Queue as central reference candidates to pressure-test `PHS-T94`, `PHS-T97`, and `PHS-T100` without copying code or schemas | GPL/unknown/mixed until profiled; observational or external-tool only |
 
 ## Feature Matrix
 
@@ -62,12 +71,25 @@ The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/re
 | Moves/learnsets/Pokedex | PoryMoves, Universal-GBA-Pokedex, PokeData, Expansion | Moves and learnset source graph, Pokedex explorer, cross-linked species/move/evolution views |
 | Binary ROM graph | HMA, PGE | ROM image inspector, runs, anchors, pointers, free-space and repoint planning |
 | GameCube resource graph | PkmGCTools, public FSYS notes, HMA/PGE workflow posture | Disc header, FST, DOL, FSYS archive, LZSS member, and unsupported-resource inventory |
-| NDS resource graph | pret NDS decomps, DSPRE/PokEditor/Pokeweb/SkyTemple workflow posture | `.nds` header, NitroFS FNT/FAT browser, overlay table facts, NARC archive/member inventory, pret-style NDS source-tree index, read-only Gen IV data catalog rows, read-only diagnostics |
+| NDS resource graph | pret NDS decomps, DSPRE/PokEditor/Pokeweb/SkyTemple workflow posture, ndspy, NitroPaint, DS Pokemon Rom Editor, Pokemon DS Map Studio, PPRE, queued Tinke/Kuriimu/container candidates | `.nds` header, NitroFS FNT/FAT browser, overlay table facts, NARC archive/member inventory, pret-style NDS source-tree index, read-only Gen IV data catalog rows, read-only diagnostics |
 | Patch pipeline | RomPatcher.js, HMA, mGBA | IPS/BPS/UPS/APS-GBA parse/apply/export, checksum validation, patch manifests |
-| Build and validation | pokeemerald, pokefirered, pokeruby, Expansion, agbcc | Make target previews, toolchain checks, generated freshness, diagnostics, build logs, memory usage |
-| Playtest/debug | mGBA, Expansion tests | Run Hack, headless test plan, screenshots, savestates, symbols, break/watchpoints |
+| Build and validation | pokeemerald, pokefirered, pokeruby, Expansion, agbcc, devkitPro libgba/buildscripts | Make target previews, toolchain checks, generated freshness, diagnostics, build logs, memory usage |
+| Playtest/debug | mGBA, BizHawk, VisualBoyAdvance-M, melonDS/DeSmuME candidates, Expansion tests | Run Hack, headless test plan, screenshots, savestates, symbols, break/watchpoints |
 | Migration/import | PGE, Expansion migration scripts, Porytiles | INI/PNG/WAV import, migration dry runs, source span preserving rewrites |
 | Asset import/provenance | Team Aqua Asset Repo, Porytiles, porypal, PGE | Local asset catalog, credit metadata, conversion boundaries, no bundled third-party assets |
+
+## Reference-Review Candidate Queue
+
+The May 12, 2026 subagent review against the dirty tree did not reopen shipped rows. It sharpened these current candidates:
+
+- `PHS-T73`: patch apply/export should write only ignored output ROMs plus backup/export manifests after explicit user action; source-tree mutation remains out of scope.
+- `PHS-T76`: Poryscript follow-through starts with `.pory` detection, generated `.inc` relationships, poryswitch/line-marker facts, and blocked compiler/apply guidance.
+- `PHS-T78`: Expansion work should split into one semantic writer family at a time instead of a broad adapter rewrite.
+- `PHS-T79`: binary mutation needs preflight, manifest, backup, hash-drift refusal, and mutation-plan review before any ROM byte write.
+- `PHS-T92` and `PHS-T93`: ROM-only work remains migration/extraction planning and source-first coverage diagnostics before export or extraction writers.
+- `PHS-T94` through `PHS-T100`: the next NDS-friendly queue covers graphics/container previews, map/script/text readiness, text bank previews, semantic data expansion, extracted-directory migration planning, and member fingerprinting.
+
+Preferred first implementation picks are `PHS-T94` or `PHS-T95`, because they build on the completed NDS read-only catalog and keep all NARC/ROM/source writes disabled.
 
 ## Implementation Lanes
 

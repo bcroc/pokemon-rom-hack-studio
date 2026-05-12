@@ -47,6 +47,26 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(savestate["artifacts"])
     }
 
+    func testPlaytestDebugPlanCommandEmitsPlanningJSONWithoutLaunching() throws {
+        let rom = try makeTestROM()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["playtest-debug-plan", rom.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "binaryROM")
+        XCTAssertEqual(result["isLaunchEnabled"] as? Bool, false)
+        XCTAssertNotNil(result["commandPreview"])
+        let capabilities = try XCTUnwrap(result["capabilities"] as? [[String: Any]])
+        XCTAssertTrue(capabilities.contains { $0["id"] as? String == "mgba-debugger" })
+        XCTAssertTrue(capabilities.contains { $0["id"] as? String == "bizhawk-automation" })
+        XCTAssertTrue(capabilities.contains { $0["id"] as? String == "vba-m-debugger" })
+        let artifacts = try XCTUnwrap(result["artifacts"] as? [[String: Any]])
+        XCTAssertTrue(artifacts.contains { ($0["relativePath"] as? String)?.hasSuffix("/debug/access.log") == true })
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PLAYTEST_DEBUG_PLAN_ONLY" })
+    }
+
     func testPlaytestUnknownModeThrowsUsage() throws {
         let root = try makeEmeraldProject()
 
@@ -244,6 +264,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertGreaterThan(summary["recordCount"] as? Int ?? 0, 0)
         let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
         XCTAssertTrue(records.contains { $0["domain"] as? String == "species" && $0["relativePath"] as? String == "res/pokemon/abra/data.json" })
+        let containerRecord = try XCTUnwrap(records.first { $0["relativePath"] as? String == "res/prebuilt/poketool/personal/personal.narc" })
+        let containerSummary = try XCTUnwrap(containerRecord["containerSummary"] as? [String: Any])
+        XCTAssertEqual(containerSummary["kind"] as? String, "narc")
+        XCTAssertEqual(containerSummary["memberCount"] as? Int, 2)
         let diagnostics = try XCTUnwrap(catalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_READ_ONLY" })
 
@@ -252,8 +276,139 @@ final class PokemonHackCLITests: XCTestCase {
             PokemonHackCLI.run(arguments: ["nds-data-catalog", rom.path, "--json"])
         )
         XCTAssertEqual(romCatalog["profile"] as? String, "ndsROM")
+        let romRecords = try XCTUnwrap(romCatalog["records"] as? [[String: Any]])
+        XCTAssertTrue(romRecords.contains { $0["relativePath"] as? String == "sub/child.narc" })
         let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
-        XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_DEFERRED" })
+        XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
+    }
+
+    func testNDSDataEditCommandsPlanApplyAndBlockReadOnlyRows() throws {
+        let root = try makeTestNDSDecompRoot()
+        let draftFile = try makeTemporaryDirectory().appendingPathComponent("draft.json")
+        try "{\"base_hp\":26}\n".write(to: draftFile, atomically: true, encoding: .utf8)
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-edit-plan",
+                root.path,
+                "species:res/pokemon/abra/data.json",
+                "--draft-file",
+                draftFile.path,
+                "--json"
+            ])
+        )
+        XCTAssertEqual(plan["recordID"] as? String, "species:res/pokemon/abra/data.json")
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertNil(changes[0]["newData"])
+        XCTAssertEqual(changes[0]["newByteCount"] as? Int, 15)
+        XCTAssertTrue((changes[0]["textPreview"] as? String)?.contains("base_hp") == true)
+        let planData = try JSONSerialization.data(withJSONObject: plan)
+        XCTAssertFalse(String(data: planData, encoding: .utf8)?.contains("\"newData\"") == true)
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-edit-apply",
+                root.path,
+                "species:res/pokemon/abra/data.json",
+                "--draft-file",
+                draftFile.path,
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
+            "{\"base_hp\":26}\n"
+        )
+
+        let rom = try makeTestNDSROM()
+        let blockedROM = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-edit-plan",
+                rom.path,
+                "resources:sub/child.narc",
+                "--draft-file",
+                draftFile.path,
+                "--json"
+            ])
+        )
+        let romDiagnostics = try XCTUnwrap(blockedROM["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_EDIT_BINARY_ROM_BLOCKED" })
+
+        let blockedNARC = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-edit-plan",
+                root.path,
+                "personal:res/prebuilt/poketool/personal/personal.narc",
+                "--draft-file",
+                draftFile.path,
+                "--json"
+            ])
+        )
+        let narcDiagnostics = try XCTUnwrap(blockedNARC["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(narcDiagnostics.contains { $0["code"] as? String == "NDS_DATA_EDIT_CONTAINER_BLOCKED" })
+    }
+
+    func testNDSDataSemanticCommandsPlanAndApplyJSONFields() throws {
+        let root = try makeTestNDSDecompRoot()
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "species:res/pokemon/abra/data.json",
+                "--set",
+                "base_hp=31",
+                "--json"
+            ])
+        )
+
+        let textDraft = try XCTUnwrap(plan["textDraft"] as? [String: Any])
+        XCTAssertEqual(textDraft["editedText"] as? String, "{\"base_hp\":31}\n")
+        let editPlan = try XCTUnwrap(plan["editPlan"] as? [String: Any])
+        let changes = try XCTUnwrap(editPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "species:res/pokemon/abra/data.json",
+                "--set",
+                "base_hp=31",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
+            "{\"base_hp\":31}\n"
+        )
+    }
+
+    func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
+        let root = try makeTestNDSDecompRoot()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["toolchain-health", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeplatinum")
+        XCTAssertEqual(result["isPreviewOnly"] as? Bool, true)
+        let rows = try XCTUnwrap(result["rows"] as? [[String: Any]])
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "external:nds:devkitpro-root" })
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "external:nds:ndstool" })
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "external:nds:melonDS" })
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "rom-header:platinum-rom" })
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "generated:nds-build-output:platinum-rom" })
+        XCTAssertTrue(rows.contains { $0["id"] as? String == "graphics-conversion:nds-preview-only" })
+        XCTAssertFalse(rows.contains { $0["id"] as? String == "external:mgba" })
+        let actions = rows.flatMap { $0["actions"] as? [[String: Any]] ?? [] }
+        XCTAssertFalse(actions.isEmpty)
+        XCTAssertTrue(actions.allSatisfy { $0["isPreviewOnly"] as? Bool == true })
     }
 
     func testMoveCatalogCommandEmitsPreviewJSON() throws {
@@ -389,6 +544,7 @@ final class PokemonHackCLITests: XCTestCase {
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
         try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
         try write(Data([0x01]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
+        try write(makeTestNARC(), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
         return root
     }
 

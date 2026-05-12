@@ -19,6 +19,12 @@ struct ResourceLibraryWorkbenchView: View {
     let onLoadGameCubeResource: () -> Void
     let onLoadAssetCatalog: () -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
+    let ndsDataEditor: NDSDataResourceEditorViewState?
+    let onUpdateNDSDataDraft: (String) -> Void
+    let onUpdateNDSDataSemanticField: (String, String) -> Void
+    let onPreviewNDSDataMutationPlan: () -> Void
+    let onApplyNDSDataMutationPlan: () -> Void
+    let onDiscardNDSDataEdits: () -> Void
 
     @ViewBuilder
     var body: some View {
@@ -208,7 +214,16 @@ struct ResourceLibraryWorkbenchView: View {
                 .frame(maxWidth: .infinity, minHeight: 260)
             } else {
                 ScrollView {
-                    ResourceAssetDetailPane(asset: selectedAsset, onNavigate: onNavigateToAsset)
+                    ResourceAssetDetailPane(
+                        asset: selectedAsset,
+                        onNavigate: onNavigateToAsset,
+                        ndsDataEditor: ndsDataEditor,
+                        onUpdateNDSDataDraft: onUpdateNDSDataDraft,
+                        onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
+                        onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
+                        onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
+                        onDiscardNDSDataEdits: onDiscardNDSDataEdits
+                    )
                         .padding(layoutMode.isCompact ? 14 : 24)
                 }
             }
@@ -227,7 +242,16 @@ struct ResourceLibraryWorkbenchView: View {
                             }
 
                         if selectedAssetID == asset.id {
-                            ResourceAssetDetailPane(asset: asset, onNavigate: onNavigateToAsset)
+                            ResourceAssetDetailPane(
+                                asset: asset,
+                                onNavigate: onNavigateToAsset,
+                                ndsDataEditor: selectedAssetID == asset.id ? ndsDataEditor : nil,
+                                onUpdateNDSDataDraft: onUpdateNDSDataDraft,
+                                onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
+                                onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
+                                onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
+                                onDiscardNDSDataEdits: onDiscardNDSDataEdits
+                            )
                                 .frame(maxWidth: .infinity, minHeight: 220)
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                                 .padding(.top, 8)
@@ -485,6 +509,12 @@ private struct ResourceLibraryItemRow: View {
 private struct ResourceAssetDetailPane: View {
     let asset: ResourceAssetRowViewState?
     let onNavigate: (ResourceAssetRowViewState) -> Void
+    let ndsDataEditor: NDSDataResourceEditorViewState?
+    let onUpdateNDSDataDraft: (String) -> Void
+    let onUpdateNDSDataSemanticField: (String, String) -> Void
+    let onPreviewNDSDataMutationPlan: () -> Void
+    let onApplyNDSDataMutationPlan: () -> Void
+    let onDiscardNDSDataEdits: () -> Void
 
     var body: some View {
         ScrollView {
@@ -516,6 +546,17 @@ private struct ResourceAssetDetailPane: View {
                         EditorSection(title: "Facts") {
                             FactGrid(facts: asset.facts)
                         }
+                    }
+
+                    if asset.id.contains(":nds-data:") {
+                        NDSDataRecordEditor(
+                            editor: ndsDataEditor,
+                            onUpdateDraft: onUpdateNDSDataDraft,
+                            onUpdateSemanticField: onUpdateNDSDataSemanticField,
+                            onPreview: onPreviewNDSDataMutationPlan,
+                            onApply: onApplyNDSDataMutationPlan,
+                            onDiscard: onDiscardNDSDataEdits
+                        )
                     }
 
                     if !asset.diagnostics.isEmpty {
@@ -560,6 +601,92 @@ private struct ResourceAssetDetailPane: View {
             Fact(label: "Checksum", value: asset.checksumSummary),
             Fact(label: "Source Line", value: "\(asset.source.line)")
         ]
+    }
+}
+
+private struct NDSDataRecordEditor: View {
+    let editor: NDSDataResourceEditorViewState?
+    let onUpdateDraft: (String) -> Void
+    let onUpdateSemanticField: (String, String) -> Void
+    let onPreview: () -> Void
+    let onApply: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        EditorSection(title: "NDS Data Record") {
+            if let editor {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        ResourceTag(text: editor.recordID)
+                        if editor.isDirty {
+                            ResourceTag(text: "draft")
+                        }
+                        Spacer()
+                        Button("Preview", systemImage: "doc.text.magnifyingglass") {
+                            onPreview()
+                        }
+                        .disabled(!editor.canPreview)
+                        .help(editor.blockedReason ?? "Preview NDS data source mutation")
+
+                        Button("Apply", systemImage: "checkmark.seal") {
+                            onApply()
+                        }
+                        .disabled(!editor.canApply)
+                        .help(editor.applyBlockedReason ?? "Apply previewed NDS data source mutation")
+
+                        Button("Discard", systemImage: "trash") {
+                            onDiscard()
+                        }
+                        .disabled(!editor.canDiscard)
+                    }
+
+                    if !editor.semanticFields.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Semantic Fields")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], alignment: .leading, spacing: 8) {
+                                ForEach(editor.semanticFields) { field in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(field.label)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        TextField(field.valueKind, text: Binding(
+                                            get: { field.value },
+                                            set: { onUpdateSemanticField(field.key, $0) }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        .disabled(!editor.canEdit)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    TextEditor(text: Binding(
+                        get: { editor.text },
+                        set: { onUpdateDraft($0) }
+                    ))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 220)
+                    .scrollContentBackground(.hidden)
+                    .background(.quaternary.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
+                    .disabled(!editor.canEdit)
+                    .opacity(editor.canEdit ? 1 : 0.72)
+
+                    if let blockedReason = editor.blockedReason, !editor.canPreview {
+                        Label(blockedReason, systemImage: "lock")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Label("This NDS data row is read-only in the current source-backed editor slice.", systemImage: "lock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

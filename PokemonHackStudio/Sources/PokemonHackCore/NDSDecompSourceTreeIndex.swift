@@ -130,7 +130,7 @@ public enum NDSDecompSourceTreeIndexBuilder {
             Diagnostic(
                 severity: .info,
                 code: "NDS_DECOMP_READ_ONLY",
-                message: "Nintendo DS decomp source-tree workflows are read-only until NDS mutation plans are designed."
+                message: "Nintendo DS decomp workflows remain preview-first; only eligible source-backed data records can be edited through explicit mutation plans."
             )
         ] + missingDiagnostics(sourceDocuments)
 

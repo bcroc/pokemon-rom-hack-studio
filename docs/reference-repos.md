@@ -22,6 +22,10 @@ The May 6, 2026 broad sweep created a 30-repo local reference bench. The May 12,
 
 Only `references/manifest.json` is tracked in this repo. The ignored `references/*` paths are compatibility symlinks to central clone roots, and each manifest entry records its central profile and current central HEAD under `centralReference`.
 
+The May 12, 2026 reference-corpus expansion added a focused batch for current NDS, toolchain, binary-extraction, graphics, and emulator/debugger coverage. Selected DS/NDS and emulator/tooling profiles now have local `references/*` compatibility aliases for quick PokemonHackStudio routing: `references/dspre`, `references/ds-pokemon-rom-editor`, `references/ndspy`, `references/nitropaint`, `references/pokemon-ds-map-studio`, `references/ppre`, `references/pokeditor-v2`, `references/skytemple`, `references/bizhawk`, `references/visualboyadvance-m`, and `references/tilemap-studio`. The remaining expansion entries stay central-profile-first, including `ayashibox__pkmn-rom-extract`, `skeli789__complete-fire-red-upgrade`, `bivurnum__decomps-resources`, `devkitpro__libgba`, and `devkitpro__buildscripts`. The originally researched `pkmn-rom-extract` crate is indexed under the canonical repository owner `ayashibox` rather than the crates.io owner handle.
+
+The May 12 reference-review follow-up also confirmed that current DSPRE development moved to `DS-Pokemon-Rom-Editor/DSPRE`; keep `AdAstra-LD/DS-Pokemon-Rom-Editor` as a stable historical/lineage reference and use the newer central DSPRE profile for current Gen IV editor behavior. Gen V coverage should expand through central-corpus candidates such as `pokemodding/pokeblack`, `PlatinumMaster/SwissArmyKnife`, `ds-pokemon-hacking/CTRMap-CE`, and `hzla/Pokeweb`, while sprite/palette planning should keep `loxed/porypal` in the behavioral-only graphics lane.
+
 | Path | Primary Use | Notes |
 | --- | --- | --- |
 | `references/agbcc` | pret toolchain setup and compiler/build boundary reference | Central profile: `pret__agbcc`; mixed GCC/newlib notices; treat as external toolchain research only. |
@@ -65,18 +69,41 @@ The May 12, 2026 NDS planning sweep found these central references under `/Users
 | `/Users/bryan/projects/reference-repos/repos/pret__pokeplatinum` | Platinum source-tree shape and Meson/Make build expectations | `Makefile`, `meson.build`, `src/`, `asm/`, `res/`, `generated/`, `include/`, and `platinum.us/`. Detects as read-only `pokeplatinum`; reference-only. |
 | `/Users/bryan/projects/reference-repos/repos/pret__pokeheartgold` | HeartGold/SoulSilver source-tree shape and filesystem metadata | `Makefile`, `CMakeLists.txt`, `config.mk`, `filesystem.mk`, `rom.rsf`, `main.lsf`, `src/`, `asm/`, `files/`, `include/`, `heartgold.us/`, and `soulsilver.us/`. Detects as read-only `pokeheartgold`; reference-only. |
 | `/Users/bryan/projects/reference-repos/repos/pret__pmd-sky` | DS-era decomp source-tree pressure outside mainline Pokemon RPGs | Detects as read-only `pmdSky`; spin-off reference only; do not use as Gen IV RPG schema truth. |
-| `/Users/bryan/projects/reference-repos/repos/DSPRE` | DS Pokemon ROM editor UX/tool boundary reference | Treat as observational and external-tool oriented; do not copy code or UI text. |
-| `/Users/bryan/projects/reference-repos/repos/PokEditor-v2` | DS editor lineage and binary data workflow reference | Treat as high-risk/read-only reference. |
-| `/Users/bryan/projects/reference-repos/repos/Pokeweb` | Web/editor workflow reference for DS-era data | Observational only. |
-| `/Users/bryan/projects/reference-repos/repos/SkyTemple` | NDS/PMD resource tooling and plugin workflow reference | Spin-off resource tooling reference; keep behind clean-room/external-tool boundaries. |
+| `/Users/bryan/projects/reference-repos/repos/ds-pokemon-rom-editor__dspre` | DS Pokemon ROM editor UX/tool boundary reference | Treat as observational and external-tool oriented; do not copy code or UI text. |
+| `/Users/bryan/projects/reference-repos/repos/adastra-ld__ds-pokemon-rom-editor` | Modern DSPRE-descended Gen IV ROM editor workflows | High-risk/read-only reference for extracted-directory loading, NARC pack/unpack, scripts, maps, trainers, personal data, learnsets, and ROM toolbox behavior. |
+| `/Users/bryan/projects/reference-repos/repos/roadrunnerwmc__ndspy` | General NDS container and format library reference | GPL-3.0; use only for clean-room format behavior around NitroFS, overlays, NARC, compression, BMG, sound, and texture-related containers. |
+| `/Users/bryan/projects/reference-repos/repos/garhoogin__nitropaint` | DS graphics/resource editor reference | BSD-2-Clause; useful for NCLR, NCGR, NSCR, NCER, NANR, NFTR, BMG, NSBMD, NSBTX, compression, and preview workflow terminology after attribution review. |
+| `/Users/bryan/projects/reference-repos/repos/trifindo__pokemon-ds-map-studio` | Gen IV/V 3D map authoring workflow reference | No root license detected; observational only for map-authoring UX and project-shape pressure. |
+| `/Users/bryan/projects/reference-repos/repos/turtleisaac__pokeditor-v2` | DS editor lineage and binary data workflow reference | Treat as high-risk/read-only reference. |
+| `/Users/bryan/projects/reference-repos/repos/projectpokemon__ppre` | Historical Gen IV editor/data workflow reference | No root license detected; use for compatibility history around NDS/NARC, text, move, species, evolution, trainer, and generator-style workflows. |
+| `/Users/bryan/projects/reference-repos/repos/hzla__pokeweb` | Web/editor workflow reference for DS-era data | Observational only. |
+| `/Users/bryan/projects/reference-repos/repos/skytemple__skytemple` | NDS/PMD resource tooling and plugin workflow reference | Spin-off resource tooling reference; keep behind clean-room/external-tool boundaries. |
 
-No local `pokemodding/pokeblack`, Tinke, CTRMap, standalone ndspy, BlocksDS, or nitromods clone was found in this sweep.
+No local `pokemodding/pokeblack`, Tinke, CTRMap, BlocksDS, or nitromods clone is indexed yet. Standalone `ndspy` coverage is now present through `roadrunnerwmc__ndspy`, and current DSPRE coverage is present through `ds-pokemon-rom-editor__dspre`.
+
+## Central Reference Candidate Queue
+
+These are metadata-only candidates for `/Users/bryan/projects/reference-repos`. Do not clone or vendor them inside PokemonHackStudio, and treat all entries as read-only until the central profile records current license and reuse posture.
+
+| Repository | Decision | Coverage Added |
+| --- | --- | --- |
+| `pokemodding/pokeblack` | Add, reference-only | Gen V source-tree detection and future BW/BW2 source catalog/edit posture. |
+| `PlatinumMaster/SwissArmyKnife` | Add, reference-only | Gen V map containers, text, scripts, zone entities, encounters, and project/hotswap workflow. |
+| `ds-pokemon-hacking/CTRMap-CE` | Add, reference-only | Gen V plugin-based level editor and project workflow pressure; keep GPL code outside the product. |
+| `melonDS-emu/melonDS` | Add, external-tool reference | DS emulator launch/debug/runtime assumptions for future NDS playtest planning. |
+| `R-YaTian/TinkeDSi` | Add, reference-only | Active Tinke-descended DS/DSi file viewer/editor coverage for NARC, BMG, SDAT, and graphics inventory. |
+| `Gota7/NitroStudio2` | Add, research-only | Dedicated SDAT/audio workflow coverage for future NDS audio/cries/music diagnostics. |
+| `FanTranslatorsInternational/Kuriimu2` | Add, reference-only | Broad archive/text/image toolkit coverage for encodings, message resources, and plugin-style format handling. |
+| `TASEmulators/desmume` | Add, external-tool reference | Alternate DS emulator/debugger behavior for capability reporting. |
+| `Gericom/EveryFileExplorer` | Research-only | Cross-check for broad Nintendo container/resource vocabulary. |
+| `Barubary/dsdecmp` | Research-only | Focused DS compression/decompression behavior for compressed NARC/member planning. |
+| `jmacd/xdelta` | Research-only | xdelta patch-format compatibility for DS hack distribution planning. |
+| `XorTroll/NitroEdit` | Research-only | Compact DS resource checklist and on-console editor perspective. |
 
 ## Researched But Not Cloned
 
 | Repository | Decision | Rationale |
 | --- | --- | --- |
-| `Rangi42/tilemap-studio` | Skip for this pass | Useful tilemap editor ergonomics, but LGPL-3.0 makes it behavioral-only and less direct than Porytiles for the current source-first lane. |
 | `Alcaro/Flips` | Skip for this pass | Strong BPS/IPS reference, but archived and GPL-3.0; keep patch-format work clean-room against existing RomPatcher.js and public format behavior first. |
 | `Ajarmar/universal-pokemon-randomizer-zx` | Skip for this pass | GPL-3.0 randomizer workflows are less direct than decomp source indexing and build/playtest validation. |
 | `TuxSH/PkmGCTools` | Research only | Useful GameCube-era Colosseum/XD resource context; not cloned into this workspace and not a source for copied implementation. |

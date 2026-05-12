@@ -891,7 +891,20 @@ struct WorkbenchSidebarPanel: View {
                     }
                 }
 
-                Text("Build runs only selected declared make targets. Validate, patch apply, export, conversion, and source writes stay locked.")
+                if store.selectedBuildReport?.isNDS == true && !store.selectedNDSHealthActionRows.isEmpty {
+                    Divider()
+                    sidebarSubheading("NDS Setup")
+                    ForEach(store.selectedNDSHealthActionRows.prefix(4)) { row in
+                        if let action = row.actions.first {
+                            Button(action.title, systemImage: action.kind == .copyPath ? "doc.on.clipboard" : "terminal") {
+                                store.copyBuildReportRowActionToPasteboard(action)
+                            }
+                            .help(action.detail)
+                        }
+                    }
+                }
+
+                Text(store.selectedBuildReport?.isNDS == true ? "NDS health actions copy manual setup or rerun guidance only. Builds, Docker, extraction, emulator launch, and ROM writes stay disabled." : "Build runs only selected declared make targets. Validate, patch apply, export, conversion, and source writes stay locked.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -1,6 +1,5 @@
 import CoreGraphics
 import XCTest
-@testable import PokemonHackStudio
 
 final class WorkbenchLayoutModeTests: XCTestCase {
     func testContentWidthThresholdKeepsSmallSidebarWindowsCompact() {

@@ -509,12 +509,14 @@ public enum GenIIIResourceRegistry {
             }
             let catalog = NDSDataCatalogBuilder.build(index: index, fileManager: fileManager)
             let catalogItems = catalog.records.map { record in
-                GenIIIResourceItem(
+                let kind = record.containerSummary.map { "\(record.format.rawValue) (\($0.memberCount) members)" } ?? record.format.rawValue
+                return GenIIIResourceItem(
                     id: "nds-data:\(record.id)",
                     path: record.relativePath,
-                    kind: record.format.rawValue,
+                    kind: kind,
                     category: "NDS Data \(record.domain.rawValue)",
-                    size: record.byteCount
+                    size: record.byteCount ?? record.containerSummary?.byteCount,
+                    uncompressedSize: record.containerSummary.map { UInt64($0.memberCount) }
                 )
             }
             return pathItems + variantItems + buildItems + catalogItems

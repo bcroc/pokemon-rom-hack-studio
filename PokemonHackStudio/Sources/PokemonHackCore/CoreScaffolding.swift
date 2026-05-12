@@ -584,7 +584,7 @@ public struct NDSROMAdapter: GameAdapter {
             Diagnostic(
                 severity: .info,
                 code: "NDS_ROM_READ_ONLY",
-                message: "Nintendo DS ROM workflows are read-only until NDS mutation plans are designed."
+                message: "Nintendo DS ROM workflows remain read-only; source-backed NDS data mutation plans do not write ROMs or binary containers."
             )
         )
 

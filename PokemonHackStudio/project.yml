@@ -76,15 +76,18 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
+      - path: Sources/PokemonHackStudio/Models
+      - path: Sources/PokemonHackStudio/Stores
+      - path: Sources/PokemonHackStudio/Views/Editors/MapCanvasInteraction.swift
+      - path: Sources/PokemonHackStudio/Views/Editors/MapEventSpriteRenderer.swift
+      - path: Sources/PokemonHackStudio/Views/Editors/MetatileSwatchRenderer.swift
       - path: Tests/PokemonHackStudioTests
     dependencies:
-      - target: PokemonHackStudio
+      - target: PokemonHackCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackStudioTests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PokemonHackStudio.app/Contents/MacOS/PokemonHackStudio"
-        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   PokemonHackStudio:
     build:
