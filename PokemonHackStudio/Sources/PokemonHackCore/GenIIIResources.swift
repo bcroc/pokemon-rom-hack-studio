@@ -67,6 +67,19 @@ public struct GenIIIResourceItem: Codable, Equatable, Identifiable {
     public let size: UInt64?
     public let uncompressedSize: UInt64?
     public let sha1: String?
+    public let facts: [SourceIndexFact]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case path
+        case kind
+        case category
+        case offset
+        case size
+        case uncompressedSize
+        case sha1
+        case facts
+    }
 
     public init(
         id: String,
@@ -76,7 +89,8 @@ public struct GenIIIResourceItem: Codable, Equatable, Identifiable {
         offset: UInt64? = nil,
         size: UInt64? = nil,
         uncompressedSize: UInt64? = nil,
-        sha1: String? = nil
+        sha1: String? = nil,
+        facts: [SourceIndexFact] = []
     ) {
         self.id = id
         self.path = path
@@ -86,6 +100,20 @@ public struct GenIIIResourceItem: Codable, Equatable, Identifiable {
         self.size = size
         self.uncompressedSize = uncompressedSize
         self.sha1 = sha1
+        self.facts = facts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        path = try container.decode(String.self, forKey: .path)
+        kind = try container.decode(String.self, forKey: .kind)
+        category = try container.decode(String.self, forKey: .category)
+        offset = try container.decodeIfPresent(UInt64.self, forKey: .offset)
+        size = try container.decodeIfPresent(UInt64.self, forKey: .size)
+        uncompressedSize = try container.decodeIfPresent(UInt64.self, forKey: .uncompressedSize)
+        sha1 = try container.decodeIfPresent(String.self, forKey: .sha1)
+        facts = try container.decodeIfPresent([SourceIndexFact].self, forKey: .facts) ?? []
     }
 }
 
@@ -516,7 +544,8 @@ public enum GenIIIResourceRegistry {
                     kind: kind,
                     category: "NDS Data \(record.domain.rawValue)",
                     size: record.byteCount ?? record.containerSummary?.byteCount,
-                    uncompressedSize: record.containerSummary.map { UInt64($0.memberCount) }
+                    uncompressedSize: record.containerSummary.map { UInt64($0.memberCount) },
+                    facts: record.facts
                 )
             }
             return pathItems + variantItems + buildItems + catalogItems

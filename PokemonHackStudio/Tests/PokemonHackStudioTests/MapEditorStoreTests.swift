@@ -546,6 +546,11 @@ final class MapEditorStoreTests: XCTestCase {
         store.selectWorkbenchModule(.resources)
         store.loadSelectedAssetCatalogIfNeeded()
         let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let mapRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/field/maps/route201/map.bin" })
+        XCTAssertTrue(mapRow.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
+        XCTAssertTrue(mapRow.facts.contains { $0.label == "Related Domains" && $0.value.contains("scripts") })
+        XCTAssertEqual(mapRow.targetModule, .resources)
+
         let speciesRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/pokemon/abra/data.json" })
 
         store.requestResourceAssetSelection(speciesRow.id)
@@ -2752,6 +2757,10 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
+        try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
+        try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
+        try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
+        try write("{\"matrix\":1}\n", to: root.appendingPathComponent("res/field/matrices/route201.json"))
         try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
 
         return root

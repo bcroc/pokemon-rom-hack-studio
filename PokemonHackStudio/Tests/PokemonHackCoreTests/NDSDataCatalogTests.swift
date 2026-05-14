@@ -37,6 +37,15 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "res/pokemon/abra/data.json" && $0.format == .json && $0.recordCount == 1 })
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "res/items/items.csv" && $0.format == .csv && $0.recordCount == 1 })
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "platinum.us/filesys.csv" && $0.role == .nitroFSManifest })
+        let routeMap = try XCTUnwrap(catalog.records.first { $0.relativePath == "res/field/maps/route201/map.bin" })
+        XCTAssertEqual(routeMap.readiness?.status, .ready)
+        XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "maps:res/field/matrices/route201.json" && $0.label == "Matrix" })
+        XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "scripts:res/field/scripts/route201.s" && $0.label == "Script resource" })
+        XCTAssertTrue(routeMap.facts.contains { $0.label == "Related Rows" && $0.value == "3" })
+        XCTAssertTrue(routeMap.diagnostics.contains { $0.code == "NDS_DATA_READINESS_PREVIEW_ONLY" })
+        let filesys = try XCTUnwrap(catalog.records.first { $0.relativePath == "platinum.us/filesys.csv" })
+        XCTAssertEqual(filesys.readiness?.status, .partial)
+        XCTAssertTrue(filesys.readiness?.blockedActions.contains("ROM rebuild") == true)
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "NDS_DATA_CATALOG_READ_ONLY" })
     }
 
@@ -76,6 +85,8 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(unpacked.containerSummary?.kind, .unpackedArchiveDirectory)
         XCTAssertEqual(unpacked.containerSummary?.memberCount, 2)
         XCTAssertEqual(unpacked.containerSummary?.unnamedMemberCount, 2)
+        XCTAssertEqual(unpacked.readiness?.status, .blocked)
+        XCTAssertTrue(unpacked.diagnostics.contains { $0.code == "NDS_DATA_READINESS_WRITE_BLOCKED" })
         XCTAssertTrue(catalog.isReadOnly)
     }
 
@@ -122,8 +133,14 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Data species" && $0.path == "res/pokemon/abra/data.json" })
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Data items" && $0.path == "res/items/items.csv" })
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Data personal" && $0.path == "res/prebuilt/poketool/personal/personal.narc" && $0.kind == "narc (2 members)" && $0.uncompressedSize == 2 })
+        let mapItem = try XCTUnwrap(entry.items.first { $0.category == "NDS Data maps" && $0.path == "res/field/maps/route201/map.bin" })
+        XCTAssertTrue(mapItem.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
+        XCTAssertTrue(mapItem.facts.contains { $0.label == "Related Domains" && $0.value.contains("scripts") })
         XCTAssertTrue(assetCatalog.assets.contains { $0.relativePath == "res/pokemon/abra/data.json" && $0.category == .species })
         XCTAssertTrue(assetCatalog.assets.contains { $0.relativePath == "res/items/items.csv" && $0.category == .items })
+        let mapAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "res/field/maps/route201/map.bin" })
+        XCTAssertTrue(mapAsset.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
+        XCTAssertTrue(mapAsset.tags.contains("ndsSource"))
     }
 
     func testNDSDataMutationPlanAppliesSourceBackedJSONRecordWithBackup() throws {
@@ -175,6 +192,72 @@ final class NDSDataCatalogTests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
             "{\"base_hp\":28}\n"
         )
+    }
+
+    func testNDSDataSemanticEditorPlansTrainerScalarEditsOnlyForTrainerDataJSON() throws {
+        let root = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        try write("{\"cell_animation\":1}\n", to: root.appendingPathComponent("res/trainers/classes/youngster.json"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:res/trainers/data/youngster.json")
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "name" && $0.value == "Youngster" && $0.valueKind == .string })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "class" && $0.value == "TRAINER_CLASS_YOUNGSTER" && $0.valueKind == .string })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "double_battle" && $0.value == "false" && $0.valueKind == .bool })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "party" })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "items" })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "messages" })
+
+        let semanticPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:res/trainers/data/youngster.json",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "name", value: "Youngster Ben"),
+                    NDSDataSemanticFieldEdit(key: "double_battle", value: "true")
+                ]
+            )
+        )
+
+        XCTAssertTrue(semanticPlan.diagnostics.allSatisfy { $0.severity != .error }, semanticPlan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"name\": \"Youngster Ben\""))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"double_battle\": true"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"party\": [{\"species\":\"STARLY\",\"level\":5}]"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"messages\": [\"I like shorts!\"]"))
+        XCTAssertEqual(semanticPlan.editPlan.changes.count, 1)
+        XCTAssertTrue(semanticPlan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("res/trainers/data/youngster.json"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"name\": \"Youngster Ben\""))
+        XCTAssertTrue(updated.contains("\"double_battle\": true"))
+        XCTAssertTrue(updated.contains("\"party\": [{\"species\":\"STARLY\",\"level\":5}]"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let classSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:res/trainers/classes/youngster.json")
+        XCTAssertFalse(classSnapshot.canEdit)
+        XCTAssertTrue(classSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
+    }
+
+    func testNDSDataSemanticEditorKeepsNonPlatinumAndContainerRowsBlocked() throws {
+        let platinum = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let platinumCatalog = try NDSDataCatalogBuilder.build(path: platinum.path)
+        let narcSnapshot = NDSDataSemanticEditor.snapshot(catalog: platinumCatalog, recordID: "personal:res/prebuilt/poketool/personal/personal.narc")
+        XCTAssertFalse(narcSnapshot.canEdit)
+        XCTAssertTrue(narcSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let heartGold = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
+        let heartGoldCatalog = try NDSDataCatalogBuilder.build(path: heartGold.path)
+        let heartGoldSnapshot = NDSDataSemanticEditor.snapshot(catalog: heartGoldCatalog, recordID: "trainers:files/poketool/trainer/trainers.json")
+        XCTAssertFalse(heartGoldSnapshot.canEdit)
+        XCTAssertTrue(heartGoldSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
+
+        let pmd = try makeRoot(name: "pmd-sky", configure: makePMDSkyFixture)
+        let pmdCatalog = try NDSDataCatalogBuilder.build(path: pmd.path)
+        let pmdSnapshot = NDSDataSemanticEditor.snapshot(catalog: pmdCatalog, recordID: "resources:files/MESSAGE/text_us.str")
+        XCTAssertFalse(pmdSnapshot.canEdit)
+        XCTAssertTrue(pmdSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
     }
 
     func testNDSDataMutationPlanBlocksHashMismatchBeforeApply() throws {
@@ -285,7 +368,13 @@ final class NDSDataCatalogTests: XCTestCase {
         try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
-        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("res/trainers/data/youngster.json"))
+        try write(
+            """
+            {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "items": ["POTION"], "messages": ["I like shorts!"]}
+
+            """,
+            to: root.appendingPathComponent("res/trainers/data/youngster.json")
+        )
         try write("[{\"species\":\"BIDOOF\"}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))

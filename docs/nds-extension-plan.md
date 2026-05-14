@@ -18,7 +18,8 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 4. **Done - NARC-Backed Read-Only Summaries**: source-tree and ROM-backed NARC containers now appear in NDS data catalogs with member counts, sample member paths, diagnostics, and Resources metadata; Diamond/Pearl unpacked archive directories are summarized without reconstruction.
 5. **Done - NDS Toolchain Health**: report user-installed devkitPro/BlocksDS, ndstool, grit, mmutil, devkitARM, ndspy-compatible tooling, melonDS/DeSmuME, reference-only DSPRE/Tinke posture, NDS header facts, and source-tree build prerequisites as optional external dependencies.
 6. **Done - Source-Backed Record Editing**: local source-tree NDS data records in safe UTF-8 formats now draft, preview, apply, discard, back up, and reload through the mutation-plan contract in CLI and Resources.
-7. **Done - Semantic Editor Design V1**: eligible Platinum source-backed JSON species/move records expose top-level scalar semantic fields in Resources and CLI plan/apply commands while still lowering to the source-backed NDS mutation plan. Separate binary-only export plans remain later rows.
+7. **Done - Semantic Editor Design V1**: eligible Platinum source-backed JSON species/move/trainer data records expose top-level scalar semantic fields in Resources and CLI plan/apply commands while still lowering to the source-backed NDS mutation plan. Separate binary-only export plans remain later rows.
+8. **Done - Map/Script/Text Readiness**: NDS data catalog rows now carry read-only relationship and readiness metadata for map, matrix, script, text, filesystem manifest, and container review in CLI JSON and Resources facts. External editors, compilers, extraction, rebuilds, NARC packing, mutation apply, and ROM/container writes stay blocked.
 
 ## V1 Native Parsers
 
@@ -66,12 +67,19 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 ## V7 Semantic Field Editing
 
-- `NDSDataSemanticEditor` adds the first semantic layer above raw source text by detecting top-level scalar fields in eligible Platinum source-backed JSON records for species/personal/move-style data.
+- `NDSDataSemanticEditor` adds the first semantic layer above raw source text by detecting top-level scalar fields in eligible Platinum source-backed JSON records for species/personal/move-style data and trainer data under `res/trainers/data/**/*.json`.
 - Semantic edits preserve the source file shape by replacing only the selected scalar value, then flow through `NDSDataMutationPlanner`/`NDSDataMutationApplier` for preview, source hash/size checks, explicit apply, and backups.
 - `pokemonhack-cli nds-data-semantic-plan <project> <record-id> --set <field=value> --json` and `nds-data-semantic-apply ...` expose field-level planning/apply without introducing a separate write path.
 - Resources renders semantic field controls above the raw text editor when a selected NDS data row is eligible; ineligible records keep the existing raw editor or read-only blocked state.
-- ROM-backed rows, NARC/container rows, generated/reference rows, non-Platinum profiles, PMD-Sky, extraction, rebuilds, binary writes, and ROM exports remain blocked/read-only.
+- Trainer class/resource JSON, nested trainer arrays/objects, ROM-backed rows, NARC/container rows, generated/reference rows, non-Platinum profiles, PMD-Sky, extraction, rebuilds, binary writes, and ROM exports remain blocked/read-only.
+
+## V8 Map/Script/Text Readiness
+
+- `NDSDataCatalogRecord` now includes `relatedRecords` and a read-only `readiness` summary so existing `nds-data-catalog`, `resource-index`, and Resources rows can show Gen IV context without a new editor module.
+- Relationship keys connect same-name map, matrix, script, and text rows where source-tree paths make that safe; unmatched rows remain partial and explain that no same-key context was found.
+- Filesystem manifests and binary/container rows report manual-only or blocked readiness with explicit blocked actions for extraction, decompression, compilers, NARC rebuild, ROM rebuild, and ROM export.
+- Resources surfaces this metadata as facts and searchable row context. Navigation still routes through existing Resources behavior; no editor, compiler, extraction, rebuild, mutation apply, NARC packing, ROM export, or binary/container write path is added by this pass.
 
 ## Next Useful Pass
 
-Expand semantic Gen IV coverage beyond top-level Platinum JSON scalars, add NDS text/message readiness, or design separate binary export plans. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.
+Expand semantic Gen IV coverage to another dedicated source-backed domain, add decoded NDS text/message-bank previews, or add container member fingerprints before graphics previews. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.

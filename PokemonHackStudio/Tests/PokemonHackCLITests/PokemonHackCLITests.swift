@@ -387,6 +387,39 @@ final class PokemonHackCLITests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
             "{\"base_hp\":31}\n"
         )
+
+        let trainerPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "trainers:res/trainers/data/youngster.json",
+                "--set",
+                "double_battle=true",
+                "--json"
+            ])
+        )
+        let trainerTextDraft = try XCTUnwrap(trainerPlan["textDraft"] as? [String: Any])
+        XCTAssertTrue((trainerTextDraft["editedText"] as? String)?.contains("\"double_battle\": true") == true)
+        let trainerEditPlan = try XCTUnwrap(trainerPlan["editPlan"] as? [String: Any])
+        let trainerChanges = try XCTUnwrap(trainerEditPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(trainerChanges.count, 1)
+
+        let trainerApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "trainers:res/trainers/data/youngster.json",
+                "--set",
+                "double_battle=true",
+                "--json"
+            ])
+        )
+        let trainerAppliedChanges = try XCTUnwrap(trainerApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(trainerAppliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("res/trainers/data/youngster.json"), encoding: .utf8)
+                .contains("\"double_battle\": true")
+        )
     }
 
     func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
@@ -538,7 +571,13 @@ final class PokemonHackCLITests: XCTestCase {
         try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
-        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("res/trainers/data/youngster.json"))
+        try write(
+            """
+            {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "messages": ["I like shorts!"]}
+
+            """,
+            to: root.appendingPathComponent("res/trainers/data/youngster.json")
+        )
         try write("[{\"slot\":1}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))

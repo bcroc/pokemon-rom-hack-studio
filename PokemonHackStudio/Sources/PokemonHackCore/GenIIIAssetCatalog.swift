@@ -1013,7 +1013,7 @@ public enum GenIIIAssetCatalogBuilder {
             facts: [
                 SourceIndexFact(label: "Category", value: item.category),
                 SourceIndexFact(label: "Offset", value: item.offset.map { "0x\(String($0, radix: 16, uppercase: true))" } ?? "source path")
-            ],
+            ] + item.facts,
             diagnostics: entry.diagnostics,
             navigationTarget: GenIIIAssetNavigationTarget(module: .rom, identifier: entry.id)
         )

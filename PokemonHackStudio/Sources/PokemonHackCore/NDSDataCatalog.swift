@@ -102,6 +102,42 @@ public struct NDSDataCatalogSummary: Codable, Equatable {
     }
 }
 
+public enum NDSDataReadinessStatus: String, Codable, Equatable, CaseIterable, Sendable {
+    case ready
+    case partial
+    case blocked
+}
+
+public struct NDSDataRelatedRecord: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { recordID }
+
+    public let recordID: String
+    public let label: String
+    public let domain: NDSDataDomain
+    public let relativePath: String
+
+    public init(recordID: String, label: String, domain: NDSDataDomain, relativePath: String) {
+        self.recordID = recordID
+        self.label = label
+        self.domain = domain
+        self.relativePath = relativePath
+    }
+}
+
+public struct NDSDataReadinessSummary: Codable, Equatable, Sendable {
+    public let status: NDSDataReadinessStatus
+    public let title: String
+    public let detail: String
+    public let blockedActions: [String]
+
+    public init(status: NDSDataReadinessStatus, title: String, detail: String, blockedActions: [String] = []) {
+        self.status = status
+        self.title = title
+        self.detail = detail
+        self.blockedActions = blockedActions
+    }
+}
+
 public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let id: String
     public let domain: NDSDataDomain
@@ -117,6 +153,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let facts: [SourceIndexFact]
     public let preview: String?
     public let containerSummary: NDSDataContainerSummary?
+    public let relatedRecords: [NDSDataRelatedRecord]
+    public let readiness: NDSDataReadinessSummary?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -134,6 +172,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         facts: [SourceIndexFact] = [],
         preview: String? = nil,
         containerSummary: NDSDataContainerSummary? = nil,
+        relatedRecords: [NDSDataRelatedRecord] = [],
+        readiness: NDSDataReadinessSummary? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.id = id
@@ -150,6 +190,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.facts = facts
         self.preview = preview
         self.containerSummary = containerSummary
+        self.relatedRecords = relatedRecords
+        self.readiness = readiness
         self.diagnostics = diagnostics
     }
 }
@@ -285,11 +327,14 @@ public enum NDSDataCatalogBuilder {
             )
         }
 
-        let records = uniqueRecords(
-            descriptors.flatMap { descriptor in
-                catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-            } + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-        ).sorted(by: recordSort)
+        let records = enrichRelationships(
+            records: uniqueRecords(
+                descriptors.flatMap { descriptor in
+                    catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                } + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+            ).sorted(by: recordSort),
+            profile: index.profile
+        )
 
         return catalog(
             root: root,
@@ -658,7 +703,7 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static func romContainerRecords(report: NDSROMInspectorReport) -> [NDSDataCatalogRecord] {
-        report.narcArchives.map { archive in
+        let records = report.narcArchives.map { archive in
             let domain = domain(forContainerPath: archive.path)
             let summary = containerSummary(for: archive.index, byteCount: archive.size)
             return NDSDataCatalogRecord(
@@ -684,6 +729,7 @@ public enum NDSDataCatalogBuilder {
                 diagnostics: archive.index.diagnostics
             )
         }.sorted(by: recordSort)
+        return enrichRelationships(records: records, profile: .ndsROM)
     }
 
     private static func uniqueRecords(_ records: [NDSDataCatalogRecord]) -> [NDSDataCatalogRecord] {
@@ -693,6 +739,183 @@ public enum NDSDataCatalogBuilder {
             unique.append(record)
         }
         return unique
+    }
+
+    private static func enrichRelationships(records: [NDSDataCatalogRecord], profile: GameProfile) -> [NDSDataCatalogRecord] {
+        let recordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        return records.map { record in
+            let related = relatedRecords(for: record, allRecords: records)
+            let readiness = readinessSummary(for: record, profile: profile, relatedRecords: related)
+            let relationshipFacts = factsForRelationships(related, readiness: readiness)
+            let diagnostics = record.diagnostics + diagnosticsForReadiness(readiness, record: record)
+            let stableRelated = related.filter { recordsByID[$0.recordID] != nil }
+            return NDSDataCatalogRecord(
+                id: record.id,
+                domain: record.domain,
+                title: record.title,
+                relativePath: record.relativePath,
+                containerPath: record.containerPath,
+                format: record.format,
+                role: record.role,
+                exists: record.exists,
+                recordCount: record.recordCount,
+                byteCount: record.byteCount,
+                sourceSpan: record.sourceSpan,
+                facts: record.facts + relationshipFacts,
+                preview: record.preview,
+                containerSummary: record.containerSummary,
+                relatedRecords: stableRelated,
+                readiness: readiness,
+                diagnostics: diagnostics
+            )
+        }
+    }
+
+    private static func relatedRecords(
+        for record: NDSDataCatalogRecord,
+        allRecords records: [NDSDataCatalogRecord]
+    ) -> [NDSDataRelatedRecord] {
+        guard [.maps, .scripts, .text].contains(record.domain) else { return [] }
+        let key = relationshipKey(for: record)
+        guard !key.isEmpty else { return [] }
+
+        return records.compactMap { candidate in
+            guard candidate.id != record.id,
+                  [.maps, .scripts, .text].contains(candidate.domain),
+                  relationshipKey(for: candidate) == key
+            else { return nil }
+            return NDSDataRelatedRecord(
+                recordID: candidate.id,
+                label: relationshipLabel(for: candidate),
+                domain: candidate.domain,
+                relativePath: candidate.relativePath
+            )
+        }.sorted { lhs, rhs in
+            if lhs.domain.sortOrder == rhs.domain.sortOrder {
+                return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
+            }
+            return lhs.domain.sortOrder < rhs.domain.sortOrder
+        }
+    }
+
+    private static func readinessSummary(
+        for record: NDSDataCatalogRecord,
+        profile: GameProfile,
+        relatedRecords: [NDSDataRelatedRecord]
+    ) -> NDSDataReadinessSummary? {
+        if record.role == .binaryContainer {
+            return NDSDataReadinessSummary(
+                status: .blocked,
+                title: "NDS container readiness",
+                detail: "Container rows are read-only inventory for routing future graphics, text, map, and migration work.",
+                blockedActions: ["container extraction", "decompression", "NARC rebuild", "ROM export"]
+            )
+        }
+
+        switch record.domain {
+        case .maps:
+            let status: NDSDataReadinessStatus = relatedRecords.isEmpty ? .partial : .ready
+            return NDSDataReadinessSummary(
+                status: status,
+                title: "Gen IV map readiness",
+                detail: relatedRecords.isEmpty
+                    ? "Map data is indexed, but no same-key matrix/script/text relationship was found."
+                    : "Map, matrix, script, or text rows share a source-tree key and can be reviewed together.",
+                blockedActions: ["map editor", "matrix compiler", "NARC rebuild", "ROM export"]
+            )
+        case .scripts:
+            return NDSDataReadinessSummary(
+                status: relatedRecords.isEmpty ? .partial : .ready,
+                title: "Gen IV script readiness",
+                detail: relatedRecords.isEmpty
+                    ? "Script data is indexed without a same-key map or text row."
+                    : "Script rows have same-key map or text context for read-only review.",
+                blockedActions: ["script compiler", "event editor", "NARC rebuild", "ROM export"]
+            )
+        case .text:
+            return NDSDataReadinessSummary(
+                status: profile == .pmdSky ? .blocked : (relatedRecords.isEmpty ? .partial : .ready),
+                title: "Gen IV text readiness",
+                detail: profile == .pmdSky
+                    ? "PMD-Sky text is spin-off inventory only and is not treated as mainline Gen IV RPG text."
+                    : (relatedRecords.isEmpty ? "Text data is indexed without decoded message-bank or same-key map/script context." : "Text rows have same-key map or script context for read-only review."),
+                blockedActions: ["message decoder", "text-bank writer", "NARC rebuild", "ROM export"]
+            )
+        case .resources where record.role == .nitroFSManifest:
+            return NDSDataReadinessSummary(
+                status: .partial,
+                title: "NDS filesystem manifest readiness",
+                detail: "Filesystem manifests are source-tree context for routing resources; extraction, packing, and rebuilds stay external.",
+                blockedActions: ["filesystem extraction", "NARC pack", "ROM rebuild", "ROM export"]
+            )
+        default:
+            return nil
+        }
+    }
+
+    private static func factsForRelationships(
+        _ relatedRecords: [NDSDataRelatedRecord],
+        readiness: NDSDataReadinessSummary?
+    ) -> [SourceIndexFact] {
+        var facts: [SourceIndexFact] = []
+        if let readiness {
+            facts.append(SourceIndexFact(label: "Readiness", value: readiness.status.rawValue))
+            facts.append(SourceIndexFact(label: "Blocked Actions", value: readiness.blockedActions.joined(separator: ", ")))
+        }
+        if !relatedRecords.isEmpty {
+            facts.append(SourceIndexFact(label: "Related Rows", value: "\(relatedRecords.count)"))
+            facts.append(SourceIndexFact(label: "Related Domains", value: Array(Set(relatedRecords.map { $0.domain.rawValue })).sorted().joined(separator: ", ")))
+        }
+        return facts
+    }
+
+    private static func diagnosticsForReadiness(
+        _ readiness: NDSDataReadinessSummary?,
+        record: NDSDataCatalogRecord
+    ) -> [Diagnostic] {
+        guard let readiness else { return [] }
+        let severity: DiagnosticSeverity = readiness.status == .blocked ? .warning : .info
+        return [
+            Diagnostic(
+                severity: severity,
+                code: readiness.status == .blocked ? "NDS_DATA_READINESS_WRITE_BLOCKED" : "NDS_DATA_READINESS_PREVIEW_ONLY",
+                message: "\(readiness.title): \(readiness.detail) Blocked actions: \(readiness.blockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
+    private static func relationshipKey(for record: NDSDataCatalogRecord) -> String {
+        let lower = record.relativePath.lowercased()
+        if lower.contains("map_headers") || lower.contains("maptable") {
+            return "headers"
+        }
+        let url = URL(fileURLWithPath: record.relativePath)
+        let fileStem = url.deletingPathExtension().lastPathComponent
+        let parent = url.deletingLastPathComponent().lastPathComponent
+        let raw = fileStem == "map" || fileStem == "script" || fileStem == "text" ? parent : fileStem
+        return raw
+            .replacingOccurrences(of: "map_", with: "")
+            .replacingOccurrences(of: "matrix_", with: "")
+            .replacingOccurrences(of: "scr_", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func relationshipLabel(for record: NDSDataCatalogRecord) -> String {
+        switch record.domain {
+        case .maps where record.relativePath.lowercased().contains("matri"):
+            return "Matrix"
+        case .maps where record.relativePath.lowercased().contains("header") || record.relativePath.lowercased().contains("maptable"):
+            return "Map header"
+        case .maps:
+            return "Map resource"
+        case .scripts:
+            return "Script resource"
+        case .text:
+            return "Text bank"
+        default:
+            return record.domain.rawValue
+        }
     }
 
     private static func shallowRecordCount(
