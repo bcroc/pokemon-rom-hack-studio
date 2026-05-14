@@ -550,6 +550,9 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(mapRow.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
         XCTAssertTrue(mapRow.facts.contains { $0.label == "Related Domains" && $0.value.contains("scripts") })
         XCTAssertEqual(mapRow.targetModule, .resources)
+        let personalNARCRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/prebuilt/poketool/personal/personal.narc" })
+        XCTAssertTrue(personalNARCRow.facts.contains { $0.label == "Preview Hints" && $0.value.contains("nitroPalette") })
+        XCTAssertTrue(personalNARCRow.facts.contains { $0.label == "Blocked Previews" && $0.value == "1" })
 
         let speciesRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/pokemon/abra/data.json" })
 
@@ -574,6 +577,44 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
             "{\"base_hp\":29}\n"
+        )
+
+        let trainerRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/trainers/data/youngster.json" })
+        store.requestResourceAssetSelection(trainerRow.id)
+
+        let trainerEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(trainerEditor.recordID, "trainers:res/trainers/data/youngster.json")
+        XCTAssertTrue(trainerEditor.semanticFields.contains { $0.key == "name" && $0.value == "Youngster" })
+        XCTAssertTrue(trainerEditor.semanticFields.contains { $0.key == "double_battle" && $0.value == "false" })
+        XCTAssertFalse(trainerEditor.semanticFields.contains { $0.key == "party" })
+
+        store.updateSelectedNDSDataSemanticField(key: "double_battle", value: "true")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("res/trainers/data/youngster.json"), encoding: .utf8)
+                .contains("\"double_battle\": true")
+        )
+
+        let trainerClassRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/trainers/classes/youngster.json" })
+        store.requestResourceAssetSelection(trainerClassRow.id)
+
+        let trainerClassEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(trainerClassEditor.semanticFields.isEmpty)
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        store.updateSelectedNDSDataSemanticField(key: "cell_animation", value: "2")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/trainers/classes/youngster.json"), encoding: .utf8),
+            "{\"cell_animation\":1}\n"
         )
     }
 
@@ -2756,14 +2797,76 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
+        try write(
+            """
+            {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "messages": ["I like shorts!"]}
+
+            """,
+            to: root.appendingPathComponent("res/trainers/data/youngster.json")
+        )
+        try write("{\"cell_animation\":1}\n", to: root.appendingPathComponent("res/trainers/classes/youngster.json"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
         try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
         try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
         try write("{\"matrix\":1}\n", to: root.appendingPathComponent("res/field/matrices/route201.json"))
-        try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
+        try write(makeTestNARC(), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
 
         return root
+    }
+
+    private func makeTestNARC() -> Data {
+        let payload = Data("NCLR".utf8) + Data([0x10, 0x00, 0x00, 0x00])
+        var fat = Data("BTAF".utf8)
+        appendUInt32LE(28, to: &fat)
+        appendUInt16LE(2, to: &fat)
+        appendUInt16LE(0, to: &fat)
+        appendUInt32LE(0, to: &fat)
+        appendUInt32LE(4, to: &fat)
+        appendUInt32LE(4, to: &fat)
+        appendUInt32LE(UInt32(payload.count), to: &fat)
+
+        var namesData = Data()
+        appendUInt32LE(8, to: &namesData)
+        appendUInt16LE(0, to: &namesData)
+        appendUInt16LE(1, to: &namesData)
+        appendFNTFile("first.bin", to: &namesData)
+        appendFNTFile("second.bin", to: &namesData)
+        namesData.append(0)
+        var fnt = Data("BTNF".utf8)
+        appendUInt32LE(UInt32(8 + namesData.count), to: &fnt)
+        fnt.append(namesData)
+
+        var image = Data("GMIF".utf8)
+        appendUInt32LE(UInt32(8 + payload.count), to: &image)
+        image.append(payload)
+
+        let fileSize = UInt32(16 + fat.count + fnt.count + image.count)
+        var header = Data("NARC".utf8)
+        appendUInt16LE(0xFFFE, to: &header)
+        appendUInt16LE(0x0100, to: &header)
+        appendUInt32LE(fileSize, to: &header)
+        appendUInt16LE(0x10, to: &header)
+        appendUInt16LE(3, to: &header)
+        return header + fat + fnt + image
+    }
+
+    private func appendFNTFile(_ name: String, to data: inout Data) {
+        let bytes = Array(name.utf8)
+        data.append(UInt8(bytes.count))
+        data.append(contentsOf: bytes)
+    }
+
+    private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8(value & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+    }
+
+    private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 24) & 0xFF))
     }
 
     private func makeSourceIndexProject() throws -> URL {

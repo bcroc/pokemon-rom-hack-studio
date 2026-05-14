@@ -256,10 +256,18 @@ public enum NDSDataSemanticEditor {
     ) -> NDSDataSemanticEditPlan {
         let snapshot = snapshot(catalog: catalog, recordID: draft.recordID, fileManager: fileManager)
         let sourceText = NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: draft.recordID, fileManager: fileManager) ?? ""
-        let editResult = updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID)
+        let editResult = snapshot.canEdit
+            ? updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID)
+            : (text: sourceText, diagnostics: [])
         let textDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editResult.text)
-        let editPlan = NDSDataMutationPlanner.plan(catalog: catalog, draft: textDraft, fileManager: fileManager)
-        let diagnostics = snapshot.diagnostics + editResult.diagnostics + editPlan.diagnostics
+        let semanticDiagnostics = snapshot.diagnostics + editResult.diagnostics
+        let editPlan: NDSDataEditPlan
+        if semanticDiagnostics.contains(where: { $0.severity == .error }) {
+            editPlan = blockedEditPlan(catalog: catalog, draft: textDraft, diagnostics: semanticDiagnostics)
+        } else {
+            editPlan = NDSDataMutationPlanner.plan(catalog: catalog, draft: textDraft, fileManager: fileManager)
+        }
+        let diagnostics = semanticDiagnostics + editPlan.diagnostics
         return NDSDataSemanticEditPlan(snapshot: snapshot, draft: draft, textDraft: textDraft, editPlan: editPlan, diagnostics: diagnostics)
     }
 
@@ -477,6 +485,28 @@ public enum NDSDataSemanticEditor {
             .split(separator: "_")
             .map { word in word.prefix(1).uppercased() + String(word.dropFirst()) }
             .joined(separator: " ")
+    }
+
+    private static func blockedEditPlan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataEditDraft,
+        diagnostics: [Diagnostic]
+    ) -> NDSDataEditPlan {
+        let mutationPlan = MutationPlan(
+            title: "NDS semantic data edits blocked",
+            summary: "No NDS source files are applyable until semantic edit diagnostics are resolved.",
+            diagnostics: diagnostics,
+            requiresExplicitApply: true
+        )
+        return NDSDataEditPlan(
+            rootPath: catalog.root.path,
+            recordID: draft.recordID,
+            draft: draft,
+            changes: [],
+            diagnostics: diagnostics,
+            mutationPlan: mutationPlan,
+            backupRelativeRoot: ".pokemonhackstudio/backups/semantic-blocked"
+        )
     }
 
     private static func skipWhitespace(_ text: String, index: inout String.Index) {

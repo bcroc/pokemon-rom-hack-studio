@@ -906,6 +906,7 @@ public struct NDSNARCArchive: Codable, Equatable, Identifiable {
     public let offset: UInt64
     public let size: UInt64
     public let index: NARCIndex
+    public let memberFingerprints: [NDSDataContainerMemberFingerprint]
 }
 
 public struct NDSROMInspectorReport: Codable, Equatable {
@@ -1028,7 +1029,8 @@ public enum NDSROMInspectorReportBuilder {
                     path: file.path,
                     offset: file.offset,
                     size: file.size,
-                    index: index
+                    index: index,
+                    memberFingerprints: NDSDataCatalogBuilder.memberFingerprints(for: index, data: archiveData)
                 )
             )
         }

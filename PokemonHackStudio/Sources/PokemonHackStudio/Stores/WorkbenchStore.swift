@@ -2829,11 +2829,14 @@ final class WorkbenchStore: ObservableObject {
 
     func updateSelectedNDSDataSemanticField(key fieldKey: String, value: String) {
         guard
+            let catalog = selectedNDSDataCatalog,
             let sourceText = selectedNDSDataDraft?.editedText ?? selectedNDSDataSourceText,
             let recordID = selectedNDSDataRecordID
         else {
             return
         }
+        let snapshot = PokemonHackCore.NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: recordID, fileManager: fileManager)
+        guard snapshot.canEdit else { return }
         let result = PokemonHackCore.NDSDataSemanticEditor.updateSourceText(
             sourceText,
             fieldEdit: PokemonHackCore.NDSDataSemanticFieldEdit(key: fieldKey, value: value),

@@ -37,6 +37,75 @@ public enum NDSDataContainerKind: String, Codable, Equatable, CaseIterable, Send
     case unpackedArchiveDirectory
 }
 
+public enum NDSDataContainerMemberPreviewStatus: String, Codable, Equatable, CaseIterable, Sendable {
+    case ready
+    case blocked
+}
+
+public struct NDSDataContainerMemberPreview: Codable, Equatable {
+    public let status: NDSDataContainerMemberPreviewStatus
+    public let format: String
+    public let summary: String
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: NDSDataContainerMemberPreviewStatus,
+        format: String,
+        summary: String,
+        blockedActions: [String] = [],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.status = status
+        self.format = format
+        self.summary = summary
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct NDSDataContainerMemberFingerprint: Codable, Equatable, Identifiable {
+    public var id: String { "\(memberIndex):\(path)" }
+
+    public let memberIndex: Int
+    public let path: String
+    public let byteCount: UInt64?
+    public let fileExtension: String?
+    public let leadingMagicHex: String?
+    public let leadingMagicASCII: String?
+    public let formatHint: String
+    public let compressionHint: String
+    public let confidence: String
+    public let preview: NDSDataContainerMemberPreview?
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        memberIndex: Int,
+        path: String,
+        byteCount: UInt64?,
+        fileExtension: String?,
+        leadingMagicHex: String?,
+        leadingMagicASCII: String?,
+        formatHint: String,
+        compressionHint: String,
+        confidence: String,
+        preview: NDSDataContainerMemberPreview? = nil,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.memberIndex = memberIndex
+        self.path = path
+        self.byteCount = byteCount
+        self.fileExtension = fileExtension
+        self.leadingMagicHex = leadingMagicHex
+        self.leadingMagicASCII = leadingMagicASCII
+        self.formatHint = formatHint
+        self.compressionHint = compressionHint
+        self.confidence = confidence
+        self.preview = preview
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct NDSDataContainerSummary: Codable, Equatable {
     public let kind: NDSDataContainerKind
     public let memberCount: Int
@@ -44,6 +113,7 @@ public struct NDSDataContainerSummary: Codable, Equatable {
     public let unnamedMemberCount: Int
     public let byteCount: UInt64?
     public let sampleMemberPaths: [String]
+    public let memberFingerprints: [NDSDataContainerMemberFingerprint]
     public let isReadOnly: Bool
     public let diagnostics: [Diagnostic]
 
@@ -54,6 +124,7 @@ public struct NDSDataContainerSummary: Codable, Equatable {
         unnamedMemberCount: Int,
         byteCount: UInt64?,
         sampleMemberPaths: [String],
+        memberFingerprints: [NDSDataContainerMemberFingerprint] = [],
         isReadOnly: Bool = true,
         diagnostics: [Diagnostic] = []
     ) {
@@ -63,6 +134,7 @@ public struct NDSDataContainerSummary: Codable, Equatable {
         self.unnamedMemberCount = unnamedMemberCount
         self.byteCount = byteCount
         self.sampleMemberPaths = sampleMemberPaths
+        self.memberFingerprints = memberFingerprints
         self.isReadOnly = isReadOnly
         self.diagnostics = diagnostics
     }
@@ -705,7 +777,11 @@ public enum NDSDataCatalogBuilder {
     private static func romContainerRecords(report: NDSROMInspectorReport) -> [NDSDataCatalogRecord] {
         let records = report.narcArchives.map { archive in
             let domain = domain(forContainerPath: archive.path)
-            let summary = containerSummary(for: archive.index, byteCount: archive.size)
+            let summary = containerSummary(
+                for: archive.index,
+                memberFingerprints: archive.memberFingerprints,
+                byteCount: archive.size
+            )
             return NDSDataCatalogRecord(
                 id: "\(domain.rawValue):\(archive.path)",
                 domain: domain,
@@ -743,8 +819,9 @@ public enum NDSDataCatalogBuilder {
 
     private static func enrichRelationships(records: [NDSDataCatalogRecord], profile: GameProfile) -> [NDSDataCatalogRecord] {
         let recordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        let relationshipKeysByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, relationshipKeys(for: $0, profile: profile)) })
         return records.map { record in
-            let related = relatedRecords(for: record, allRecords: records)
+            let related = relatedRecords(for: record, allRecords: records, relationshipKeysByID: relationshipKeysByID)
             let readiness = readinessSummary(for: record, profile: profile, relatedRecords: related)
             let relationshipFacts = factsForRelationships(related, readiness: readiness)
             let diagnostics = record.diagnostics + diagnosticsForReadiness(readiness, record: record)
@@ -773,16 +850,18 @@ public enum NDSDataCatalogBuilder {
 
     private static func relatedRecords(
         for record: NDSDataCatalogRecord,
-        allRecords records: [NDSDataCatalogRecord]
+        allRecords records: [NDSDataCatalogRecord],
+        relationshipKeysByID: [String: Set<String>]
     ) -> [NDSDataRelatedRecord] {
         guard [.maps, .scripts, .text].contains(record.domain) else { return [] }
-        let key = relationshipKey(for: record)
-        guard !key.isEmpty else { return [] }
+        let keys = relationshipKeysByID[record.id] ?? []
+        guard !keys.isEmpty else { return [] }
 
         return records.compactMap { candidate in
+            let candidateKeys = relationshipKeysByID[candidate.id] ?? []
             guard candidate.id != record.id,
                   [.maps, .scripts, .text].contains(candidate.domain),
-                  relationshipKey(for: candidate) == key
+                  !keys.isDisjoint(with: candidateKeys)
             else { return nil }
             return NDSDataRelatedRecord(
                 recordID: candidate.id,
@@ -885,20 +964,59 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
-    private static func relationshipKey(for record: NDSDataCatalogRecord) -> String {
+    private static func relationshipKeys(for record: NDSDataCatalogRecord, profile: GameProfile) -> Set<String> {
         let lower = record.relativePath.lowercased()
-        if lower.contains("map_headers") || lower.contains("maptable") {
-            return "headers"
+        var keys: Set<String> = []
+
+        if lower.contains("map_headers") || lower.contains("map_header") || lower.contains("maptable") {
+            keys.insert("map-header")
         }
+
+        if profile == .pokediamond,
+           lower.hasPrefix("arm9/src/"),
+           ["map_header.c", "script.c", "msgdata.c"].contains(URL(fileURLWithPath: lower).lastPathComponent) {
+            keys.insert("arm9-field-source")
+        }
+
         let url = URL(fileURLWithPath: record.relativePath)
+        guard !relationshipExcludedFileNames.contains(url.lastPathComponent.lowercased()) else {
+            return keys
+        }
         let fileStem = url.deletingPathExtension().lastPathComponent
         let parent = url.deletingLastPathComponent().lastPathComponent
         let raw = fileStem == "map" || fileStem == "script" || fileStem == "text" ? parent : fileStem
-        return raw
+        for normalized in relationshipTokenVariants(raw) where !normalized.isEmpty {
+            keys.insert("token:\(normalized)")
+        }
+        return keys
+    }
+
+    private static func relationshipTokenVariants(_ value: String) -> Set<String> {
+        var token = value.lowercased()
+            .replacingOccurrences(of: "map_data_", with: "")
+            .replacingOccurrences(of: "map_matrix_", with: "")
             .replacingOccurrences(of: "map_", with: "")
             .replacingOccurrences(of: "matrix_", with: "")
+            .replacingOccurrences(of: "events_", with: "")
+            .replacingOccurrences(of: "scripts_init_", with: "")
+            .replacingOccurrences(of: "scripts_", with: "")
+            .replacingOccurrences(of: "script_", with: "")
+            .replacingOccurrences(of: "scr_seq_", with: "")
             .replacingOccurrences(of: "scr_", with: "")
+            .replacingOccurrences(of: "zone_", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while token.count > 1, token.first == "0", token.dropFirst().allSatisfy(\.isNumber) {
+            token.removeFirst()
+        }
+
+        var variants: Set<String> = token.isEmpty ? [] : [token]
+        if let suffix = token.split(separator: "_").last.map(String.init),
+           !suffix.isEmpty,
+           suffix.allSatisfy(\.isNumber) {
+            variants.insert(suffix)
+        }
+        return variants
     }
 
     private static func relationshipLabel(for record: NDSDataCatalogRecord) -> String {
@@ -973,7 +1091,7 @@ public enum NDSDataCatalogBuilder {
         fileManager: FileManager
     ) -> NDSDataContainerSummary? {
         if format == .narc, !isDirectory, let data = try? Data(contentsOf: url) {
-            return containerSummary(for: NARCParser.parse(path: relativePath, data: data), byteCount: UInt64(data.count))
+            return containerSummary(for: NARCParser.parse(path: relativePath, data: data), data: data, byteCount: UInt64(data.count))
         }
         if isDirectory {
             return unpackedArchiveSummary(url: url, fileManager: fileManager)
@@ -981,8 +1099,14 @@ public enum NDSDataCatalogBuilder {
         return nil
     }
 
-    private static func containerSummary(for index: NARCIndex, byteCount: UInt64?) -> NDSDataContainerSummary {
+    private static func containerSummary(
+        for index: NARCIndex,
+        data: Data? = nil,
+        memberFingerprints: [NDSDataContainerMemberFingerprint]? = nil,
+        byteCount: UInt64?
+    ) -> NDSDataContainerSummary {
         let namedCount = index.members.filter { $0.name != nil }.count
+        let fingerprints = memberFingerprints ?? Self.memberFingerprints(for: index, data: data)
         return NDSDataContainerSummary(
             kind: .narc,
             memberCount: index.memberCount,
@@ -990,6 +1114,7 @@ public enum NDSDataCatalogBuilder {
             unnamedMemberCount: max(index.memberCount - namedCount, 0),
             byteCount: byteCount,
             sampleMemberPaths: Array(index.members.prefix(maxContainerSampleMembers).map(\.path)),
+            memberFingerprints: fingerprints,
             diagnostics: index.diagnostics
         )
     }
@@ -1010,6 +1135,7 @@ public enum NDSDataCatalogBuilder {
                 unnamedMemberCount: 0,
                 byteCount: 0,
                 sampleMemberPaths: [],
+                memberFingerprints: [],
                 diagnostics: []
             )
         }
@@ -1022,8 +1148,255 @@ public enum NDSDataCatalogBuilder {
             unnamedMemberCount: unnamedCount,
             byteCount: byteCount,
             sampleMemberPaths: Array(members.prefix(maxContainerSampleMembers).map(\.relativePath)),
+            memberFingerprints: unpackedMemberFingerprints(root: url, members: members, fileManager: fileManager),
             diagnostics: []
         )
+    }
+
+    public static func memberFingerprints(for index: NARCIndex, data: Data?) -> [NDSDataContainerMemberFingerprint] {
+        index.members.prefix(maxContainerSampleMembers).map { member in
+            let sample: Data?
+            if let data, let gmifDataOffset = index.gmifDataOffset {
+                let start = Int(gmifDataOffset + member.offset)
+                let availableEnd = min(data.count, start + Int(member.size))
+                if start >= 0, start < availableEnd, start < data.count {
+                    sample = data.subdata(in: start..<min(availableEnd, start + maxMemberFingerprintBytes))
+                } else {
+                    sample = nil
+                }
+            } else {
+                sample = nil
+            }
+            return memberFingerprint(
+                memberIndex: member.fileID,
+                path: member.path,
+                byteCount: member.size,
+                sample: sample
+            )
+        }
+    }
+
+    private static func unpackedMemberFingerprints(
+        root: URL,
+        members: [(relativePath: String, byteCount: UInt64?)],
+        fileManager: FileManager
+    ) -> [NDSDataContainerMemberFingerprint] {
+        members.prefix(maxContainerSampleMembers).enumerated().map { index, member in
+            let sample = leadingBytes(
+                url: root.appendingPathComponent(member.relativePath),
+                byteCount: maxMemberFingerprintBytes,
+                fileManager: fileManager
+            )
+            return memberFingerprint(
+                memberIndex: index,
+                path: member.relativePath,
+                byteCount: member.byteCount,
+                sample: sample
+            )
+        }
+    }
+
+    private static func memberFingerprint(
+        memberIndex: Int,
+        path: String,
+        byteCount: UInt64?,
+        sample: Data?
+    ) -> NDSDataContainerMemberFingerprint {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let fileExtension = ext.isEmpty ? nil : ext
+        let leading = sample.map { Data($0.prefix(maxMemberMagicBytes)) } ?? Data()
+        let leadingHex = leading.isEmpty ? nil : leading.map { String(format: "%02X", $0) }.joined(separator: " ")
+        let leadingASCII = safeASCII(leading)
+        let classification = classifyMember(path: path, leadingBytes: leading)
+        let diagnostics: [Diagnostic] = sample == nil && (byteCount ?? 0) > 0
+            ? [Diagnostic(severity: .warning, code: "NDS_DATA_MEMBER_FINGERPRINT_UNAVAILABLE", message: "Could not read leading bytes for NDS container member: \(path).")]
+            : []
+        let preview = memberPreview(
+            path: path,
+            byteCount: byteCount,
+            leadingBytes: leading,
+            classification: classification,
+            diagnostics: diagnostics
+        )
+        return NDSDataContainerMemberFingerprint(
+            memberIndex: memberIndex,
+            path: path,
+            byteCount: byteCount,
+            fileExtension: fileExtension,
+            leadingMagicHex: leadingHex,
+            leadingMagicASCII: leadingASCII,
+            formatHint: classification.formatHint,
+            compressionHint: classification.compressionHint,
+            confidence: classification.confidence,
+            preview: preview,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func memberPreview(
+        path: String,
+        byteCount: UInt64?,
+        leadingBytes: Data,
+        classification: (formatHint: String, compressionHint: String, confidence: String),
+        diagnostics: [Diagnostic]
+    ) -> NDSDataContainerMemberPreview? {
+        if classification.compressionHint != "unknown" {
+            return NDSDataContainerMemberPreview(
+                status: .blocked,
+                format: classification.formatHint,
+                summary: "Compressed NDS member candidate; preview remains metadata-only.",
+                blockedActions: ndsGraphicsPreviewBlockedActions,
+                diagnostics: diagnostics + [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "NDS_DATA_MEMBER_PREVIEW_COMPRESSED_BLOCKED",
+                        message: "NDS member \(path) has compression hint \(classification.compressionHint); preview metadata is read-only and no decompression is attempted."
+                    )
+                ]
+            )
+        }
+
+        guard ndsGraphicsPreviewFormats.contains(classification.formatHint) else {
+            return NDSDataContainerMemberPreview(
+                status: .blocked,
+                format: classification.formatHint,
+                summary: "Unsupported NDS member preview format; catalog keeps routing metadata only.",
+                blockedActions: ndsGraphicsPreviewBlockedActions,
+                diagnostics: diagnostics + [
+                    Diagnostic(
+                        severity: .info,
+                        code: "NDS_DATA_MEMBER_PREVIEW_UNSUPPORTED",
+                        message: "NDS member \(path) is not in the read-only graphics preview allowlist."
+                    )
+                ]
+            )
+        }
+
+        guard leadingBytes.count >= 4 else {
+            return NDSDataContainerMemberPreview(
+                status: .blocked,
+                format: classification.formatHint,
+                summary: "Too few bytes for NDS graphics preview metadata.",
+                blockedActions: ndsGraphicsPreviewBlockedActions,
+                diagnostics: diagnostics + [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "NDS_DATA_MEMBER_PREVIEW_TOO_SHORT",
+                        message: "NDS member \(path) is too short for bounded graphics preview metadata."
+                    )
+                ]
+            )
+        }
+
+        let byteSummary = byteCount.map { "\($0) bytes" } ?? "unknown size"
+        return NDSDataContainerMemberPreview(
+            status: .ready,
+            format: classification.formatHint,
+            summary: "\(displayName(forMemberFormat: classification.formatHint)) metadata candidate, \(byteSummary).",
+            blockedActions: ndsGraphicsPreviewBlockedActions
+        )
+    }
+
+    private static func classifyMember(path: String, leadingBytes: Data) -> (formatHint: String, compressionHint: String, confidence: String) {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        if let hint = formatHint(forExtension: ext) {
+            return (hint, compressionHint(for: leadingBytes), "medium")
+        }
+
+        let magic = safeASCII(Data(leadingBytes.prefix(8))) ?? ""
+        let upperMagic = magic.uppercased()
+        for signature in ["NCLR", "RLCN", "NCGR", "RGCN", "NSCR", "RCSN", "NCER", "RECN", "NANR", "RNAN", "NFTR", "RTFN", "BMG", "MESG", "NSBMD", "BMD0", "NSBTX", "BTX0", "NARC"] {
+            if upperMagic.hasPrefix(signature) {
+                return (formatHint(forSignature: signature), compressionHint(for: leadingBytes), "high")
+            }
+        }
+
+        let compression = compressionHint(for: leadingBytes)
+        if compression != "unknown" {
+            return ("compressedCandidate", compression, "low")
+        }
+        return ("unknown", "unknown", "low")
+    }
+
+    private static func formatHint(forExtension ext: String) -> String? {
+        switch ext {
+        case "nclr", "rlcn": return "nitroPalette"
+        case "ncgr", "rgcn": return "nitroCharacterGraphics"
+        case "nscr", "rcsn": return "nitroScreenMap"
+        case "ncer", "recn": return "nitroCell"
+        case "nanr", "rnan": return "nitroAnimation"
+        case "nftr", "rtfn": return "nitroFont"
+        case "bmg": return "messageBank"
+        case "nsbmd", "bmd0": return "nitroModel"
+        case "nsbtx", "btx0": return "nitroTexture"
+        case "narc": return "narcContainer"
+        default: return nil
+        }
+    }
+
+    private static func formatHint(forSignature signature: String) -> String {
+        switch signature {
+        case "NCLR", "RLCN": return "nitroPalette"
+        case "NCGR", "RGCN": return "nitroCharacterGraphics"
+        case "NSCR", "RCSN": return "nitroScreenMap"
+        case "NCER", "RECN": return "nitroCell"
+        case "NANR", "RNAN": return "nitroAnimation"
+        case "NFTR", "RTFN": return "nitroFont"
+        case "BMG", "MESG": return "messageBank"
+        case "NSBMD", "BMD0": return "nitroModel"
+        case "NSBTX", "BTX0": return "nitroTexture"
+        case "NARC": return "narcContainer"
+        default: return "unknown"
+        }
+    }
+
+    private static func displayName(forMemberFormat format: String) -> String {
+        switch format {
+        case "nitroPalette": return "Nitro palette"
+        case "nitroCharacterGraphics": return "Nitro character graphics"
+        case "nitroScreenMap": return "Nitro screen map"
+        case "nitroCell": return "Nitro cell"
+        case "nitroAnimation": return "Nitro animation"
+        case "nitroFont": return "Nitro font"
+        case "nitroModel": return "Nitro model"
+        case "nitroTexture": return "Nitro texture"
+        default: return "NDS member"
+        }
+    }
+
+    private static func compressionHint(for bytes: Data) -> String {
+        guard let first = bytes.first else { return "unknown" }
+        switch first {
+        case 0x10: return "lz77Candidate"
+        case 0x11: return "lz11Candidate"
+        case 0x24: return "huffmanCandidate"
+        case 0x30: return "rleCandidate"
+        default: return "unknown"
+        }
+    }
+
+    private static func safeASCII(_ data: Data) -> String? {
+        guard !data.isEmpty,
+              data.allSatisfy({ byte in
+                byte == 0x20 || (byte >= 0x21 && byte <= 0x7E)
+              })
+        else {
+            return nil
+        }
+        return String(data: data, encoding: .ascii)
+    }
+
+    private static func leadingBytes(url: URL, byteCount: Int, fileManager: FileManager) -> Data? {
+        guard fileManager.fileExists(atPath: url.path),
+              let handle = try? FileHandle(forReadingFrom: url)
+        else {
+            return nil
+        }
+        defer { try? handle.close() }
+        if #available(macOS 10.15.4, *) {
+            return try? handle.read(upToCount: byteCount)
+        }
+        return handle.readData(ofLength: byteCount)
     }
 
     private static func recursiveMemberFiles(url: URL, fileManager: FileManager) -> [(relativePath: String, byteCount: UInt64?)] {
@@ -1088,6 +1461,24 @@ public enum NDSDataCatalogBuilder {
             facts.append(SourceIndexFact(label: "Members", value: "\(containerSummary.memberCount)"))
             facts.append(SourceIndexFact(label: "Named Members", value: "\(containerSummary.namedMemberCount)"))
             facts.append(SourceIndexFact(label: "Unnamed Members", value: "\(containerSummary.unnamedMemberCount)"))
+            let formatHints = Array(Set(containerSummary.memberFingerprints.map(\.formatHint))).sorted()
+            let compressionHints = Array(Set(containerSummary.memberFingerprints.map(\.compressionHint).filter { $0 != "unknown" })).sorted()
+            let previewHints = Array(Set(containerSummary.memberFingerprints.compactMap { fingerprint in
+                fingerprint.preview?.status == .ready ? fingerprint.preview?.format : nil
+            })).sorted()
+            let blockedPreviewCount = containerSummary.memberFingerprints.filter { $0.preview?.status == .blocked }.count
+            if !formatHints.isEmpty {
+                facts.append(SourceIndexFact(label: "Member Hints", value: formatHints.joined(separator: ", ")))
+            }
+            if !compressionHints.isEmpty {
+                facts.append(SourceIndexFact(label: "Compression Hints", value: compressionHints.joined(separator: ", ")))
+            }
+            if !previewHints.isEmpty {
+                facts.append(SourceIndexFact(label: "Preview Hints", value: previewHints.joined(separator: ", ")))
+            }
+            if blockedPreviewCount > 0 {
+                facts.append(SourceIndexFact(label: "Blocked Previews", value: "\(blockedPreviewCount)"))
+            }
         }
         if let recordCount {
             facts.append(SourceIndexFact(label: "Shallow Count", value: "\(recordCount)"))
@@ -1245,9 +1636,34 @@ public enum NDSDataCatalogBuilder {
         "build",
         "DerivedData"
     ]
+    private static let relationshipExcludedFileNames: Set<String> = [
+        "makefile",
+        "meson.build",
+        "readme.md"
+    ]
+    private static let ndsGraphicsPreviewFormats: Set<String> = [
+        "nitroPalette",
+        "nitroCharacterGraphics",
+        "nitroScreenMap",
+        "nitroCell",
+        "nitroAnimation",
+        "nitroFont",
+        "nitroModel",
+        "nitroTexture"
+    ]
+    private static let ndsGraphicsPreviewBlockedActions = [
+        "Extraction",
+        "Decompression",
+        "Conversion",
+        "NARC rebuild",
+        "ROM export",
+        "Mutation apply"
+    ]
 
     private static let maxDiscoveredContainerRecords = 256
     private static let maxContainerSampleMembers = 8
+    private static let maxMemberFingerprintBytes = 32
+    private static let maxMemberMagicBytes = 8
 }
 
 private struct CatalogPathDescriptor {

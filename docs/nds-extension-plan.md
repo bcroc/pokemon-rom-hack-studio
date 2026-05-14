@@ -20,6 +20,8 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 6. **Done - Source-Backed Record Editing**: local source-tree NDS data records in safe UTF-8 formats now draft, preview, apply, discard, back up, and reload through the mutation-plan contract in CLI and Resources.
 7. **Done - Semantic Editor Design V1**: eligible Platinum source-backed JSON species/move/trainer data records expose top-level scalar semantic fields in Resources and CLI plan/apply commands while still lowering to the source-backed NDS mutation plan. Separate binary-only export plans remain later rows.
 8. **Done - Map/Script/Text Readiness**: NDS data catalog rows now carry read-only relationship and readiness metadata for map, matrix, script, text, filesystem manifest, and container review in CLI JSON and Resources facts. External editors, compilers, extraction, rebuilds, NARC packing, mutation apply, and ROM/container writes stay blocked.
+9. **Done - Container Member Fingerprints**: NARC and unpacked archive directory summaries now include bounded read-only member path/index, size, extension, leading magic, format/compression hint, confidence, diagnostics, CLI JSON, and Resources facts for future graphics, text, map, and migration routing.
+10. **Done - Graphics Preview Metadata**: sampled NDS container members now expose read-only preview metadata for known Nitro graphics-adjacent formats, while compressed, unsupported, too-short, and unreadable members stay blocked and metadata-only.
 
 ## V1 Native Parsers
 
@@ -69,6 +71,7 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 - `NDSDataSemanticEditor` adds the first semantic layer above raw source text by detecting top-level scalar fields in eligible Platinum source-backed JSON records for species/personal/move-style data and trainer data under `res/trainers/data/**/*.json`.
 - Semantic edits preserve the source file shape by replacing only the selected scalar value, then flow through `NDSDataMutationPlanner`/`NDSDataMutationApplier` for preview, source hash/size checks, explicit apply, and backups.
+- Semantic eligibility diagnostics are carried into the lowered mutation plan so direct CLI/app apply paths cannot bypass trainer-data-only policy.
 - `pokemonhack-cli nds-data-semantic-plan <project> <record-id> --set <field=value> --json` and `nds-data-semantic-apply ...` expose field-level planning/apply without introducing a separate write path.
 - Resources renders semantic field controls above the raw text editor when a selected NDS data row is eligible; ineligible records keep the existing raw editor or read-only blocked state.
 - Trainer class/resource JSON, nested trainer arrays/objects, ROM-backed rows, NARC/container rows, generated/reference rows, non-Platinum profiles, PMD-Sky, extraction, rebuilds, binary writes, and ROM exports remain blocked/read-only.
@@ -80,6 +83,20 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 - Filesystem manifests and binary/container rows report manual-only or blocked readiness with explicit blocked actions for extraction, decompression, compilers, NARC rebuild, ROM rebuild, and ROM export.
 - Resources surfaces this metadata as facts and searchable row context. Navigation still routes through existing Resources behavior; no editor, compiler, extraction, rebuild, mutation apply, NARC packing, ROM export, or binary/container write path is added by this pass.
 
+## V9 Container Member Fingerprints
+
+- `NDSDataContainerSummary` now carries `NDSDataContainerMemberFingerprint` rows for sampled NARC and unpacked archive members.
+- Fingerprints report path/index, byte count, extension, leading magic bytes/ASCII when safe, conservative Nitro/text/container/compression hints, confidence, and diagnostics.
+- Fingerprinting reads only bounded leading byte windows and caps samples with the existing container sample limit. It does not extract, decompress, rewrite, rebuild, apply mutation plans, export ROMs, or materialize member files.
+- `nds-data-catalog`, `resource-index`, and Resources facts expose member hints and compression hints while keeping ROM-backed, source-backed container, generated/reference, PMD-Sky, and binary rows read-only or blocked.
+
+## V10 Graphics Preview Metadata
+
+- `NDSDataContainerMemberFingerprint` now carries optional read-only preview metadata for Nitro palette, character graphics, screen map, cell, animation, font, model, and texture candidates detected from extension or leading magic.
+- Preview metadata is descriptive only: it reports ready/blocked status, format, summary, blocked actions, and diagnostics. It does not decode pixels, parse dimensions, extract members, decompress data, convert formats, rebuild containers, apply mutation plans, export ROMs, or materialize preview files.
+- Compressed candidates, unsupported formats, too-short members, and unreadable member bytes are explicitly blocked so future graphics, text, map, and migration rows can route the member safely without implying write or conversion support.
+- `nds-data-catalog`, `resource-index`, and Resources facts surface preview hints and blocked preview counts consistently for source-tree and ROM-backed container rows.
+
 ## Next Useful Pass
 
-Expand semantic Gen IV coverage to another dedicated source-backed domain, add decoded NDS text/message-bank previews, or add container member fingerprints before graphics previews. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.
+Expand semantic Gen IV coverage to another dedicated source-backed domain, add decoded NDS text/message-bank previews, or add extracted-directory migration mapping on top of the new fingerprint and preview metadata. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.

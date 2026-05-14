@@ -268,6 +268,18 @@ final class PokemonHackCLITests: XCTestCase {
         let containerSummary = try XCTUnwrap(containerRecord["containerSummary"] as? [String: Any])
         XCTAssertEqual(containerSummary["kind"] as? String, "narc")
         XCTAssertEqual(containerSummary["memberCount"] as? Int, 2)
+        let memberFingerprints = try XCTUnwrap(containerSummary["memberFingerprints"] as? [[String: Any]])
+        XCTAssertEqual(memberFingerprints.count, 2)
+        XCTAssertEqual(memberFingerprints.first?["formatHint"] as? String, "nitroPalette")
+        XCTAssertEqual(memberFingerprints.first?["leadingMagicASCII"] as? String, "NCLR")
+        let firstPreview = try XCTUnwrap(memberFingerprints.first?["preview"] as? [String: Any])
+        XCTAssertEqual(firstPreview["status"] as? String, "ready")
+        XCTAssertEqual(firstPreview["format"] as? String, "nitroPalette")
+        XCTAssertEqual(memberFingerprints.last?["compressionHint"] as? String, "lz77Candidate")
+        let compressedPreview = try XCTUnwrap(memberFingerprints.last?["preview"] as? [String: Any])
+        XCTAssertEqual(compressedPreview["status"] as? String, "blocked")
+        let compressedDiagnostics = try XCTUnwrap(compressedPreview["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(compressedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_MEMBER_PREVIEW_COMPRESSED_BLOCKED" })
         let diagnostics = try XCTUnwrap(catalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_READ_ONLY" })
 
@@ -278,6 +290,13 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(romCatalog["profile"] as? String, "ndsROM")
         let romRecords = try XCTUnwrap(romCatalog["records"] as? [[String: Any]])
         XCTAssertTrue(romRecords.contains { $0["relativePath"] as? String == "sub/child.narc" })
+        let romContainerRecord = try XCTUnwrap(romRecords.first { $0["relativePath"] as? String == "sub/child.narc" })
+        let romContainerSummary = try XCTUnwrap(romContainerRecord["containerSummary"] as? [String: Any])
+        let romFingerprints = try XCTUnwrap(romContainerSummary["memberFingerprints"] as? [[String: Any]])
+        XCTAssertEqual(romFingerprints.first?["formatHint"] as? String, "nitroPalette")
+        let romPreview = try XCTUnwrap(romFingerprints.first?["preview"] as? [String: Any])
+        XCTAssertEqual(romPreview["status"] as? String, "ready")
+        XCTAssertEqual(romPreview["format"] as? String, "nitroPalette")
         let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
     }
@@ -419,6 +438,25 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(
             try String(contentsOf: root.appendingPathComponent("res/trainers/data/youngster.json"), encoding: .utf8)
                 .contains("\"double_battle\": true")
+        )
+
+        let blockedClassApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "trainers:res/trainers/classes/youngster.json",
+                "--set",
+                "cell_animation=2",
+                "--json"
+            ])
+        )
+        let blockedAppliedChanges = try XCTUnwrap(blockedClassApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedAppliedChanges.count, 0)
+        let blockedDiagnostics = try XCTUnwrap(blockedClassApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/trainers/classes/youngster.json"), encoding: .utf8),
+            "{\"cell_animation\":1}\n"
         )
     }
 
@@ -578,6 +616,7 @@ final class PokemonHackCLITests: XCTestCase {
             """,
             to: root.appendingPathComponent("res/trainers/data/youngster.json")
         )
+        try write("{\"cell_animation\":1}\n", to: root.appendingPathComponent("res/trainers/classes/youngster.json"))
         try write("[{\"slot\":1}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
@@ -610,7 +649,7 @@ final class PokemonHackCLITests: XCTestCase {
     }
 
     private func makeTestNARC() -> Data {
-        let payload = Data([0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33])
+        let payload = Data("NCLR".utf8) + Data([0x10, 0x00, 0x00, 0x00])
         var fat = Data("BTAF".utf8)
         appendUInt32LE(28, to: &fat)
         appendUInt16LE(2, to: &fat)
