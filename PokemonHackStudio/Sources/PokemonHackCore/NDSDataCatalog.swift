@@ -210,6 +210,66 @@ public struct NDSDataReadinessSummary: Codable, Equatable, Sendable {
     }
 }
 
+public enum NDSDataTextBankPreviewStatus: String, Codable, Equatable, CaseIterable {
+    case ready
+    case blocked
+}
+
+public struct NDSDataTextBankPreview: Codable, Equatable {
+    public let status: NDSDataTextBankPreviewStatus
+    public let format: String
+    public let decodedStringCount: Int
+    public let sampleStrings: [String]
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: NDSDataTextBankPreviewStatus,
+        format: String,
+        decodedStringCount: Int,
+        sampleStrings: [String],
+        blockedActions: [String],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.status = status
+        self.format = format
+        self.decodedStringCount = decodedStringCount
+        self.sampleStrings = sampleStrings
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
+public enum NDSDataMigrationPlanStatus: String, Codable, Equatable, CaseIterable {
+    case previewOnly
+    case blocked
+}
+
+public struct NDSDataMigrationPlan: Codable, Equatable {
+    public let status: NDSDataMigrationPlanStatus
+    public let sourceTreeCandidates: [String]
+    public let extractedDirectoryCandidates: [String]
+    public let unsupportedSteps: [String]
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: NDSDataMigrationPlanStatus,
+        sourceTreeCandidates: [String],
+        extractedDirectoryCandidates: [String],
+        unsupportedSteps: [String],
+        blockedActions: [String],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.status = status
+        self.sourceTreeCandidates = sourceTreeCandidates
+        self.extractedDirectoryCandidates = extractedDirectoryCandidates
+        self.unsupportedSteps = unsupportedSteps
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let id: String
     public let domain: NDSDataDomain
@@ -225,6 +285,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let facts: [SourceIndexFact]
     public let preview: String?
     public let containerSummary: NDSDataContainerSummary?
+    public let textBankPreview: NDSDataTextBankPreview?
+    public let migrationPlan: NDSDataMigrationPlan?
     public let relatedRecords: [NDSDataRelatedRecord]
     public let readiness: NDSDataReadinessSummary?
     public let diagnostics: [Diagnostic]
@@ -244,6 +306,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         facts: [SourceIndexFact] = [],
         preview: String? = nil,
         containerSummary: NDSDataContainerSummary? = nil,
+        textBankPreview: NDSDataTextBankPreview? = nil,
+        migrationPlan: NDSDataMigrationPlan? = nil,
         relatedRecords: [NDSDataRelatedRecord] = [],
         readiness: NDSDataReadinessSummary? = nil,
         diagnostics: [Diagnostic] = []
@@ -262,6 +326,8 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.facts = facts
         self.preview = preview
         self.containerSummary = containerSummary
+        self.textBankPreview = textBankPreview
+        self.migrationPlan = migrationPlan
         self.relatedRecords = relatedRecords
         self.readiness = readiness
         self.diagnostics = diagnostics
@@ -621,9 +687,34 @@ public enum NDSDataCatalogBuilder {
                 )
             )
         }
+        let textPreview = textBankPreview(
+            url: url,
+            relativePath: relativePath,
+            domain: descriptor.domain,
+            format: format,
+            exists: exists,
+            isDirectory: isDirectory
+        )
+        let migrationPlan = ndsMigrationPlan(
+            relativePath: relativePath,
+            domain: descriptor.domain,
+            format: format,
+            role: descriptor.role,
+            exists: exists
+        )
         diagnostics.append(contentsOf: containerSummary?.diagnostics ?? [])
+        diagnostics.append(contentsOf: textPreview?.diagnostics ?? [])
+        diagnostics.append(contentsOf: migrationPlan?.diagnostics ?? [])
 
-        let facts = factsForRecord(format: format, role: descriptor.role, byteCount: byteCount, recordCount: recordCount, containerSummary: containerSummary)
+        let facts = factsForRecord(
+            format: format,
+            role: descriptor.role,
+            byteCount: byteCount,
+            recordCount: recordCount,
+            containerSummary: containerSummary,
+            textBankPreview: textPreview,
+            migrationPlan: migrationPlan
+        )
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
             domain: descriptor.domain,
@@ -638,6 +729,8 @@ public enum NDSDataCatalogBuilder {
             facts: facts,
             preview: containerPreview(containerSummary) ?? preview(url: url, format: format),
             containerSummary: containerSummary,
+            textBankPreview: textPreview,
+            migrationPlan: migrationPlan,
             diagnostics: diagnostics
         )
     }
@@ -782,6 +875,13 @@ public enum NDSDataCatalogBuilder {
                 memberFingerprints: archive.memberFingerprints,
                 byteCount: archive.size
             )
+            let migrationPlan = ndsMigrationPlan(
+                relativePath: archive.path,
+                domain: domain,
+                format: .narc,
+                role: .binaryContainer,
+                exists: true
+            )
             return NDSDataCatalogRecord(
                 id: "\(domain.rawValue):\(archive.path)",
                 domain: domain,
@@ -798,11 +898,13 @@ public enum NDSDataCatalogBuilder {
                     role: .binaryContainer,
                     byteCount: archive.size,
                     recordCount: summary.memberCount,
-                    containerSummary: summary
+                    containerSummary: summary,
+                    migrationPlan: migrationPlan
                 ),
                 preview: containerPreview(summary),
                 containerSummary: summary,
-                diagnostics: archive.index.diagnostics
+                migrationPlan: migrationPlan,
+                diagnostics: archive.index.diagnostics + (migrationPlan?.diagnostics ?? [])
             )
         }.sorted(by: recordSort)
         return enrichRelationships(records: records, profile: .ndsROM)
@@ -841,6 +943,8 @@ public enum NDSDataCatalogBuilder {
                 facts: record.facts + relationshipFacts,
                 preview: record.preview,
                 containerSummary: record.containerSummary,
+                textBankPreview: record.textBankPreview,
+                migrationPlan: record.migrationPlan,
                 relatedRecords: stableRelated,
                 readiness: readiness,
                 diagnostics: diagnostics
@@ -917,8 +1021,10 @@ public enum NDSDataCatalogBuilder {
                 title: "Gen IV text readiness",
                 detail: profile == .pmdSky
                     ? "PMD-Sky text is spin-off inventory only and is not treated as mainline Gen IV RPG text."
-                    : (relatedRecords.isEmpty ? "Text data is indexed without decoded message-bank or same-key map/script context." : "Text rows have same-key map or script context for read-only review."),
-                blockedActions: ["message decoder", "text-bank writer", "NARC rebuild", "ROM export"]
+                    : (record.textBankPreview == nil && relatedRecords.isEmpty
+                        ? "Text data is indexed without decoded message-bank or same-key map/script context."
+                        : "Text rows have decoded read-only preview facts or same-key map/script context for review."),
+                blockedActions: ndsTextBankPreviewBlockedActions
             )
         case .resources where record.role == .nitroFSManifest:
             return NDSDataReadinessSummary(
@@ -1358,6 +1464,7 @@ public enum NDSDataCatalogBuilder {
         case "nitroCell": return "Nitro cell"
         case "nitroAnimation": return "Nitro animation"
         case "nitroFont": return "Nitro font"
+        case "messageBank": return "NDS message bank"
         case "nitroModel": return "Nitro model"
         case "nitroTexture": return "Nitro texture"
         default: return "NDS member"
@@ -1445,12 +1552,234 @@ public enum NDSDataCatalogBuilder {
         return summary.sampleMemberPaths.joined(separator: ", ")
     }
 
+    private static func textBankPreview(
+        url: URL,
+        relativePath: String,
+        domain: NDSDataDomain,
+        format: NDSDataSourceFormat,
+        exists: Bool,
+        isDirectory: Bool
+    ) -> NDSDataTextBankPreview? {
+        guard domain == .text, exists, !isDirectory else { return nil }
+        if [.text, .cSource, .cHeader, .json, .csv].contains(format),
+           let text = try? String(contentsOf: url, encoding: .utf8) {
+            let samples = decodedTextSamples(text, format: format)
+            guard !samples.isEmpty else { return nil }
+            return NDSDataTextBankPreview(
+                status: .ready,
+                format: "sourceText",
+                decodedStringCount: samples.count,
+                sampleStrings: Array(samples.prefix(maxTextBankSampleStrings)),
+                blockedActions: ndsTextBankPreviewBlockedActions,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .info,
+                        code: "NDS_TEXT_BANK_PREVIEW_READ_ONLY",
+                        message: "Decoded text-bank samples for \(relativePath) are read-only preview facts; text-bank writers, NARC rebuilds, and ROM export remain disabled.",
+                        span: SourceSpan(relativePath: relativePath, startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        let ext = url.pathExtension.lowercased()
+        guard ["bmg", "msg", "bin"].contains(ext),
+              let data = try? Data(contentsOf: url)
+        else { return nil }
+
+        let classification = classifyMember(path: relativePath, leadingBytes: Data(data.prefix(maxMemberFingerprintBytes)))
+        guard classification.formatHint == "messageBank" || ext == "msg" else { return nil }
+        let samples = decodedBinaryTextSamples(data)
+        let status: NDSDataTextBankPreviewStatus = samples.isEmpty ? .blocked : .ready
+        return NDSDataTextBankPreview(
+            status: status,
+            format: classification.formatHint,
+            decodedStringCount: samples.count,
+            sampleStrings: Array(samples.prefix(maxTextBankSampleStrings)),
+            blockedActions: ndsTextBankPreviewBlockedActions,
+            diagnostics: [
+                Diagnostic(
+                    severity: status == .ready ? .info : .warning,
+                    code: status == .ready ? "NDS_TEXT_BANK_BINARY_PREVIEW_READ_ONLY" : "NDS_TEXT_BANK_BINARY_PREVIEW_BLOCKED",
+                    message: status == .ready
+                        ? "Decoded bounded printable strings for \(relativePath) as read-only message-bank preview facts; binary text writes and export remain disabled."
+                        : "Could not safely decode printable message-bank samples for \(relativePath); no extraction, conversion, write, or export was attempted.",
+                    span: SourceSpan(relativePath: relativePath, startLine: 1)
+                )
+            ]
+        )
+    }
+
+    private static func decodedTextSamples(_ text: String, format: NDSDataSourceFormat) -> [String] {
+        if format == .json,
+           let data = text.data(using: .utf8),
+           let value = try? JSONSerialization.jsonObject(with: data) {
+            let samples = decodedJSONTextSamples(value)
+            if !samples.isEmpty {
+                return samples
+            }
+        }
+        return text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { line in
+                !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("//")
+            }
+    }
+
+    private static func decodedJSONTextSamples(_ value: Any, key: String? = nil) -> [String] {
+        if let string = value as? String {
+            guard key != "id" else { return [] }
+            let sample = normalizedTextSample(string)
+            return sample.isEmpty ? [] : [sample]
+        }
+        if let array = value as? [Any] {
+            return array.flatMap { decodedJSONTextSamples($0, key: key) }
+        }
+        if let object = value as? [String: Any] {
+            return object.keys.sorted().flatMap { childKey in
+                decodedJSONTextSamples(object[childKey] as Any, key: childKey)
+            }
+        }
+        return []
+    }
+
+    private static func normalizedTextSample(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func decodedBinaryTextSamples(_ data: Data) -> [String] {
+        var samples: [String] = []
+        var current: [UInt8] = []
+        for byte in data.prefix(maxTextBankPreviewBytes) {
+            if byte == 0x20 || (byte >= 0x21 && byte <= 0x7E) {
+                current.append(byte)
+            } else {
+                appendBinaryTextSample(current, to: &samples)
+                current.removeAll(keepingCapacity: true)
+            }
+        }
+        appendBinaryTextSample(current, to: &samples)
+        return samples
+    }
+
+    private static func appendBinaryTextSample(_ bytes: [UInt8], to samples: inout [String]) {
+        guard bytes.count >= 2, let text = String(bytes: bytes, encoding: .ascii) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: .letters) != nil else { return }
+        samples.append(trimmed)
+    }
+
+    private static func ndsMigrationPlan(
+        relativePath: String,
+        domain: NDSDataDomain,
+        format: NDSDataSourceFormat,
+        role: NDSDataSourceRole,
+        exists: Bool
+    ) -> NDSDataMigrationPlan? {
+        guard exists,
+              role == .binaryContainer || role == .nitroFSManifest || format == .narc || format == .directory
+        else { return nil }
+
+        let sourceCandidates = sourceTreeMigrationCandidates(relativePath: relativePath, domain: domain)
+        let extractedCandidates = extractedDirectoryMigrationCandidates(relativePath: relativePath, format: format)
+        let status: NDSDataMigrationPlanStatus = sourceCandidates.isEmpty && extractedCandidates.isEmpty ? .blocked : .previewOnly
+        return NDSDataMigrationPlan(
+            status: status,
+            sourceTreeCandidates: sourceCandidates,
+            extractedDirectoryCandidates: extractedCandidates,
+            unsupportedSteps: ndsMigrationUnsupportedSteps,
+            blockedActions: ndsMigrationBlockedActions,
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_DATA_MIGRATION_PREVIEW_ONLY",
+                    message: "NDS migration plan for \(relativePath) is read-only candidate routing only; extraction, repacking, rebuilds, exports, and writes remain disabled.",
+                    span: SourceSpan(relativePath: relativePath, startLine: 1)
+                )
+            ]
+        )
+    }
+
+    private static func sourceTreeMigrationCandidates(relativePath: String, domain: NDSDataDomain) -> [String] {
+        let path = relativePath as NSString
+        let fileName = path.lastPathComponent
+        let stem = (fileName as NSString).deletingPathExtension
+        var candidates: [String] = []
+
+        switch domain {
+        case .species, .personal:
+            candidates.append("res/pokemon/\(stem)")
+            candidates.append("files/poketool/personal/\(fileName)")
+        case .moves:
+            candidates.append("res/battle/moves/\(stem).json")
+            candidates.append("files/poketool/waza/\(fileName)")
+        case .items:
+            candidates.append("res/items/\(stem).json")
+            candidates.append("files/itemtool/itemdata/\(fileName)")
+        case .trainers:
+            candidates.append("res/trainers/data/\(stem).json")
+            candidates.append("files/poketool/trainer/\(fileName)")
+        case .encounters:
+            candidates.append("res/field/encounters/\(stem).json")
+            candidates.append("files/fielddata/encountdata/\(fileName)")
+        case .text:
+            candidates.append("res/text/\(stem).txt")
+            candidates.append("files/msgdata/msg/\(stem).txt")
+        case .scripts:
+            candidates.append("res/field/scripts/\(stem).s")
+            candidates.append("files/fielddata/script/\(stem)")
+        case .maps:
+            candidates.append("res/field/maps/\(stem)/map.bin")
+            candidates.append("files/fielddata/mapmatrix/\(fileName)")
+        case .resources:
+            if !relativePath.hasPrefix("res/prebuilt/") {
+                candidates.append("res/prebuilt/\(relativePath)")
+            }
+            if !relativePath.hasPrefix("files/") {
+                candidates.append("files/\(relativePath)")
+            }
+        }
+
+        candidates.append(relativePath)
+        return uniqueNonEmptyPaths(candidates)
+    }
+
+    private static func extractedDirectoryMigrationCandidates(relativePath: String, format: NDSDataSourceFormat) -> [String] {
+        let path = relativePath as NSString
+        let parent = path.deletingLastPathComponent
+        let stem = (path.lastPathComponent as NSString).deletingPathExtension
+        var candidates = [
+            path.deletingPathExtension,
+            "\(relativePath).d",
+            parent == "." || parent.isEmpty ? "\(stem)_extracted" : "\(parent)/\(stem)_extracted"
+        ]
+        if format == .narc {
+            candidates.append(parent == "." || parent.isEmpty ? "narc_\(stem)" : "\(parent)/narc_\(stem)")
+        }
+        return uniqueNonEmptyPaths(candidates)
+    }
+
+    private static func uniqueNonEmptyPaths(_ paths: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for path in paths {
+            let normalized = path.replacingOccurrences(of: "//", with: "/")
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { continue }
+            result.append(normalized)
+        }
+        return result
+    }
+
     private static func factsForRecord(
         format: NDSDataSourceFormat,
         role: NDSDataSourceRole,
         byteCount: UInt64?,
         recordCount: Int?,
-        containerSummary: NDSDataContainerSummary? = nil
+        containerSummary: NDSDataContainerSummary? = nil,
+        textBankPreview: NDSDataTextBankPreview? = nil,
+        migrationPlan: NDSDataMigrationPlan? = nil
     ) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Format", value: format.rawValue),
@@ -1479,6 +1808,25 @@ public enum NDSDataCatalogBuilder {
             if blockedPreviewCount > 0 {
                 facts.append(SourceIndexFact(label: "Blocked Previews", value: "\(blockedPreviewCount)"))
             }
+        }
+        if let textBankPreview {
+            facts.append(SourceIndexFact(label: "Text Bank Preview", value: textBankPreview.status.rawValue))
+            facts.append(SourceIndexFact(label: "Decoded Strings", value: "\(textBankPreview.decodedStringCount)"))
+            if !textBankPreview.sampleStrings.isEmpty {
+                facts.append(SourceIndexFact(label: "Text Samples", value: textBankPreview.sampleStrings.joined(separator: " | ")))
+            }
+            facts.append(SourceIndexFact(label: "Text Preview Blocked Actions", value: textBankPreview.blockedActions.joined(separator: ", ")))
+        }
+        if let migrationPlan {
+            facts.append(SourceIndexFact(label: "Migration Status", value: migrationPlan.status.rawValue))
+            if !migrationPlan.sourceTreeCandidates.isEmpty {
+                facts.append(SourceIndexFact(label: "Source Candidates", value: migrationPlan.sourceTreeCandidates.prefix(3).joined(separator: ", ")))
+            }
+            if !migrationPlan.extractedDirectoryCandidates.isEmpty {
+                facts.append(SourceIndexFact(label: "Extracted Candidates", value: migrationPlan.extractedDirectoryCandidates.prefix(3).joined(separator: ", ")))
+            }
+            facts.append(SourceIndexFact(label: "Unsupported Migration Steps", value: migrationPlan.unsupportedSteps.joined(separator: ", ")))
+            facts.append(SourceIndexFact(label: "Migration Blocked Actions", value: migrationPlan.blockedActions.joined(separator: ", ")))
         }
         if let recordCount {
             facts.append(SourceIndexFact(label: "Shallow Count", value: "\(recordCount)"))
@@ -1648,6 +1996,7 @@ public enum NDSDataCatalogBuilder {
         "nitroCell",
         "nitroAnimation",
         "nitroFont",
+        "messageBank",
         "nitroModel",
         "nitroTexture"
     ]
@@ -1659,11 +2008,34 @@ public enum NDSDataCatalogBuilder {
         "ROM export",
         "Mutation apply"
     ]
+    private static let ndsTextBankPreviewBlockedActions = [
+        "Message decoder apply",
+        "Text-bank writer",
+        "NARC rebuild",
+        "ROM export",
+        "Mutation apply"
+    ]
+    private static let ndsMigrationBlockedActions = [
+        "ROM extraction",
+        "NARC unpack",
+        "NARC repack",
+        "ROM rebuild",
+        "ROM export",
+        "Mutation apply"
+    ]
+    private static let ndsMigrationUnsupportedSteps = [
+        "Confirm matching source-tree profile",
+        "Decode container members",
+        "Preserve file ordering and IDs",
+        "Rebuild containers externally"
+    ]
 
     private static let maxDiscoveredContainerRecords = 256
     private static let maxContainerSampleMembers = 8
     private static let maxMemberFingerprintBytes = 32
     private static let maxMemberMagicBytes = 8
+    private static let maxTextBankPreviewBytes = 65536
+    private static let maxTextBankSampleStrings = 5
 }
 
 private struct CatalogPathDescriptor {

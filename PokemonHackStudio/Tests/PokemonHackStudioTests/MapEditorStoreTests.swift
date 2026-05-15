@@ -579,6 +579,32 @@ final class MapEditorStoreTests: XCTestCase {
             "{\"base_hp\":29}\n"
         )
 
+        let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/items/potion.json" })
+        store.requestResourceAssetSelection(itemRow.id)
+
+        let itemEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(itemEditor.recordID, "items:res/items/potion.json")
+        XCTAssertTrue(itemEditor.semanticFields.contains { $0.key == "name" && $0.value == "Potion" })
+        XCTAssertTrue(itemEditor.semanticFields.contains { $0.key == "price" && $0.value == "300" })
+        XCTAssertTrue(itemEditor.semanticFields.contains { $0.key == "field_use" && $0.value == "true" })
+        XCTAssertFalse(itemEditor.semanticFields.contains { $0.key == "effects" })
+
+        store.updateSelectedNDSDataSemanticField(key: "price", value: "250")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("res/items/potion.json"), encoding: .utf8)
+                .contains("\"price\": 250")
+        )
+
         let trainerRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/trainers/data/youngster.json" })
         store.requestResourceAssetSelection(trainerRow.id)
 
@@ -616,6 +642,61 @@ final class MapEditorStoreTests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent("res/trainers/classes/youngster.json"), encoding: .utf8),
             "{\"cell_animation\":1}\n"
         )
+
+        let itemCSVRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/items/items.csv" })
+        store.requestResourceAssetSelection(itemCSVRow.id)
+
+        let itemCSVEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(itemCSVEditor.semanticFields.isEmpty)
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        store.updateSelectedNDSDataSemanticField(key: "name", value: "Super Potion")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/items/items.csv"), encoding: .utf8),
+            "id,name\n1,POTION\n"
+        )
+    }
+
+    @MainActor
+    func testLocalPlatinumSourceAndROMSurfaceTextAndMigrationFactsInResources() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let sourcePath = environment["PHS_LOCAL_PLATINUM_SOURCE_PATH"], !sourcePath.isEmpty else {
+            throw XCTSkip("Set PHS_LOCAL_PLATINUM_SOURCE_PATH to run the local Platinum Resources smoke.")
+        }
+        guard let romPath = environment["PHS_LOCAL_PLATINUM_ROM_PATH"], !romPath.isEmpty else {
+            throw XCTSkip("Set PHS_LOCAL_PLATINUM_ROM_PATH to run the local Platinum ROM Resources smoke.")
+        }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: sourcePath)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let sourceCatalog = try await waitForSelectedAssetCatalog(store)
+        let abilityNames = try XCTUnwrap(sourceCatalog.rows.first { $0.path == "res/text/ability_names.json" })
+        XCTAssertTrue(abilityNames.facts.contains { $0.label == "Text Bank Preview" && $0.value == "ready" })
+        XCTAssertTrue(abilityNames.facts.contains { $0.label == "Decoded Strings" && (Int($0.value) ?? 0) > 0 })
+        XCTAssertTrue(abilityNames.facts.contains { $0.label == "Text Samples" && $0.value.contains("Stench") })
+        XCTAssertTrue(abilityNames.facts.contains { $0.label == "Text Preview Blocked Actions" && $0.value.contains("Text-bank writer") })
+
+        let messageNARC = try XCTUnwrap(sourceCatalog.rows.first { $0.path == "res/prebuilt/msgdata/msg.narc" })
+        XCTAssertTrue(messageNARC.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
+        XCTAssertTrue(messageNARC.facts.contains { $0.label == "Source Candidates" && !$0.value.contains("res/prebuilt/res/prebuilt") })
+        XCTAssertTrue(messageNARC.facts.contains { $0.label == "Extracted Candidates" && $0.value.contains("res/prebuilt/msgdata/msg") })
+        XCTAssertTrue(messageNARC.facts.contains { $0.label == "Migration Blocked Actions" && $0.value.contains("NARC repack") })
+
+        store.openProject(path: romPath)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded(force: true)
+        let romCatalog = try await waitForSelectedAssetCatalog(store)
+        let romMigrationRow = try XCTUnwrap(romCatalog.rows.first { row in
+            row.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" }
+        })
+        XCTAssertTrue(romMigrationRow.tags.contains("ndsROM"))
+        XCTAssertTrue(romMigrationRow.facts.contains { $0.label == "Source Candidates" && !$0.value.isEmpty })
+        XCTAssertTrue(romMigrationRow.facts.contains { $0.label == "Extracted Candidates" && !$0.value.isEmpty })
+        XCTAssertTrue(romMigrationRow.facts.contains { $0.label == "Migration Blocked Actions" && $0.value.contains("ROM export") })
     }
 
     @MainActor
@@ -2797,6 +2878,13 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
+        try write(
+            """
+            {"name": "Potion", "price": 300, "field_use": true, "effects": [{"kind":"heal","amount":20}]}
+
+            """,
+            to: root.appendingPathComponent("res/items/potion.json")
+        )
         try write(
             """
             {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "messages": ["I like shorts!"]}

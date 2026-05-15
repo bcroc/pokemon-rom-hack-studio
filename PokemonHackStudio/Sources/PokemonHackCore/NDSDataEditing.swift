@@ -321,8 +321,11 @@ public enum NDSDataSemanticEditor {
         if catalog.profile != .pokeplatinum {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing starts with Platinum source-tree JSON records; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
-        if ![NDSDataDomain.species, .personal, .moves, .trainers].contains(record.domain) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum Pokemon, move, and trainer JSON records in this slice.", span: record.sourceSpan))
+        if ![NDSDataDomain.species, .personal, .moves, .items, .trainers].contains(record.domain) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum Pokemon, move, item, and trainer JSON records in this slice.", span: record.sourceSpan))
+        }
+        if record.domain == .items, !isPlatinumItemDataPath(record.relativePath) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items; CSV, generated, binary, and non-Platinum item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
         if record.domain == .trainers, !isPlatinumTrainerDataPath(record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED", message: "Semantic trainer editing is limited to Platinum trainer data JSON rows under res/trainers/data; trainer classes, animation resources, and other trainer assets remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
@@ -335,6 +338,10 @@ public enum NDSDataSemanticEditor {
 
     private static func isPlatinumTrainerDataPath(_ relativePath: String) -> Bool {
         relativePath.hasPrefix("res/trainers/data/") && relativePath.lowercased().hasSuffix(".json")
+    }
+
+    private static func isPlatinumItemDataPath(_ relativePath: String) -> Bool {
+        relativePath.hasPrefix("res/items/") && relativePath.lowercased().hasSuffix(".json")
     }
 
     private struct ParsedSemanticField {

@@ -280,6 +280,22 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(compressedPreview["status"] as? String, "blocked")
         let compressedDiagnostics = try XCTUnwrap(compressedPreview["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(compressedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_MEMBER_PREVIEW_COMPRESSED_BLOCKED" })
+        let migrationPlan = try XCTUnwrap(containerRecord["migrationPlan"] as? [String: Any])
+        XCTAssertEqual(migrationPlan["status"] as? String, "previewOnly")
+        let sourceCandidates = try XCTUnwrap(migrationPlan["sourceTreeCandidates"] as? [String])
+        XCTAssertTrue(sourceCandidates.contains("res/prebuilt/poketool/personal/personal.narc"))
+        let migrationFacts = try XCTUnwrap(containerRecord["facts"] as? [[String: Any]])
+        XCTAssertTrue(migrationFacts.contains { $0["label"] as? String == "Migration Status" && $0["value"] as? String == "previewOnly" })
+        XCTAssertTrue(migrationFacts.contains { $0["label"] as? String == "Migration Blocked Actions" && ($0["value"] as? String)?.contains("ROM export") == true })
+        let textRecord = try XCTUnwrap(records.first { $0["relativePath"] as? String == "res/text/story.json" })
+        let textPreview = try XCTUnwrap(textRecord["textBankPreview"] as? [String: Any])
+        XCTAssertEqual(textPreview["status"] as? String, "ready")
+        XCTAssertEqual(textPreview["decodedStringCount"] as? Int, 1)
+        let textFacts = try XCTUnwrap(textRecord["facts"] as? [[String: Any]])
+        XCTAssertTrue(textFacts.contains { $0["label"] as? String == "Text Bank Preview" && $0["value"] as? String == "ready" })
+        XCTAssertTrue(textFacts.contains { $0["label"] as? String == "Decoded Strings" && $0["value"] as? String == "1" })
+        let textDiagnostics = try XCTUnwrap(textRecord["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(textDiagnostics.contains { $0["code"] as? String == "NDS_TEXT_BANK_PREVIEW_READ_ONLY" })
         let diagnostics = try XCTUnwrap(catalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_READ_ONLY" })
 
@@ -297,6 +313,10 @@ final class PokemonHackCLITests: XCTestCase {
         let romPreview = try XCTUnwrap(romFingerprints.first?["preview"] as? [String: Any])
         XCTAssertEqual(romPreview["status"] as? String, "ready")
         XCTAssertEqual(romPreview["format"] as? String, "nitroPalette")
+        let romMigrationPlan = try XCTUnwrap(romContainerRecord["migrationPlan"] as? [String: Any])
+        XCTAssertEqual(romMigrationPlan["status"] as? String, "previewOnly")
+        let romExtractedCandidates = try XCTUnwrap(romMigrationPlan["extractedDirectoryCandidates"] as? [String])
+        XCTAssertTrue(romExtractedCandidates.contains("sub/child"))
         let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
     }
@@ -407,6 +427,42 @@ final class PokemonHackCLITests: XCTestCase {
             "{\"base_hp\":31}\n"
         )
 
+        let itemPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "items:res/items/potion.json",
+                "--set",
+                "price=250",
+                "--set",
+                "field_use=false",
+                "--json"
+            ])
+        )
+        let itemTextDraft = try XCTUnwrap(itemPlan["textDraft"] as? [String: Any])
+        XCTAssertTrue((itemTextDraft["editedText"] as? String)?.contains("\"price\": 250") == true)
+        XCTAssertTrue((itemTextDraft["editedText"] as? String)?.contains("\"field_use\": false") == true)
+        let itemEditPlan = try XCTUnwrap(itemPlan["editPlan"] as? [String: Any])
+        let itemChanges = try XCTUnwrap(itemEditPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(itemChanges.count, 1)
+
+        let itemApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:res/items/potion.json",
+                "--set",
+                "price=250",
+                "--json"
+            ])
+        )
+        let itemAppliedChanges = try XCTUnwrap(itemApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(itemAppliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("res/items/potion.json"), encoding: .utf8)
+                .contains("\"price\": 250")
+        )
+
         let trainerPlan = try decodeJSON(
             PokemonHackCLI.run(arguments: [
                 "nds-data-semantic-plan",
@@ -457,6 +513,25 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(
             try String(contentsOf: root.appendingPathComponent("res/trainers/classes/youngster.json"), encoding: .utf8),
             "{\"cell_animation\":1}\n"
+        )
+
+        let blockedCSVApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:res/items/items.csv",
+                "--set",
+                "name=SUPER_POTION",
+                "--json"
+            ])
+        )
+        let blockedCSVChanges = try XCTUnwrap(blockedCSVApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedCSVChanges.count, 0)
+        let blockedCSVDiagnostics = try XCTUnwrap(blockedCSVApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedCSVDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("res/items/items.csv"), encoding: .utf8),
+            "id,name\n1,POTION\n"
         )
     }
 
@@ -609,6 +684,13 @@ final class PokemonHackCLITests: XCTestCase {
         try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
+        try write(
+            """
+            {"name": "Potion", "price": 300, "field_use": true, "effects": [{"kind":"heal","amount":20}]}
+
+            """,
+            to: root.appendingPathComponent("res/items/potion.json")
+        )
         try write(
             """
             {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "messages": ["I like shorts!"]}

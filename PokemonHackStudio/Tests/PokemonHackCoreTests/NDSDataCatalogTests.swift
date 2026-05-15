@@ -23,10 +23,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(index.editorModules.contains(.pokemon))
         XCTAssertEqual(count(for: .species, in: catalog), 1)
         XCTAssertEqual(count(for: .moves, in: catalog), 1)
-        XCTAssertEqual(count(for: .items, in: catalog), 1)
+        XCTAssertEqual(count(for: .items, in: catalog), 2)
         XCTAssertEqual(count(for: .trainers, in: catalog), 1)
         XCTAssertEqual(count(for: .encounters, in: catalog), 1)
-        XCTAssertEqual(count(for: .text, in: catalog), 1)
+        XCTAssertEqual(count(for: .text, in: catalog), 2)
         XCTAssertEqual(count(for: .scripts, in: catalog), 1)
         XCTAssertEqual(count(for: .maps, in: catalog), 3)
         let personalNARC = try XCTUnwrap(catalog.records.first { $0.relativePath == "res/prebuilt/poketool/personal/personal.narc" })
@@ -47,7 +47,18 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(personalNARC.facts.contains { $0.label == "Compression Hints" && $0.value.contains("lz77Candidate") })
         XCTAssertTrue(personalNARC.facts.contains { $0.label == "Preview Hints" && $0.value.contains("nitroPalette") })
         XCTAssertTrue(personalNARC.facts.contains { $0.label == "Blocked Previews" && $0.value == "1" })
+        XCTAssertEqual(personalNARC.migrationPlan?.status, .previewOnly)
+        XCTAssertTrue(personalNARC.migrationPlan?.sourceTreeCandidates.contains("res/prebuilt/poketool/personal/personal.narc") == true)
+        XCTAssertTrue(personalNARC.migrationPlan?.extractedDirectoryCandidates.contains("res/prebuilt/poketool/personal/personal") == true)
+        XCTAssertTrue(personalNARC.migrationPlan?.unsupportedSteps.contains("Decode container members") == true)
+        XCTAssertTrue(personalNARC.migrationPlan?.blockedActions.contains("NARC repack") == true)
+        XCTAssertTrue(personalNARC.diagnostics.contains { $0.code == "NDS_DATA_MIGRATION_PREVIEW_ONLY" })
+        XCTAssertTrue(personalNARC.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
+        XCTAssertTrue(personalNARC.facts.contains { $0.label == "Source Candidates" && $0.value.contains("files/poketool/personal/personal.narc") })
+        XCTAssertTrue(personalNARC.facts.contains { $0.label == "Extracted Candidates" && $0.value.contains("res/prebuilt/poketool/personal/personal") })
+        XCTAssertTrue(personalNARC.facts.contains { $0.label == "Migration Blocked Actions" && $0.value.contains("ROM export") })
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "res/pokemon/abra/data.json" && $0.format == .json && $0.recordCount == 1 })
+        XCTAssertTrue(catalog.records.contains { $0.relativePath == "res/items/potion.json" && $0.format == .json && $0.recordCount == 1 })
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "res/items/items.csv" && $0.format == .csv && $0.recordCount == 1 })
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "platinum.us/filesys.csv" && $0.role == .nitroFSManifest })
         let routeMap = try XCTUnwrap(catalog.records.first { $0.relativePath == "res/field/maps/route201/map.bin" })
@@ -60,6 +71,19 @@ final class NDSDataCatalogTests: XCTestCase {
         let filesys = try XCTUnwrap(catalog.records.first { $0.relativePath == "platinum.us/filesys.csv" })
         XCTAssertEqual(filesys.readiness?.status, .partial)
         XCTAssertTrue(filesys.readiness?.blockedActions.contains("ROM rebuild") == true)
+        let textBank = try XCTUnwrap(catalog.records.first { $0.relativePath == "res/text/route201.txt" })
+        XCTAssertEqual(textBank.textBankPreview?.status, .ready)
+        XCTAssertEqual(textBank.textBankPreview?.decodedStringCount, 2)
+        XCTAssertTrue(textBank.facts.contains { $0.label == "Text Bank Preview" && $0.value == "ready" })
+        XCTAssertTrue(textBank.facts.contains { $0.label == "Decoded Strings" && $0.value == "2" })
+        XCTAssertTrue(textBank.facts.contains { $0.label == "Text Samples" && $0.value.contains("hello") && $0.value.contains("world") })
+        XCTAssertTrue(textBank.diagnostics.contains { $0.code == "NDS_TEXT_BANK_PREVIEW_READ_ONLY" })
+        XCTAssertTrue(textBank.readiness?.blockedActions.contains("Text-bank writer") == true)
+        let bmgBank = try XCTUnwrap(catalog.records.first { $0.relativePath == "res/text/battle.bmg" })
+        XCTAssertEqual(bmgBank.textBankPreview?.status, .ready)
+        XCTAssertEqual(bmgBank.textBankPreview?.format, "messageBank")
+        XCTAssertTrue(bmgBank.facts.contains { $0.label == "Decoded Strings" && $0.value == "3" })
+        XCTAssertTrue(bmgBank.diagnostics.contains { $0.code == "NDS_TEXT_BANK_BINARY_PREVIEW_READ_ONLY" })
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "NDS_DATA_CATALOG_READ_ONLY" })
     }
 
@@ -117,6 +141,9 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(unpacked.containerSummary?.memberFingerprints.last?.confidence, "low")
         XCTAssertEqual(unpacked.containerSummary?.memberFingerprints.last?.preview?.status, .blocked)
         XCTAssertTrue(unpacked.containerSummary?.memberFingerprints.last?.preview?.diagnostics.contains { $0.code == "NDS_DATA_MEMBER_PREVIEW_UNSUPPORTED" } == true)
+        XCTAssertEqual(unpacked.migrationPlan?.status, .previewOnly)
+        XCTAssertTrue(unpacked.migrationPlan?.extractedDirectoryCandidates.contains("files/fielddata/script/scr_seq_release.d") == true)
+        XCTAssertTrue(unpacked.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
         XCTAssertEqual(unpacked.readiness?.status, .blocked)
         XCTAssertTrue(unpacked.diagnostics.contains { $0.code == "NDS_DATA_READINESS_WRITE_BLOCKED" })
         XCTAssertTrue(catalog.isReadOnly)
@@ -153,8 +180,26 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(narc.containerSummary?.memberFingerprints.first?.preview?.status, .ready)
         XCTAssertEqual(narc.containerSummary?.memberFingerprints.first?.preview?.format, "nitroPalette")
         XCTAssertEqual(narc.preview, "first.bin, second.bin")
+        XCTAssertEqual(narc.migrationPlan?.status, .previewOnly)
+        XCTAssertTrue(narc.migrationPlan?.sourceTreeCandidates.contains("files/sub/child.narc") == true)
+        XCTAssertTrue(narc.migrationPlan?.extractedDirectoryCandidates.contains("sub/child") == true)
+        XCTAssertTrue(narc.migrationPlan?.blockedActions.contains("ROM extraction") == true)
+        XCTAssertTrue(narc.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
+        XCTAssertTrue(narc.facts.contains { $0.label == "Unsupported Migration Steps" && $0.value.contains("Preserve file ordering") })
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
         XCTAssertTrue(catalog.isReadOnly)
+
+        let entry = GenIIIResourceRegistry.resourceIndex(path: rom.path)
+        let resourceItem = try XCTUnwrap(entry.items.first { $0.category == "NDS Data resources" && $0.path == "sub/child.narc" })
+        XCTAssertTrue(resourceItem.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
+        XCTAssertTrue(resourceItem.facts.contains { $0.label == "Migration Blocked Actions" && $0.value.contains("ROM export") })
+        let assetCatalog = GenIIIAssetCatalogBuilder.build(path: rom.path)
+        let resourceAsset = try XCTUnwrap(assetCatalog.assets.first {
+            $0.relativePath == "sub/child.narc"
+                && $0.tags.contains("ndsROM")
+                && $0.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" }
+        })
+        XCTAssertTrue(resourceAsset.facts.contains { $0.label == "Migration Blocked Actions" && $0.value.contains("ROM export") })
     }
 
     func testResourceRegistrySurfacesCatalogRowsForNDSSourceRoots() throws {
@@ -172,16 +217,25 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(personalItem.uncompressedSize, 2)
         XCTAssertTrue(personalItem.facts.contains { $0.label == "Preview Hints" && $0.value.contains("nitroPalette") })
         XCTAssertTrue(personalItem.facts.contains { $0.label == "Blocked Previews" && $0.value == "1" })
+        XCTAssertTrue(personalItem.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
+        XCTAssertTrue(personalItem.facts.contains { $0.label == "Source Candidates" && $0.value.contains("files/poketool/personal/personal.narc") })
         let mapItem = try XCTUnwrap(entry.items.first { $0.category == "NDS Data maps" && $0.path == "res/field/maps/route201/map.bin" })
         XCTAssertTrue(mapItem.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
         XCTAssertTrue(mapItem.facts.contains { $0.label == "Related Domains" && $0.value.contains("scripts") })
+        let textItem = try XCTUnwrap(entry.items.first { $0.category == "NDS Data text" && $0.path == "res/text/route201.txt" })
+        XCTAssertTrue(textItem.facts.contains { $0.label == "Decoded Strings" && $0.value == "2" })
+        XCTAssertTrue(textItem.facts.contains { $0.label == "Text Samples" && $0.value.contains("hello") })
         XCTAssertTrue(assetCatalog.assets.contains { $0.relativePath == "res/pokemon/abra/data.json" && $0.category == .species })
         XCTAssertTrue(assetCatalog.assets.contains { $0.relativePath == "res/items/items.csv" && $0.category == .items })
         let personalAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "res/prebuilt/poketool/personal/personal.narc" })
         XCTAssertTrue(personalAsset.facts.contains { $0.label == "Preview Hints" && $0.value.contains("nitroPalette") })
+        XCTAssertTrue(personalAsset.facts.contains { $0.label == "Migration Status" && $0.value == "previewOnly" })
         let mapAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "res/field/maps/route201/map.bin" })
         XCTAssertTrue(mapAsset.facts.contains { $0.label == "Readiness" && $0.value == "ready" })
         XCTAssertTrue(mapAsset.tags.contains("ndsSource"))
+        let textAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "res/text/route201.txt" })
+        XCTAssertTrue(textAsset.facts.contains { $0.label == "Text Bank Preview" && $0.value == "ready" })
+        XCTAssertTrue(textAsset.facts.contains { $0.label == "Decoded Strings" && $0.value == "2" })
     }
 
     func testNDSContainerFingerprintsStayBoundedAndReadOnlyWhenBytesAreUnavailable() throws {
@@ -316,6 +370,49 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(blockedClassPlan.editPlan.validateApplyability().isApplyable)
     }
 
+    func testNDSDataSemanticEditorPlansItemScalarEditsOnlyForPlatinumItemJSON() throws {
+        let root = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:res/items/potion.json")
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "name" && $0.value == "Potion" && $0.valueKind == .string })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "price" && $0.value == "300" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "field_use" && $0.value == "true" && $0.valueKind == .bool })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "effects" })
+
+        let semanticPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "items:res/items/potion.json",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "price", value: "250"),
+                    NDSDataSemanticFieldEdit(key: "field_use", value: "false")
+                ]
+            )
+        )
+
+        XCTAssertTrue(semanticPlan.diagnostics.allSatisfy { $0.severity != .error }, semanticPlan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"price\": 250"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"field_use\": false"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"effects\": [{\"kind\":\"heal\",\"amount\":20}]"))
+        XCTAssertEqual(semanticPlan.editPlan.changes.count, 1)
+        XCTAssertTrue(semanticPlan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("res/items/potion.json"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"price\": 250"))
+        XCTAssertTrue(updated.contains("\"field_use\": false"))
+        XCTAssertTrue(updated.contains("\"effects\": [{\"kind\":\"heal\",\"amount\":20}]"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let csvSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:res/items/items.csv")
+        XCTAssertFalse(csvSnapshot.canEdit)
+        XCTAssertTrue(csvSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
+        XCTAssertTrue(csvSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
     func testNDSDataSemanticEditorKeepsNonPlatinumAndContainerRowsBlocked() throws {
         let platinum = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
         let platinumCatalog = try NDSDataCatalogBuilder.build(path: platinum.path)
@@ -328,6 +425,12 @@ final class NDSDataCatalogTests: XCTestCase {
         let heartGoldSnapshot = NDSDataSemanticEditor.snapshot(catalog: heartGoldCatalog, recordID: "trainers:files/poketool/trainer/trainers.json")
         XCTAssertFalse(heartGoldSnapshot.canEdit)
         XCTAssertTrue(heartGoldSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
+
+        let diamond = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let diamondCatalog = try NDSDataCatalogBuilder.build(path: diamond.path)
+        let diamondSnapshot = NDSDataSemanticEditor.snapshot(catalog: diamondCatalog, recordID: "items:arm9/src/itemtool.c")
+        XCTAssertFalse(diamondSnapshot.canEdit)
+        XCTAssertTrue(diamondSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
 
         let pmd = try makeRoot(name: "pmd-sky", configure: makePMDSkyFixture)
         let pmdCatalog = try NDSDataCatalogBuilder.build(path: pmd.path)
@@ -446,13 +549,21 @@ final class NDSDataCatalogTests: XCTestCase {
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
         try write(
             """
+            {"name": "Potion", "price": 300, "field_use": true, "effects": [{"kind":"heal","amount":20}]}
+
+            """,
+            to: root.appendingPathComponent("res/items/potion.json")
+        )
+        try write(
+            """
             {"name": "Youngster", "class": "TRAINER_CLASS_YOUNGSTER", "double_battle": false, "party": [{"species":"STARLY","level":5}], "items": ["POTION"], "messages": ["I like shorts!"]}
 
             """,
             to: root.appendingPathComponent("res/trainers/data/youngster.json")
         )
         try write("[{\"species\":\"BIDOOF\"}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
-        try write("hello\n", to: root.appendingPathComponent("res/text/route201.txt"))
+        try write("hello\nworld\n", to: root.appendingPathComponent("res/text/route201.txt"))
+        try write(Data("BMG Test\u{0}Hello there\u{0}Goodbye\u{0}".utf8), to: root.appendingPathComponent("res/text/battle.bmg"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
         try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
         try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))

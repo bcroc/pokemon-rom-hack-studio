@@ -442,7 +442,7 @@ public enum GenIIIResourceRegistry {
     private static func entry(from index: ProjectIndex, role: GenIIIResourceRole, fileManager: FileManager) -> GenIIIResourceEntry {
         if index.profile == .ndsROM,
            let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager) {
-            return report.resourceEntry
+            return entryByAppendingNDSDataCatalogItems(report.resourceEntry, index: index, fileManager: fileManager)
         }
 
         let items = resourceItems(from: index, fileManager: fileManager)
@@ -505,7 +505,7 @@ public enum GenIIIResourceRegistry {
     private static func resourceItems(from index: ProjectIndex, fileManager: FileManager) -> [GenIIIResourceItem] {
         if index.profile == .ndsROM,
            let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager) {
-            return report.resourceEntry.items
+            return entryByAppendingNDSDataCatalogItems(report.resourceEntry, index: index, fileManager: fileManager).items
         }
 
         if isNDSSourceProfile(index.profile),
@@ -536,18 +536,7 @@ public enum GenIIIResourceRegistry {
                 )
             }
             let catalog = NDSDataCatalogBuilder.build(index: index, fileManager: fileManager)
-            let catalogItems = catalog.records.map { record in
-                let kind = record.containerSummary.map { "\(record.format.rawValue) (\($0.memberCount) members)" } ?? record.format.rawValue
-                return GenIIIResourceItem(
-                    id: "nds-data:\(record.id)",
-                    path: record.relativePath,
-                    kind: kind,
-                    category: "NDS Data \(record.domain.rawValue)",
-                    size: record.byteCount ?? record.containerSummary?.byteCount,
-                    uncompressedSize: record.containerSummary.map { UInt64($0.memberCount) },
-                    facts: record.facts
-                )
-            }
+            let catalogItems = ndsDataCatalogItems(from: catalog)
             return pathItems + variantItems + buildItems + catalogItems
         }
 
@@ -757,6 +746,47 @@ public enum GenIIIResourceRegistry {
             return []
         default:
             return []
+        }
+    }
+
+    private static func entryByAppendingNDSDataCatalogItems(
+        _ entry: GenIIIResourceEntry,
+        index: ProjectIndex,
+        fileManager: FileManager
+    ) -> GenIIIResourceEntry {
+        let catalog = NDSDataCatalogBuilder.build(index: index, fileManager: fileManager)
+        let items = entry.items + ndsDataCatalogItems(from: catalog)
+        return GenIIIResourceEntry(
+            id: entry.id,
+            title: entry.title,
+            path: entry.path,
+            platform: entry.platform,
+            family: entry.family,
+            profile: entry.profile,
+            variants: entry.variants,
+            role: entry.role,
+            parseStatus: entry.parseStatus,
+            adapterID: entry.adapterID,
+            writePolicy: entry.writePolicy,
+            modules: entry.modules,
+            resourceCount: items.count,
+            items: items,
+            diagnostics: entry.diagnostics + catalog.diagnostics
+        )
+    }
+
+    private static func ndsDataCatalogItems(from catalog: ProjectNDSDataCatalog) -> [GenIIIResourceItem] {
+        catalog.records.map { record in
+            let kind = record.containerSummary.map { "\(record.format.rawValue) (\($0.memberCount) members)" } ?? record.format.rawValue
+            return GenIIIResourceItem(
+                id: "nds-data:\(record.id)",
+                path: record.relativePath,
+                kind: kind,
+                category: "NDS Data \(record.domain.rawValue)",
+                size: record.byteCount ?? record.containerSummary?.byteCount,
+                uncompressedSize: record.containerSummary.map { UInt64($0.memberCount) },
+                facts: record.facts
+            )
         }
     }
 

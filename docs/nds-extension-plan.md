@@ -22,6 +22,8 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 8. **Done - Map/Script/Text Readiness**: NDS data catalog rows now carry read-only relationship and readiness metadata for map, matrix, script, text, filesystem manifest, and container review in CLI JSON and Resources facts. External editors, compilers, extraction, rebuilds, NARC packing, mutation apply, and ROM/container writes stay blocked.
 9. **Done - Container Member Fingerprints**: NARC and unpacked archive directory summaries now include bounded read-only member path/index, size, extension, leading magic, format/compression hint, confidence, diagnostics, CLI JSON, and Resources facts for future graphics, text, map, and migration routing.
 10. **Done - Graphics Preview Metadata**: sampled NDS container members now expose read-only preview metadata for known Nitro graphics-adjacent formats, while compressed, unsupported, too-short, and unreadable members stay blocked and metadata-only.
+11. **Done - Text Bank Preview Metadata**: safe source text, JSON message banks, and BMG-like Gen IV text rows now expose read-only decoded string counts, decoded sample strings, blocked writer/export actions, CLI JSON, and Resources facts without adding semantic mutation eligibility or any extraction/rebuild/export path.
+12. **Done - Extracted Directory Migration Plan**: binary container and NitroFS manifest rows now report read-only source-tree and extracted-directory candidate paths, unsupported preservation/rebuild steps, blocked actions, CLI JSON, and source/ROM Resources facts without materializing extracted files or enabling repack/rebuild/export behavior.
 
 ## V1 Native Parsers
 
@@ -97,6 +99,22 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 - Compressed candidates, unsupported formats, too-short members, and unreadable member bytes are explicitly blocked so future graphics, text, map, and migration rows can route the member safely without implying write or conversion support.
 - `nds-data-catalog`, `resource-index`, and Resources facts surface preview hints and blocked preview counts consistently for source-tree and ROM-backed container rows.
 
+## V11 Text Bank Preview Metadata
+
+- `NDSDataCatalogRecord` carries optional `NDSDataTextBankPreview` metadata for Gen IV text rows.
+- Safe source-backed text, JSON, CSV, C source, and C header rows report decoded string counts and capped sample strings as read-only facts; JSON message-bank rows sample decoded string leaves rather than JSON syntax.
+- BMG-like binary text rows use bounded printable-string sampling and explicit blocked diagnostics instead of extraction, conversion, write, rebuild, or export behavior.
+- CLI `nds-data-catalog`, CLI `resource-index`, and Resources facts surface the same preview status, decoded string counts, sample strings, and blocked actions; the local Platinum source-tree smoke proves these facts through Resources rows.
+- Text bank preview does not add semantic mutation eligibility. Existing NDS source edits remain governed by the raw source mutation gate, and ROM/NARC/container/generated/reference rows remain blocked/read-only.
+
+## V12 Extracted Directory Migration Plan
+
+- `NDSDataCatalogRecord` carries optional `NDSDataMigrationPlan` metadata for binary container and NitroFS manifest rows.
+- Migration plans report source-tree candidate paths, extracted-directory candidate paths, unsupported preservation/rebuild steps, blocked actions, and read-only diagnostics.
+- Candidate routing uses conservative path/domain heuristics from existing NDS catalog classification; it does not copy reference schemas, inspect external tools, or infer write eligibility.
+- CLI `nds-data-catalog`, CLI `resource-index`, and Resources facts surface the same migration status, candidate paths, unsupported steps, and blocked actions for source-tree and ROM rows.
+- Migration plans do not extract ROM files, unpack NARCs, materialize member files, repack containers, rebuild ROMs, export ROMs, or apply mutation plans.
+
 ## Next Useful Pass
 
-Expand semantic Gen IV coverage to another dedicated source-backed domain, add decoded NDS text/message-bank previews, or add extracted-directory migration mapping on top of the new fingerprint and preview metadata. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.
+Expand semantic Gen IV coverage to another dedicated source-backed domain or add deeper migration coverage diagnostics across legacy binary-editor domains. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.
