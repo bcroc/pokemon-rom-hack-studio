@@ -400,12 +400,15 @@ final class PokemonHackCLITests: XCTestCase {
                 "species:res/pokemon/abra/data.json",
                 "--set",
                 "base_hp=31",
+                "--set",
+                "evolutions.0.parameter=22",
                 "--json"
             ])
         )
 
         let textDraft = try XCTUnwrap(plan["textDraft"] as? [String: Any])
-        XCTAssertEqual(textDraft["editedText"] as? String, "{\"base_hp\":31}\n")
+        XCTAssertTrue((textDraft["editedText"] as? String)?.contains("\"base_hp\":31") == true)
+        XCTAssertTrue((textDraft["editedText"] as? String)?.contains("[\"EVO_LEVEL\",22,\"SPECIES_KADABRA\"]") == true)
         let editPlan = try XCTUnwrap(plan["editPlan"] as? [String: Any])
         let changes = try XCTUnwrap(editPlan["changes"] as? [[String: Any]])
         XCTAssertEqual(changes.count, 1)
@@ -417,14 +420,36 @@ final class PokemonHackCLITests: XCTestCase {
                 "species:res/pokemon/abra/data.json",
                 "--set",
                 "base_hp=31",
+                "--set",
+                "evolutions.0.target=SPECIES_ALAKAZAM",
                 "--json"
             ])
         )
         let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
         XCTAssertEqual(appliedChanges.count, 1)
-        XCTAssertEqual(
-            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
-            "{\"base_hp\":31}\n"
+        let updatedSpecies = try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8)
+        XCTAssertTrue(updatedSpecies.contains("\"base_hp\":31"))
+        XCTAssertTrue(updatedSpecies.contains("[\"EVO_LEVEL\",16,\"SPECIES_ALAKAZAM\"]"))
+
+        let duplicateApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "species:res/pokemon/abra/data.json",
+                "--set",
+                "evolutions.0.parameter=22",
+                "--set",
+                "evolutions.0.parameter=24",
+                "--json"
+            ])
+        )
+        let duplicateChanges = try XCTUnwrap(duplicateApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(duplicateChanges.count, 0)
+        let duplicateDiagnostics = try XCTUnwrap(duplicateApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(duplicateDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FIELD_DUPLICATE" })
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8)
+                .contains("[\"EVO_LEVEL\",16,\"SPECIES_ALAKAZAM\"]")
         )
 
         let itemPlan = try decodeJSON(
@@ -681,7 +706,7 @@ final class PokemonHackCLITests: XCTestCase {
         try "cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n".write(to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"), atomically: true, encoding: .utf8)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("asm"), withIntermediateDirectories: true)
-        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("{\"base_hp\":25,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
         try write(

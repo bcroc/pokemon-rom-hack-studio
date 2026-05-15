@@ -292,6 +292,25 @@ public enum NDSDataSemanticEditor {
         var diagnostics = parsed.diagnostics
         var text = sourceText
         let fieldsByKey = Dictionary(uniqueKeysWithValues: parsed.fields.map { ($0.semanticField.key, $0) })
+        var seenKeys = Set<String>()
+        var duplicateKeys = Set<String>()
+        for edit in fieldEdits {
+            if !seenKeys.insert(edit.key).inserted {
+                duplicateKeys.insert(edit.key)
+            }
+        }
+        for key in duplicateKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_FIELD_DUPLICATE",
+                    message: "Semantic NDS field \(key) was edited more than once in the same plan; submit one value per field."
+                )
+            )
+        }
+        guard duplicateKeys.isEmpty else {
+            return (sourceText, diagnostics)
+        }
 
         var replacements: [(range: Range<String.Index>, value: String)] = []
         for edit in fieldEdits {
@@ -396,10 +415,141 @@ public enum NDSDataSemanticEditor {
             fields.append(ParsedSemanticField(semanticField: field, valueRange: valueStart..<value.end))
         }
 
+        let evolutionFields = parseEvolutionTupleJSONFields(sourceText: sourceText, record: record)
+        fields.append(contentsOf: evolutionFields.fields)
+        diagnostics.append(contentsOf: evolutionFields.diagnostics)
+
         if fields.isEmpty {
             diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_SCALAR_FIELDS", message: "No top-level scalar JSON fields were found for semantic NDS editing.", span: record?.sourceSpan))
         }
         return (fields, diagnostics)
+    }
+
+    private static func parseEvolutionTupleJSONFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> (fields: [ParsedSemanticField], diagnostics: [Diagnostic]) {
+        guard record?.domain == .species || record == nil,
+              let valueRange = topLevelJSONValueRange(sourceText, key: "evolutions"),
+              valueRange.lowerBound < sourceText.endIndex,
+              sourceText[valueRange.lowerBound] == "["
+        else {
+            return ([], [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var diagnostics: [Diagnostic] = []
+        var tupleIndex = 0
+        var index = sourceText.index(after: valueRange.lowerBound)
+        while index < valueRange.upperBound {
+            skipWhitespaceAndCommas(sourceText, index: &index)
+            guard index < valueRange.upperBound, sourceText[index] != "]" else { break }
+            guard sourceText[index] == "[",
+                  let tupleEnd = matchingBracketEnd(sourceText, start: index)
+            else {
+                skipJSONValueOrToken(sourceText, index: &index)
+                continue
+            }
+
+            var tupleCursor = sourceText.index(after: index)
+            if let method = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "method", record: record) {
+                fields.append(method)
+            }
+            if let parameter = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "parameter", record: record) {
+                fields.append(parameter)
+            }
+            if let target = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "target", record: record) {
+                fields.append(target)
+            } else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_EVOLUTION_TUPLE_UNSUPPORTED", message: "Evolution tuple \(tupleIndex + 1) is not a three-value method/parameter/target row and remains raw-source only.", span: record?.sourceSpan))
+            }
+
+            index = tupleEnd
+            tupleIndex += 1
+        }
+        return (fields, diagnostics)
+    }
+
+    private static func parseTupleScalarField(
+        _ sourceText: String,
+        cursor: inout String.Index,
+        tupleEnd: String.Index,
+        tupleIndex: Int,
+        key: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticField? {
+        skipWhitespaceAndCommas(sourceText, index: &cursor)
+        guard cursor < tupleEnd, let value = parseJSONScalarValue(sourceText, start: cursor) else { return nil }
+        let valueStart = cursor
+        cursor = value.end
+        let semanticKey = "evolutions.\(tupleIndex).\(key)"
+        return ParsedSemanticField(
+            semanticField: NDSDataSemanticField(
+                key: semanticKey,
+                label: "Evolution \(tupleIndex + 1) \(semanticLabel(for: key))",
+                value: value.displayValue,
+                valueKind: value.kind,
+                sourceSpan: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+            ),
+            valueRange: valueStart..<value.end
+        )
+    }
+
+    private static func topLevelJSONValueRange(_ sourceText: String, key: String) -> Range<String.Index>? {
+        var index = sourceText.startIndex
+        guard let objectStart = sourceText[index...].firstIndex(of: "{") else { return nil }
+        index = sourceText.index(after: objectStart)
+
+        while index < sourceText.endIndex {
+            skipWhitespaceAndCommas(sourceText, index: &index)
+            guard index < sourceText.endIndex, sourceText[index] != "}" else { break }
+            guard sourceText[index] == "\"", let keyToken = parseJSONStringToken(sourceText, start: index) else {
+                skipJSONValueOrToken(sourceText, index: &index)
+                continue
+            }
+            index = keyToken.end
+            skipWhitespace(sourceText, index: &index)
+            guard index < sourceText.endIndex, sourceText[index] == ":" else { continue }
+            index = sourceText.index(after: index)
+            skipWhitespace(sourceText, index: &index)
+            let valueStart = index
+            skipJSONValueOrToken(sourceText, index: &index)
+            if keyToken.value == key {
+                return valueStart..<index
+            }
+        }
+        return nil
+    }
+
+    private static func matchingBracketEnd(_ text: String, start: String.Index) -> String.Index? {
+        guard start < text.endIndex, text[start] == "[" else { return nil }
+        var index = start
+        var depth = 0
+        var inString = false
+        var escaped = false
+        while index < text.endIndex {
+            let character = text[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+            } else if character == "\"" {
+                inString = true
+            } else if character == "[" {
+                depth += 1
+            } else if character == "]" {
+                depth -= 1
+                if depth == 0 {
+                    return text.index(after: index)
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
     }
 
     private static func parseJSONStringToken(_ text: String, start: String.Index) -> (value: String, end: String.Index)? {

@@ -562,8 +562,10 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(editor.recordID, "species:res/pokemon/abra/data.json")
         XCTAssertEqual(editor.semanticFields.first?.key, "base_hp")
         XCTAssertEqual(editor.semanticFields.first?.value, "25")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "evolutions.0.parameter" && $0.value == "16" })
 
         store.updateSelectedNDSDataSemanticField(key: "base_hp", value: "29")
+        store.updateSelectedNDSDataSemanticField(key: "evolutions.0.target", value: "SPECIES_ALAKAZAM")
         XCTAssertTrue(store.selectedNDSDataIsDirty)
         XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
 
@@ -574,10 +576,9 @@ final class MapEditorStoreTests: XCTestCase {
         store.applySelectedNDSDataMutationPlan()
         XCTAssertFalse(store.selectedNDSDataIsDirty)
         XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
-        XCTAssertEqual(
-            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
-            "{\"base_hp\":29}\n"
-        )
+        let updatedSpecies = try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8)
+        XCTAssertTrue(updatedSpecies.contains("\"base_hp\":29"))
+        XCTAssertTrue(updatedSpecies.contains("[\"EVO_LEVEL\",16,\"SPECIES_ALAKAZAM\"]"))
 
         let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/items/potion.json" })
         store.requestResourceAssetSelection(itemRow.id)
@@ -2875,7 +2876,7 @@ final class MapEditorStoreTests: XCTestCase {
         try write("cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n", to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"))
         try write("src\n", to: root.appendingPathComponent("src/main.c"))
         try write("asm\n", to: root.appendingPathComponent("asm/main.s"))
-        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("{\"base_hp\":25,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
         try write(

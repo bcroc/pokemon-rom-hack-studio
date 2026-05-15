@@ -290,26 +290,54 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
         XCTAssertEqual(snapshot.fields.first?.key, "base_hp")
         XCTAssertEqual(snapshot.fields.first?.value, "25")
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "evolutions.0.method" && $0.value == "EVO_LEVEL" && $0.valueKind == .string })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "evolutions.0.parameter" && $0.value == "16" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "evolutions.0.target" && $0.value == "SPECIES_KADABRA" && $0.valueKind == .string })
 
         let semanticPlan = NDSDataSemanticEditor.plan(
             catalog: catalog,
             draft: NDSDataSemanticEditDraft(
                 recordID: "species:res/pokemon/abra/data.json",
-                fieldEdits: [NDSDataSemanticFieldEdit(key: "base_hp", value: "28")]
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "base_hp", value: "28"),
+                    NDSDataSemanticFieldEdit(key: "evolutions.0.parameter", value: "22")
+                ]
             )
         )
 
         XCTAssertTrue(semanticPlan.diagnostics.allSatisfy { $0.severity != .error }, semanticPlan.diagnostics.map(\.code).joined(separator: ","))
-        XCTAssertEqual(semanticPlan.textDraft.editedText, "{\"base_hp\":28}\n")
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"base_hp\":28"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("[\"EVO_LEVEL\",22,\"SPECIES_KADABRA\"]"))
         XCTAssertEqual(semanticPlan.editPlan.changes.count, 1)
         XCTAssertTrue(semanticPlan.editPlan.validateApplyability().isApplyable)
 
         let result = try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan)
         XCTAssertEqual(result.appliedChanges.count, 1)
-        XCTAssertEqual(
-            try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
-            "{\"base_hp\":28}\n"
+        let updated = try String(contentsOf: root.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"base_hp\":28"))
+        XCTAssertTrue(updated.contains("[\"EVO_LEVEL\",22,\"SPECIES_KADABRA\"]"))
+    }
+
+    func testNDSDataSemanticEditorBlocksDuplicateFieldEditsBeforeLowering() throws {
+        let root = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let semanticPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "species:res/pokemon/abra/data.json",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "evolutions.0.parameter", value: "22"),
+                    NDSDataSemanticFieldEdit(key: "evolutions.0.parameter", value: "24")
+                ]
+            )
         )
+
+        XCTAssertTrue(semanticPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_DUPLICATE" })
+        XCTAssertTrue(semanticPlan.editPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_DUPLICATE" })
+        XCTAssertEqual(semanticPlan.textDraft.editedText, "{\"base_hp\":25,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n")
+        XCTAssertEqual(semanticPlan.editPlan.changes.count, 0)
+        XCTAssertFalse(semanticPlan.editPlan.validateApplyability().isApplyable)
     }
 
     func testNDSDataSemanticEditorPlansTrainerScalarEditsOnlyForTrainerDataJSON() throws {
@@ -444,7 +472,7 @@ final class NDSDataCatalogTests: XCTestCase {
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)
         let draft = NDSDataEditDraft(recordID: "species:res/pokemon/abra/data.json", editedText: "{\"base_hp\":26}\n")
         let plan = NDSDataMutationPlanner.plan(catalog: catalog, draft: draft)
-        try "{\"base_hp\":27}\n".write(to: root.appendingPathComponent("res/pokemon/abra/data.json"), atomically: true, encoding: .utf8)
+        try "{\"base_hp\":27,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n".write(to: root.appendingPathComponent("res/pokemon/abra/data.json"), atomically: true, encoding: .utf8)
 
         let applyability = plan.validateApplyability()
 
@@ -544,7 +572,7 @@ final class NDSDataCatalogTests: XCTestCase {
         try write("cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n", to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"))
         try makeDirectory(root.appendingPathComponent("src"))
         try makeDirectory(root.appendingPathComponent("asm"))
-        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("{\"base_hp\":25,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
         try write("{\"power\":40}\n", to: root.appendingPathComponent("res/battle/moves/tackle.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("res/items/items.csv"))
         try write(
