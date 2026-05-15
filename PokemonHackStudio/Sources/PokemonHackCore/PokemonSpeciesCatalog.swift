@@ -539,21 +539,34 @@ public enum SpeciesAssetImportValidator {
             return diagnostics
         }
 
+        let sourcePalette = sourcePath.lowercased().hasSuffix(".pal")
+            ? GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath)
+            : nil
+        let binaryPalette = GraphicsMetadataParser.gbaPaletteMetadata(from: data)
         guard detectedKind == .palette,
-              let palette = GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath)
-                ?? GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+              let palette = sourcePalette ?? binaryPalette
         else {
             return [
                 Diagnostic(
                     severity: .error,
                     code: "SPECIES_ASSET_IMPORT_KIND_MISMATCH",
-                    message: "\(expectedKind.title) imports must be JASC .pal files or supported GBA palette bytes.",
+                    message: "\(expectedKind.title) imports must be JASC .pal source files.",
                     span: span
                 )
             ]
         }
 
         var diagnostics: [Diagnostic] = []
+        if sourcePalette == nil, binaryPalette != nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "SPECIES_ASSET_IMPORT_BINARY_PALETTE_BLOCKED",
+                    message: "Binary .gbapal palette bytes cannot replace source .pal files until a conversion workflow is available.",
+                    span: span
+                )
+            )
+        }
         if !palette.hasSlotZero {
             diagnostics.append(
                 Diagnostic(
@@ -2102,13 +2115,17 @@ public enum SpeciesMutationPlanner {
             return diagnostics
         }
 
-        guard let palette = GraphicsMetadataParser.paletteMetadata(from: data, path: path)
-            ?? GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+        let sourcePalette = GraphicsMetadataParser.paletteMetadata(from: data, path: path)
+        let binaryPalette = GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+        guard let palette = sourcePalette ?? binaryPalette
         else {
-            return [assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_INVALID", "\(kind.title) import must be a JASC .pal file or supported GBA palette bytes.", path: path, species: species)]
+            return [assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_INVALID", "\(kind.title) import must be a JASC .pal source file.", path: path, species: species)]
         }
 
         var diagnostics: [Diagnostic] = []
+        if sourcePalette == nil, binaryPalette != nil {
+            diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_BINARY_PALETTE_BLOCKED", "Binary .gbapal palette bytes cannot replace source .pal files until a conversion workflow is available.", path: path, species: species))
+        }
         if !palette.hasSlotZero {
             diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PALETTE_SLOT_ZERO_MISSING", "\(kind.title) palette must include slot 0.", path: path, species: species))
         }

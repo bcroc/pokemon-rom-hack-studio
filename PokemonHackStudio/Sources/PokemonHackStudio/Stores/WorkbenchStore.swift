@@ -12,6 +12,29 @@ private struct ResourceAssetRowsCache {
     let rows: [ResourceAssetRowViewState]
 }
 
+private struct WorkbenchWorkflowContextState: Codable {
+    let selection: String
+    let selectedResourceAssetID: String?
+    let selectedResourceLibraryEntryID: String
+    let selectedResourceLibraryMode: String
+    let selectedBuildWorkbenchTab: String
+    let selectedBuildReportRowID: String
+    let selectedDiagnosticBucket: String
+    let selectedDiagnosticRowID: String
+    let searchText: String
+    let moduleSearchTextByModule: [String: String]
+    let recentModules: [String]
+    let recentTargets: [PersistedWorkbenchRecentTarget]
+}
+
+private struct PersistedWorkbenchRecentTarget: Codable {
+    let kind: String
+    let identifier: String
+    let title: String
+    let subtitle: String
+    let systemImage: String
+}
+
 private struct SourceGraphLoadPayload: Codable {
     let index: PokemonHackCore.ProjectIndex
     let scriptOutline: PokemonHackCore.ProjectScriptOutline?
@@ -181,7 +204,9 @@ struct WorkbenchToolbarMutationState: Equatable {
 
 @MainActor
 final class WorkbenchStore: ObservableObject {
-    @Published var selection: WorkbenchModule = .dashboard
+    @Published var selection: WorkbenchModule = .dashboard {
+        didSet { persistWorkflowContext() }
+    }
     @Published var selectedTargetID: BuildTarget.ID = "emerald-dev"
     @Published var selectedProjectID: IndexedProjectSummary.ID = ""
     @Published var selectedMapID: String = ""
@@ -191,9 +216,15 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedMoveWorkbenchFilter: MoveWorkbenchFilter = .all
     @Published var selectedItemID: String = ""
     @Published var selectedItemWorkbenchFilter: ItemWorkbenchFilter = .all
-    @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID?
-    @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = ""
-    @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets
+    @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID? {
+        didSet { persistWorkflowContext() }
+    }
+    @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = "" {
+        didSet { persistWorkflowContext() }
+    }
+    @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets {
+        didSet { persistWorkflowContext() }
+    }
     @Published var selectedGameCubeResourcePath: String = ""
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
@@ -204,23 +235,37 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedScriptLabelID: String = ""
     @Published var selectedScriptTextBlockID: String = ""
     @Published var selectedMapWorkbenchTab: MapWorkbenchTab = .overviewLayers
-    @Published var selectedBuildWorkbenchTab: BuildWorkbenchTab = .build
-    @Published var selectedBuildReportRowID: String = ""
+    @Published var selectedBuildWorkbenchTab: BuildWorkbenchTab = .build {
+        didSet { persistWorkflowContext() }
+    }
+    @Published var selectedBuildReportRowID: String = "" {
+        didSet { persistWorkflowContext() }
+    }
     @Published var selectedGraphicsReportRowID: String = ""
     @Published var selectedGraphicsImportPackagePath: String = ""
-    @Published var selectedDiagnosticBucket: DiagnosticSummaryBucket = .blockingErrors
-    @Published var selectedDiagnosticRowID: String = ""
+    @Published var selectedDiagnosticBucket: DiagnosticSummaryBucket = .blockingErrors {
+        didSet { persistWorkflowContext() }
+    }
+    @Published var selectedDiagnosticRowID: String = "" {
+        didSet { persistWorkflowContext() }
+    }
     @Published var selectedGuidedFlowID: String = ""
     @Published var selectedRecordIDsByModule: [WorkbenchModule: UUID] = [:]
     @Published var mapShowsPalette = true
     @Published var mapMetatileFilter = ""
     @Published var mapViewportRequest: MapCanvasViewportRequest?
-    @Published var searchText = ""
+    @Published var searchText = "" {
+        didSet { persistWorkflowContext() }
+    }
     @Published var resourceAssetCategory = WorkbenchStore.allResourceAssetCategories
     @Published var resourceAssetSortMode: ResourceAssetSortMode = .category
     @Published var pendingMapNavigation: PendingMapNavigation?
-    @Published private(set) var recentModules: [WorkbenchModule] = []
-    @Published private(set) var recentWorkbenchTargets: [WorkbenchRecentTarget] = []
+    @Published private(set) var recentModules: [WorkbenchModule] = [] {
+        didSet { persistWorkflowContext() }
+    }
+    @Published private(set) var recentWorkbenchTargets: [WorkbenchRecentTarget] = [] {
+        didSet { persistWorkflowContext() }
+    }
     @Published private(set) var indexedProjects: [IndexedProjectSummary] = []
     @Published private(set) var projectIndexStatus: ProjectIndexLoadStatus = .idle
     @Published private(set) var selectedMapCatalog: MapCatalogViewState?
@@ -327,6 +372,7 @@ final class WorkbenchStore: ObservableObject {
     private var projectLoadGeneration = 0
 
     private static let recentRootsKey = "PokemonHackStudio.recentProjectRoots"
+    private static let workflowContextKey = "PokemonHackStudio.workflowContext"
     private static let autosaveDelayNanoseconds: UInt64 = 600_000_000
     static let allResourceAssetCategories = "All"
 
@@ -356,6 +402,7 @@ final class WorkbenchStore: ObservableObject {
         records = FixtureData.records
         issues = FixtureData.issues
         buildSteps = FixtureData.buildSteps
+        restoreWorkflowContext()
 
         settingsCancellable = self.userSettings.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -371,6 +418,135 @@ final class WorkbenchStore: ObservableObject {
                 self?.refreshProjectIndexes()
             }
         }
+    }
+
+    private func restoreWorkflowContext() {
+        guard
+            let data = userDefaults.data(forKey: Self.workflowContextKey),
+            let state = try? JSONDecoder().decode(WorkbenchWorkflowContextState.self, from: data)
+        else { return }
+
+        if let module = WorkbenchModule(rawValue: state.selection) {
+            selection = module
+        }
+        selectedResourceAssetID = state.selectedResourceAssetID
+        selectedResourceLibraryEntryID = state.selectedResourceLibraryEntryID
+        selectedResourceLibraryMode = ResourceLibraryMode(rawValue: state.selectedResourceLibraryMode) ?? .assets
+        selectedBuildWorkbenchTab = BuildWorkbenchTab(rawValue: state.selectedBuildWorkbenchTab) ?? .build
+        selectedBuildReportRowID = state.selectedBuildReportRowID
+        selectedDiagnosticBucket = DiagnosticSummaryBucket(rawValue: state.selectedDiagnosticBucket) ?? .blockingErrors
+        selectedDiagnosticRowID = state.selectedDiagnosticRowID
+        searchText = state.searchText
+        moduleSearchTextByModule = Dictionary(
+            uniqueKeysWithValues: state.moduleSearchTextByModule.compactMap { entry in
+                guard let module = WorkbenchModule(rawValue: entry.key) else { return nil }
+                return (module, entry.value)
+            }
+        )
+        recentModules = state.recentModules.compactMap(WorkbenchModule.init(rawValue:))
+        recentWorkbenchTargets = state.recentTargets.compactMap(Self.recentTarget(from:))
+    }
+
+    private func persistWorkflowContext() {
+        let state = WorkbenchWorkflowContextState(
+            selection: selection.rawValue,
+            selectedResourceAssetID: selectedResourceAssetID,
+            selectedResourceLibraryEntryID: selectedResourceLibraryEntryID,
+            selectedResourceLibraryMode: selectedResourceLibraryMode.rawValue,
+            selectedBuildWorkbenchTab: selectedBuildWorkbenchTab.rawValue,
+            selectedBuildReportRowID: selectedBuildReportRowID,
+            selectedDiagnosticBucket: selectedDiagnosticBucket.rawValue,
+            selectedDiagnosticRowID: selectedDiagnosticRowID,
+            searchText: searchText,
+            moduleSearchTextByModule: Dictionary(
+                uniqueKeysWithValues: moduleSearchTextByModule.map { ($0.key.rawValue, $0.value) }
+            ),
+            recentModules: recentModules.map(\.rawValue),
+            recentTargets: recentWorkbenchTargets.map(Self.persistedTarget(from:))
+        )
+        guard let data = try? JSONEncoder().encode(state) else { return }
+        userDefaults.set(data, forKey: Self.workflowContextKey)
+    }
+
+    private static func persistedTarget(from target: WorkbenchRecentTarget) -> PersistedWorkbenchRecentTarget {
+        let kind: String
+        let identifier: String
+        switch target.target {
+        case .map(let value):
+            kind = "map"
+            identifier = value
+        case .species(let value):
+            kind = "species"
+            identifier = value
+        case .trainer(let value):
+            kind = "trainer"
+            identifier = value
+        case .move(let value):
+            kind = "move"
+            identifier = value
+        case .item(let value):
+            kind = "item"
+            identifier = value
+        case .resourceAsset(let value):
+            kind = "resourceAsset"
+            identifier = value
+        case .resourceEntry(let value):
+            kind = "resourceEntry"
+            identifier = value
+        case .scriptLabel(let value):
+            kind = "scriptLabel"
+            identifier = value
+        case .buildRow(let value):
+            kind = "buildRow"
+            identifier = value
+        case .diagnostic(let value):
+            kind = "diagnostic"
+            identifier = value
+        }
+
+        return PersistedWorkbenchRecentTarget(
+            kind: kind,
+            identifier: identifier,
+            title: target.title,
+            subtitle: target.subtitle,
+            systemImage: target.systemImage
+        )
+    }
+
+    private static func recentTarget(from persisted: PersistedWorkbenchRecentTarget) -> WorkbenchRecentTarget? {
+        let focusTarget: WorkbenchFocusTarget
+        switch persisted.kind {
+        case "map":
+            focusTarget = .map(persisted.identifier)
+        case "species":
+            focusTarget = .species(persisted.identifier)
+        case "trainer":
+            focusTarget = .trainer(persisted.identifier)
+        case "move":
+            focusTarget = .move(persisted.identifier)
+        case "item":
+            focusTarget = .item(persisted.identifier)
+        case "resourceAsset":
+            focusTarget = .resourceAsset(persisted.identifier)
+        case "resourceEntry":
+            focusTarget = .resourceEntry(persisted.identifier)
+        case "scriptLabel":
+            focusTarget = .scriptLabel(persisted.identifier)
+        case "buildRow":
+            focusTarget = .buildRow(persisted.identifier)
+        case "diagnostic":
+            focusTarget = .diagnostic(persisted.identifier)
+        default:
+            return nil
+        }
+
+        return WorkbenchRecentTarget(
+            target: focusTarget,
+            module: focusTarget.module,
+            title: persisted.title,
+            subtitle: persisted.subtitle,
+            systemImage: persisted.systemImage
+        )
     }
 
     var selectedTarget: BuildTarget {
@@ -850,6 +1026,78 @@ final class WorkbenchStore: ObservableObject {
             return nil
         }
         return applyability.diagnostics.first?.message ?? "Resolve trainer mutation diagnostics before applying."
+    }
+
+    var selectedTrainerAssetSources: [PokemonHackCore.TrainerAssetSource] {
+        guard let catalog = selectedTrainerCatalog, let trainer = selectedTrainerDetail else { return [] }
+        return PokemonHackCore.TrainerAssetResolver.sources(catalog: catalog, trainer: trainer, fileManager: fileManager)
+    }
+
+    func selectedTrainerAssetImportBlockedReason(kind: PokemonHackCore.TrainerAssetKind) -> String? {
+        guard let selectedIndexedProject else {
+            return "Open an editable source project before importing trainer assets."
+        }
+        guard !Self.pathIsBundledAssetRoot(selectedIndexedProject.rootPath) else {
+            return "Bundled fallback projects are read-only; open the local source tree to import trainer assets."
+        }
+        guard let catalog = selectedTrainerCatalog, let trainer = selectedTrainerDetail else {
+            return "Select a trainer before importing assets."
+        }
+        guard selectedTrainerDraft != nil else {
+            return "\(trainer.trainerID) is read-only for this project profile."
+        }
+        guard let source = PokemonHackCore.TrainerAssetResolver.source(kind: kind, catalog: catalog, trainer: trainer, fileManager: fileManager) else {
+            return "\(kind.title) has no indexed source row."
+        }
+        if let error = source.diagnostics.first(where: { $0.severity == .error }) {
+            return error.message
+        }
+        guard let relativePath = source.relativePath, source.exists, source.isExplicitSource else {
+            return "\(kind.title) replacement requires an existing source PNG or .pal file."
+        }
+        let lowercased = relativePath.lowercased()
+        if relativePath.contains("..") || relativePath.hasPrefix("/") {
+            return "\(kind.title) source path is unsafe."
+        }
+        if lowercased.contains(".4bpp") || lowercased.contains(".gbapal") || lowercased.contains("/build/") || lowercased.hasSuffix(".lz") {
+            return "\(kind.title) imports must target source PNG or .pal files, not generated outputs."
+        }
+        switch kind {
+        case .frontSprite where !lowercased.hasSuffix(".png"):
+            return "\(kind.title) imports must target a PNG source path."
+        case .palette where !lowercased.hasSuffix(".pal"):
+            return "\(kind.title) imports must target a .pal source path."
+        default:
+            return nil
+        }
+    }
+
+    @discardableResult
+    func importSelectedTrainerAsset(
+        kind: PokemonHackCore.TrainerAssetKind,
+        from sourceURL: URL
+    ) -> PokemonHackCore.SourceAssetImportProvenance? {
+        guard
+            selectedTrainerAssetImportBlockedReason(kind: kind) == nil,
+            let catalog = selectedTrainerCatalog,
+            let trainer = selectedTrainerDetail,
+            let targetPath = PokemonHackCore.TrainerAssetResolver.source(kind: kind, catalog: catalog, trainer: trainer, fileManager: fileManager)?.relativePath,
+            var draft = selectedTrainerDraft,
+            let data = try? Data(contentsOf: sourceURL)
+        else {
+            return nil
+        }
+
+        let provenance = PokemonHackCore.SourceAssetImportValidator.provenance(
+            sourcePath: sourceURL.path,
+            expectedContent: kind.expectedContent,
+            targetPath: targetPath,
+            data: data
+        )
+        draft.assetData[kind] = data
+        draft.assetImports[kind] = provenance
+        updateSelectedTrainerDraft(draft)
+        return provenance
     }
 
     var selectedBuildReport: BuildPatchPlaytestReportViewState? {

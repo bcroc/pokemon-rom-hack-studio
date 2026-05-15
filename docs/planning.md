@@ -1,6 +1,6 @@
 # PokemonHackStudio Planning
 
-PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon Generation III ROM hacking. The product direction is source-tree-first: decomp projects are the canonical editing surface, while binary ROM workflows support inspection, patching, migration, and compatibility.
+PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon GBA and NDS ROM hacking. The product direction remains source-tree-first: decomp projects are the canonical editing surface, while binary ROM workflows support inspection, patching, migration, and compatibility. The active GBA + NDS extension shape is tracked in `docs/nds-extension-plan.md`.
 
 ## Current Roadmap
 
@@ -28,6 +28,7 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 
 5. **Cross-Media Resource Library**
    - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface.
+   - Treat NDS ROMs and pret-style NDS source trees as read-only preview/catalog inputs until future mutation-plan rows explicitly open source-backed Gen IV writes.
    - Keep GameCube `.iso`/`.gcm` media as direct parser inputs for `resource-index`, not auto-loaded Resources rows, until the GBA asset workflow is mature.
    - Parse GameCube headers, FST entries, DOL ranges, FSYS archives, and LZSS members before any future export workflow.
    - Show missing Colosseum, XD, Box, and Channel inputs as diagnostics instead of silently omitting them.
@@ -38,6 +39,7 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 - Do not bundle commercial ROMs, generated ROMs, decomp assets, or unlicensed expansion content.
 - Treat generated files as caches unless an adapter marks them as source.
 - Treat GameCube disc and archive resources as direct read-only parser inputs until a future mutation/export policy and UI scope are designed.
+- Treat NDS build/playtest as manual guidance only until a future row explicitly adds runnable NDS execution.
 - Keep all writes preview-first through mutation plans and diffs.
 - Back up source files under ignored `.pokemonhackstudio/backups/` before explicit apply operations.
 - Use local `pokeemerald` and `pokefirered` as smoke targets, not hard unit-test dependencies.

@@ -24,6 +24,7 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 10. **Done - Graphics Preview Metadata**: sampled NDS container members now expose read-only preview metadata for known Nitro graphics-adjacent formats, while compressed, unsupported, too-short, and unreadable members stay blocked and metadata-only.
 11. **Done - Text Bank Preview Metadata**: safe source text, JSON message banks, and BMG-like Gen IV text rows now expose read-only decoded string counts, decoded sample strings, blocked writer/export actions, CLI JSON, and Resources facts without adding semantic mutation eligibility or any extraction/rebuild/export path.
 12. **Done - Extracted Directory Migration Plan**: binary container and NitroFS manifest rows now report read-only source-tree and extracted-directory candidate paths, unsupported preservation/rebuild steps, blocked actions, CLI JSON, and source/ROM Resources facts without materializing extracted files or enabling repack/rebuild/export behavior.
+13. **Done - Shared Migration Coverage Diagnostics**: `migration-coverage <path> --json` reports NDS source, ROM, and source-backed Gen IV semantic domains against shared source-first/read-only/migration-plan/binary-only/blocked statuses so PHS-T93 can guide PHS-T92 and future PHS-T98 slices without enabling NDS build/playtest execution or ROM/container writes.
 
 ## V1 Native Parsers
 
@@ -117,4 +118,4 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 ## Next Useful Pass
 
-Expand semantic Gen IV coverage to another dedicated source-backed domain, add deeper evolution row operations, or add deeper migration coverage diagnostics across legacy binary-editor domains. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist.
+Expand semantic Gen IV coverage one dedicated source-backed domain at a time, starting from Platinum and only then widening to HGSS/DP. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist, and keep NDS build/playtest as manual guidance until a future implementation row opens runnable execution.

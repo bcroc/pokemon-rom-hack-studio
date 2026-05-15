@@ -12,9 +12,12 @@ struct TrainerEditorView: View {
     let loadStatus: TrainerCatalogLoadStatus
     let fallbackRecords: [WorkbenchRecord]
     let speciesCatalog: PokemonHackCore.ProjectSpeciesCatalog?
+    let assetSources: [PokemonHackCore.TrainerAssetSource]
     let onLoadCatalog: () -> Void
     let onSelectTrainer: (String) -> Void
     let onUpdateDraft: (PokemonHackCore.TrainerEditDraft) -> Void
+    let onImportAsset: (PokemonHackCore.TrainerAssetKind, URL) -> Void
+    let assetImportBlockedReason: (PokemonHackCore.TrainerAssetKind) -> String?
     var onFocusSpecies: ((String) -> Void)? = nil
 
     @State private var selectedPartySlot = 0
@@ -145,6 +148,7 @@ struct TrainerEditorView: View {
             if let draft {
                 ScrollView {
                     VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+                        trainerSwitcher(trainer)
                         trainerHeader(trainer: trainer, draft: draft)
 
                         if layoutMode.isCompact {
@@ -161,7 +165,7 @@ struct TrainerEditorView: View {
 
                         aiFlagsSection(draft: draft)
                         partySection(trainer: trainer, draft: draft, layoutMode: layoutMode)
-                        sourceSection(trainer: trainer, layoutMode: layoutMode)
+                        sourceSection(trainer: trainer, draft: draft, layoutMode: layoutMode)
                         diagnosticsSection(trainer: trainer)
                     }
                     .padding(layoutMode.contentPadding)
@@ -477,6 +481,7 @@ struct TrainerEditorView: View {
 
     private func sourceSection(
         trainer: PokemonHackCore.TrainerDetail,
+        draft: PokemonHackCore.TrainerEditDraft,
         layoutMode: WorkbenchLayoutMode
     ) -> some View {
         DisclosureGroup(isExpanded: $sourceExpanded) {
@@ -484,10 +489,12 @@ struct TrainerEditorView: View {
                 if layoutMode.isCompact {
                     VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
                         sourcePreviews(trainer: trainer)
+                        trainerAssetsSection(draft: draft)
                     }
                 } else {
                     HStack(alignment: .top, spacing: 18) {
                         sourcePreviews(trainer: trainer)
+                        trainerAssetsSection(draft: draft)
                     }
                 }
             }
@@ -496,6 +503,25 @@ struct TrainerEditorView: View {
             Label("Source Previews", systemImage: "curlybraces.square")
                 .font(.headline)
         }
+    }
+
+    private func trainerAssetsSection(draft: PokemonHackCore.TrainerEditDraft) -> some View {
+        EditorSection(title: "Trainer Assets") {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], alignment: .leading, spacing: 12) {
+                ForEach(assetSources) { source in
+                    TrainerAssetTile(
+                        source: source,
+                        draftData: draft.assetData[source.kind],
+                        importProvenance: draft.assetImports[source.kind],
+                        importBlockedReason: assetImportBlockedReason(source.kind),
+                        onImport: {
+                            importAsset(kind: source.kind)
+                        }
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -528,6 +554,7 @@ struct TrainerEditorView: View {
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+                trainerSwitcher(trainer)
                 trainerHeader(
                     trainer: trainer,
                     draft: PokemonHackCore.TrainerEditDraft(
@@ -577,6 +604,50 @@ struct TrainerEditorView: View {
         catalog?.constants[group] ?? []
     }
 
+    private func trainerSwitcher(_ selected: PokemonHackCore.TrainerDetail) -> some View {
+        EditorRecordSwitcher(
+            title: "Switch Trainer",
+            selectedTitle: selected.displayName,
+            selectedSubtitle: selected.trainerID,
+            systemImage: WorkbenchModule.trainers.systemImage,
+            items: (catalog?.trainers ?? trainers).map(trainerSwitcherItem),
+            selectedID: selectedTrainerID,
+            emptyTitle: "No Trainers",
+            emptyDescription: "No trainers matched the current search.",
+            onSelect: { selectedTrainerID = $0 }
+        )
+    }
+
+    private func trainerSwitcherItem(_ trainer: PokemonHackCore.TrainerDetail) -> EditorRecordSwitcherItem {
+        let partySummary = "\(trainer.trainerClass) · \(trainer.party.count) Pokemon"
+        let detail = trainer.doubleBattle ? "\(partySummary) · Double" : partySummary
+        let searchText = (
+            [
+                trainer.displayName,
+                trainer.trainerID,
+                trainer.trainerName,
+                trainer.trainerClass,
+                trainer.trainerPic,
+                trainer.encounterMusicGender,
+                trainer.sourceSpan.relativePath,
+                trainer.partySourceSpan?.relativePath ?? ""
+            ]
+            + trainer.trainerItems
+            + trainer.aiFlags
+            + trainer.party.map(\.species)
+        ).joined(separator: " ")
+
+        return EditorRecordSwitcherItem(
+            id: trainer.trainerID,
+            title: trainer.displayName,
+            subtitle: trainer.trainerID,
+            detail: detail,
+            systemImage: trainer.isEditable ? "person.crop.rectangle" : "lock.doc",
+            status: validationState(for: trainer.diagnostics),
+            searchText: searchText
+        )
+    }
+
     private func validationState(for diagnostics: [PokemonHackCore.Diagnostic]) -> ValidationState {
         let states = diagnostics.map { WorkbenchStore.validationState(for: $0.severity) }
         if states.contains(.error) {
@@ -586,6 +657,24 @@ struct TrainerEditorView: View {
             return .warning
         }
         return .valid
+    }
+
+    private func importAsset(kind: PokemonHackCore.TrainerAssetKind) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        switch kind {
+        case .frontSprite:
+            panel.allowedFileTypes = ["png"]
+            panel.message = "Select a replacement trainer front sprite PNG"
+        case .palette:
+            panel.allowedFileTypes = ["pal"]
+            panel.message = "Select a replacement trainer palette"
+        }
+
+        if panel.runModal() == .OK, let url = panel.url {
+            onImportAsset(kind, url)
+        }
     }
 
     private func draftStringBinding(
@@ -1117,6 +1206,116 @@ private struct TrainerDisabledField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct TrainerAssetTile: View {
+    let source: PokemonHackCore.TrainerAssetSource
+    let draftData: Data?
+    let importProvenance: PokemonHackCore.SourceAssetImportProvenance?
+    let importBlockedReason: String?
+    let onImport: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(source.kind.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                StatusPill(state: status)
+            }
+
+            Button("Import...", systemImage: "square.and.arrow.down") {
+                onImport()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(importBlockedReason != nil)
+            .help(importBlockedReason ?? "Import stages replacement bytes only; preview the mutation plan before apply.")
+
+            if let importBlockedReason {
+                Text(importBlockedReason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if source.sharedTrainerCount > 1 {
+                Text("\(source.sharedTrainerCount) trainers share \(source.trainerPic).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let draftData {
+                Text("Draft staged: \(draftData.count) bytes.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let importProvenance {
+                TrainerAssetImportProvenanceView(provenance: importProvenance)
+            }
+
+            Text(source.relativePath ?? source.generatedReferencePath ?? "No source path")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var status: ValidationState {
+        if source.diagnostics.contains(where: { $0.severity == .error }) {
+            return .error
+        }
+        if source.diagnostics.contains(where: { $0.severity == .warning }) {
+            return .warning
+        }
+        return source.exists && source.isExplicitSource ? .valid : .warning
+    }
+}
+
+private struct TrainerAssetImportProvenanceView: View {
+    let provenance: PokemonHackCore.SourceAssetImportProvenance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                StatusPill(state: validationState)
+                Text("\(provenance.sourceFileName) · \(provenance.byteCount) bytes")
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
+            Text("SHA1 \(provenance.sha1)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Text("Detected \(provenance.detectedKind.rawValue); validation \(provenance.status.rawValue).")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ForEach(provenance.diagnostics.prefix(2)) { diagnostic in
+                Text(diagnostic.message)
+                    .font(.caption2)
+                    .foregroundStyle(diagnostic.severity == .error ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var validationState: ValidationState {
+        switch provenance.status {
+        case .ready:
+            return .valid
+        case .warning:
+            return .warning
+        case .blocked:
+            return .error
+        }
     }
 }
 

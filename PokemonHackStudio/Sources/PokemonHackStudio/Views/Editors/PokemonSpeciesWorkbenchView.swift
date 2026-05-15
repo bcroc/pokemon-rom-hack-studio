@@ -52,6 +52,7 @@ struct PokemonSpeciesWorkbenchView: View {
             if let draft {
                 ScrollView {
                     VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+                        speciesSwitcher(selectedSpecies)
                         SpeciesHero(species: selectedSpecies, draft: draft, isDirty: isDirty, rootPath: rootPath)
 
                         if layoutMode.isCompact {
@@ -564,6 +565,7 @@ struct PokemonSpeciesWorkbenchView: View {
     ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
+                speciesSwitcher(species)
                 SpeciesHero(species: species, draft: nil, isDirty: false, rootPath: rootPath)
                 if layoutMode.isCompact {
                     VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
@@ -594,6 +596,39 @@ struct PokemonSpeciesWorkbenchView: View {
 
     private func constants(_ group: PokemonHackCore.SpeciesConstantGroup) -> [PokemonHackCore.SpeciesConstant] {
         catalog?.constants[group] ?? []
+    }
+
+    private func speciesSwitcher(_ selected: PokemonHackCore.SpeciesDetail) -> some View {
+        EditorRecordSwitcher(
+            title: "Switch Pokemon",
+            selectedTitle: selected.displayName,
+            selectedSubtitle: selected.speciesID,
+            systemImage: WorkbenchModule.pokemon.systemImage,
+            items: (catalog?.species ?? species).map(speciesSwitcherItem),
+            selectedID: selectedSpeciesID,
+            emptyTitle: "No Pokemon",
+            emptyDescription: "No Pokemon matched the current search.",
+            onSelect: { selectedSpeciesID = $0 }
+        )
+    }
+
+    private func speciesSwitcherItem(_ species: PokemonHackCore.SpeciesDetail) -> EditorRecordSwitcherItem {
+        EditorRecordSwitcherItem(
+            id: species.speciesID,
+            title: species.displayName,
+            subtitle: species.speciesID,
+            detail: species.types.map(displayConstant).joined(separator: " / "),
+            systemImage: WorkbenchModule.pokemon.systemImage,
+            status: validationState(for: species.diagnostics),
+            searchText: [
+                species.displayName,
+                species.speciesID,
+                species.sourceSpan.relativePath,
+                species.types.joined(separator: " "),
+                species.abilities.joined(separator: " "),
+                species.pokedex?.categoryName ?? ""
+            ].joined(separator: " ")
+        )
     }
 
     private func validationState(for diagnostics: [PokemonHackCore.Diagnostic]) -> ValidationState {

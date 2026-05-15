@@ -321,6 +321,32 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(malformedPlan.isApplyable)
     }
 
+    func testSpeciesPaletteImportBlocksBinaryGBAPaletteBytesForSourceTargets() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let binaryPalette = Data(repeating: 0, count: 32)
+
+        let provenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/normal.gbapal").path,
+            expectedKind: .normalPalette,
+            data: binaryPalette
+        )
+        draft.assetData[.normalPalette] = binaryPalette
+        draft.assetImports[.normalPalette] = provenance
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(provenance.status, .blocked)
+        XCTAssertTrue(provenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_BINARY_PALETTE_BLOCKED" })
+        XCTAssertFalse(plan.changes.contains { $0.path == "graphics/pokemon/treecko/normal.pal" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_ASSET_BINARY_PALETTE_BLOCKED" })
+        XCTAssertFalse(plan.isApplyable)
+    }
+
     func testSpeciesMutationPlannerBlocksAssetApplyAfterSourceHashChanges() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url

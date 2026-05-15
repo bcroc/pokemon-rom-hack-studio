@@ -117,7 +117,7 @@ struct DashboardView: View {
                 MetricCard(title: "Maps", value: mapMetric.value, detail: mapMetric.detail)
                 MetricCard(title: "Pokemon", value: "\(store.selectedSpeciesCatalog?.speciesCount ?? 0)", detail: store.speciesCatalogLoadStatus.label)
                 MetricCard(title: "Trainers", value: "\(store.selectedTrainerCatalog?.trainerCount ?? 0)", detail: store.trainerCatalogLoadStatus.label)
-                MetricCard(title: "Build Targets", value: "\(project.buildTargetCount)", detail: "Preview only")
+                MetricCard(title: "Build Targets", value: "\(project.buildTargetCount)", detail: store.selectedBuildReport?.isNDS == true ? "Manual NDS guidance" : "Declared make targets")
                 MetricCard(title: "Diagnostics", value: "\(diagnosticSummary.totalCount)", detail: diagnosticSummary.compactLabel)
             }
         }

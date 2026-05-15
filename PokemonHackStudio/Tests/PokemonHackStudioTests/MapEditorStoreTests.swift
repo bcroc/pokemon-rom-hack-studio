@@ -726,14 +726,20 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedResourceLibraryMode, .entries)
         XCTAssertEqual(store.selectedResourceLibraryEntryID, entry.id)
 
+        func filteredGameCubeEntryIDs() -> [String] {
+            store.filteredResourceLibraryEntries
+                .filter { $0.platform == "gameCube" }
+                .map(\.id)
+        }
+
         store.searchText = "0x2080"
-        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+        XCTAssertEqual(filteredGameCubeEntryIDs(), [entry.id])
 
         store.searchText = "pokemonTable"
-        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+        XCTAssertEqual(filteredGameCubeEntryIDs(), [entry.id])
 
         store.searchText = "msg_shop"
-        XCTAssertEqual(store.filteredResourceLibraryEntries.map(\.id), [entry.id])
+        XCTAssertEqual(filteredGameCubeEntryIDs(), [entry.id])
     }
 
     @MainActor
@@ -941,6 +947,36 @@ final class MapEditorStoreTests: XCTestCase {
 
         XCTAssertEqual(store.searchText, "grovyle")
         XCTAssertEqual(Array(store.recentModules.prefix(2)), [.pokemon, .moves])
+    }
+
+    @MainActor
+    func testWorkbenchWorkflowContextPersistsAcrossStoreInstances() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+
+        let first = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        first.selectWorkbenchModule(.resources, search: .replace("asset-search"))
+        first.selectedResourceLibraryMode = .entries
+        first.requestResourceAssetSelection("asset:species-treecko")
+        first.requestResourceLibraryEntrySelection("entry:pokeplatinum")
+        first.selectedBuildWorkbenchTab = .playtest
+        first.requestBuildReportRowSelection("playtest-row")
+        first.requestDiagnosticBucketSelection(.generatedArtifacts)
+        first.requestDiagnosticRowSelection("diagnostic-row")
+        first.selectWorkbenchModule(.build, search: .replace("playtest-search"))
+
+        let restored = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        XCTAssertEqual(restored.selection, .build)
+        XCTAssertEqual(restored.searchText, "playtest-search")
+        XCTAssertEqual(restored.selectedResourceLibraryMode, .entries)
+        XCTAssertEqual(restored.selectedResourceAssetID, "asset:species-treecko")
+        XCTAssertEqual(restored.selectedResourceLibraryEntryID, "entry:pokeplatinum")
+        XCTAssertEqual(restored.selectedBuildWorkbenchTab, .playtest)
+        XCTAssertEqual(restored.selectedBuildReportRowID, "playtest-row")
+        XCTAssertEqual(restored.selectedDiagnosticBucket, .generatedArtifacts)
+        XCTAssertEqual(restored.selectedDiagnosticRowID, "diagnostic-row")
+        XCTAssertEqual(restored.recentModules.first, .build)
+        XCTAssertTrue(restored.recentWorkbenchTargets.contains { $0.target == .resourceEntry("entry:pokeplatinum") })
     }
 
     @MainActor
@@ -1796,7 +1832,7 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(actions.first { $0.id == "open-playtest" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "capture-screenshot" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "capture-savestate" }?.isEnabled, true)
-        XCTAssertEqual(actions.first { $0.id == "build-rom" }?.isEnabled, false)
+        XCTAssertEqual(actions.first { $0.id == "build-rom" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isPreviewLocked, true)
 
         var capturedRequest: PlaytestProcessRequest?
@@ -2237,6 +2273,8 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     func testMapRefreshIsGuardedWhenVisualEditsAreStaged() async throws {
         let store = try await makeLoadedStore()
+        store.loadSelectedMapCatalog()
+        try await waitForSelectedMapCatalog(store)
 
         store.selectBrush(rawValue: 0x0033)
         store.paintMapCell(x: 0, y: 0)

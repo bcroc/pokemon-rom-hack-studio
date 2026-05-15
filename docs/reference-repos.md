@@ -18,13 +18,13 @@ Detailed feature synthesis, adoption decisions, and the current implementation l
 
 ## Current References
 
-The May 6, 2026 broad sweep created a 30-repo local reference bench. The May 12, 2026 centralization moved that bench into `/Users/bryan/projects/reference-repos`: central clone roots now live under `repos/<owner>__<repo>`, central profiles live under `docs/<owner>__<repo>.md`, and the central index tags every PokemonHackStudio-relevant resource with `ref.family.pokemonhackstudio` plus domain/reuse/license-risk tags.
+The May 6, 2026 broad sweep created a 30-repo local reference bench. The May 12, 2026 centralization moved that bench into `/Users/bryan/projects/reference-repos`: central clone roots now live under `repos/<owner>__<repo>`, central profiles live under `docs/<owner>__<repo>.md`, and the central index tags every PokemonHackStudio-relevant resource with `ref.family.pokemonhackstudio` plus domain/reuse/license-risk tags. As of the May 14, 2026 central index snapshot (`docs/index.json` generated at `2026-05-14T08:45:07.156Z`), the corpus records 129 unique repositories and 59 PokemonHackStudio-tagged profiles.
 
-Only `references/manifest.json` is tracked in this repo. The ignored `references/*` paths are compatibility symlinks to central clone roots, and each manifest entry records its central profile and current central HEAD under `centralReference`.
+Only `references/manifest.json` is tracked in this repo. The ignored `references/*` paths are compatibility symlinks to central clone roots, and each manifest entry records its central profile and current central HEAD under `centralReference`. That manifest intentionally remains the original 30-entry product bench unless a later task explicitly adds local compatibility aliases; do not expand it to all 59 central PokemonHackStudio profiles by default.
 
 The May 12, 2026 reference-corpus expansion added a focused batch for current NDS, toolchain, binary-extraction, graphics, and emulator/debugger coverage. Selected DS/NDS and emulator/tooling profiles now have local `references/*` compatibility aliases for quick PokemonHackStudio routing: `references/dspre`, `references/ds-pokemon-rom-editor`, `references/ndspy`, `references/nitropaint`, `references/pokemon-ds-map-studio`, `references/ppre`, `references/pokeditor-v2`, `references/skytemple`, `references/bizhawk`, `references/visualboyadvance-m`, and `references/tilemap-studio`. The remaining expansion entries stay central-profile-first, including `ayashibox__pkmn-rom-extract`, `skeli789__complete-fire-red-upgrade`, `bivurnum__decomps-resources`, `devkitpro__libgba`, and `devkitpro__buildscripts`. The originally researched `pkmn-rom-extract` crate is indexed under the canonical repository owner `ayashibox` rather than the crates.io owner handle.
 
-The May 12 reference-review follow-up also confirmed that current DSPRE development moved to `DS-Pokemon-Rom-Editor/DSPRE`; keep `AdAstra-LD/DS-Pokemon-Rom-Editor` as a stable historical/lineage reference and use the newer central DSPRE profile for current Gen IV editor behavior. Gen V coverage should expand through central-corpus candidates such as `pokemodding/pokeblack`, `PlatinumMaster/SwissArmyKnife`, `ds-pokemon-hacking/CTRMap-CE`, and `hzla/Pokeweb`, while sprite/palette planning should keep `loxed/porypal` in the behavioral-only graphics lane.
+The May 12 reference-review follow-up also confirmed that current DSPRE development moved to `DS-Pokemon-Rom-Editor/DSPRE`; keep `AdAstra-LD/DS-Pokemon-Rom-Editor` as a stable historical/lineage reference and use the newer central DSPRE profile for current Gen IV editor behavior. Current lane drivers are: pret decomps for source truth; Porymap, Poryscript, Porytiles, and porypal for GBA workflow pressure; HMA, PGE, pkmn-rom-extract, and RomPatcher.js for binary, migration, and patch behavior; and DSPRE, ndspy, NitroPaint, TinkeDSi, PPRE, and Pokemon DS Map Studio for NDS pressure.
 
 | Path | Primary Use | Notes |
 | --- | --- | --- |
@@ -79,22 +79,22 @@ The May 12, 2026 NDS planning sweep found these central references under `/Users
 | `/Users/bryan/projects/reference-repos/repos/hzla__pokeweb` | Web/editor workflow reference for DS-era data | Observational only. |
 | `/Users/bryan/projects/reference-repos/repos/skytemple__skytemple` | NDS/PMD resource tooling and plugin workflow reference | Spin-off resource tooling reference; keep behind clean-room/external-tool boundaries. |
 
-No local `pokemodding/pokeblack`, Tinke, CTRMap, BlocksDS, or nitromods clone is indexed yet. Standalone `ndspy` coverage is now present through `roadrunnerwmc__ndspy`, and current DSPRE coverage is present through `ds-pokemon-rom-editor__dspre`.
+The central index now includes `pokemodding__pokeblack`, `r-yatian__tinkedsi`, `ds-pokemon-hacking__ctrmap-ce`, `melonds-emu__melonds`, `fantranslatorsinternational__kuriimu2`, `gota7__nitrostudio2`, and `tasemulators__desmume`. They stay central-profile-first until a product test, doc, or CLI path needs a stable local alias. Standalone `ndspy` coverage is present through `roadrunnerwmc__ndspy`, current DSPRE coverage is present through `ds-pokemon-rom-editor__dspre`, and BlocksDS/nitromods remain research candidates rather than local product aliases.
 
-## Central Reference Candidate Queue
+## Central Reference-Only Watchlist
 
-These are metadata-only candidates for `/Users/bryan/projects/reference-repos`. Do not clone or vendor them inside PokemonHackStudio, and treat all entries as read-only until the central profile records current license and reuse posture.
+These are metadata-only or central-profile-first references for `/Users/bryan/projects/reference-repos`. Do not clone or vendor them inside PokemonHackStudio, and treat all entries as read-only until the central profile records current license and reuse posture.
 
 | Repository | Decision | Coverage Added |
 | --- | --- | --- |
-| `pokemodding/pokeblack` | Add, reference-only | Gen V source-tree detection and future BW/BW2 source catalog/edit posture. |
-| `PlatinumMaster/SwissArmyKnife` | Add, reference-only | Gen V map containers, text, scripts, zone entities, encounters, and project/hotswap workflow. |
-| `ds-pokemon-hacking/CTRMap-CE` | Add, reference-only | Gen V plugin-based level editor and project workflow pressure; keep GPL code outside the product. |
-| `melonDS-emu/melonDS` | Add, external-tool reference | DS emulator launch/debug/runtime assumptions for future NDS playtest planning. |
-| `R-YaTian/TinkeDSi` | Add, reference-only | Active Tinke-descended DS/DSi file viewer/editor coverage for NARC, BMG, SDAT, and graphics inventory. |
-| `Gota7/NitroStudio2` | Add, research-only | Dedicated SDAT/audio workflow coverage for future NDS audio/cries/music diagnostics. |
-| `FanTranslatorsInternational/Kuriimu2` | Add, reference-only | Broad archive/text/image toolkit coverage for encodings, message resources, and plugin-style format handling. |
-| `TASEmulators/desmume` | Add, external-tool reference | Alternate DS emulator/debugger behavior for capability reporting. |
+| `pokemodding/pokeblack` | Indexed centrally, reference-only | Gen V source-tree detection and future BW/BW2 source catalog/edit posture. |
+| `PlatinumMaster/SwissArmyKnife` | Indexed centrally, reference-only | Gen V map containers, text, scripts, zone entities, encounters, and project/hotswap workflow. |
+| `ds-pokemon-hacking/CTRMap-CE` | Indexed centrally, reference-only | Gen V plugin-based level editor and project workflow pressure; keep GPL code outside the product. |
+| `melonDS-emu/melonDS` | Indexed centrally, external-tool reference | DS emulator launch/debug/runtime assumptions for future NDS playtest planning. |
+| `R-YaTian/TinkeDSi` | Indexed centrally, reference-only | Active Tinke-descended DS/DSi file viewer/editor coverage for NARC, BMG, SDAT, and graphics inventory. |
+| `Gota7/NitroStudio2` | Indexed centrally, research-only | Dedicated SDAT/audio workflow coverage for future NDS audio/cries/music diagnostics. |
+| `FanTranslatorsInternational/Kuriimu2` | Indexed centrally, reference-only | Broad archive/text/image toolkit coverage for encodings, message resources, and plugin-style format handling. |
+| `TASEmulators/desmume` | Indexed centrally, external-tool reference | Alternate DS emulator/debugger behavior for capability reporting. |
 | `Gericom/EveryFileExplorer` | Research-only | Cross-check for broad Nintendo container/resource vocabulary. |
 | `Barubary/dsdecmp` | Research-only | Focused DS compression/decompression behavior for compressed NARC/member planning. |
 | `jmacd/xdelta` | Research-only | xdelta patch-format compatibility for DS hack distribution planning. |

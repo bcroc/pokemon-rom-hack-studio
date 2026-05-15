@@ -68,6 +68,7 @@ struct PokemonItemsWorkbenchView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
+                    itemSwitcher(catalog)
                     Text("Items")
                         .font(.largeTitle.weight(.semibold))
                     Text("\(catalog.projectTitle) source-backed item catalog and Emerald row editor.")
@@ -122,6 +123,41 @@ struct PokemonItemsWorkbenchView: View {
         }
         .padding(16)
         .background(.background)
+    }
+
+    private func itemSwitcher(_ catalog: ItemCatalogViewState) -> some View {
+        EditorRecordSwitcher(
+            title: "Switch Item",
+            selectedTitle: selectedItem?.displayName ?? "No Item Selected",
+            selectedSubtitle: selectedItem?.itemID,
+            systemImage: WorkbenchModule.items.systemImage,
+            items: catalog.items.map(itemSwitcherItem),
+            selectedID: selectedItemID,
+            emptyTitle: "No Items",
+            emptyDescription: "No items matched the current search.",
+            onSelect: { selectedItemID = $0 }
+        )
+    }
+
+    private func itemSwitcherItem(_ item: ItemDetailViewState) -> EditorRecordSwitcherItem {
+        let detail: String
+        if item.isEditable {
+            detail = "Editable"
+        } else if item.isDescriptionEditable {
+            detail = "Description editable"
+        } else {
+            detail = "Read-only"
+        }
+
+        return EditorRecordSwitcherItem(
+            id: item.itemID,
+            title: item.displayName,
+            subtitle: item.itemID,
+            detail: detail,
+            systemImage: WorkbenchModule.items.systemImage,
+            status: item.status,
+            searchText: item.searchBlob
+        )
     }
 
     private func itemListRow(_ item: ItemDetailViewState) -> some View {

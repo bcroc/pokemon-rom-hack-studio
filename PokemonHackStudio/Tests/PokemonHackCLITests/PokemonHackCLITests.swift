@@ -94,6 +94,51 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["layeredTilesetDryRun"])
     }
 
+    func testScriptCommandEditPlanAndApplyCommandsEmitJSONAndWriteSource() throws {
+        let root = try makeEmeraldProject()
+        let scriptPath = "data/maps/Route1/scripts.inc"
+        try write(
+            """
+            Route1_EventScript_Test::
+                msgbox Route1_Text_Hello, MSGBOX_DEFAULT @ keep
+                end
+            """,
+            to: root.appendingPathComponent(scriptPath)
+        )
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "script-command-edit-plan",
+                root.path,
+                scriptPath,
+                "2",
+                "1",
+                "MSGBOX_YESNO",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(plan["rootPath"] as? String, root.path)
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.first?["path"] as? String, scriptPath)
+        XCTAssertEqual(changes.first?["textPreview"] as? String, "    msgbox Route1_Text_Hello, MSGBOX_YESNO @ keep")
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "script-command-edit-apply",
+                root.path,
+                scriptPath,
+                "2",
+                "1",
+                "MSGBOX_YESNO",
+                "--json"
+            ])
+        )
+        let applied = try XCTUnwrap(result["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(applied.first?["path"] as? String, scriptPath)
+        let edited = try String(contentsOf: root.appendingPathComponent(scriptPath), encoding: .utf8)
+        XCTAssertTrue(edited.contains("msgbox Route1_Text_Hello, MSGBOX_YESNO @ keep"))
+    }
+
     func testPatchArtifactPlanCommandEmitsPreviewJSONWithoutWritingROM() throws {
         let root = try makeEmeraldProject()
         let patch = root.appendingPathComponent("cleanroom.aps")
@@ -623,6 +668,71 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(entries.contains { $0["surface"] as? String == "cries" && $0["status"] as? String == "blocked" })
     }
 
+    func testMigrationCoverageCommandEmitsSourceFirstAndBlockedJSON() throws {
+        let root = try makeItemCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["migration-coverage", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeemerald")
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertNotNil(result["summary"])
+        let entries = try XCTUnwrap(result["entries"] as? [[String: Any]])
+        XCTAssertTrue(entries.contains { $0["domain"] as? String == "items" && $0["status"] as? String == "sourceFirstEditable" })
+        XCTAssertTrue(entries.contains { $0["domain"] as? String == "patches" && $0["status"] as? String == "previewOnly" && $0["recommendedFutureRow"] as? String == "PHS-T73" })
+        XCTAssertTrue(entries.contains { $0["domain"] as? String == "binaryBlocks" && $0["recommendedFutureRow"] as? String == "PHS-T79" })
+
+        let rom = try makeTestROM()
+        let binaryResult = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["migration-coverage", rom.path, "--json"])
+        )
+        XCTAssertEqual(binaryResult["profile"] as? String, "binaryROM")
+        let binaryEntries = try XCTUnwrap(binaryResult["entries"] as? [[String: Any]])
+        XCTAssertTrue(binaryEntries.contains { $0["domain"] as? String == "species" && $0["status"] as? String == "binaryOnlyBlocked" })
+        XCTAssertTrue(binaryEntries.contains { $0["domain"] as? String == "graphics" && $0["status"] as? String == "migrationPlanOnly" && $0["recommendedFutureRow"] as? String == "PHS-T92" })
+
+        let ndsRoot = try makeTestNDSDecompRoot()
+        let ndsResult = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["migration-coverage", ndsRoot.path, "--json"])
+        )
+        XCTAssertEqual(ndsResult["profile"] as? String, "pokeplatinum")
+        let ndsEntries = try XCTUnwrap(ndsResult["entries"] as? [[String: Any]])
+        XCTAssertTrue(ndsEntries.contains { $0["domain"] as? String == "ndsContainers" && $0["status"] as? String == "migrationPlanOnly" })
+        XCTAssertTrue(ndsEntries.contains { $0["domain"] as? String == "build" && $0["status"] as? String == "externalToolOnly" })
+        XCTAssertTrue(ndsEntries.contains { $0["domain"] as? String == "items" && $0["recommendedFutureRow"] as? String == "PHS-T98" })
+    }
+
+    func testROMAssetMigrationPlanCommandEmitsReadOnlyPreviewJSON() throws {
+        let rom = try makeTestROM(includeGraphicsPreviewBytes: true)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["rom-asset-migration-plan", rom.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "binaryROM")
+        XCTAssertEqual(result["gameFamily"] as? String, "emerald")
+        XCTAssertEqual(result["familyConfidence"] as? String, "high")
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["extractionEnabled"] as? Bool, false)
+        XCTAssertEqual(result["exportEnabled"] as? Bool, false)
+        XCTAssertNotNil(result["coverageEntry"])
+        let summary = try XCTUnwrap(result["summary"] as? [String: Any])
+        XCTAssertGreaterThan(summary["blockedTargetCount"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["tileCandidateCount"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["paletteCandidateCount"] as? Int ?? 0, 0)
+        let plans = try XCTUnwrap(result["familyPlans"] as? [[String: Any]])
+        XCTAssertTrue(plans.contains { plan in
+            plan["family"] as? String == "pokemonSprites"
+                && plan["status"] as? String == "migrationPlanOnly"
+                && (plan["sourceMigrationTarget"] as? String)?.contains("pokeemerald") == true
+        })
+        let blockedTargets = plans.flatMap { $0["blockedTargets"] as? [[String: Any]] ?? [] }
+        XCTAssertTrue(blockedTargets.contains { ($0["targetPath"] as? String)?.contains("graphics/pokemon/<species>/front.png") == true })
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "ROM_ASSET_MIGRATION_PLAN_ONLY" })
+    }
+
     private func makeEmeraldProject() throws -> URL {
         let root = try makeTemporaryDirectory()
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -642,10 +752,10 @@ final class PokemonHackCLITests: XCTestCase {
         return root
     }
 
-    private func makeTestROM() throws -> URL {
+    private func makeTestROM(includeGraphicsPreviewBytes: Bool = false) throws -> URL {
         let root = try makeTemporaryDirectory()
         let rom = root.appendingPathComponent("test.gba")
-        var bytes = [UInt8](repeating: 0xff, count: 0x200)
+        var bytes = [UInt8](repeating: 0xff, count: 0x240)
         bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
         bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
         bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
@@ -654,6 +764,11 @@ final class PokemonHackCLITests: XCTestCase {
         bytes[0x101] = 0x00
         bytes[0x102] = 0x00
         bytes[0x103] = 0x08
+        if includeGraphicsPreviewBytes {
+            for index in 0..<64 {
+                bytes[0x140 + index] = UInt8((index % 31) + 1)
+            }
+        }
         try Data(bytes).write(to: rom)
         return rom
     }

@@ -1,13 +1,13 @@
 # Product Architecture
 
-PokemonHackStudio is a local-first macOS tool for editing Pokemon GBA hacks from decompilation source trees first, with ROM patching and binary inspection treated as support workflows. The app should help creators make deliberate changes, preview likely outcomes, and produce reproducible build artifacts without hiding the underlying project structure.
+PokemonHackStudio is a local-first macOS tool for editing Pokemon GBA hacks from decompilation source trees first, while growing read-only NDS source/ROM intelligence. ROM patching, binary inspection, and NDS container catalogs are support workflows until mutation-plan backed writers exist. The app should help creators make deliberate changes, preview likely outcomes, and produce reproducible build artifacts without hiding the underlying project structure.
 
 ## Workspace Model
 
 - `PokemonHackStudio/` is the product surface: SwiftUI app, shared core library, CLI, configuration, and tests.
 - `pokeemerald/` and `pokefirered/` are editable source-tree workspaces. They are the preferred targets for content, data, script, map, and build-system changes.
 - Root `.gba` files are local base ROM inputs for comparison, extraction, or patch generation. They should not become the canonical editing surface.
-- `references/` is read-only research material unless a task explicitly says otherwise.
+- `references/` is read-only research material unless a task explicitly says otherwise; `/Users/bryan/projects/reference-repos` is the canonical reference metadata and clone corpus.
 - `agbcc/` is toolchain support for the decompilation builds.
 - `script/` is reserved for repo-level automation that does not belong in the app package.
 
@@ -28,6 +28,7 @@ Keep UI state and platform integration in the app target. Keep file formats, dat
 Reference review is captured in `docs/reference-synthesis.md`. The implementation should grow through four cooperating lanes:
 
 - Decomp project graph: source-tree adapters index maps, layouts, scripts, constants, C initializer tables, trainer data, graphics, generated files, and build targets.
+- NDS resource graph: read-only NDS ROM/source adapters index NitroFS, overlays, NARC/member rows, Gen IV data catalogs, source markers, and manual build/playtest readiness without enabling writes.
 - Binary ROM graph: ROM adapters index local `.gba` inputs as semantic byte ranges, pointers, anchors, checksums, metadata, diffs, and patch plans.
 - Build and patch pipeline: build targets, generated-data checks, patch parsing, checksum validation, patch manifests, and export plans stay in `PokemonHackCore`.
 - Emulator and playtest bridge: interactive run and headless validation use mGBA-compatible boundaries, with Swift owning the product state and any emulator bridge kept isolated.
@@ -62,7 +63,7 @@ Durable source changes should be represented as source-tree diffs, patch manifes
 
 `PokemonHackCore` should grow around narrow services:
 
-- Project discovery: identify Emerald, FireRed, Ruby/Sapphire, Expansion, binary ROM, and future Gen 3 project shapes.
+- Project discovery: identify Emerald, FireRed, Ruby/Sapphire, Expansion, GBA binary ROM, NDS binary ROM, pret-style NDS source trees, and future Gen 3/Gen 4 project shapes.
 - Adapter registry: select the appropriate `GameAdapter` and expose a `ProjectIndex`.
 - Source index: map domain objects to source files, source spans, generated build products, and adapter capabilities.
 - Parser layer: read structured source data without ad hoc text replacement where a safer parser or table model exists.
@@ -83,6 +84,9 @@ The CLI is the automation companion for the app:
 - `build`: report selected decomp build targets, output existence, checksums, freshness, and tool readiness before any future build execution.
 - `patch`: parse and verify patch metadata, base-ROM compatibility, and dry-run manifests before any future patch apply/export.
 - `playtest`: prepare headless mGBA-compatible run plans and explicitly launch runnable interactive handoffs through the external emulator boundary.
+- `migration-coverage`: report source-first, read-only, migration-plan-only, binary-only, and blocked domains across GBA/NDS inputs so CLI and app-facing diagnostics share one fact model before ROM asset migration planning.
+
+Repo-level validation should keep `make validate` as the canonical local proof, with `make validate-nds` as the opt-in central NDS reference smoke. App-hosted Xcode tests should use a unique DerivedData path for each focused ladder to avoid shared build database locks.
 
 CLI output should be script-friendly by default, with JSON output available for workflows that feed back into the app or tests.
 

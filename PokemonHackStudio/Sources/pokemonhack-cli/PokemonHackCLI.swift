@@ -67,6 +67,10 @@ struct PokemonHackCLI {
             return try scriptOutline(arguments: Array(arguments.dropFirst()))
         case "script-readiness":
             return try scriptReadiness(arguments: Array(arguments.dropFirst()))
+        case "script-command-edit-plan":
+            return try scriptCommandEditPlan(arguments: Array(arguments.dropFirst()))
+        case "script-command-edit-apply":
+            return try scriptCommandEditApply(arguments: Array(arguments.dropFirst()))
         case "moves-graph":
             return try movesGraph(arguments: Array(arguments.dropFirst()))
         case "move-catalog":
@@ -75,6 +79,10 @@ struct PokemonHackCLI {
             return try itemCatalog(arguments: Array(arguments.dropFirst()))
         case "pokemon-compatibility":
             return try pokemonCompatibility(arguments: Array(arguments.dropFirst()))
+        case "migration-coverage":
+            return try migrationCoverage(arguments: Array(arguments.dropFirst()))
+        case "rom-asset-migration-plan":
+            return try romAssetMigrationPlan(arguments: Array(arguments.dropFirst()))
         case "species-graph":
             return try speciesGraph(arguments: Array(arguments.dropFirst()))
         case "resources":
@@ -196,6 +204,25 @@ struct PokemonHackCLI {
         return try encode(ScriptReadinessReportBuilder.build(index: index, target: target))
     }
 
+    private static func scriptCommandEditPlan(arguments: [String]) throws -> String {
+        let request = try scriptCommandEditRequest(arguments: arguments)
+        return try encode(
+            ScriptCommandEditPlanner.plan(
+                rootPath: request.projectPath,
+                draft: request.draft
+            )
+        )
+    }
+
+    private static func scriptCommandEditApply(arguments: [String]) throws -> String {
+        let request = try scriptCommandEditRequest(arguments: arguments)
+        let plan = ScriptCommandEditPlanner.plan(
+            rootPath: request.projectPath,
+            draft: request.draft
+        )
+        return try encode(try ScriptCommandEditApplier.apply(plan: plan))
+    }
+
     private static func movesGraph(arguments: [String]) throws -> String {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
@@ -223,6 +250,20 @@ struct PokemonHackCLI {
             throw CLIError.usage
         }
         return try encode(PokemonDataCompatibilityReportBuilder.build(path: path))
+    }
+
+    private static func migrationCoverage(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(MigrationCoverageReportBuilder.build(path: path))
+    }
+
+    private static func romAssetMigrationPlan(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(ROMAssetMigrationPlanBuilder.build(path: path))
     }
 
     private static func speciesGraph(arguments: [String]) throws -> String {
@@ -631,6 +672,32 @@ struct PokemonHackCLI {
         return try encode(PlaytestDebugPlanBuilder.build(index: index))
     }
 
+    private static func scriptCommandEditRequest(arguments: [String]) throws -> ScriptCommandEditCLIRequest {
+        guard
+            arguments.count == 6,
+            let projectPath = arguments.first,
+            let sourcePath = arguments.dropFirst().first,
+            let lineText = arguments.dropFirst(2).first,
+            let argumentIndexText = arguments.dropFirst(3).first,
+            let replacementArgument = arguments.dropFirst(4).first,
+            arguments.last == "--json",
+            let line = Int(lineText),
+            let argumentIndex = Int(argumentIndexText)
+        else {
+            throw CLIError.usage
+        }
+
+        return ScriptCommandEditCLIRequest(
+            projectPath: projectPath,
+            draft: ScriptCommandEditDraft(
+                sourcePath: sourcePath,
+                line: line,
+                argumentIndex: argumentIndex,
+                replacementArgument: replacementArgument
+            )
+        )
+    }
+
     private static func encode<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -653,11 +720,16 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | nds-data-edit-plan <project> <record-id> --draft-file <path> --json | nds-data-edit-apply <project> <record-id> --draft-file <path> --json | nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json | nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json | playtest-debug-plan <path> --json"
+            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | script-command-edit-plan <project> <source-path> <line> <argument-index> <replacement> --json | script-command-edit-apply <project> <source-path> <line> <argument-index> <replacement> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | migration-coverage <path> --json | rom-asset-migration-plan <rom> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | nds-data-edit-plan <project> <record-id> --draft-file <path> --json | nds-data-edit-apply <project> <record-id> --draft-file <path> --json | nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json | nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json | playtest-debug-plan <path> --json"
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }
     }
+}
+
+private struct ScriptCommandEditCLIRequest {
+    let projectPath: String
+    let draft: ScriptCommandEditDraft
 }
 
 private struct NDSDataEditCLIRequest {

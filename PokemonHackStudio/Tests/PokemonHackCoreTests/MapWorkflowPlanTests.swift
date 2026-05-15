@@ -2,12 +2,13 @@ import XCTest
 @testable import PokemonHackCore
 
 final class MapWorkflowPlanTests: XCTestCase {
-    func testDuplicationPlanCapturesSourceSnapshotsAndBlocksApply() throws {
+    func testDuplicationPlanCapturesSourceSnapshotsAndEnablesApply() throws {
         let root = try makeTemporaryProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try write("{}", to: root.appendingPathComponent("data/maps/OldaleTown/map.json"))
+        try write(#"{"id":"MAP_OLDALE_TOWN","name":"OldaleTown","layout":"LAYOUT_OLDALE_TOWN"}"#, to: root.appendingPathComponent("data/maps/OldaleTown/map.json"))
         try write("[\"OldaleTown\"]", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write(#"{"layouts":[{"id":"LAYOUT_OLDALE_TOWN","name":"OldaleTown","blockdata_filepath":"data/layouts/OldaleTown/map.bin","border_filepath":"data/layouts/OldaleTown/border.bin"}]}"#, to: root.appendingPathComponent("data/layouts/layouts.json"))
         try write(Data(repeating: 0, count: 8), to: root.appendingPathComponent("data/layouts/OldaleTown/map.bin"))
         try write(Data(repeating: 0, count: 8), to: root.appendingPathComponent("data/layouts/OldaleTown/border.bin"))
 
@@ -60,11 +61,24 @@ final class MapWorkflowPlanTests: XCTestCase {
             proposedMapName: "CodexTest"
         )
 
-        XCTAssertFalse(plan.executionState.canApply)
+        XCTAssertTrue(plan.executionState.canApply, "\(plan.executionState.reasons)")
         XCTAssertTrue(plan.mutationPlan.requiresExplicitApply)
         XCTAssertTrue(plan.plannedFiles.contains { $0.destinationPath == "data/maps/CodexTest/map.json" })
         XCTAssertTrue(plan.plannedFiles.contains { $0.destinationPath == "data/layouts/OldaleTown_Copy/map.bin" })
         XCTAssertTrue(plan.sourceSnapshots.contains { $0.relativePath == "data/maps/OldaleTown/map.json" && $0.exists })
+
+        let result = try MapWorkflowApplier.applyDuplication(plan: plan)
+        XCTAssertEqual(result.selectedMapID, "MAP_CODEX_TEST")
+        XCTAssertTrue(result.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(result.appliedFiles.contains { $0.path == "data/maps/CodexTest/map.json" })
+        XCTAssertTrue(result.appliedFiles.contains { $0.path == "data/maps/map_groups.json" && $0.backupPath != nil })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedFiles.first { $0.path == "data/maps/map_groups.json" }?.backupPath ?? ""))
+        let duplicatedMap = try String(contentsOf: root.appendingPathComponent("data/maps/CodexTest/map.json"), encoding: .utf8)
+        XCTAssertTrue(duplicatedMap.contains("MAP_CODEX_TEST"))
+        XCTAssertTrue(duplicatedMap.contains("CodexTest"))
+        XCTAssertTrue(duplicatedMap.contains("LAYOUT_OLDALE_TOWN_COPY"))
+        let mapGroups = try String(contentsOf: root.appendingPathComponent("data/maps/map_groups.json"), encoding: .utf8)
+        XCTAssertTrue(mapGroups.contains("\"OldaleTown\", \"CodexTest\""))
     }
 
     func testExternalChangeDiagnosticsReportHashMismatch() throws {
@@ -125,18 +139,87 @@ final class MapWorkflowPlanTests: XCTestCase {
         XCTAssertTrue(blocked.diagnostics.contains { $0.code == "MAP_PREFAB_PASTE_OUT_OF_BOUNDS" })
     }
 
-    func testVisualExportPlansIgnoredArtifactWithoutWriting() throws {
+    func testDuplicationApplyBlocksStaleSnapshots() throws {
+        let root = try makeTemporaryProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try write(#"{"id":"MAP_OLDALE_TOWN","name":"OldaleTown","layout":"LAYOUT_OLDALE_TOWN"}"#, to: root.appendingPathComponent("data/maps/OldaleTown/map.json"))
+        try write("[\"OldaleTown\"]", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write(#"{"layouts":[{"id":"LAYOUT_OLDALE_TOWN","name":"OldaleTown"}]}"#, to: root.appendingPathComponent("data/layouts/layouts.json"))
+
+        let catalog = ProjectMapCatalog(
+            id: "emerald",
+            rootPath: root.path,
+            profile: .pokeemerald,
+            mapGroups: [],
+            maps: [
+                MapDescriptor(
+                    id: "MAP_OLDALE_TOWN",
+                    name: "OldaleTown",
+                    sourcePath: "data/maps/OldaleTown/map.json",
+                    groupID: nil,
+                    groupIndex: nil,
+                    mapIndexInGroup: nil,
+                    layout: "LAYOUT_OLDALE_TOWN",
+                    layoutSlotIndex: 0,
+                    music: nil,
+                    mapType: nil,
+                    weather: nil,
+                    regionMapSection: nil,
+                    floorNumber: nil,
+                    sharedEventsMap: nil,
+                    sharedScriptsMap: nil
+                )
+            ],
+            layoutSlots: [
+                LayoutSlot(
+                    slotIndex: 0,
+                    layoutID: "LAYOUT_OLDALE_TOWN",
+                    name: "OldaleTown",
+                    width: 2,
+                    height: 2,
+                    borderWidth: nil,
+                    borderHeight: nil,
+                    primaryTileset: nil,
+                    secondaryTileset: nil,
+                    borderFilepath: nil,
+                    blockdataFilepath: nil,
+                    sourcePath: "data/layouts/layouts.json"
+                )
+            ]
+        )
+        let plan = MapWorkflowPlanner.planDuplication(
+            catalog: catalog,
+            sourceMapID: "MAP_OLDALE_TOWN",
+            proposedMapID: "MAP_CODEX_TEST",
+            proposedMapName: "CodexTest"
+        )
+        try write("[\"OldaleTown\", \"Changed\"]", to: root.appendingPathComponent("data/maps/map_groups.json"))
+
+        let result = try MapWorkflowApplier.applyDuplication(plan: plan)
+
+        XCTAssertTrue(result.appliedFiles.isEmpty)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "MAP_WORKFLOW_SOURCE_HASH_MISMATCH" || $0.code == "MAP_WORKFLOW_SOURCE_SIZE_MISMATCH" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("data/maps/CodexTest/map.json").path))
+    }
+
+    func testVisualExportPlansAndWritesIgnoredArtifact() throws {
         let root = try makeTemporaryProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let document = makeMapVisualDocument(root: root)
-        let plan = MapWorkflowPlanner.planVisualExport(document: document, format: .png, fileStem: "test-room")
+        let plan = MapWorkflowPlanner.planVisualExport(document: document, format: .json, fileStem: "test-room")
 
-        XCTAssertFalse(plan.executionState.canExport)
-        XCTAssertEqual(plan.artifacts.first?.relativePath, ".pokemonhackstudio/exports/maps/test-room.png")
+        XCTAssertTrue(plan.executionState.canExport)
+        XCTAssertEqual(plan.artifacts.first?.relativePath, ".pokemonhackstudio/exports/maps/test-room.json")
         XCTAssertEqual(plan.artifacts.first?.role, .artifact)
         XCTAssertTrue(plan.artifacts.first?.isIgnoredWorkspaceArtifact == true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: plan.artifacts[0].absolutePath))
+
+        let result = try MapVisualExportWriter.export(plan: plan)
+        XCTAssertEqual(result.relativePath, ".pokemonhackstudio/exports/maps/test-room.json")
+        XCTAssertGreaterThan(result.byteCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: plan.artifacts[0].absolutePath))
     }
 
     private func makeMapVisualDocument(root: URL) -> MapVisualDocument {

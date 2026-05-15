@@ -103,11 +103,18 @@ struct ModuleDetailView: View {
                 loadStatus: store.trainerCatalogLoadStatus,
                 fallbackRecords: store.records(for: .trainers),
                 speciesCatalog: store.selectedSpeciesCatalog,
+                assetSources: store.selectedTrainerAssetSources,
                 onLoadCatalog: {
                     store.loadSelectedTrainerCatalogIfNeeded()
                 },
                 onSelectTrainer: store.requestTrainerSelection,
                 onUpdateDraft: store.updateSelectedTrainerDraft,
+                onImportAsset: { kind, url in
+                    store.importSelectedTrainerAsset(kind: kind, from: url)
+                },
+                assetImportBlockedReason: { kind in
+                    store.selectedTrainerAssetImportBlockedReason(kind: kind)
+                },
                 onFocusSpecies: { speciesID in
                     store.focusSpecies(speciesID)
                 }

@@ -315,6 +315,62 @@ public struct ProjectTrainerCatalog: Codable, Equatable {
     }
 }
 
+public enum TrainerAssetKind: String, Codable, Equatable, CaseIterable {
+    case frontSprite
+    case palette
+
+    public var title: String {
+        switch self {
+        case .frontSprite:
+            return "Trainer front sprite"
+        case .palette:
+            return "Trainer palette"
+        }
+    }
+
+    public var expectedContent: SourceAssetImportExpectedContent {
+        switch self {
+        case .frontSprite:
+            return .png
+        case .palette:
+            return .sourcePalette
+        }
+    }
+}
+
+public struct TrainerAssetSource: Codable, Equatable, Identifiable {
+    public var id: String { "\(trainerPic):\(kind.rawValue)" }
+
+    public let kind: TrainerAssetKind
+    public let trainerPic: String
+    public let relativePath: String?
+    public let generatedReferencePath: String?
+    public let exists: Bool
+    public let isExplicitSource: Bool
+    public let sharedTrainerCount: Int
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        kind: TrainerAssetKind,
+        trainerPic: String,
+        relativePath: String?,
+        generatedReferencePath: String? = nil,
+        exists: Bool,
+        isExplicitSource: Bool,
+        sharedTrainerCount: Int,
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.kind = kind
+        self.trainerPic = trainerPic
+        self.relativePath = relativePath
+        self.generatedReferencePath = generatedReferencePath
+        self.exists = exists
+        self.isExplicitSource = isExplicitSource
+        self.sharedTrainerCount = sharedTrainerCount
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct TrainerPartyPokemonDraft: Codable, Equatable, Identifiable {
     public var id: Int { slot }
 
@@ -365,6 +421,8 @@ public struct TrainerEditDraft: Codable, Equatable, Identifiable {
     public var partyShape: TrainerPartyShape
     public var partySymbol: String
     public var party: [TrainerPartyPokemonDraft]
+    public var assetData: [TrainerAssetKind: Data]
+    public var assetImports: [TrainerAssetKind: SourceAssetImportProvenance]
 
     public init(
         trainerID: String,
@@ -377,7 +435,9 @@ public struct TrainerEditDraft: Codable, Equatable, Identifiable {
         aiFlags: [String],
         partyShape: TrainerPartyShape,
         partySymbol: String,
-        party: [TrainerPartyPokemonDraft]
+        party: [TrainerPartyPokemonDraft],
+        assetData: [TrainerAssetKind: Data] = [:],
+        assetImports: [TrainerAssetKind: SourceAssetImportProvenance] = [:]
     ) {
         self.trainerID = trainerID
         self.trainerName = trainerName
@@ -390,6 +450,8 @@ public struct TrainerEditDraft: Codable, Equatable, Identifiable {
         self.partyShape = partyShape
         self.partySymbol = partySymbol
         self.party = party
+        self.assetData = assetData
+        self.assetImports = assetImports
     }
 
     public init?(detail: TrainerDetail) {
@@ -419,8 +481,43 @@ public struct TrainerEditDraft: Codable, Equatable, Identifiable {
                     moves: $0.moves.isEmpty ? $0.defaultMoves : $0.moves,
                     defaultMoves: $0.defaultMoves
                 )
-            }
+            },
+            assetData: [:],
+            assetImports: [:]
         )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case trainerID
+        case trainerName
+        case trainerClass
+        case encounterMusicGender
+        case trainerPic
+        case trainerItems
+        case doubleBattle
+        case aiFlags
+        case partyShape
+        case partySymbol
+        case party
+        case assetData
+        case assetImports
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.trainerID = try container.decode(String.self, forKey: .trainerID)
+        self.trainerName = try container.decode(String.self, forKey: .trainerName)
+        self.trainerClass = try container.decode(String.self, forKey: .trainerClass)
+        self.encounterMusicGender = try container.decode(String.self, forKey: .encounterMusicGender)
+        self.trainerPic = try container.decode(String.self, forKey: .trainerPic)
+        self.trainerItems = try container.decode([String].self, forKey: .trainerItems)
+        self.doubleBattle = try container.decode(Bool.self, forKey: .doubleBattle)
+        self.aiFlags = try container.decode([String].self, forKey: .aiFlags)
+        self.partyShape = try container.decode(TrainerPartyShape.self, forKey: .partyShape)
+        self.partySymbol = try container.decode(String.self, forKey: .partySymbol)
+        self.party = try container.decode([TrainerPartyPokemonDraft].self, forKey: .party)
+        self.assetData = try container.decodeIfPresent([TrainerAssetKind: Data].self, forKey: .assetData) ?? [:]
+        self.assetImports = try container.decodeIfPresent([TrainerAssetKind: SourceAssetImportProvenance].self, forKey: .assetImports) ?? [:]
     }
 }
 
@@ -906,6 +1003,250 @@ public enum ProjectTrainerCatalogBuilder {
     }
 }
 
+public enum TrainerAssetResolver {
+    public static func sources(
+        catalog: ProjectTrainerCatalog,
+        trainer: TrainerDetail,
+        fileManager: FileManager = .default
+    ) -> [TrainerAssetSource] {
+        TrainerAssetKind.allCases.compactMap {
+            source(kind: $0, catalog: catalog, trainer: trainer, fileManager: fileManager)
+        }
+    }
+
+    public static func source(
+        kind: TrainerAssetKind,
+        catalog: ProjectTrainerCatalog,
+        trainer: TrainerDetail,
+        fileManager: FileManager = .default
+    ) -> TrainerAssetSource? {
+        let root = URL(fileURLWithPath: catalog.root.path).standardizedFileURL
+        let graphicsPath = "src/data/graphics/trainers.h"
+        let graphicsURL = root.appendingPathComponent(graphicsPath)
+        let sharedCount = max(1, catalog.trainers.filter { $0.trainerPic == trainer.trainerPic }.count)
+        guard fileManager.fileExists(atPath: graphicsURL.path), let text = try? readText(graphicsURL) else {
+            return TrainerAssetSource(
+                kind: kind,
+                trainerPic: trainer.trainerPic,
+                relativePath: nil,
+                exists: false,
+                isExplicitSource: false,
+                sharedTrainerCount: sharedCount,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_GRAPHICS_SOURCE_MISSING",
+                        message: "Trainer graphics references are missing at \(graphicsPath).",
+                        span: SourceSpan(relativePath: graphicsPath, startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        let references = trainerGraphicsReferences(in: text, relativePath: graphicsPath)
+        let normalizedPic = normalizedTrainerPicKey(trainer.trainerPic)
+        guard let reference = references.first(where: { $0.kind == kind && normalizedTrainerPicKey($0.suffix) == normalizedPic }) else {
+            return TrainerAssetSource(
+                kind: kind,
+                trainerPic: trainer.trainerPic,
+                relativePath: nil,
+                exists: false,
+                isExplicitSource: false,
+                sharedTrainerCount: sharedCount,
+                diagnostics: sharedDiagnostics(kind: kind, trainer: trainer, sharedCount: sharedCount) + [
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_SOURCE_UNRESOLVED",
+                        message: "No \(kind.title) source reference was found for \(trainer.trainerPic).",
+                        span: SourceSpan(relativePath: graphicsPath, startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        let resolved = resolvedSourcePath(for: reference)
+        let sourcePath = resolved.relativePath
+        let exists = sourcePath.map { fileManager.fileExists(atPath: root.appendingPathComponent($0).path) } ?? false
+        var diagnostics = sharedDiagnostics(kind: kind, trainer: trainer, sharedCount: sharedCount)
+        diagnostics.append(contentsOf: resolved.diagnostics)
+        if let sourcePath, !exists {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_SOURCE_MISSING",
+                    message: "Existing \(kind.title) source file is required before replacement: \(sourcePath).",
+                    span: SourceSpan(relativePath: sourcePath, startLine: 1)
+                )
+            )
+        }
+
+        return TrainerAssetSource(
+            kind: kind,
+            trainerPic: trainer.trainerPic,
+            relativePath: sourcePath,
+            generatedReferencePath: reference.rawPath,
+            exists: exists,
+            isExplicitSource: resolved.isExplicitSource && exists,
+            sharedTrainerCount: sharedCount,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func sharedDiagnostics(kind: TrainerAssetKind, trainer: TrainerDetail, sharedCount: Int) -> [Diagnostic] {
+        guard sharedCount > 1 else { return [] }
+        return [
+            Diagnostic(
+                severity: .warning,
+                code: "TRAINER_ASSET_SHARED_PIC",
+                message: "\(kind.title) replacement for \(trainer.trainerPic) may affect \(sharedCount) trainers that share the same pic constant.",
+                span: trainer.sourceSpan
+            )
+        ]
+    }
+
+    private static func trainerGraphicsReferences(in text: String, relativePath: String) -> [TrainerGraphicsReference] {
+        let pattern = #"(?m)^\s*const\s+u32\s+gTrainer(FrontPic|Palette)_([A-Za-z0-9]+)\[\]\s*=\s*INC(?:GFX|BIN)_U32\s*\(\s*"([^"]+)""#
+        let lineNumbers = LineNumberIndex(text: text)
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: nsRange).compactMap { match in
+            guard
+                match.numberOfRanges >= 4,
+                let kindRange = Range(match.range(at: 1), in: text),
+                let suffixRange = Range(match.range(at: 2), in: text),
+                let pathRange = Range(match.range(at: 3), in: text)
+            else { return nil }
+            let kind: TrainerAssetKind = String(text[kindRange]) == "FrontPic" ? .frontSprite : .palette
+            return TrainerGraphicsReference(
+                kind: kind,
+                suffix: String(text[suffixRange]),
+                rawPath: String(text[pathRange]),
+                span: SourceSpan(
+                    relativePath: relativePath,
+                    startLine: lineNumbers.lineNumber(at: text.distance(from: text.startIndex, to: pathRange.lowerBound))
+                )
+            )
+        }
+    }
+
+    private static func resolvedSourcePath(for reference: TrainerGraphicsReference) -> TrainerResolvedAssetSource {
+        let path = reference.rawPath
+        let lowercased = path.lowercased()
+        switch reference.kind {
+        case .frontSprite:
+            if lowercased.hasSuffix(".png") {
+                return TrainerResolvedAssetSource(relativePath: path, isExplicitSource: true, diagnostics: sourcePathDiagnostics(path: path, span: reference.span))
+            }
+            let uncompressed = pathWithoutLZ(path)
+            if uncompressed.lowercased().hasSuffix(".4bpp") {
+                let sourcePath = String(uncompressed.dropLast(".4bpp".count)) + ".png"
+                return TrainerResolvedAssetSource(relativePath: sourcePath, isExplicitSource: true, diagnostics: sourcePathDiagnostics(path: sourcePath, span: reference.span))
+            }
+            return TrainerResolvedAssetSource(
+                relativePath: nil,
+                isExplicitSource: false,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_FRONT_SOURCE_UNSUPPORTED",
+                        message: "Trainer front sprite replacement requires an existing source PNG, but \(path) is not a supported source-backed reference.",
+                        span: reference.span
+                    )
+                ]
+            )
+
+        case .palette:
+            if lowercased.hasSuffix(".pal") {
+                return TrainerResolvedAssetSource(relativePath: path, isExplicitSource: true, diagnostics: sourcePathDiagnostics(path: path, span: reference.span))
+            }
+            if lowercased.hasSuffix(".png") {
+                return TrainerResolvedAssetSource(
+                    relativePath: nil,
+                    isExplicitSource: false,
+                    diagnostics: [
+                        Diagnostic(
+                            severity: .error,
+                            code: "TRAINER_ASSET_PALETTE_GENERATED_FROM_PNG",
+                            message: "Trainer palette replacement requires an explicit source .pal file; \(path) derives palette data from a PNG.",
+                            span: reference.span
+                        )
+                    ]
+                )
+            }
+            let uncompressed = pathWithoutLZ(path)
+            if uncompressed.lowercased().hasSuffix(".gbapal") {
+                let sourcePath = String(uncompressed.dropLast(".gbapal".count)) + ".pal"
+                return TrainerResolvedAssetSource(relativePath: sourcePath, isExplicitSource: true, diagnostics: sourcePathDiagnostics(path: sourcePath, span: reference.span))
+            }
+            return TrainerResolvedAssetSource(
+                relativePath: nil,
+                isExplicitSource: false,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_PALETTE_SOURCE_UNSUPPORTED",
+                        message: "Trainer palette replacement requires an existing source .pal file, but \(path) is not a supported source-backed reference.",
+                        span: reference.span
+                    )
+                ]
+            )
+        }
+    }
+
+    private static func sourcePathDiagnostics(path: String, span: SourceSpan) -> [Diagnostic] {
+        if path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.hasPrefix("/") || path.split(separator: "/").contains("..") {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_SOURCE_PATH_UNSAFE",
+                    message: "Trainer asset source path must stay inside the project source tree.",
+                    span: span
+                )
+            ]
+        }
+        let lowercased = path.lowercased()
+        if lowercased.contains("/build/") || lowercased.contains(".4bpp") || lowercased.contains(".gbapal") || lowercased.hasSuffix(".lz") {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_GENERATED_OUTPUT_BLOCKED",
+                    message: "Trainer asset replacement must target source PNG or .pal files, not generated outputs.",
+                    span: span
+                )
+            ]
+        }
+        return []
+    }
+
+    private static func pathWithoutLZ(_ path: String) -> String {
+        path.lowercased().hasSuffix(".lz") ? String(path.dropLast(3)) : path
+    }
+}
+
+private struct TrainerGraphicsReference {
+    let kind: TrainerAssetKind
+    let suffix: String
+    let rawPath: String
+    let span: SourceSpan
+}
+
+private struct TrainerResolvedAssetSource {
+    let relativePath: String?
+    let isExplicitSource: Bool
+    let diagnostics: [Diagnostic]
+}
+
+private func normalizedTrainerPicKey(_ value: String) -> String {
+    var normalized = value
+    if normalized.hasPrefix("TRAINER_PIC_") {
+        normalized.removeFirst("TRAINER_PIC_".count)
+    }
+    return normalized
+        .filter { $0.isLetter || $0.isNumber }
+        .map { String($0).lowercased() }
+        .joined()
+}
+
 public enum TrainerMutationPlanner {
     public static func plan(
         catalog: ProjectTrainerCatalog,
@@ -933,6 +1274,7 @@ public enum TrainerMutationPlanner {
         }
 
         var diagnostics = plannerDiagnostics(catalog: catalog, trainer: trainer, draft: draft)
+        diagnostics.append(contentsOf: assetDiagnostics(catalog: catalog, trainer: trainer, draft: draft, root: root, fileManager: fileManager))
         var changes: [TrainerEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -957,6 +1299,7 @@ public enum TrainerMutationPlanner {
                     Diagnostic(severity: .error, code: "TRAINER_PARTY_SPAN_MISSING", message: "\(draft.trainerID) has no editable party source span.")
                 )
             }
+            changes.append(contentsOf: assetChanges(catalog: catalog, trainer: trainer, draft: draft, root: root, fileManager: fileManager))
         }
 
         let plannedChanges = changes.map {
@@ -1069,6 +1412,148 @@ public enum TrainerMutationPlanner {
         let known = constants[group] ?? []
         for symbol in Set(symbols) where !symbol.isEmpty && !known.contains(symbol) {
             diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_DRAFT_CONSTANT_UNRESOLVED", message: "\(symbol) is not defined in the current project constants.", span: trainer.sourceSpan))
+        }
+    }
+
+    private static func assetDiagnostics(
+        catalog: ProjectTrainerCatalog,
+        trainer: TrainerDetail,
+        draft: TrainerEditDraft,
+        root: URL,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        draft.assetData.keys.sorted { $0.rawValue < $1.rawValue }.flatMap { kind -> [Diagnostic] in
+            guard let data = draft.assetData[kind] else { return [] }
+            guard let source = TrainerAssetResolver.source(kind: kind, catalog: catalog, trainer: trainer, fileManager: fileManager) else {
+                return [
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_SOURCE_UNRESOLVED",
+                        message: "No \(kind.title) source could be resolved for \(trainer.trainerPic).",
+                        span: trainer.sourceSpan
+                    )
+                ]
+            }
+            var diagnostics = source.diagnostics
+            guard let relativePath = source.relativePath else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_SOURCE_UNRESOLVED",
+                        message: "\(kind.title) replacement requires an explicit existing source file for \(trainer.trainerPic).",
+                        span: trainer.sourceSpan
+                    )
+                )
+                return diagnostics
+            }
+            if !source.isExplicitSource || !source.exists {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_SOURCE_NOT_APPLYABLE",
+                        message: "\(kind.title) replacement is blocked until \(relativePath) resolves to an existing source PNG or .pal file.",
+                        span: SourceSpan(relativePath: relativePath, startLine: 1)
+                    )
+                )
+            }
+            diagnostics.append(contentsOf: validateTrainerAssetPath(kind: kind, path: relativePath, trainer: trainer))
+            let provenance = SourceAssetImportValidator.provenance(
+                sourcePath: draft.assetImports[kind]?.sourcePath ?? relativePath,
+                expectedContent: kind.expectedContent,
+                targetPath: relativePath,
+                data: data
+            )
+            diagnostics.append(contentsOf: provenance.diagnostics)
+            if !fileManager.fileExists(atPath: root.appendingPathComponent(relativePath).path) {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "TRAINER_ASSET_SOURCE_MISSING",
+                        message: "Trainer asset source is missing before replacement: \(relativePath).",
+                        span: SourceSpan(relativePath: relativePath, startLine: 1)
+                    )
+                )
+            }
+            return diagnostics
+        }
+    }
+
+    private static func validateTrainerAssetPath(kind: TrainerAssetKind, path: String, trainer: TrainerDetail) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let lowercased = path.lowercased()
+        if path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.hasPrefix("/") || path.split(separator: "/").contains("..") {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_PATH_UNSAFE",
+                    message: "Trainer asset path must stay inside the project source tree.",
+                    span: trainer.sourceSpan
+                )
+            )
+        }
+        if lowercased.contains(".4bpp") || lowercased.contains(".gbapal") || lowercased.contains("/build/") || lowercased.hasSuffix(".lz") {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_GENERATED_OUTPUT_BLOCKED",
+                    message: "Trainer asset imports must target source PNG or .pal files, not generated outputs.",
+                    span: trainer.sourceSpan
+                )
+            )
+        }
+        switch kind {
+        case .frontSprite where !lowercased.hasSuffix(".png"):
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_KIND_PATH_MISMATCH",
+                    message: "Trainer front sprite imports must target a PNG source path.",
+                    span: trainer.sourceSpan
+                )
+            )
+        case .palette where !lowercased.hasSuffix(".pal"):
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_ASSET_KIND_PATH_MISMATCH",
+                    message: "Trainer palette imports must target a .pal source path.",
+                    span: trainer.sourceSpan
+                )
+            )
+        default:
+            break
+        }
+        return diagnostics
+    }
+
+    private static func assetChanges(
+        catalog: ProjectTrainerCatalog,
+        trainer: TrainerDetail,
+        draft: TrainerEditDraft,
+        root: URL,
+        fileManager: FileManager
+    ) -> [TrainerEditFileChange] {
+        draft.assetData.keys.sorted { $0.rawValue < $1.rawValue }.compactMap { kind in
+            guard
+                let data = draft.assetData[kind],
+                let source = TrainerAssetResolver.source(kind: kind, catalog: catalog, trainer: trainer, fileManager: fileManager),
+                source.isExplicitSource,
+                let relativePath = source.relativePath
+            else {
+                return nil
+            }
+            let url = root.appendingPathComponent(relativePath)
+            let originalData = try? Data(contentsOf: url)
+            guard originalData != data else { return nil }
+            return TrainerEditFileChange(
+                path: relativePath,
+                summary: "Replace \(kind.title.lowercased()) asset",
+                originalByteCount: originalData?.count ?? 0,
+                originalSHA1: originalData.map { pokemonHackSHA1Hex($0) },
+                newByteCount: data.count,
+                newData: data,
+                textPreview: nil
+            )
         }
     }
 

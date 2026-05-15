@@ -2,7 +2,7 @@
 
 PokemonHackStudio is intended to become an all-in-one, Apple Silicon native Pokemon GBA + NDS ROM hacking workbench. The reference repos are a product and compatibility map, not a source pool. Default adoption is clean-room Swift implementation unless a future license review explicitly approves copying code, schemas, assets, tests, or UI text.
 
-The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/reference-repos` canonical for PokemonHackStudio reference metadata and clones. Use `docs/index.json` and per-repo central profiles there for current HEAD, license posture, reuse class, and tags. The ignored local `references/*` paths are compatibility aliases to central clone roots, while active editable decomp source trees in the PokemonHackStudio working folder remain local project inputs. The later May 12 expansion added central profiles for additional NDS, Gen III binary extraction, CFRU, devkitPro, tilemap, and alternate emulator/debugger references without adding product code. Selected DS/NDS and emulator/tooling entries now also have local `references/*` compatibility aliases, while binary-extraction, CFRU, and devkitPro additions remain central-profile-first.
+The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/reference-repos` canonical for PokemonHackStudio reference metadata and clones. Use `docs/index.json` and per-repo central profiles there for current HEAD, license posture, reuse class, and tags. The ignored local `references/*` paths are compatibility aliases to central clone roots, while active editable decomp source trees in the PokemonHackStudio working folder remain local project inputs. The later May 12 expansion added central profiles for additional NDS, Gen III binary extraction, CFRU, devkitPro, tilemap, and alternate emulator/debugger references without adding product code. Selected DS/NDS and emulator/tooling entries now also have local `references/*` compatibility aliases, while binary-extraction, CFRU, and devkitPro additions remain central-profile-first. The May 14, 2026 central index snapshot records 129 unique repositories and 59 PokemonHackStudio-tagged profiles; the product-local `references/manifest.json` remains the original 30-entry bench unless a future row explicitly adds compatibility aliases.
 
 ## Product Direction
 
@@ -75,21 +75,21 @@ The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/re
 | Patch pipeline | RomPatcher.js, HMA, mGBA | IPS/BPS/UPS/APS-GBA parse/apply/export, checksum validation, patch manifests |
 | Build and validation | pokeemerald, pokefirered, pokeruby, Expansion, agbcc, devkitPro libgba/buildscripts | Make target previews, toolchain checks, generated freshness, diagnostics, build logs, memory usage |
 | Playtest/debug | mGBA, BizHawk, VisualBoyAdvance-M, melonDS/DeSmuME candidates, Expansion tests | Run Hack, headless test plan, screenshots, savestates, symbols, break/watchpoints |
-| Migration/import | PGE, Expansion migration scripts, Porytiles | INI/PNG/WAV import, migration dry runs, source span preserving rewrites |
+| Migration/import | PGE, Expansion migration scripts, Porytiles, pkmn-rom-extract | INI/PNG/WAV import, migration dry runs, source span preserving rewrites, `migration-coverage <path> --json` source-first/binary-only diagnostics |
 | Asset import/provenance | Team Aqua Asset Repo, Porytiles, porypal, PGE | Local asset catalog, credit metadata, conversion boundaries, no bundled third-party assets |
 
 ## Reference-Review Candidate Queue
 
-The May 12, 2026 subagent review against the dirty tree did not reopen shipped rows. It sharpened these current candidates:
+The May 12, 2026 subagent review against the dirty tree did not reopen shipped rows. The later NDS/reference push completed `PHS-T94` through `PHS-T101`, so the current queue should strengthen validation and migration coverage before widening more writers:
 
 - `PHS-T73`: patch apply/export should write only ignored output ROMs plus backup/export manifests after explicit user action; source-tree mutation remains out of scope.
 - `PHS-T76`: Poryscript follow-through starts with `.pory` detection, generated `.inc` relationships, poryswitch/line-marker facts, and blocked compiler/apply guidance.
 - `PHS-T78`: Expansion work should split into one semantic writer family at a time instead of a broad adapter rewrite.
 - `PHS-T79`: binary mutation needs preflight, manifest, backup, hash-drift refusal, and mutation-plan review before any ROM byte write.
-- `PHS-T92` and `PHS-T93`: ROM-only work remains migration/extraction planning and source-first coverage diagnostics before export or extraction writers.
-- `PHS-T94` through `PHS-T100`: the next NDS-friendly queue covers graphics/container previews, map/script/text readiness, text bank previews, semantic data expansion, extracted-directory migration planning, and member fingerprinting.
+- `PHS-T92` and `PHS-T93`: ROM-only work remains migration/extraction planning and source-first coverage diagnostics before export or extraction writers; the first shared diagnostic surface is `migration-coverage <path> --json`.
+- `PHS-T94` through `PHS-T101`: completed NDS read-only catalog, preview, and manual workflow rows remain the baseline; future NDS work should expand one semantic domain at a time, starting with Platinum before HGSS/DP.
 
-Preferred first implementation picks are `PHS-T94` or `PHS-T95`, because they build on the completed NDS read-only catalog and keep all NARC/ROM/source writes disabled.
+Preferred next implementation picks are `PHS-T83` for related-record context panels, then narrow compatibility splits from `PHS-T57`, plus bounded `PHS-T75`, `PHS-T84`, `PHS-T76`, and `PHS-T77` authoring rows. Keep `PHS-T93` coverage diagnostics ahead of `PHS-T92` ROM asset migration planning.
 
 ## Implementation Lanes
 

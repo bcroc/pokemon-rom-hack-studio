@@ -66,13 +66,17 @@ struct PokemonMovesWorkbenchView: View {
         VStack(alignment: .leading, spacing: layoutMode.sectionSpacing) {
             if layoutMode.isCompact {
                 VStack(alignment: .leading, spacing: 10) {
+                    moveSwitcher(catalog)
                     titleBlock(catalog)
                     StatusPill(state: catalog.status)
                     filterControls(catalog)
                 }
             } else {
                 HStack(alignment: .top, spacing: 12) {
-                    titleBlock(catalog)
+                    VStack(alignment: .leading, spacing: 10) {
+                        moveSwitcher(catalog)
+                        titleBlock(catalog)
+                    }
 
                     Spacer()
 
@@ -109,6 +113,32 @@ struct PokemonMovesWorkbenchView: View {
                 .truncationMode(.middle)
                 .textSelection(.enabled)
         }
+    }
+
+    private func moveSwitcher(_ catalog: MoveCatalogViewState) -> some View {
+        EditorRecordSwitcher(
+            title: "Switch Move",
+            selectedTitle: selectedMove?.displayName ?? "No Move Selected",
+            selectedSubtitle: selectedMove?.moveID,
+            systemImage: WorkbenchModule.moves.systemImage,
+            items: catalog.moves.map(moveSwitcherItem),
+            selectedID: selectedMoveID,
+            emptyTitle: "No Moves",
+            emptyDescription: "No moves matched the current search.",
+            onSelect: { selectedMoveID = $0 }
+        )
+    }
+
+    private func moveSwitcherItem(_ move: MoveDetailViewState) -> EditorRecordSwitcherItem {
+        EditorRecordSwitcherItem(
+            id: move.moveID,
+            title: move.displayName,
+            subtitle: move.moveID,
+            detail: "\(move.learnerCount) linked learners",
+            systemImage: WorkbenchModule.moves.systemImage,
+            status: move.status,
+            searchText: move.searchBlob
+        )
     }
 
     private func filterControls(_ catalog: MoveCatalogViewState) -> some View {

@@ -87,6 +87,137 @@ final class TrainerCatalogTests: XCTestCase {
         XCTAssertEqual(edited.party.first?.ivs, .uniform(14))
     }
 
+    func testTrainerAssetReplacementRequiresExistingSourceFilesAndWarnsForSharedPics() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        try writeTrainerGraphicsReferences(
+            at: temp.url,
+            frontReference: #"graphics/trainers/front_pics/hiker_front_pic.4bpp.lz"#,
+            paletteReference: #"graphics/trainers/palettes/hiker.gbapal.lz"#
+        )
+        try write(Data("old-front".utf8), to: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker_front_pic.png"))
+        try write(Data("old-palette".utf8), to: temp.url.appendingPathComponent("graphics/trainers/palettes/hiker.pal"))
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        let sources = TrainerAssetResolver.sources(catalog: catalog, trainer: trainer)
+
+        XCTAssertEqual(sources.first { $0.kind == .frontSprite }?.relativePath, "graphics/trainers/front_pics/hiker_front_pic.png")
+        XCTAssertEqual(sources.first { $0.kind == .palette }?.relativePath, "graphics/trainers/palettes/hiker.pal")
+        XCTAssertEqual(sources.first { $0.kind == .frontSprite }?.sharedTrainerCount, 2)
+
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        let replacementPNG = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let replacementPalette = testJASCPalette(colorCount: 16)
+        draft.assetData[.frontSprite] = replacementPNG
+        draft.assetData[.palette] = replacementPalette
+        draft.assetImports[.frontSprite] = SourceAssetImportValidator.provenance(
+            sourcePath: temp.url.appendingPathComponent("incoming/hiker.png").path,
+            expectedContent: .png,
+            targetPath: "graphics/trainers/front_pics/hiker_front_pic.png",
+            data: replacementPNG
+        )
+        draft.assetImports[.palette] = SourceAssetImportValidator.provenance(
+            sourcePath: temp.url.appendingPathComponent("incoming/hiker.pal").path,
+            expectedContent: .sourcePalette,
+            targetPath: "graphics/trainers/palettes/hiker.pal",
+            data: replacementPalette
+        )
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_ASSET_SHARED_PIC" && $0.severity == .warning })
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.contains { $0.path == "graphics/trainers/front_pics/hiker_front_pic.png" })
+        XCTAssertTrue(plan.changes.contains { $0.path == "graphics/trainers/palettes/hiker.pal" })
+
+        let result = try TrainerMutationApplier.apply(plan: plan)
+        XCTAssertTrue(result.appliedChanges.contains { $0.path == "graphics/trainers/front_pics/hiker_front_pic.png" })
+        XCTAssertEqual(try Data(contentsOf: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker_front_pic.png")), replacementPNG)
+        XCTAssertEqual(try Data(contentsOf: temp.url.appendingPathComponent("graphics/trainers/palettes/hiker.pal")), replacementPalette)
+    }
+
+    func testTrainerPaletteReplacementBlocksGeneratedPNGPaletteReferences() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        try writeTrainerGraphicsReferences(
+            at: temp.url,
+            frontReference: #"graphics/trainers/front_pics/hiker.png"#,
+            paletteReference: #"graphics/trainers/front_pics/hiker.png"#
+        )
+        try write(testPNGData(width: 64, height: 64, paletteColorCount: 16), to: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker.png"))
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.assetData[.palette] = testJASCPalette(colorCount: 16)
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_ASSET_PALETTE_GENERATED_FROM_PNG" })
+        XCTAssertFalse(plan.changes.contains { $0.path.hasSuffix(".pal") })
+    }
+
+    func testTrainerPaletteReplacementBlocksBinaryGBAPaletteBytesForSourceTargets() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        try writeTrainerGraphicsReferences(
+            at: temp.url,
+            frontReference: #"graphics/trainers/front_pics/hiker_front_pic.4bpp.lz"#,
+            paletteReference: #"graphics/trainers/palettes/hiker.gbapal.lz"#
+        )
+        try write(Data("old-front".utf8), to: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker_front_pic.png"))
+        try write(Data("old-palette".utf8), to: temp.url.appendingPathComponent("graphics/trainers/palettes/hiker.pal"))
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        let binaryPalette = Data(repeating: 0, count: 32)
+        let provenance = SourceAssetImportValidator.provenance(
+            sourcePath: temp.url.appendingPathComponent("incoming/hiker.gbapal").path,
+            expectedContent: .sourcePalette,
+            targetPath: "graphics/trainers/palettes/hiker.pal",
+            data: binaryPalette
+        )
+        draft.assetData[.palette] = binaryPalette
+        draft.assetImports[.palette] = provenance
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(provenance.status, .blocked)
+        XCTAssertTrue(provenance.diagnostics.contains { $0.code == "ASSET_IMPORT_BINARY_PALETTE_BLOCKED" })
+        XCTAssertFalse(plan.changes.contains { $0.path == "graphics/trainers/palettes/hiker.pal" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ASSET_IMPORT_BINARY_PALETTE_BLOCKED" })
+        XCTAssertFalse(plan.isApplyable)
+    }
+
+    func testTrainerAssetReplacementBlocksApplyAfterSourceHashChanges() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeEmeraldFixture(at: temp.url)
+        try writeTrainerGraphicsReferences(
+            at: temp.url,
+            frontReference: #"graphics/trainers/front_pics/hiker_front_pic.4bpp.lz"#,
+            paletteReference: #"graphics/trainers/palettes/hiker.gbapal.lz"#
+        )
+        try write(Data("old-front".utf8), to: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker_front_pic.png"))
+        try write(Data("old-palette".utf8), to: temp.url.appendingPathComponent("graphics/trainers/palettes/hiker.pal"))
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_DEFAULT" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.assetData[.frontSprite] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        try write(Data("changed-front".utf8), to: temp.url.appendingPathComponent("graphics/trainers/front_pics/hiker_front_pic.png"))
+
+        let applyability = plan.validateApplyability()
+
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "TRAINER_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "TRAINER_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
     func testTrainerMutationPlannerHandlesPartyRemovalAndItemUpdates() throws {
         let temp = try TrainerCatalogTemporaryDirectory()
         try writeEmeraldFixture(at: temp.url)
@@ -209,6 +340,16 @@ final class TrainerCatalogTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/trainer_parties.h")
+        )
+    }
+
+    private func writeTrainerGraphicsReferences(at root: URL, frontReference: String, paletteReference: String) throws {
+        try write(
+            """
+            const u32 gTrainerFrontPic_Hiker[] = INCBIN_U32("\(frontReference)");
+            const u32 gTrainerPalette_Hiker[] = INCGFX_U32("\(paletteReference)", ".gbapal.lz");
+            """,
+            to: root.appendingPathComponent("src/data/graphics/trainers.h")
         )
     }
 
@@ -436,6 +577,49 @@ final class TrainerCatalogTests: XCTestCase {
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func write(_ data: Data, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url)
+    }
+
+    private func testPNGData(width: UInt32, height: UInt32, paletteColorCount: Int? = nil) -> Data {
+        var data = Data([137, 80, 78, 71, 13, 10, 26, 10])
+        var ihdr = Data()
+        ihdr.appendTrainerTestUInt32BE(width)
+        ihdr.appendTrainerTestUInt32BE(height)
+        ihdr.append(contentsOf: [8, 3, 0, 0, 0])
+        data.appendTrainerTestPNGChunk(type: "IHDR", payload: ihdr)
+        if let paletteColorCount {
+            data.appendTrainerTestPNGChunk(type: "PLTE", payload: Data(repeating: 0, count: paletteColorCount * 3))
+        }
+        data.appendTrainerTestPNGChunk(type: "IEND", payload: Data())
+        return data
+    }
+
+    private func testJASCPalette(colorCount: Int) -> Data {
+        let colors = (0..<colorCount).map { index -> String in
+            let channel = (index * 8) % 256
+            return "\(channel) \(channel) \(channel)"
+        }
+        return Data(("JASC-PAL\n0100\n\(colorCount)\n" + colors.joined(separator: "\n") + "\n").utf8)
+    }
+}
+
+private extension Data {
+    mutating func appendTrainerTestUInt32BE(_ value: UInt32) {
+        append(UInt8((value >> 24) & 0xff))
+        append(UInt8((value >> 16) & 0xff))
+        append(UInt8((value >> 8) & 0xff))
+        append(UInt8(value & 0xff))
+    }
+
+    mutating func appendTrainerTestPNGChunk(type: String, payload: Data) {
+        appendTrainerTestUInt32BE(UInt32(payload.count))
+        append(contentsOf: type.utf8)
+        append(payload)
+        appendTrainerTestUInt32BE(0)
     }
 }
 

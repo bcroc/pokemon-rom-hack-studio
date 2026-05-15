@@ -227,7 +227,9 @@ extension WorkbenchStore {
             id: "ship-preview",
             title: "Prepare Patch & Playtest",
             subtitle: "Check build readiness, patch inputs, and playtest handoff reports.",
-            detail: "This workbench remains preview-only and never runs builds or writes ROM outputs.",
+            detail: selectedBuildReport?.isNDS == true
+                ? "NDS build and emulator actions remain manual guidance only; no tools, Docker, extraction, rebuilds, or ROM writes are run."
+                : "GBA projects can run declared make targets and external mGBA handoffs; patch apply/export and source writes remain locked behind preview/report flows.",
             systemImage: WorkbenchModule.build.systemImage,
             status: moduleStatus(for: .build),
             facts: [
@@ -237,7 +239,9 @@ extension WorkbenchStore {
             primaryAction: WorkbenchGuidedAction(
                 id: "open-ship",
                 title: "Open Build Readiness",
-                subtitle: "Review build, patch, and playtest preview reports.",
+                subtitle: selectedBuildReport?.isNDS == true
+                    ? "Review manual NDS setup, header, and declared-output guidance."
+                    : "Review build, patch, and playtest actions for the selected project.",
                 systemImage: WorkbenchModule.build.systemImage,
                 targetModule: .build,
                 buildTab: .build

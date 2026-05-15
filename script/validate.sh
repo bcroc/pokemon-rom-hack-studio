@@ -40,6 +40,7 @@ run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli graphics-impor
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-graph "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli rom-inspect "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli playtest-debug-plan "$PATCH_SMOKE_DIR/test.gba" --json
+run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli migration-coverage "$PATCH_SMOKE_DIR/test.gba" --json
 
 if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli inspect "$POKEEMERALD_DIR" --json
@@ -63,6 +64,7 @@ if [[ -d "$POKEEMERALD_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-outline "$POKEEMERALD_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-readiness "$POKEEMERALD_DIR" --map MAP_MAUVILLE_CITY --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKEEMERALD_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli migration-coverage "$POKEEMERALD_DIR" --json
 else
   printf '\n==> skipping pokeemerald CLI smoke; fixture not found at %s\n' "$POKEEMERALD_DIR"
 fi
@@ -75,6 +77,7 @@ if [[ -d "$POKEFIRERED_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKEFIRERED_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli script-readiness "$POKEFIRERED_DIR" --script PalletTown_EventScript_TryReadySignLady --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKEFIRERED_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli migration-coverage "$POKEFIRERED_DIR" --json
 else
   printf '\n==> skipping pokefirered toolchain-health smoke; fixture not found at %s\n' "$POKEFIRERED_DIR"
 fi
@@ -88,6 +91,7 @@ if [[ -d "$POKERUBY_REFERENCE_DIR" ]]; then
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli item-catalog "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli species-graph "$POKERUBY_REFERENCE_DIR" --json
   run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli toolchain-health "$POKERUBY_REFERENCE_DIR" --json
+  run_quiet swift run --package-path "$PACKAGE_DIR" pokemonhack-cli migration-coverage "$POKERUBY_REFERENCE_DIR" --json
 else
   printf '\n==> skipping pokeruby reference CLI smoke; fixture not found at %s\n' "$POKERUBY_REFERENCE_DIR"
 fi

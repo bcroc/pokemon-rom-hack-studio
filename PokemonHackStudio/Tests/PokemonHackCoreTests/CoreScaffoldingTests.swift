@@ -221,6 +221,47 @@ final class CoreScaffoldingTests: XCTestCase {
         XCTAssertFalse(report.diagnostics.contains { $0.code == "BUILD_TARGETS_EMPTY" })
     }
 
+    func testROMAssetMigrationPlanReportsReadOnlyPreviewAndBlockedTargets() throws {
+        let temp = try CoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("asset-plan.gba")
+        var bytes = [UInt8](repeating: 0xff, count: 0x240)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0xBC] = 0
+        let expected = UInt8((0x19 - bytes[0xA0...0xBC].reduce(0) { ($0 + Int($1)) & 0xff }) & 0xff)
+        bytes[0xBD] = expected
+        for index in 0..<64 {
+            bytes[0x140 + index] = UInt8((index % 31) + 1)
+        }
+        try Data(bytes).write(to: rom)
+
+        let report = try ROMAssetMigrationPlanBuilder.build(path: rom.path)
+
+        XCTAssertTrue(report.isReadOnly)
+        XCTAssertFalse(report.extractionEnabled)
+        XCTAssertFalse(report.exportEnabled)
+        XCTAssertEqual(report.profile, .binaryROM)
+        XCTAssertEqual(report.gameFamily, .emerald)
+        XCTAssertEqual(report.familyConfidence, "high")
+        XCTAssertEqual(report.coverageEntry?.recommendedFutureRow, "PHS-T92")
+        XCTAssertTrue(report.summary.familyPlanCount >= 6)
+        XCTAssertTrue(report.summary.blockedTargetCount > 0)
+        XCTAssertTrue(report.summary.tileCandidateCount > 0)
+        XCTAssertTrue(report.summary.paletteCandidateCount > 0)
+        XCTAssertTrue(report.summary.tilemapCandidateCount > 0)
+        XCTAssertTrue(report.familyPlans.allSatisfy { $0.status == .migrationPlanOnly })
+        XCTAssertTrue(report.familyPlans.allSatisfy { $0.blockedActions.contains("asset extraction") })
+        XCTAssertTrue(report.familyPlans.contains { plan in
+            plan.family == .pokemonSprites
+                && plan.sourceMigrationTarget.contains("pokeemerald")
+                && plan.blockedTargets.contains { $0.targetPath.contains("graphics/pokemon/<species>/front.png") }
+        })
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "ROM_ASSET_MIGRATION_PLAN_ONLY" })
+    }
+
     func testMapGroupIndexRoundTripsWithoutLosingGroups() throws {
         let json = Data(
             """

@@ -262,6 +262,59 @@ public struct MapVisualExportPlan: Codable, Equatable, Identifiable {
     }
 }
 
+public struct MapVisualExportResult: Codable, Equatable, Identifiable {
+    public var id: String { relativePath }
+
+    public let relativePath: String
+    public let absolutePath: String
+    public let byteCount: Int
+    public let sha1: String
+    public let diagnostics: [Diagnostic]
+
+    public init(relativePath: String, absolutePath: String, byteCount: Int, sha1: String, diagnostics: [Diagnostic] = []) {
+        self.relativePath = relativePath
+        self.absolutePath = absolutePath
+        self.byteCount = byteCount
+        self.sha1 = sha1
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct AppliedMapDuplicationFile: Codable, Equatable, Identifiable {
+    public var id: String { path }
+
+    public let path: String
+    public let action: MapDuplicationPlannedFileAction
+    public let backupPath: String?
+    public let byteCount: Int
+
+    public init(path: String, action: MapDuplicationPlannedFileAction, backupPath: String? = nil, byteCount: Int) {
+        self.path = path
+        self.action = action
+        self.backupPath = backupPath
+        self.byteCount = byteCount
+    }
+}
+
+public struct MapDuplicationApplyResult: Codable, Equatable {
+    public let backupRootPath: String
+    public let selectedMapID: String?
+    public let appliedFiles: [AppliedMapDuplicationFile]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        backupRootPath: String,
+        selectedMapID: String?,
+        appliedFiles: [AppliedMapDuplicationFile],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.backupRootPath = backupRootPath
+        self.selectedMapID = selectedMapID
+        self.appliedFiles = appliedFiles
+        self.diagnostics = diagnostics
+    }
+}
+
 public enum MapWorkflowPlanner {
     public static func planDuplication(
         catalog: ProjectMapCatalog,
@@ -639,17 +692,17 @@ public enum MapWorkflowPlanner {
         )
         let diagnostic = Diagnostic(
             severity: .info,
-            code: "MAP_VISUAL_EXPORT_PREVIEW_ONLY",
-            message: "Visual export is planned under .pokemonhackstudio/exports, but core export writes are disabled in this preview slice."
+            code: "MAP_VISUAL_EXPORT_IGNORED_ARTIFACT_READY",
+            message: "Visual export is scoped to ignored .pokemonhackstudio/exports artifacts."
         )
         let change = PlannedChange(
             path: relativePath,
-            summary: "Would write \(format.rawValue.uppercased()) map visual export for \(document.mapID).",
+            summary: "Write \(format.rawValue.uppercased()) map visual export for \(document.mapID).",
             span: SourceSpan(relativePath: relativePath, startLine: 1)
         )
         let mutationPlan = MutationPlan(
-            title: "Preview visual export for \(document.mapName)",
-            summary: "1 ignored workspace artifact planned; export is disabled.",
+            title: "Export visual artifact for \(document.mapName)",
+            summary: "1 ignored workspace artifact planned under .pokemonhackstudio/exports/maps.",
             changes: [change],
             diagnostics: [diagnostic],
             requiresExplicitApply: false
@@ -665,8 +718,8 @@ public enum MapWorkflowPlanner {
             diagnostics: [diagnostic],
             executionState: MapWorkflowExecutionState(
                 canApply: false,
-                canExport: false,
-                reasons: ["Visual export is preview-only and writes no files until an explicit exporter is implemented."]
+                canExport: artifact.isIgnoredWorkspaceArtifact,
+                reasons: artifact.isIgnoredWorkspaceArtifact ? [] : ["Visual export path must stay under ignored .pokemonhackstudio artifacts."]
             )
         )
     }
@@ -690,16 +743,20 @@ public enum MapWorkflowPlanner {
                 span: SourceSpan(relativePath: $0.destinationPath ?? $0.sourcePath, startLine: 1)
             )
         }
+        let canApply = diagnostics.allSatisfy { $0.severity != .error } && sourceSnapshots.allSatisfy(\.exists)
         let mutationPlan = MutationPlan(
             title: "Preview map duplication for \(proposedMapID)",
-            summary: "\(plannedFiles.count) source-tree file operation(s) planned; apply is disabled for this workflow slice.",
+            summary: "\(plannedFiles.count) source-tree file operation(s) planned with snapshot-gated apply.",
             changes: plannedChanges,
             diagnostics: diagnostics,
             requiresExplicitApply: true
         )
-        var reasons = ["Map/layout duplication apply is disabled until the workflow can be connected to a dedicated source-tree applier."]
+        var reasons: [String] = []
         if diagnostics.contains(where: { $0.severity == .error }) {
-            reasons.append("Resolve blocking diagnostics before any future source-tree apply.")
+            reasons.append("Resolve blocking diagnostics before source-tree apply.")
+        }
+        if sourceSnapshots.contains(where: { !$0.exists }) {
+            reasons.append("All source and index files must exist before duplication apply.")
         }
 
         return MapDuplicationPlan(
@@ -714,7 +771,7 @@ public enum MapWorkflowPlanner {
             plannedFiles: plannedFiles,
             mutationPlan: mutationPlan,
             diagnostics: diagnostics,
-            executionState: MapWorkflowExecutionState(canApply: false, canExport: false, reasons: reasons)
+            executionState: MapWorkflowExecutionState(canApply: canApply, canExport: false, reasons: reasons)
         )
     }
 
@@ -929,5 +986,258 @@ public enum MapWorkflowPlanner {
         path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || (path as NSString).isAbsolutePath
             || path.split(separator: "/").contains("..")
+    }
+}
+
+public enum MapVisualExportWriter {
+    public static func export(
+        plan: MapVisualExportPlan,
+        renderedData: Data? = nil,
+        fileManager: FileManager = .default
+    ) throws -> MapVisualExportResult {
+        guard let artifact = plan.artifacts.first else {
+            return MapVisualExportResult(relativePath: "", absolutePath: "", byteCount: 0, sha1: "", diagnostics: [
+                Diagnostic(severity: .error, code: "MAP_VISUAL_EXPORT_ARTIFACT_MISSING", message: "No visual export artifact path was planned.")
+            ])
+        }
+        var diagnostics = plan.diagnostics.filter { $0.severity == .error }
+        if !plan.executionState.canExport {
+            diagnostics.append(Diagnostic(severity: .error, code: "MAP_VISUAL_EXPORT_NOT_APPLYABLE", message: "Visual export plan is not exportable.", span: SourceSpan(relativePath: artifact.relativePath, startLine: 1)))
+        }
+        if !artifact.relativePath.hasPrefix(".pokemonhackstudio/exports/maps/") || isUnsafeMapWorkflowPath(artifact.relativePath) {
+            diagnostics.append(Diagnostic(severity: .error, code: "MAP_VISUAL_EXPORT_PATH_UNSAFE", message: "Visual export must stay under .pokemonhackstudio/exports/maps.", span: SourceSpan(relativePath: artifact.relativePath, startLine: 1)))
+        }
+
+        let data: Data
+        switch plan.format {
+        case .json:
+            data = try JSONEncoder().encode(
+                MapVisualExportMetadata(
+                    documentID: plan.documentID,
+                    mapID: plan.mapID,
+                    mapName: plan.mapName,
+                    artifactPath: artifact.relativePath
+                )
+            )
+        case .png:
+            guard let renderedData, !renderedData.isEmpty else {
+                diagnostics.append(Diagnostic(severity: .error, code: "MAP_VISUAL_EXPORT_RENDERED_DATA_MISSING", message: "PNG visual export requires rendered image bytes.", span: SourceSpan(relativePath: artifact.relativePath, startLine: 1)))
+                return MapVisualExportResult(relativePath: artifact.relativePath, absolutePath: artifact.absolutePath, byteCount: 0, sha1: "", diagnostics: diagnostics)
+            }
+            data = renderedData
+        }
+
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else {
+            return MapVisualExportResult(relativePath: artifact.relativePath, absolutePath: artifact.absolutePath, byteCount: 0, sha1: "", diagnostics: diagnostics)
+        }
+
+        let destination = URL(fileURLWithPath: artifact.absolutePath).standardizedFileURL
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
+        return MapVisualExportResult(
+            relativePath: artifact.relativePath,
+            absolutePath: destination.path,
+            byteCount: data.count,
+            sha1: pokemonHackSHA1Hex(data)
+        )
+    }
+}
+
+public enum MapWorkflowApplier {
+    public static func applyDuplication(
+        plan: MapDuplicationPlan,
+        fileManager: FileManager = .default
+    ) throws -> MapDuplicationApplyResult {
+        let root = URL(fileURLWithPath: plan.rootPath).standardizedFileURL
+        let backupRoot = root.appendingPathComponent(".pokemonhackstudio/backups/\(mapWorkflowBackupTimestamp())")
+        let diagnostics = duplicationPreflightDiagnostics(plan: plan, root: root, fileManager: fileManager)
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else {
+            return MapDuplicationApplyResult(
+                backupRootPath: backupRoot.path,
+                selectedMapID: nil,
+                appliedFiles: [],
+                diagnostics: diagnostics
+            )
+        }
+
+        try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
+        var applied: [AppliedMapDuplicationFile] = []
+        for file in plan.plannedFiles {
+            switch file.action {
+            case .copy:
+                guard let destinationPath = file.destinationPath else { continue }
+                let data = try Data(contentsOf: root.appendingPathComponent(file.sourcePath))
+                try writeMapWorkflowData(data, to: root.appendingPathComponent(destinationPath), fileManager: fileManager)
+                applied.append(AppliedMapDuplicationFile(path: destinationPath, action: file.action, byteCount: data.count))
+
+            case .copyAndRewrite:
+                guard let destinationPath = file.destinationPath else { continue }
+                let sourceURL = root.appendingPathComponent(file.sourcePath)
+                let text = try readMapWorkflowText(sourceURL)
+                let rewritten = rewriteMapJSON(text, sourcePath: file.sourcePath, plan: plan)
+                let data = Data(rewritten.utf8)
+                try writeMapWorkflowData(data, to: root.appendingPathComponent(destinationPath), fileManager: fileManager)
+                applied.append(AppliedMapDuplicationFile(path: destinationPath, action: file.action, byteCount: data.count))
+
+            case .updateIndex:
+                let sourceURL = root.appendingPathComponent(file.sourcePath)
+                let originalData = try Data(contentsOf: sourceURL)
+                let originalText: String
+                if let utf8 = String(data: originalData, encoding: .utf8) {
+                    originalText = utf8
+                } else {
+                    originalText = try readMapWorkflowText(sourceURL)
+                }
+                let updatedText: String
+                if file.sourcePath == "data/maps/map_groups.json" {
+                    updatedText = try updateMapGroupsJSON(originalText, plan: plan)
+                } else {
+                    updatedText = try updateLayoutsJSON(originalText, plan: plan)
+                }
+                let backup = backupRoot.appendingPathComponent(file.sourcePath)
+                try fileManager.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.copyItem(at: sourceURL, to: backup)
+                let data = Data(updatedText.utf8)
+                try writeMapWorkflowData(data, to: sourceURL, fileManager: fileManager)
+                applied.append(AppliedMapDuplicationFile(path: file.sourcePath, action: file.action, backupPath: backup.path, byteCount: data.count))
+            }
+        }
+
+        return MapDuplicationApplyResult(
+            backupRootPath: backupRoot.path,
+            selectedMapID: plan.proposedMapID,
+            appliedFiles: applied
+        )
+    }
+
+    private static func duplicationPreflightDiagnostics(plan: MapDuplicationPlan, root: URL, fileManager: FileManager) -> [Diagnostic] {
+        var diagnostics = plan.diagnostics.filter { $0.severity == .error }
+        if !plan.executionState.canApply {
+            diagnostics.append(Diagnostic(severity: .error, code: "MAP_DUPLICATION_APPLY_NOT_READY", message: "Map duplication plan is not applyable."))
+        }
+        diagnostics.append(contentsOf: MapWorkflowPlanner.externalChangeDiagnostics(rootPath: plan.rootPath, snapshots: plan.sourceSnapshots, fileManager: fileManager).filter { $0.severity == .error })
+        for file in plan.plannedFiles {
+            if isUnsafeMapWorkflowPath(file.sourcePath) {
+                diagnostics.append(Diagnostic(severity: .error, code: "MAP_DUPLICATION_SOURCE_PATH_UNSAFE", message: "Map duplication source path is unsafe: \(file.sourcePath).", span: SourceSpan(relativePath: file.sourcePath, startLine: 1)))
+            }
+            if let destinationPath = file.destinationPath {
+                if isUnsafeMapWorkflowPath(destinationPath) {
+                    diagnostics.append(Diagnostic(severity: .error, code: "MAP_DUPLICATION_DESTINATION_PATH_UNSAFE", message: "Map duplication destination path is unsafe: \(destinationPath).", span: SourceSpan(relativePath: destinationPath, startLine: 1)))
+                }
+                if fileManager.fileExists(atPath: root.appendingPathComponent(destinationPath).path) {
+                    diagnostics.append(Diagnostic(severity: .error, code: "MAP_DUPLICATION_DESTINATION_CONFLICT", message: "Map duplication destination already exists: \(destinationPath).", span: SourceSpan(relativePath: destinationPath, startLine: 1)))
+                }
+            }
+        }
+        return diagnostics
+    }
+}
+
+private struct MapVisualExportMetadata: Codable, Equatable {
+    let documentID: String
+    let mapID: String
+    let mapName: String
+    let artifactPath: String
+}
+
+private func rewriteMapJSON(_ text: String, sourcePath: String, plan: MapDuplicationPlan) -> String {
+    let sourceMapName = mapWorkflowMapName(fromSourcePath: sourcePath)
+    var updated = text
+        .replacingOccurrences(of: plan.sourceMapID, with: plan.proposedMapID)
+        .replacingOccurrences(of: sourceMapName, with: plan.proposedMapName)
+    if let proposedLayoutID = plan.proposedLayoutID {
+        updated = replaceJSONStringValue(in: updated, key: "layout", value: proposedLayoutID)
+        updated = replaceJSONStringValue(in: updated, key: "layout_id", value: proposedLayoutID)
+    }
+    return updated
+}
+
+private func updateMapGroupsJSON(_ text: String, plan: MapDuplicationPlan) throws -> String {
+    if text.contains("\"\(plan.proposedMapName)\"") {
+        return text
+    }
+    if text.trimmingCharacters(in: .whitespacesAndNewlines) == "[]" {
+        return "[\"\(plan.proposedMapName)\"]"
+    }
+    let sourceName = plan.plannedFiles.first { $0.action == .copyAndRewrite }.map { mapWorkflowMapName(fromSourcePath: $0.sourcePath) } ?? plan.sourceMapID
+    guard let sourceRange = text.range(of: "\"\(sourceName)\"") else {
+        throw MapWorkflowApplyError.indexUpdateFailed("Could not find \(sourceName) in data/maps/map_groups.json.")
+    }
+    return text.replacingCharacters(in: sourceRange, with: "\"\(sourceName)\", \"\(plan.proposedMapName)\"")
+}
+
+private func updateLayoutsJSON(_ text: String, plan: MapDuplicationPlan) throws -> String {
+    guard let layoutID = plan.proposedLayoutID else {
+        throw MapWorkflowApplyError.indexUpdateFailed("No proposed layout id is available for layout index update.")
+    }
+    if text.contains("\"\(layoutID)\"") {
+        return text
+    }
+    guard let insertionIndex = text.lastIndex(of: "]") else {
+        throw MapWorkflowApplyError.indexUpdateFailed("Could not find layouts array in data/layouts/layouts.json.")
+    }
+    let blockdataPath = plan.plannedFiles.first { $0.action == .copy && ($0.destinationPath?.hasSuffix("map.bin") == true || $0.destinationPath?.contains("block") == true) }?.destinationPath
+    let borderPath = plan.plannedFiles.first { $0.action == .copy && ($0.destinationPath?.hasSuffix("border.bin") == true || $0.destinationPath?.contains("border") == true) }?.destinationPath
+    var object = """
+    {
+      "id": "\(layoutID)",
+      "name": "\(plan.proposedLayoutName ?? layoutID)"
+    """
+    if let blockdataPath {
+        object += ",\n  \"blockdata_filepath\": \"\(blockdataPath)\""
+    }
+    if let borderPath {
+        object += ",\n  \"border_filepath\": \"\(borderPath)\""
+    }
+    object += "\n}"
+    let prefix = text[..<insertionIndex]
+    let needsComma = prefix.contains("{") && !prefix.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("[")
+    let insertion = (needsComma ? ",\n" : "\n") + object + "\n"
+    return String(prefix) + insertion + String(text[insertionIndex...])
+}
+
+private func replaceJSONStringValue(in text: String, key: String, value: String) -> String {
+    let pattern = #""\#(key)"\s*:\s*"[^"]*""#
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    return regex.stringByReplacingMatches(in: text, range: range, withTemplate: #""\#(key)": "\#(value)""#)
+}
+
+private func writeMapWorkflowData(_ data: Data, to url: URL, fileManager: FileManager) throws {
+    try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try data.write(to: url, options: .atomic)
+}
+
+private func readMapWorkflowText(_ url: URL) throws -> String {
+    if let utf8 = try? String(contentsOf: url, encoding: .utf8) {
+        return utf8
+    }
+    return try String(contentsOf: url, encoding: .isoLatin1)
+}
+
+private func mapWorkflowMapName(fromSourcePath sourcePath: String) -> String {
+    URL(fileURLWithPath: sourcePath).deletingLastPathComponent().lastPathComponent
+}
+
+private func isUnsafeMapWorkflowPath(_ path: String) -> Bool {
+    path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || (path as NSString).isAbsolutePath
+        || path.split(separator: "/").contains("..")
+}
+
+private func mapWorkflowBackupTimestamp() -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyyMMdd-HHmmss"
+    return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
+}
+
+private enum MapWorkflowApplyError: LocalizedError {
+    case indexUpdateFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .indexUpdateFailed(let message):
+            return message
+        }
     }
 }
