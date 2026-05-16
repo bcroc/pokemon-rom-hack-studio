@@ -230,6 +230,84 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(plan.changes.first { $0.path == "graphics/pokemon/treecko/front.png" }?.newData, pngData)
     }
 
+    func testSpeciesFootprintImportStagesSourcePNGWithFormatProvenance() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        let importPath = root.appendingPathComponent("incoming/footprint.png").path
+        let pngData = testPNGData(width: 16, height: 16, paletteColorCount: 2)
+        let provenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: importPath,
+            expectedKind: .footprint,
+            data: pngData
+        )
+        draft.assetData[.footprint] = pngData
+        draft.assetImports[.footprint] = provenance
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertEqual(provenance.status, .ready)
+        XCTAssertEqual(provenance.detectedKind, .png)
+        XCTAssertEqual(provenance.pngMetadata?.width, 16)
+        XCTAssertEqual(provenance.pngMetadata?.height, 16)
+        XCTAssertEqual(provenance.pngMetadata?.paletteColorCount, 2)
+        XCTAssertEqual(plan.draft.assetImports[.footprint]?.sha1, provenance.sha1)
+        let change = try XCTUnwrap(plan.changes.first { $0.path == "graphics/pokemon/treecko/footprint.png" })
+        XCTAssertEqual(change.summary, "Replace footprint asset")
+        XCTAssertEqual(change.newData, pngData)
+
+        _ = try SpeciesMutationApplier.apply(plan: plan)
+        let appliedData = try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/footprint.png"))
+        XCTAssertEqual(appliedData, pngData)
+    }
+
+    func testSpeciesFootprintImportBlocksUnsupportedFormatAndPalette() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        var wrongSizeDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let wrongSize = testPNGData(width: 32, height: 32, paletteColorCount: 2)
+        let wrongSizeProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/footprint-large.png").path,
+            expectedKind: .footprint,
+            data: wrongSize
+        )
+        wrongSizeDraft.assetData[.footprint] = wrongSize
+        wrongSizeDraft.assetImports[.footprint] = wrongSizeProvenance
+
+        let wrongSizePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: wrongSizeDraft)
+        XCTAssertEqual(wrongSizeProvenance.status, .blocked)
+        XCTAssertTrue(wrongSizeProvenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_PNG_DIMENSIONS_UNSUPPORTED" })
+        XCTAssertFalse(wrongSizePlan.changes.contains { $0.path == "graphics/pokemon/treecko/footprint.png" })
+        XCTAssertTrue(wrongSizePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_DIMENSIONS_UNSUPPORTED" })
+        XCTAssertFalse(wrongSizePlan.isApplyable)
+
+        var paletteDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let tooManyColors = testPNGData(width: 16, height: 16, paletteColorCount: 3)
+        let paletteProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/footprint-colors.png").path,
+            expectedKind: .footprint,
+            data: tooManyColors
+        )
+        paletteDraft.assetData[.footprint] = tooManyColors
+        paletteDraft.assetImports[.footprint] = paletteProvenance
+
+        let palettePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: paletteDraft)
+        XCTAssertEqual(paletteProvenance.status, .blocked)
+        XCTAssertTrue(paletteProvenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_PNG_PALETTE_OVER_LIMIT" })
+        XCTAssertFalse(palettePlan.changes.contains { $0.path == "graphics/pokemon/treecko/footprint.png" })
+        XCTAssertTrue(palettePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_PALETTE_OVER_LIMIT" })
+        XCTAssertFalse(palettePlan.isApplyable)
+    }
+
     func testSpeciesMutationPlannerStagesFireRedAssetChanges() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url

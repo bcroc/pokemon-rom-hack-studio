@@ -394,6 +394,24 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
     public var isPaletteAsset: Bool {
         !isSpriteAsset
     }
+
+    public var expectedPNGDimensions: (width: Int, height: Int)? {
+        switch self {
+        case .footprint:
+            return (16, 16)
+        default:
+            return nil
+        }
+    }
+
+    public var pngPaletteColorLimit: Int {
+        switch self {
+        case .footprint:
+            return 2
+        default:
+            return 16
+        }
+    }
 }
 
 public enum SpeciesAssetImportDetectedKind: String, Codable, Equatable {
@@ -415,6 +433,8 @@ public struct SpeciesAssetImportProvenance: Codable, Equatable {
     public let sha1: String
     public let expectedKind: SpeciesAssetKind
     public let detectedKind: SpeciesAssetImportDetectedKind
+    public let pngMetadata: GraphicsPNGMetadata?
+    public let paletteMetadata: GraphicsPaletteMetadata?
     public let status: SpeciesAssetImportValidationStatus
     public let diagnostics: [Diagnostic]
 
@@ -425,6 +445,8 @@ public struct SpeciesAssetImportProvenance: Codable, Equatable {
         sha1: String,
         expectedKind: SpeciesAssetKind,
         detectedKind: SpeciesAssetImportDetectedKind,
+        pngMetadata: GraphicsPNGMetadata? = nil,
+        paletteMetadata: GraphicsPaletteMetadata? = nil,
         status: SpeciesAssetImportValidationStatus,
         diagnostics: [Diagnostic]
     ) {
@@ -434,6 +456,8 @@ public struct SpeciesAssetImportProvenance: Codable, Equatable {
         self.sha1 = sha1
         self.expectedKind = expectedKind
         self.detectedKind = detectedKind
+        self.pngMetadata = pngMetadata
+        self.paletteMetadata = paletteMetadata
         self.status = status
         self.diagnostics = diagnostics
     }
@@ -446,8 +470,22 @@ public enum SpeciesAssetImportValidator {
         data: Data
     ) -> SpeciesAssetImportProvenance {
         let sourceURL = URL(fileURLWithPath: sourcePath)
-        let detectedKind = detectedKind(sourcePath: sourcePath, data: data)
-        let diagnostics = diagnostics(sourcePath: sourcePath, expectedKind: expectedKind, detectedKind: detectedKind, data: data)
+        let pngMetadata = GraphicsMetadataParser.pngMetadata(from: data)
+        let sourcePaletteMetadata = sourcePath.lowercased().hasSuffix(".pal")
+            ? GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath)
+            : nil
+        let binaryPaletteMetadata = GraphicsMetadataParser.gbaPaletteMetadata(from: data)
+        let paletteMetadata = sourcePaletteMetadata ?? binaryPaletteMetadata
+        let detectedKind = detectedKind(pngMetadata: pngMetadata, paletteMetadata: paletteMetadata)
+        let diagnostics = diagnostics(
+            sourcePath: sourcePath,
+            expectedKind: expectedKind,
+            detectedKind: detectedKind,
+            data: data,
+            pngMetadata: pngMetadata,
+            sourcePaletteMetadata: sourcePaletteMetadata,
+            binaryPaletteMetadata: binaryPaletteMetadata
+        )
         let status: SpeciesAssetImportValidationStatus
         if diagnostics.contains(where: { $0.severity == .error }) {
             status = .blocked
@@ -464,18 +502,21 @@ public enum SpeciesAssetImportValidator {
             sha1: pokemonHackSHA1Hex(data),
             expectedKind: expectedKind,
             detectedKind: detectedKind,
+            pngMetadata: pngMetadata,
+            paletteMetadata: paletteMetadata,
             status: status,
             diagnostics: diagnostics
         )
     }
 
-    private static func detectedKind(sourcePath: String, data: Data) -> SpeciesAssetImportDetectedKind {
-        if GraphicsMetadataParser.pngMetadata(from: data) != nil {
+    private static func detectedKind(
+        pngMetadata: GraphicsPNGMetadata?,
+        paletteMetadata: GraphicsPaletteMetadata?
+    ) -> SpeciesAssetImportDetectedKind {
+        if pngMetadata != nil {
             return .png
         }
-        if GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath) != nil
-            || GraphicsMetadataParser.gbaPaletteMetadata(from: data) != nil
-        {
+        if paletteMetadata != nil {
             return .palette
         }
         return .unsupported
@@ -485,7 +526,10 @@ public enum SpeciesAssetImportValidator {
         sourcePath: String,
         expectedKind: SpeciesAssetKind,
         detectedKind: SpeciesAssetImportDetectedKind,
-        data: Data
+        data: Data,
+        pngMetadata: GraphicsPNGMetadata?,
+        sourcePaletteMetadata: GraphicsPaletteMetadata?,
+        binaryPaletteMetadata: GraphicsPaletteMetadata?
     ) -> [Diagnostic] {
         let span = SourceSpan(relativePath: sourcePath, startLine: 1)
         guard !data.isEmpty else {
@@ -501,7 +545,7 @@ public enum SpeciesAssetImportValidator {
 
         if expectedKind.isSpriteAsset {
             guard detectedKind == .png,
-                  let png = GraphicsMetadataParser.pngMetadata(from: data),
+                  let png = pngMetadata,
                   png.width > 0,
                   png.height > 0
             else {
@@ -516,35 +560,17 @@ public enum SpeciesAssetImportValidator {
             }
 
             var diagnostics: [Diagnostic] = []
-            if let paletteColorCount = png.paletteColorCount, paletteColorCount > 16 {
-                diagnostics.append(
-                    Diagnostic(
-                        severity: .error,
-                        code: "SPECIES_ASSET_IMPORT_PNG_PALETTE_OVER_LIMIT",
-                        message: "\(expectedKind.title) PNG declares \(paletteColorCount) palette colors; Gen III sprite sources must fit 16 colors.",
-                        span: span
-                    )
-                )
-            }
-            if png.paletteColorCount == nil {
-                diagnostics.append(
-                    Diagnostic(
-                        severity: .warning,
-                        code: "SPECIES_ASSET_IMPORT_PNG_PALETTE_UNVERIFIED",
-                        message: "\(expectedKind.title) PNG has no PLTE chunk; palette fit must be reviewed before conversion.",
-                        span: span
-                    )
-                )
-            }
+            diagnostics.append(contentsOf: pngFormatDiagnostics(
+                kind: expectedKind,
+                png: png,
+                codePrefix: "SPECIES_ASSET_IMPORT",
+                span: span
+            ))
             return diagnostics
         }
 
-        let sourcePalette = sourcePath.lowercased().hasSuffix(".pal")
-            ? GraphicsMetadataParser.paletteMetadata(from: data, path: sourcePath)
-            : nil
-        let binaryPalette = GraphicsMetadataParser.gbaPaletteMetadata(from: data)
         guard detectedKind == .palette,
-              let palette = sourcePalette ?? binaryPalette
+              let palette = sourcePaletteMetadata ?? binaryPaletteMetadata
         else {
             return [
                 Diagnostic(
@@ -557,7 +583,7 @@ public enum SpeciesAssetImportValidator {
         }
 
         var diagnostics: [Diagnostic] = []
-        if sourcePalette == nil, binaryPalette != nil {
+        if sourcePaletteMetadata == nil, binaryPaletteMetadata != nil {
             diagnostics.append(
                 Diagnostic(
                     severity: .error,
@@ -609,6 +635,52 @@ public enum SpeciesAssetImportValidator {
         }
         return diagnostics
     }
+
+    private static func pngFormatDiagnostics(
+        kind: SpeciesAssetKind,
+        png: GraphicsPNGMetadata,
+        codePrefix: String,
+        span: SourceSpan
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        if let expected = kind.expectedPNGDimensions,
+           png.width != expected.width || png.height != expected.height
+        {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "\(codePrefix)_PNG_DIMENSIONS_UNSUPPORTED",
+                    message: "\(kind.title) PNG must be \(expected.width)x\(expected.height); detected \(png.width)x\(png.height).",
+                    span: span
+                )
+            )
+        }
+        if let paletteColorCount = png.paletteColorCount, paletteColorCount > kind.pngPaletteColorLimit {
+            let paletteDescription = kind.pngPaletteColorLimit == 16
+                ? "Gen III sprite sources must fit 16 colors."
+                : "\(kind.title) source PNGs must fit \(kind.pngPaletteColorLimit) colors."
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "\(codePrefix)_PNG_PALETTE_OVER_LIMIT",
+                    message: "\(kind.title) PNG declares \(paletteColorCount) palette colors; \(paletteDescription)",
+                    span: span
+                )
+            )
+        }
+        if png.paletteColorCount == nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "\(codePrefix)_PNG_PALETTE_UNVERIFIED",
+                    message: "\(kind.title) PNG has no PLTE chunk; palette fit must be reviewed before conversion.",
+                    span: span
+                )
+            )
+        }
+        return diagnostics
+    }
+
 }
 
 public struct SpeciesAsset: Codable, Equatable, Identifiable {
@@ -2106,8 +2178,16 @@ public enum SpeciesMutationPlanner {
                 return [assetDiagnostic(.error, "SPECIES_ASSET_PNG_INVALID", "\(kind.title) import must be a valid PNG with readable IHDR metadata.", path: path, species: species)]
             }
             var diagnostics: [Diagnostic] = []
-            if let paletteColorCount = png.paletteColorCount, paletteColorCount > 16 {
-                diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PNG_PALETTE_OVER_LIMIT", "\(kind.title) PNG declares \(paletteColorCount) palette colors; Gen III sprite sources must fit 16 colors.", path: path, species: species))
+            if let expected = kind.expectedPNGDimensions,
+               png.width != expected.width || png.height != expected.height
+            {
+                diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PNG_DIMENSIONS_UNSUPPORTED", "\(kind.title) PNG must be \(expected.width)x\(expected.height); detected \(png.width)x\(png.height).", path: path, species: species))
+            }
+            if let paletteColorCount = png.paletteColorCount, paletteColorCount > kind.pngPaletteColorLimit {
+                let paletteDescription = kind.pngPaletteColorLimit == 16
+                    ? "Gen III sprite sources must fit 16 colors."
+                    : "\(kind.title) source PNGs must fit \(kind.pngPaletteColorLimit) colors."
+                diagnostics.append(assetDiagnostic(.error, "SPECIES_ASSET_PNG_PALETTE_OVER_LIMIT", "\(kind.title) PNG declares \(paletteColorCount) palette colors; \(paletteDescription)", path: path, species: species))
             }
             if png.paletteColorCount == nil {
                 diagnostics.append(assetDiagnostic(.warning, "SPECIES_ASSET_PNG_PALETTE_UNVERIFIED", "\(kind.title) PNG has no PLTE chunk; palette fit must be reviewed before conversion.", path: path, species: species))
