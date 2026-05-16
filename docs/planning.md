@@ -28,7 +28,7 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 
 5. **Cross-Media Resource Library**
    - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface.
-   - Treat NDS ROMs and pret-style NDS source trees as read-only preview/catalog inputs until future mutation-plan rows explicitly open source-backed Gen IV writes.
+   - Treat NDS ROMs, containers, and generated/reference rows as read-only preview/catalog inputs; eligible local source-backed Gen IV text/JSON rows may write only through explicit mutation-plan gates opened by dedicated rows.
    - Keep GameCube `.iso`/`.gcm` media as direct parser inputs for `resource-index`, not auto-loaded Resources rows, until the GBA asset workflow is mature.
    - Parse GameCube headers, FST entries, DOL ranges, FSYS archives, and LZSS members before any future export workflow.
    - Show missing Colosseum, XD, Box, and Channel inputs as diagnostics instead of silently omitting them.

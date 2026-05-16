@@ -291,7 +291,10 @@ public enum NDSDataSemanticEditor {
         let parsed = parseTopLevelScalarJSONFields(sourceText: sourceText, record: nil)
         var diagnostics = parsed.diagnostics
         var text = sourceText
-        let fieldsByKey = Dictionary(uniqueKeysWithValues: parsed.fields.map { ($0.semanticField.key, $0) })
+        var fieldsByKey: [String: ParsedSemanticField] = [:]
+        for field in parsed.fields where fieldsByKey[field.semanticField.key] == nil {
+            fieldsByKey[field.semanticField.key] = field
+        }
         var seenKeys = Set<String>()
         var duplicateKeys = Set<String>()
         for edit in fieldEdits {
@@ -315,11 +318,16 @@ public enum NDSDataSemanticEditor {
         var replacements: [(range: Range<String.Index>, value: String)] = []
         for edit in fieldEdits {
             guard let field = fieldsByKey[edit.key] else {
-                diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FIELD_MISSING", message: "Semantic NDS field \(edit.key) is not available on \(recordID)."))
+                let rootKey = edit.key.split(separator: ".").first.map(String.init) ?? edit.key
+                if parsed.unsupportedNestedKeys.contains(rootKey) {
+                    diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED", message: "Semantic NDS field \(edit.key) targets nested JSON that remains raw-source only on \(recordID)."))
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FIELD_MISSING", message: "Semantic NDS field \(edit.key) is not available on \(recordID)."))
+                }
                 continue
             }
             guard let rendered = renderedJSONValue(edit.value, as: field.semanticField.valueKind) else {
-                diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_VALUE_INVALID", message: "Semantic NDS field \(edit.key) cannot use value \(edit.value) as \(field.semanticField.valueKind.rawValue)."))
+                diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_VALUE_INVALID", message: "Semantic NDS field \(edit.key) received a value that cannot be rendered as \(field.semanticField.valueKind.rawValue)."))
                 continue
             }
             replacements.append((field.valueRange, rendered))
@@ -337,11 +345,14 @@ public enum NDSDataSemanticEditor {
         fileManager: FileManager
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
-        if catalog.profile != .pokeplatinum {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing starts with Platinum source-tree JSON records; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+        if !isSemanticProfileSupported(catalog.profile, record: record) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree JSON records plus HeartGold/SoulSilver personal JSON rows in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers].contains(record.domain) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum Pokemon, move, item, and trainer JSON records in this slice.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, and trainer JSON records in this slice.", span: record.sourceSpan))
+        }
+        if catalog.profile == .pokeheartgold, !isHeartGoldSoulSilverPersonalDataPath(record.relativePath) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PERSONAL_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal; NARC, trainer, item, generated, and binary rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .items, !isPlatinumItemDataPath(record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items; CSV, generated, binary, and non-Platinum item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
@@ -363,27 +374,56 @@ public enum NDSDataSemanticEditor {
         relativePath.hasPrefix("res/items/") && relativePath.lowercased().hasSuffix(".json")
     }
 
+    private static func isSemanticProfileSupported(_ profile: GameProfile, record: NDSDataCatalogRecord) -> Bool {
+        switch profile {
+        case .pokeplatinum:
+            return true
+        case .pokeheartgold:
+            return record.domain == .personal && isHeartGoldSoulSilverPersonalDataPath(record.relativePath)
+        default:
+            return false
+        }
+    }
+
+    private static func isHeartGoldSoulSilverPersonalDataPath(_ relativePath: String) -> Bool {
+        relativePath.hasPrefix("files/poketool/personal/") && relativePath.lowercased().hasSuffix(".json")
+    }
+
     private struct ParsedSemanticField {
         let semanticField: NDSDataSemanticField
         let valueRange: Range<String.Index>
     }
 
+    private struct ParsedSemanticFields {
+        let fields: [ParsedSemanticField]
+        let diagnostics: [Diagnostic]
+        let unsupportedNestedKeys: Set<String>
+    }
+
     private static func parseTopLevelScalarJSONFields(
         sourceText: String,
         record: NDSDataCatalogRecord?
-    ) -> (fields: [ParsedSemanticField], diagnostics: [Diagnostic]) {
+    ) -> ParsedSemanticFields {
         var diagnostics: [Diagnostic] = []
         let trimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("{") else {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Semantic NDS editing requires a top-level JSON object.", span: record?.sourceSpan))
-            return ([], diagnostics)
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+        if let data = sourceText.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) == nil {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_MALFORMED", message: "Semantic NDS editing requires parseable JSON before field-level edits are planned.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
         }
 
         var fields: [ParsedSemanticField] = []
+        var seenTopLevelKeys: Set<String> = []
+        var duplicateTopLevelKeys: Set<String> = []
+        var unsupportedNestedKeys: Set<String> = []
         var index = sourceText.startIndex
         guard let objectStart = sourceText[index...].firstIndex(of: "{") else {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Semantic NDS editing requires a top-level JSON object.", span: record?.sourceSpan))
-            return ([], diagnostics)
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
         }
         index = sourceText.index(after: objectStart)
 
@@ -395,12 +435,35 @@ public enum NDSDataSemanticEditor {
                 continue
             }
             index = keyToken.end
+            if !seenTopLevelKeys.insert(keyToken.value).inserted {
+                duplicateTopLevelKeys.insert(keyToken.value)
+            }
             skipWhitespace(sourceText, index: &index)
             guard index < sourceText.endIndex, sourceText[index] == ":" else { continue }
             index = sourceText.index(after: index)
             skipWhitespace(sourceText, index: &index)
             let valueStart = index
             guard let value = parseJSONScalarValue(sourceText, start: valueStart) else {
+                if valueStart < sourceText.endIndex, sourceText[valueStart] == "{" || sourceText[valueStart] == "[" {
+                    unsupportedNestedKeys.insert(keyToken.value)
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .info,
+                            code: "NDS_DATA_SEMANTIC_NESTED_VALUE_UNSUPPORTED",
+                            message: "Semantic NDS field \(keyToken.value) is nested and remains raw-source only in this slice.",
+                            span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+                        )
+                    )
+                } else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_SEMANTIC_SCALAR_INVALID",
+                            message: "Semantic NDS field \(keyToken.value) has an invalid scalar JSON value.",
+                            span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+                        )
+                    )
+                }
                 skipJSONValueOrToken(sourceText, index: &index)
                 continue
             }
@@ -414,15 +477,25 @@ public enum NDSDataSemanticEditor {
             )
             fields.append(ParsedSemanticField(semanticField: field, valueRange: valueStart..<value.end))
         }
+        for key in duplicateTopLevelKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
+                    message: "Semantic NDS JSON field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
 
         let evolutionFields = parseEvolutionTupleJSONFields(sourceText: sourceText, record: record)
         fields.append(contentsOf: evolutionFields.fields)
         diagnostics.append(contentsOf: evolutionFields.diagnostics)
 
-        if fields.isEmpty {
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
             diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_SCALAR_FIELDS", message: "No top-level scalar JSON fields were found for semantic NDS editing.", span: record?.sourceSpan))
         }
-        return (fields, diagnostics)
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: unsupportedNestedKeys)
     }
 
     private static func parseEvolutionTupleJSONFields(
@@ -452,16 +525,22 @@ public enum NDSDataSemanticEditor {
             }
 
             var tupleCursor = sourceText.index(after: index)
-            if let method = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "method", record: record) {
+            let method = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "method", record: record)
+            if let method {
                 fields.append(method)
             }
-            if let parameter = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "parameter", record: record) {
+            let parameter = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "parameter", record: record)
+            if let parameter {
                 fields.append(parameter)
             }
-            if let target = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "target", record: record) {
+            let target = parseTupleScalarField(sourceText, cursor: &tupleCursor, tupleEnd: tupleEnd, tupleIndex: tupleIndex, key: "target", record: record)
+            if let target {
                 fields.append(target)
-            } else {
-                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_EVOLUTION_TUPLE_UNSUPPORTED", message: "Evolution tuple \(tupleIndex + 1) is not a three-value method/parameter/target row and remains raw-source only.", span: record?.sourceSpan))
+            }
+            skipWhitespaceAndCommas(sourceText, index: &tupleCursor)
+            let contentEnd = sourceText.index(before: tupleEnd)
+            if method == nil || parameter == nil || target == nil || tupleCursor < contentEnd {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_EVOLUTION_TUPLE_BAD_SHAPE", message: "Evolution tuple \(tupleIndex + 1) is not a three-scalar method/parameter/target row and remains raw-source only.", span: record?.sourceSpan))
             }
 
             index = tupleEnd
@@ -899,10 +978,10 @@ public enum NDSDataMutationPlanner {
 
     private static func backupTimestamp() -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        return formatter.string(from: Date())
+        return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
     }
 
     private static func isContained(_ url: URL, in root: URL) -> Bool {

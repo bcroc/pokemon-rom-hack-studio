@@ -5,7 +5,8 @@
     "scope": "Read-only broad reference repositories cloned under references/ for Pokemon GBA hacking tools, assets, emulation, patching, toolchain, and decompilation workflows.",
     "tracking": "references/* is ignored; references/manifest.json is the tracked catalog.",
     "pinning": "Each entry records the central clone HEAD observed at generatedAt. Historical local pins may be recovered from git history; reference clone roots are now centralized.",
-    "centralCorpus": "The central /Users/bryan/projects/reference-repos corpus is canonical for reference clones and metadata; references/* entries in this workspace are compatibility aliases to central clone roots, while active repo-root decomp working trees remain in place."
+    "centralCorpus": "The central /Users/bryan/projects/reference-repos corpus is canonical for reference clones and metadata; references/* entries in this workspace are compatibility aliases to central clone roots, while active repo-root decomp working trees remain in place.",
+    "aliasRouting": "This tracked manifest remains the original product bench. Some later DS/NDS and emulator/tooling compatibility aliases are documented in docs/reference-repos.md and remain routed through the central corpus rather than expanded here by default."
   },
   "references": [
     {

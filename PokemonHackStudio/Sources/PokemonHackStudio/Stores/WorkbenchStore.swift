@@ -236,7 +236,12 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedScriptTextBlockID: String = ""
     @Published var selectedMapWorkbenchTab: MapWorkbenchTab = .overviewLayers
     @Published var selectedBuildWorkbenchTab: BuildWorkbenchTab = .build {
-        didSet { persistWorkflowContext() }
+        didSet {
+            if selectedBuildWorkbenchTab == .playtest {
+                refreshSelectedPlaytestArtifactAvailability()
+            }
+            persistWorkflowContext()
+        }
     }
     @Published var selectedBuildReportRowID: String = "" {
         didSet { persistWorkflowContext() }
@@ -289,6 +294,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var itemCatalogLoadStatus: ItemCatalogLoadStatus = .idle
     @Published private(set) var patchManifestLoadStatus: PatchManifestLoadStatus = .idle
     @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
+    @Published private(set) var latestPatchApplyExportResult: PokemonHackCore.PatchApplyExportResult?
     @Published private(set) var graphicsImportPackagePlanStatus: GraphicsImportPackagePlanLoadStatus = .idle
     @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
@@ -1169,24 +1175,32 @@ final class WorkbenchStore: ObservableObject {
         return true
     }
 
+    var canApplyExportSelectedPatch: Bool {
+        guard let report = rawPatchManifestReport else { return false }
+        guard report.compatibilityStatus == .compatible else { return false }
+        return report.artifactPlan.patchFormat == .bps || report.artifactPlan.patchFormat == .ips
+    }
+
     func buildWorkflowActions(includePatchActions: Bool) -> [BuildWorkflowActionViewState] {
         Self.buildWorkflowActions(
             canRunBuild: canRunSelectedDecompBuild,
             isBuildRunning: runningBuildTargetID != nil,
             canLaunchPlaytest: canLaunchSelectedPlaytest,
+            canApplyExportPatch: canApplyExportSelectedPatch,
             includePatchActions: includePatchActions
         )
     }
 
     var fixtureBuildWorkflowActions: [BuildWorkflowActionViewState] {
-        Self.buildWorkflowActions(canRunBuild: false, isBuildRunning: false, canLaunchPlaytest: false, includePatchActions: false)
+        Self.buildWorkflowActions(canRunBuild: false, isBuildRunning: false, canLaunchPlaytest: false, canApplyExportPatch: false, includePatchActions: false)
             .map { action in
                 BuildWorkflowActionViewState(
                     id: action.id,
                     title: action.title,
                     systemImage: action.systemImage,
                     isEnabled: false,
-                    isPreviewLocked: true
+                    isPreviewLocked: true,
+                    disabledReason: action.disabledReason
                 )
             }
     }
@@ -1652,13 +1666,31 @@ final class WorkbenchStore: ObservableObject {
             return nil
         }
         let canEdit = selectedNDSDataCanEditSourceText
-        let draftText = selectedNDSDataDraft?.editedText ?? selectedNDSDataSourceText ?? ""
+        let sourceText = selectedNDSDataSourceText ?? ""
+        let draftText = selectedNDSDataDraft?.editedText ?? sourceText
+        let isDirty = selectedNDSDataIsDirty
+        let isHiddenByFilters = isDirty && !filteredResourceAssetRows.contains { $0.id == asset.id }
+        let semanticFields = selectedNDSDataSemanticFields(sourceText: draftText)
+        let lensSummary: String
+        if !semanticFields.isEmpty {
+            lensSummary = "\(semanticFields.count) semantic field(s) available; raw UTF-8 source remains the apply target."
+        } else if canEdit {
+            lensSummary = "Raw UTF-8 source editing is available for this NDS data row."
+        } else {
+            lensSummary = "This NDS data row stays read-only in the current Resources editing slice."
+        }
         return NDSDataResourceEditorViewState(
+            assetID: asset.id,
             recordID: recordID,
             text: draftText,
-            semanticFields: selectedNDSDataSemanticFields(sourceText: draftText),
+            semanticFields: semanticFields,
             canEdit: canEdit,
-            isDirty: selectedNDSDataIsDirty,
+            isDirty: isDirty,
+            isHiddenByFilters: isHiddenByFilters,
+            sourceByteCount: sourceText.data(using: .utf8)?.count ?? 0,
+            draftByteCount: draftText.data(using: .utf8)?.count ?? 0,
+            lensSummary: lensSummary,
+            hiddenDraftSummary: isHiddenByFilters ? "The selected NDS draft is hidden by the current Resources filters or search." : nil,
             canPreview: canPreviewSelectedNDSDataMutationPlan,
             canApply: canApplySelectedNDSDataMutationPlan,
             canDiscard: canDiscardNDSDataEdits,
@@ -1743,7 +1775,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func ndsDataCatalog(for project: IndexedProjectSummary) -> PokemonHackCore.ProjectNDSDataCatalog? {
-        let fingerprint = Self.assetCatalogFingerprint(rootPath: project.rootPath, fileManager: fileManager)
+        let fingerprint = Self.ndsDataCatalogFingerprint(rootPath: project.rootPath, fileManager: fileManager)
         if ndsDataCatalogFingerprintsByID[project.id] == fingerprint,
            let cached = ndsDataCatalogsByID[project.id] {
             return cached
@@ -2502,6 +2534,18 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func showBuildCommandTab() {
+        selectWorkbenchModule(.build, search: .restoreModule)
+        selectedBuildWorkbenchTab = .build
+        selectedBuildReportRowID = filteredBuildRowsForSelectedTab.first?.id ?? ""
+    }
+
+    func showRunCommandTab() {
+        selectWorkbenchModule(.build, search: .restoreModule)
+        selectedBuildWorkbenchTab = .playtest
+        selectedBuildReportRowID = filteredBuildRowsForSelectedTab.first?.id ?? ""
+    }
+
     func selectModule(_ module: WorkbenchModule, search: WorkbenchSearchBehavior = .restoreModule) {
         selectWorkbenchModule(module, search: search)
     }
@@ -2851,6 +2895,7 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
+        latestPatchApplyExportResult = nil
         patchManifestLoadStatus = selectedPatchPath.isEmpty ? .idle : .idle
     }
 
@@ -2865,6 +2910,7 @@ final class WorkbenchStore: ObservableObject {
         selectedBaseROMPath = ""
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
+        latestPatchApplyExportResult = nil
         patchManifestLoadStatus = .idle
     }
 
@@ -2904,6 +2950,7 @@ final class WorkbenchStore: ObservableObject {
         guard !selectedPatchPath.isEmpty else {
             rawPatchManifestReport = nil
             selectedPatchManifestReport = nil
+            latestPatchApplyExportResult = nil
             patchManifestLoadStatus = .idle
             return
         }
@@ -2928,6 +2975,42 @@ final class WorkbenchStore: ObservableObject {
             rawPatchManifestReport = nil
             selectedPatchManifestReport = nil
             patchManifestLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func applyExportSelectedPatchROM() {
+        guard !selectedPatchPath.isEmpty,
+              !selectedBaseROMPath.isEmpty else {
+            return
+        }
+
+        do {
+            let result = try PatchManifestBuilder.applyExport(
+                patchPath: selectedPatchPath,
+                projectPath: selectedIndexedProject?.rootPath,
+                baseROMPath: selectedBaseROMPath,
+                overwrite: true,
+                fileManager: fileManager,
+                toolResolver: toolResolver
+            )
+            latestPatchApplyExportResult = result
+            loadSelectedPatchManifestReport()
+        } catch {
+            latestPatchApplyExportResult = PatchApplyExportResult(
+                status: .blocked,
+                outputPath: rawPatchManifestReport?.artifactPlan.absoluteOutputPath,
+                manifestPath: rawPatchManifestReport?.artifactPlan.binaryDiffPreview?.backupExportManifest.manifestPath,
+                backupPath: nil,
+                outputROMSHA1: nil,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "PATCH_EXPORT_FAILED",
+                        message: error.localizedDescription
+                    )
+                ],
+                manifest: nil
+            )
         }
     }
 
@@ -5199,6 +5282,17 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    func refreshSelectedPlaytestArtifactAvailability() {
+        guard let selectedIndexedProject,
+              let result = playtestCaptureResultsByID[selectedIndexedProject.id] else {
+            return
+        }
+        playtestCaptureResultsByID[selectedIndexedProject.id] = Self.playtestCaptureResultRefreshingArtifacts(
+            result,
+            fileManager: fileManager
+        )
+    }
+
     func loadSelectedAssetCatalogIfNeeded(force: Bool = false) {
         guard let project = selectedIndexedProject else {
             assetCatalogLoadStatus = .idle
@@ -5696,6 +5790,74 @@ final class WorkbenchStore: ObservableObject {
             parts.append("\(path):\(Int(modified)):\(size)")
         }
         return parts.joined(separator: "|")
+    }
+
+    private static func ndsDataCatalogFingerprint(rootPath: String, fileManager: FileManager) -> String {
+        let root = URL(fileURLWithPath: rootPath).standardizedFileURL
+        let trackedPaths = [
+            "Makefile",
+            "config.mk",
+            "meson.build",
+            "filesystem.mk",
+            "rom.rsf",
+            "arm9",
+            "arm7",
+            "asm",
+            "src",
+            "include",
+            "files",
+            "res",
+            "graphics",
+            "platinum.us",
+            "diamond.us",
+            "heartgold.us"
+        ]
+        var parts = ["nds-data", root.path]
+        for path in trackedPaths {
+            let url = root.appendingPathComponent(path)
+            guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else {
+                continue
+            }
+            let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let size = attributes[.size] as? UInt64 ?? 0
+            parts.append("\(path):\(Int(modified)):\(size)")
+            if (attributes[.type] as? FileAttributeType) == .typeDirectory {
+                parts.append(contentsOf: ndsDirectoryFingerprintParts(root: url, prefix: path, fileManager: fileManager))
+            }
+        }
+        return parts.joined(separator: "|")
+    }
+
+    private static func ndsDirectoryFingerprintParts(
+        root: URL,
+        prefix: String,
+        fileManager: FileManager,
+        maxFiles: Int = 20_000
+    ) -> [String] {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return []
+        }
+
+        var parts: [String] = []
+        for case let url as URL in enumerator {
+            guard parts.count < maxFiles else {
+                parts.append("\(prefix):fingerprint-truncated")
+                break
+            }
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                continue
+            }
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let relativePath = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            let modified = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let size = values?.fileSize ?? 0
+            parts.append("\(prefix)/\(relativePath):\(Int(modified)):\(size)")
+        }
+        return parts.sorted()
     }
 
     private static func summary(from index: PokemonHackCore.ProjectIndex) -> IndexedProjectSummary {
@@ -7069,6 +7231,38 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func playtestCaptureResultRefreshingArtifacts(
+        _ result: PlaytestCaptureResultViewState,
+        fileManager: FileManager
+    ) -> PlaytestCaptureResultViewState {
+        PlaytestCaptureResultViewState(
+            id: result.id,
+            title: result.title,
+            status: result.status,
+            statusLabel: result.statusLabel,
+            detail: result.detail,
+            emulatorPath: result.emulatorPath,
+            romPath: result.romPath,
+            command: result.command,
+            processID: result.processID,
+            artifacts: result.artifacts.map { artifact in
+                guard let absolutePath = artifact.absolutePath else { return artifact }
+                let exists = fileManager.fileExists(atPath: absolutePath)
+                return PlaytestArtifactViewState(
+                    id: artifact.id,
+                    kind: artifact.kind,
+                    path: artifact.path,
+                    absolutePath: absolutePath,
+                    detail: exists && !artifact.detail.contains("Created.") ? "\(artifact.detail) Created." : artifact.detail,
+                    exists: exists,
+                    isPrimaryCaptureArtifact: artifact.isPrimaryCaptureArtifact,
+                    source: artifact.source
+                )
+            },
+            source: result.source
+        )
+    }
+
     private static func artifactAbsolutePath(relativePath: String, artifactRootPath: String) -> String {
         URL(fileURLWithPath: artifactRootPath).appendingPathComponent(relativePath).path
     }
@@ -7204,7 +7398,7 @@ final class WorkbenchStore: ObservableObject {
                 section: .patchManifest,
                 title: "Output artifact plan",
                 subtitle: "\(plan.expectedPatchedROMName) · \(plan.patchFormat.rawValue.uppercased())",
-                detail: "Preview-only output path \(plan.outputPath); apply/export writes remain disabled.",
+                detail: "Output path \(plan.outputPath); a compatible BPS or IPS patch with a manifest-matched base ROM can be written only by the explicit Apply Patch or Export ROM action.",
                 status: .warning,
                 source: SourceLocation(path: plan.absoluteOutputPath, symbol: plan.expectedPatchedROMName, line: 1),
                 tags: [plan.outputPath, plan.absoluteOutputPath, plan.patchFormat.rawValue, patchSourcePath]
@@ -8038,6 +8232,7 @@ final class WorkbenchStore: ObservableObject {
         canRunBuild: Bool,
         isBuildRunning: Bool,
         canLaunchPlaytest: Bool,
+        canApplyExportPatch: Bool,
         includePatchActions: Bool
     ) -> [BuildWorkflowActionViewState] {
         var actions = [
@@ -8046,42 +8241,50 @@ final class WorkbenchStore: ObservableObject {
                 title: isBuildRunning ? "Building..." : "Build ROM",
                 systemImage: "hammer",
                 isEnabled: canRunBuild,
-                isPreviewLocked: false
+                isPreviewLocked: false,
+                disabledReason: canRunBuild
+                    ? nil
+                    : (isBuildRunning ? "A build is already running." : "No runnable declared make target is selected for this project.")
             ),
             BuildWorkflowActionViewState(
                 id: "cancel-build",
                 title: "Cancel Build",
                 systemImage: "xmark.circle",
                 isEnabled: isBuildRunning,
-                isPreviewLocked: false
+                isPreviewLocked: false,
+                disabledReason: isBuildRunning ? nil : "No build is currently running."
             ),
             BuildWorkflowActionViewState(
                 id: "open-playtest",
                 title: "Open Playtest",
                 systemImage: "play.fill",
                 isEnabled: canLaunchPlaytest,
-                isPreviewLocked: false
+                isPreviewLocked: false,
+                disabledReason: canLaunchPlaytest ? nil : "Playtest handoff is not runnable until the ROM output and emulator are available."
             ),
             BuildWorkflowActionViewState(
                 id: "capture-screenshot",
                 title: "Capture Screenshot",
                 systemImage: "camera",
                 isEnabled: canLaunchPlaytest,
-                isPreviewLocked: false
+                isPreviewLocked: false,
+                disabledReason: canLaunchPlaytest ? nil : "Screenshot capture requires a runnable playtest handoff."
             ),
             BuildWorkflowActionViewState(
                 id: "capture-savestate",
                 title: "Capture Savestate",
                 systemImage: "memories",
                 isEnabled: canLaunchPlaytest,
-                isPreviewLocked: false
+                isPreviewLocked: false,
+                disabledReason: canLaunchPlaytest ? nil : "Savestate capture requires a runnable playtest handoff."
             ),
             BuildWorkflowActionViewState(
                 id: "validate-sources",
                 title: "Validate Sources",
                 systemImage: "checkmark.seal",
                 isEnabled: false,
-                isPreviewLocked: true
+                isPreviewLocked: true,
+                disabledReason: "Validation is exposed as report guidance here; use the repository validation command from the terminal."
             )
         ]
 
@@ -8091,15 +8294,21 @@ final class WorkbenchStore: ObservableObject {
                     id: "apply-patch",
                     title: "Apply Patch",
                     systemImage: "wand.and.stars",
-                    isEnabled: false,
-                    isPreviewLocked: true
+                    isEnabled: canApplyExportPatch,
+                    isPreviewLocked: false,
+                    disabledReason: canApplyExportPatch
+                        ? nil
+                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before applying."
                 ),
                 BuildWorkflowActionViewState(
                     id: "export-rom",
                     title: "Export ROM",
                     systemImage: "square.and.arrow.down",
-                    isEnabled: false,
-                    isPreviewLocked: true
+                    isEnabled: canApplyExportPatch,
+                    isPreviewLocked: false,
+                    disabledReason: canApplyExportPatch
+                        ? nil
+                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before exporting."
                 )
             ])
         }

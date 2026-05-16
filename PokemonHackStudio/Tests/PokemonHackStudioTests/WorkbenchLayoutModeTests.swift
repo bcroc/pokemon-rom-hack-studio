@@ -23,7 +23,7 @@ final class WorkbenchLayoutModeTests: XCTestCase {
         )
         XCTAssertEqual(WorkbenchModuleGroup.workspace.modules, [.dashboard])
         XCTAssertEqual(WorkbenchModuleGroup.create.modules, [.maps, .pokemon, .trainers, .scripts])
-        XCTAssertEqual(WorkbenchModuleGroup.dataAssets.modules, [.resources, .graphics, .items, .encounters, .text])
+        XCTAssertEqual(WorkbenchModuleGroup.dataAssets.modules, [.resources, .graphics, .moves, .items, .encounters, .text])
         XCTAssertEqual(WorkbenchModuleGroup.ship.modules, [.build, .issues])
     }
 }

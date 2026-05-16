@@ -172,10 +172,12 @@ struct BuildWorkbenchView: View {
                             store.runSelectedDecompBuild()
                         }
                         .disabled(!store.canRunSelectedDecompBuild)
+                        .help(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "build-rom" }?.disabledReason ?? "Run the selected declared make target")
                     } else {
                         Button("Cancel", systemImage: "xmark.circle") {
                             store.cancelSelectedDecompBuild()
                         }
+                        .help("Cancel the current build run")
                     }
                     Spacer()
                 }
@@ -506,11 +508,11 @@ struct BuildWorkbenchView: View {
         if store.selectedBuildReport?.isNDS == true {
             return "NDS actions are manual setup and rerun guidance only. PokemonHackStudio does not install tools, run Docker, build NDS ROMs, launch melonDS/DeSmuME, extract assets, apply mutation plans, export ROMs, or write binary/source outputs from this surface."
         }
-        return "Build runs only the selected declared make target. Open Playtest launches the runnable report-selected ROM in mGBA. Capture actions launch mGBA with a scoped script that writes screenshot or savestate artifacts. Validate, patch apply, export, conversion, and source-write actions remain locked behind preview/report flows."
+        return "Build runs only the selected declared make target. Open Playtest and capture actions use mGBA handoffs. Patch apply/export writes ignored ROM artifacts only after a compatible patch and manifest-matched base ROM are selected; conversion and source-write actions stay locked."
     }
 
     private var gbaRunnerGuidance: String {
-        "Runs only the selected declared decomp make target. Source edits, patch apply/export, conversion, and repair actions remain outside this runner."
+        "Runs only the selected declared decomp make target. Source edits, conversion, and repair actions remain outside this runner."
     }
 
     private var ndsRunnerGuidance: String {
@@ -553,29 +555,41 @@ struct BuildWorkbenchView: View {
                 store.launchSelectedPlaytest()
             }
             .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Launch the runnable playtest handoff")
         } else if action.id == "build-rom" {
             Button(action.title, systemImage: action.systemImage) {
                 store.runSelectedDecompBuild()
             }
             .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Run the selected declared make target")
         } else if action.id == "cancel-build" {
             Button(action.title, systemImage: action.systemImage) {
                 store.cancelSelectedDecompBuild()
             }
             .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Cancel the current build run")
         } else if action.id == "capture-screenshot" {
             Button(action.title, systemImage: action.systemImage) {
                 store.captureSelectedPlaytest(kind: .screenshot)
             }
             .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Capture the current playtest screenshot artifact")
         } else if action.id == "capture-savestate" {
             Button(action.title, systemImage: action.systemImage) {
                 store.captureSelectedPlaytest(kind: .saveState)
             }
             .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Capture the current playtest savestate artifact")
+        } else if action.id == "apply-patch" || action.id == "export-rom" {
+            Button(action.title, systemImage: action.systemImage) {
+                store.applyExportSelectedPatchROM()
+            }
+            .disabled(!action.isEnabled)
+            .help(action.disabledReason ?? "Apply the selected patch and export the patched ROM artifact")
         } else {
             Button(action.title, systemImage: action.isPreviewLocked ? "lock" : action.systemImage) {}
                 .disabled(!action.isEnabled)
+                .help(action.disabledReason ?? "Action unavailable")
         }
     }
 
@@ -586,6 +600,7 @@ struct BuildWorkbenchView: View {
                     ForEach(store.fixtureBuildWorkflowActions) { action in
                         Button(action.title, systemImage: "lock") {}
                             .disabled(true)
+                            .help(action.disabledReason ?? "Fixture preview only")
                     }
                     Spacer()
                 }

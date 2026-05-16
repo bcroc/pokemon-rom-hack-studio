@@ -20,6 +20,8 @@ struct MutationPlanChangeRow: Identifiable {
     let path: String
     let summary: String
     let detail: String?
+    let evidenceDetail: String?
+    let evidenceIsTruncated: Bool
 }
 
 struct MutationPlanAppliedChangeRow: Identifiable {
@@ -183,7 +185,9 @@ extension MutationPlanPanelContext {
                     id: "\(plan.speciesID)::\(change.id)",
                     path: change.path,
                     summary: "\(plan.speciesID): \(change.summary)",
-                    detail: "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+                    detail: "\(change.originalByteCount) -> \(change.newByteCount) bytes",
+                    evidenceDetail: nil,
+                    evidenceIsTruncated: false
                 )
             }
         }
@@ -533,6 +537,8 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: TrainerEditFileChange) {
@@ -540,6 +546,8 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: SpeciesEditFileChange) {
@@ -547,6 +555,8 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: MoveEditFileChange) {
@@ -554,6 +564,8 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: ItemEditFileChange) {
@@ -561,6 +573,8 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: GraphicsEditFileChange) {
@@ -568,13 +582,21 @@ private extension MutationPlanChangeRow {
         path = change.path
         summary = change.summary
         detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        evidenceDetail = nil
+        evidenceIsTruncated = false
     }
 
     init(change: NDSDataEditFileChange) {
         id = change.id
         path = change.path
         summary = change.summary
-        detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes"
+        let previewLimit = 400
+        let previewCount = change.textPreview.count
+        evidenceIsTruncated = change.newData.count > previewLimit || previewCount >= previewLimit
+        let truncation = evidenceIsTruncated ? "; preview evidence is truncated" : ""
+        let shaSummary = change.originalSHA1.map { "; source sha1 \($0.prefix(8))" } ?? ""
+        detail = "\(change.originalByteCount) -> \(change.newByteCount) bytes\(shaSummary)"
+        evidenceDetail = "Replacement content is redacted; \(previewCount) preview character(s) tracked for review\(truncation)."
     }
 }
 

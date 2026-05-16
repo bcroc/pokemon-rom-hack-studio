@@ -382,6 +382,79 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(preview.diagnostics.contains { $0.code == "PATCH_BINARY_DIFF_PREVIEW_ONLY" })
     }
 
+    func testPatchApplyExportWritesBPSOutputManifestAndBackup() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        var baseBytes = Array(repeating: UInt8(0xFF), count: 0xC0)
+        baseBytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        baseBytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        let targetBytes = baseBytes.enumerated().map { index, byte in index == 0x10 ? UInt8(0x42) : byte }
+        let baseData = Data(baseBytes)
+        let targetData = Data(targetBytes)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+
+        let first = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        let outputPath = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path
+        XCTAssertEqual(first.status, .exported)
+        XCTAssertEqual(first.outputPath, outputPath)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: outputPath)), targetData)
+        XCTAssertEqual(first.manifest?.patchFormat, .bps)
+        XCTAssertEqual(first.manifest?.headerPolicy.shouldRewriteHeader, false)
+        XCTAssertEqual(first.manifest?.baseROMSHA1, pokemonHackSHA1Hex(baseData))
+        XCTAssertEqual(first.manifest?.outputROMSHA1, pokemonHackSHA1Hex(targetData))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputPath.appending(".manifest.json")))
+
+        let second = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true
+        )
+        XCTAssertEqual(second.status, .exported)
+        XCTAssertNotNil(second.backupPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.backupPath ?? ""))
+    }
+
+    func testPatchApplyExportBlocksMismatchedBaseROM() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        let base = Data("abc".utf8)
+        let wrong = Data("xyz".utf8)
+        let baseROM = root.appendingPathComponent("wrong.gba")
+        let patch = root.appendingPathComponent("cleanroom.ips")
+        try write(wrong, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(base))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(Data("PATCH".utf8) + Data([0x00, 0x00, 0x01, 0x00, 0x01, 0x64]) + Data("EOF".utf8), to: patch)
+
+        let result = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_BASE_ROM_NOT_COMPATIBLE" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/wrong-cleanroom.gba").path))
+    }
+
     func testPatchManifestReportsSelectedBaseROMMismatch() throws {
         let root = try makeTemporaryRoot()
         try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -804,6 +877,69 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
 
     private func setModificationDate(_ date: Date, for url: URL) throws {
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    }
+
+    private func makeBPSPatch(source: Data, target: Data) -> Data {
+        var body = Data("BPS1".utf8)
+        body.append(contentsOf: encodeBPSVariableLength(UInt64(source.count)))
+        body.append(contentsOf: encodeBPSVariableLength(UInt64(target.count)))
+        body.append(contentsOf: encodeBPSVariableLength(0))
+
+        var prefixLength = 0
+        let sourceBytes = Array(source)
+        let targetBytes = Array(target)
+        while prefixLength < min(sourceBytes.count, targetBytes.count),
+              sourceBytes[prefixLength] == targetBytes[prefixLength] {
+            prefixLength += 1
+        }
+        if prefixLength > 0 {
+            body.append(contentsOf: encodeBPSVariableLength(UInt64((prefixLength - 1) << 2)))
+        }
+        if prefixLength < targetBytes.count {
+            let length = targetBytes.count - prefixLength
+            body.append(contentsOf: encodeBPSVariableLength(UInt64(((length - 1) << 2) | 1)))
+            body.append(contentsOf: targetBytes[prefixLength...])
+        }
+
+        appendUInt32LE(crc32(source), to: &body)
+        appendUInt32LE(crc32(target), to: &body)
+        appendUInt32LE(crc32(body), to: &body)
+        return body
+    }
+
+    private func encodeBPSVariableLength(_ value: UInt64) -> [UInt8] {
+        var data = value
+        var bytes: [UInt8] = []
+        while true {
+            let byte = UInt8(data & 0x7F)
+            data >>= 7
+            if data == 0 {
+                bytes.append(byte | 0x80)
+                break
+            }
+            bytes.append(byte)
+            data -= 1
+        }
+        return bytes
+    }
+
+    private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 24) & 0xFF))
+    }
+
+    private func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                let mask = 0 &- (crc & 1)
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask)
+            }
+        }
+        return ~crc
     }
 }
 

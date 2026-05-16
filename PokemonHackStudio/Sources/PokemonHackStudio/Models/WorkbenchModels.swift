@@ -381,6 +381,7 @@ struct BuildWorkflowActionViewState: Identifiable, Equatable {
     let systemImage: String
     let isEnabled: Bool
     let isPreviewLocked: Bool
+    let disabledReason: String?
 }
 
 enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
@@ -1752,11 +1753,17 @@ struct ResourceLibraryItemViewState: Identifiable {
 }
 
 struct NDSDataResourceEditorViewState {
+    let assetID: String
     let recordID: String
     let text: String
     let semanticFields: [NDSDataSemanticFieldViewState]
     let canEdit: Bool
     let isDirty: Bool
+    let isHiddenByFilters: Bool
+    let sourceByteCount: Int
+    let draftByteCount: Int
+    let lensSummary: String
+    let hiddenDraftSummary: String?
     let canPreview: Bool
     let canApply: Bool
     let canDiscard: Bool

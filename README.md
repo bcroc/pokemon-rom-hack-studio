@@ -32,6 +32,8 @@ Common commands:
 make test       # Swift package tests
 make build      # Swift package build
 make validate   # Tests plus CLI smoke checks
+make scripts-check  # Shell syntax and app-build tool preflight
+make test-app   # Generate the Xcode project and run app-hosted tests
 make run        # Generate the Xcode project, build the app, and launch it
 make verify     # Build and verify the app process launches
 ```
@@ -44,14 +46,15 @@ The validation script runs:
 
 ```sh
 swift test --package-path PokemonHackStudio
-swift run --package-path PokemonHackStudio pokemonhack-cli references --json
-swift run --package-path PokemonHackStudio pokemonhack-cli inspect pokeemerald --json
-swift run --package-path PokemonHackStudio pokemonhack-cli maps pokeemerald --json
-swift run --package-path PokemonHackStudio pokemonhack-cli map-visual pokeemerald MAP_MAUVILLE_CITY --json
-swift run --package-path PokemonHackStudio pokemonhack-cli playtest pokeemerald --headless --json
+swift build --package-path PokemonHackStudio --product pokemonhack-cli
+PokemonHackStudio/.build/debug/pokemonhack-cli references --json
+PokemonHackStudio/.build/debug/pokemonhack-cli inspect pokeemerald --json
+PokemonHackStudio/.build/debug/pokemonhack-cli maps pokeemerald --json
+PokemonHackStudio/.build/debug/pokemonhack-cli map-visual pokeemerald MAP_MAUVILLE_CITY --json
+PokemonHackStudio/.build/debug/pokemonhack-cli playtest pokeemerald --headless --json
 ```
 
-The `pokeemerald`, `pokefirered`, and `references/pokeruby` checks are skipped when the local fixture is not present.
+The `pokeemerald`, `pokefirered`, and `references/pokeruby` checks are skipped when the local fixture is not present. Set `GBA_FIXTURE_ROOT`, or the narrower `POKEEMERALD_FIXTURE_ROOT`, `POKEFIRERED_FIXTURE_ROOT`, and `POKERUBY_REFERENCE_FIXTURE_ROOT`, to point validation at alternate fixtures. Set `REQUIRE_GBA_FIXTURES=1` to fail when those fixtures are missing.
 
 ## Operating Boundaries
 

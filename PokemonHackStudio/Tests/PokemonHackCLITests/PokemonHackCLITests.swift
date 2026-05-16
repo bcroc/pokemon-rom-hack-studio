@@ -12,6 +12,18 @@ final class PokemonHackCLITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testHelpUsesCommandMetadataForTextAndJSON() throws {
+        let text = try PokemonHackCLI.run(arguments: ["--help"])
+        XCTAssertTrue(text.contains("nds-data-semantic-plan <project> <record-id>"))
+        XCTAssertTrue(text.contains("help --json"))
+
+        let json = try decodeJSON(PokemonHackCLI.run(arguments: ["help", "--json"]))
+        XCTAssertEqual(json["executable"] as? String, "pokemonhack-cli")
+        let commands = try XCTUnwrap(json["commands"] as? [[String: Any]])
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-semantic-plan" && ($0["usage"] as? String)?.contains("--set <field=value>") == true })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "help" })
+    }
+
     func testPlaytestHeadlessAndLaunchEmitJSONWithoutApplyingSideEffects() throws {
         let root = try makeEmeraldProject()
 
@@ -160,6 +172,30 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["mgbaLaunchPreview"])
         XCTAssertNotNil(result["binaryDiffPreview"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba").path))
+    }
+
+    func testPatchApplyExportCommandWritesIgnoredROMAndManifest() throws {
+        let root = try makeEmeraldProject()
+        let patch = root.appendingPathComponent("cleanroom.ips")
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let patchedData = Data("adc".utf8)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try baseData.write(to: baseROM)
+        try (Data("PATCH".utf8) + Data([0x00, 0x00, 0x01, 0x00, 0x01, 0x64]) + Data("EOF".utf8)).write(to: patch)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["patch-apply-export", root.path, patch.path, "--base-rom", baseROM.path, "--json"])
+        )
+
+        XCTAssertEqual(result["status"] as? String, "exported")
+        XCTAssertEqual(result["outputROMSHA1"] as? String, "aa3159afc1d353ecf7d91cbd242724ce1f99d443")
+        let outputPath = try XCTUnwrap(result["outputPath"] as? String)
+        let manifestPath = try XCTUnwrap(result["manifestPath"] as? String)
+        XCTAssertTrue(outputPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba"))
+        XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba.manifest.json"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: outputPath)), patchedData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestPath))
     }
 
     func testRomDiffPreviewCommandEmitsStandaloneReadonlyPreview() throws {
@@ -451,12 +487,28 @@ final class PokemonHackCLITests: XCTestCase {
             ])
         )
 
-        let textDraft = try XCTUnwrap(plan["textDraft"] as? [String: Any])
-        XCTAssertTrue((textDraft["editedText"] as? String)?.contains("\"base_hp\":31") == true)
-        XCTAssertTrue((textDraft["editedText"] as? String)?.contains("[\"EVO_LEVEL\",22,\"SPECIES_KADABRA\"]") == true)
-        let editPlan = try XCTUnwrap(plan["editPlan"] as? [String: Any])
-        let changes = try XCTUnwrap(editPlan["changes"] as? [[String: Any]])
+        XCTAssertNil(plan["textDraft"])
+        XCTAssertNil(plan["editPlan"])
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(requestedFieldKeys, ["base_hp", "evolutions.0.parameter"])
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
         XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, "res/pokemon/abra/data.json")
+        XCTAssertNotNil(changes.first?["originalByteCount"])
+        XCTAssertNotNil(changes.first?["newByteCount"])
+        XCTAssertNil(changes.first?["textPreview"])
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-semantic-plan",
+            root.path,
+            "species:res/pokemon/abra/data.json",
+            "--set",
+            "base_hp=31",
+            "--set",
+            "evolutions.0.parameter=22",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains("\"base_hp\":31"))
+        XCTAssertFalse(redactedPlan.contains("EVO_LEVEL\",22"))
 
         let apply = try decodeJSON(
             PokemonHackCLI.run(arguments: [
@@ -509,12 +561,11 @@ final class PokemonHackCLITests: XCTestCase {
                 "--json"
             ])
         )
-        let itemTextDraft = try XCTUnwrap(itemPlan["textDraft"] as? [String: Any])
-        XCTAssertTrue((itemTextDraft["editedText"] as? String)?.contains("\"price\": 250") == true)
-        XCTAssertTrue((itemTextDraft["editedText"] as? String)?.contains("\"field_use\": false") == true)
-        let itemEditPlan = try XCTUnwrap(itemPlan["editPlan"] as? [String: Any])
-        let itemChanges = try XCTUnwrap(itemEditPlan["changes"] as? [[String: Any]])
+        let itemRequestedFieldKeys = try XCTUnwrap(itemPlan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(itemRequestedFieldKeys, ["price", "field_use"])
+        let itemChanges = try XCTUnwrap(itemPlan["changes"] as? [[String: Any]])
         XCTAssertEqual(itemChanges.count, 1)
+        XCTAssertNil(itemChanges.first?["textPreview"])
 
         let itemApply = try decodeJSON(
             PokemonHackCLI.run(arguments: [
@@ -543,11 +594,11 @@ final class PokemonHackCLITests: XCTestCase {
                 "--json"
             ])
         )
-        let trainerTextDraft = try XCTUnwrap(trainerPlan["textDraft"] as? [String: Any])
-        XCTAssertTrue((trainerTextDraft["editedText"] as? String)?.contains("\"double_battle\": true") == true)
-        let trainerEditPlan = try XCTUnwrap(trainerPlan["editPlan"] as? [String: Any])
-        let trainerChanges = try XCTUnwrap(trainerEditPlan["changes"] as? [[String: Any]])
+        let trainerRequestedFieldKeys = try XCTUnwrap(trainerPlan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(trainerRequestedFieldKeys, ["double_battle"])
+        let trainerChanges = try XCTUnwrap(trainerPlan["changes"] as? [[String: Any]])
         XCTAssertEqual(trainerChanges.count, 1)
+        XCTAssertNil(trainerChanges.first?["textPreview"])
 
         let trainerApply = try decodeJSON(
             PokemonHackCLI.run(arguments: [
@@ -603,6 +654,56 @@ final class PokemonHackCLITests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent("res/items/items.csv"), encoding: .utf8),
             "id,name\n1,POTION\n"
         )
+
+        let heartGoldRoot = try makeTestHeartGoldDecompRoot()
+        let heartGoldPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                heartGoldRoot.path,
+                "personal:files/poketool/personal/personal.json",
+                "--set",
+                "species=CYNDAQUIL",
+                "--json"
+            ])
+        )
+        let heartGoldRequestedFieldKeys = try XCTUnwrap(heartGoldPlan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(heartGoldRequestedFieldKeys, ["species"])
+        let heartGoldChanges = try XCTUnwrap(heartGoldPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldChanges.count, 1)
+        XCTAssertEqual(heartGoldChanges.first?["path"] as? String, "files/poketool/personal/personal.json")
+        XCTAssertNil(heartGoldChanges.first?["textPreview"])
+
+        let heartGoldApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                heartGoldRoot.path,
+                "personal:files/poketool/personal/personal.json",
+                "--set",
+                "species=CYNDAQUIL",
+                "--json"
+            ])
+        )
+        let heartGoldAppliedChanges = try XCTUnwrap(heartGoldApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldAppliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: heartGoldRoot.appendingPathComponent("files/poketool/personal/personal.json"), encoding: .utf8)
+                .contains("\"species\":\"CYNDAQUIL\"")
+        )
+
+        let blockedHeartGoldTrainerApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                heartGoldRoot.path,
+                "trainers:files/poketool/trainer/trainers.json",
+                "--set",
+                "id=2",
+                "--json"
+            ])
+        )
+        let blockedHeartGoldTrainerChanges = try XCTUnwrap(blockedHeartGoldTrainerApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedHeartGoldTrainerChanges.count, 0)
+        let blockedHeartGoldTrainerDiagnostics = try XCTUnwrap(blockedHeartGoldTrainerApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedHeartGoldTrainerDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PERSONAL_PATH_BLOCKED" })
     }
 
     func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
@@ -845,6 +946,21 @@ final class PokemonHackCLITests: XCTestCase {
         try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
         try write(Data([0x01]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
         try write(makeTestNARC(), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
+        return root
+    }
+
+    private func makeTestHeartGoldDecompRoot() throws -> URL {
+        let root = try makeTemporaryDirectory().appendingPathComponent("pokeheartgold")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try write("GAME_VERSION ?= HEARTGOLD\nGAME_CODE := IPK\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM := $(BUILD_DIR)/poke$(buildname).nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("HostRoot files/\n", to: root.appendingPathComponent("rom.rsf"))
+        try write("filesystem: $(NITROFS_FILES)\n", to: root.appendingPathComponent("filesystem.mk"))
+        try write("dddddddddddddddddddddddddddddddddddddddd  pokeheartgold.us.nds\n", to: root.appendingPathComponent("heartgold.us/rom.sha1"))
+        try write("{\"species\":\"CHIKORITA\"}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
+        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
+        try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin"))
         return root
     }
 

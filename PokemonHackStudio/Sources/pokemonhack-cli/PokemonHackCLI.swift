@@ -39,6 +39,58 @@ private struct NDSDataEditFileChangeReport: Codable, Equatable {
     }
 }
 
+private struct NDSDataSemanticEditPlanReport: Codable, Equatable {
+    let recordID: String
+    let requestedFieldKeys: [String]
+    let snapshot: NDSDataSemanticSnapshot
+    let changes: [NDSDataSemanticFileChangeReport]
+    let diagnostics: [Diagnostic]
+    let mutationPlan: MutationPlan
+    let backupRelativeRoot: String
+    let changeCount: Int
+
+    init(plan: NDSDataSemanticEditPlan) {
+        recordID = plan.draft.recordID
+        requestedFieldKeys = plan.draft.fieldEdits.map(\.key)
+        snapshot = plan.snapshot
+        changes = plan.editPlan.changes.map(NDSDataSemanticFileChangeReport.init(change:))
+        diagnostics = plan.diagnostics
+        mutationPlan = plan.editPlan.mutationPlan
+        backupRelativeRoot = plan.editPlan.backupRelativeRoot
+        changeCount = plan.editPlan.changes.count
+    }
+}
+
+private struct NDSDataSemanticFileChangeReport: Codable, Equatable {
+    let id: String
+    let path: String
+    let summary: String
+    let originalSHA1: String?
+    let originalByteCount: Int
+    let newByteCount: Int
+
+    init(change: NDSDataEditFileChange) {
+        id = change.id
+        path = change.path
+        summary = change.summary
+        originalSHA1 = change.originalSHA1
+        originalByteCount = change.originalByteCount
+        newByteCount = change.newByteCount
+    }
+}
+
+private struct CLICommandMetadata: Codable, Equatable {
+    let name: String
+    let usage: String
+    let summary: String
+}
+
+private struct CLIHelpReport: Codable, Equatable {
+    let executable: String
+    let summary: String
+    let commands: [CLICommandMetadata]
+}
+
 @main
 struct PokemonHackCLI {
     static func main() {
@@ -52,6 +104,12 @@ struct PokemonHackCLI {
     }
 
     static func run(arguments: [String]) throws -> String {
+        if arguments == ["--help"] || arguments == ["help"] {
+            return helpText
+        }
+        if arguments == ["help", "--json"] || arguments == ["--help", "--json"] {
+            return try encode(helpReport)
+        }
         guard let command = arguments.first else {
             throw CLIError.usage
         }
@@ -135,6 +193,8 @@ struct PokemonHackCLI {
             return try patchManifest(arguments: Array(arguments.dropFirst()))
         case "patch-artifact-plan":
             return try patchArtifactPlan(arguments: Array(arguments.dropFirst()))
+        case "patch-apply-export":
+            return try patchApplyExport(arguments: Array(arguments.dropFirst()))
         case "rom-diff-preview":
             return try romDiffPreview(arguments: Array(arguments.dropFirst()))
         case "build":
@@ -441,7 +501,7 @@ struct PokemonHackCLI {
         }
         let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
         let draft = NDSDataSemanticEditDraft(recordID: request.recordID, fieldEdits: request.fieldEdits)
-        return try encode(NDSDataSemanticEditor.plan(catalog: catalog, draft: draft))
+        return try encode(NDSDataSemanticEditPlanReport(plan: NDSDataSemanticEditor.plan(catalog: catalog, draft: draft)))
     }
 
     private static func ndsDataSemanticApply(arguments: [String]) throws -> String {
@@ -617,6 +677,59 @@ struct PokemonHackCLI {
         )
     }
 
+    private static func patchApplyExport(arguments: [String]) throws -> String {
+        guard arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var overwrite = false
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else if argument == "--overwrite" {
+                overwrite = true
+                index += 1
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard let baseROMPath else {
+            throw CLIError.usage
+        }
+        if positionals.count == 1, let patch = positionals.first {
+            return try encode(
+                PatchManifestBuilder.applyExport(
+                    patchPath: patch,
+                    baseROMPath: baseROMPath,
+                    overwrite: overwrite
+                )
+            )
+        }
+        guard positionals.count == 2, let project = positionals.first, let patch = positionals.dropFirst().first else {
+            throw CLIError.usage
+        }
+        return try encode(
+            PatchManifestBuilder.applyExport(
+                patchPath: patch,
+                projectPath: project,
+                baseROMPath: baseROMPath,
+                overwrite: overwrite
+            )
+        )
+    }
+
     private static func build(arguments: [String]) throws -> String {
         guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
@@ -705,6 +818,74 @@ struct PokemonHackCLI {
         return String(decoding: data, as: UTF8.self)
     }
 
+    static var helpText: String {
+        let commandLines = commandMetadata.map { "  \($0.usage)\n      \($0.summary)" }.joined(separator: "\n")
+        return """
+        Usage: pokemonhack-cli <command> [arguments]
+
+        Commands:
+        \(commandLines)
+
+        Run pokemonhack-cli help --json for machine-readable command metadata.
+        """
+    }
+
+    private static var helpReport: CLIHelpReport {
+        CLIHelpReport(
+            executable: "pokemonhack-cli",
+            summary: "Inspect, validate, preview, and explicitly apply supported PokemonHackStudio project plans.",
+            commands: commandMetadata
+        )
+    }
+
+    private static let commandMetadata: [CLICommandMetadata] = [
+        CLICommandMetadata(name: "inspect", usage: "inspect <path> --json", summary: "Inspect a project, ROM, or supported input path."),
+        CLICommandMetadata(name: "index", usage: "index <path> --json", summary: "Build the adapter index for a project path."),
+        CLICommandMetadata(name: "source-index", usage: "source-index <path> --json", summary: "Emit parsed source index records."),
+        CLICommandMetadata(name: "script-outline", usage: "script-outline <path> --json", summary: "Emit script outline records."),
+        CLICommandMetadata(name: "script-readiness", usage: "script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json", summary: "Preview script readiness for a map or script label."),
+        CLICommandMetadata(name: "script-command-edit-plan", usage: "script-command-edit-plan <project> <source-path> <line> <argument-index> <replacement> --json", summary: "Plan a single native script command argument edit."),
+        CLICommandMetadata(name: "script-command-edit-apply", usage: "script-command-edit-apply <project> <source-path> <line> <argument-index> <replacement> --json", summary: "Apply a planned native script command argument edit through backups and safety checks."),
+        CLICommandMetadata(name: "moves-graph", usage: "moves-graph <path> --json", summary: "Emit move and learnset graph data."),
+        CLICommandMetadata(name: "move-catalog", usage: "move-catalog <path> --json", summary: "Emit editable/read-only move catalog data."),
+        CLICommandMetadata(name: "item-catalog", usage: "item-catalog <path> --json", summary: "Emit editable/read-only item catalog data."),
+        CLICommandMetadata(name: "pokemon-compatibility", usage: "pokemon-compatibility <path> --json", summary: "Report Pokemon data editor compatibility by surface."),
+        CLICommandMetadata(name: "migration-coverage", usage: "migration-coverage <path> --json", summary: "Report source migration coverage."),
+        CLICommandMetadata(name: "rom-asset-migration-plan", usage: "rom-asset-migration-plan <rom> --json", summary: "Preview ROM asset migration targets."),
+        CLICommandMetadata(name: "species-graph", usage: "species-graph <path> --json", summary: "Emit species graph data."),
+        CLICommandMetadata(name: "resources", usage: "resources --json", summary: "Emit the built-in resource manifest."),
+        CLICommandMetadata(name: "resource-index", usage: "resource-index <path> --json", summary: "Emit resource rows for a project path."),
+        CLICommandMetadata(name: "asset-index", usage: "asset-index <path> --json", summary: "Emit or reuse the generated asset catalog."),
+        CLICommandMetadata(name: "pokemon-catalog", usage: "pokemon-catalog <path> --json", summary: "Emit Pokemon species catalog data."),
+        CLICommandMetadata(name: "trainer-catalog", usage: "trainer-catalog <path> --json", summary: "Emit trainer catalog data."),
+        CLICommandMetadata(name: "validate", usage: "validate <path> --json", summary: "Emit the composite validation report."),
+        CLICommandMetadata(name: "maps", usage: "maps <path> --json", summary: "Emit map catalog data."),
+        CLICommandMetadata(name: "map-visual", usage: "map-visual <path> <map-id> --json", summary: "Emit map visual data for one map."),
+        CLICommandMetadata(name: "graphics", usage: "graphics <path> --json", summary: "Emit graphics diagnostics."),
+        CLICommandMetadata(name: "graphics-import-plan", usage: "graphics-import-plan <project> <package> --json", summary: "Preview graphics import package handling without applying it."),
+        CLICommandMetadata(name: "rom-graph", usage: "rom-graph <rom> --json", summary: "Emit semantic GBA ROM graph data."),
+        CLICommandMetadata(name: "rom-inspect", usage: "rom-inspect <rom> --json", summary: "Inspect a GBA or NDS ROM."),
+        CLICommandMetadata(name: "nds-inspect", usage: "nds-inspect <rom> --json", summary: "Inspect an NDS ROM header and layout."),
+        CLICommandMetadata(name: "nds-files", usage: "nds-files <rom> --json", summary: "Emit NDS filesystem rows."),
+        CLICommandMetadata(name: "narc-inspect", usage: "narc-inspect <narc> --json", summary: "Inspect a NARC container."),
+        CLICommandMetadata(name: "nds-data-catalog", usage: "nds-data-catalog <path> --json", summary: "Emit the NDS data catalog."),
+        CLICommandMetadata(name: "nds-data-edit-plan", usage: "nds-data-edit-plan <project> <record-id> --draft-file <path> --json", summary: "Plan a raw source-backed NDS data edit."),
+        CLICommandMetadata(name: "nds-data-edit-apply", usage: "nds-data-edit-apply <project> <record-id> --draft-file <path> --json", summary: "Apply a raw source-backed NDS data edit through backups and safety checks."),
+        CLICommandMetadata(name: "nds-data-semantic-plan", usage: "nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Plan redacted field-level NDS semantic edits."),
+        CLICommandMetadata(name: "nds-data-semantic-apply", usage: "nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Apply field-level NDS semantic edits through the existing source mutation gate."),
+        CLICommandMetadata(name: "toolchain-health", usage: "toolchain-health <path> --json", summary: "Emit toolchain readiness rows."),
+        CLICommandMetadata(name: "references", usage: "references --json", summary: "Emit reference repository metadata."),
+        CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
+        CLICommandMetadata(name: "patch-manifest", usage: "patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json", summary: "Emit patch manifest compatibility data."),
+        CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
+        CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
+        CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
+        CLICommandMetadata(name: "build", usage: "build <path> --json", summary: "Emit build validation data without building."),
+        CLICommandMetadata(name: "playtest", usage: "playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json", summary: "Preview or run supported mGBA handoff actions."),
+        CLICommandMetadata(name: "playtest-debug-plan", usage: "playtest-debug-plan <path> --json", summary: "Preview emulator debugging plans."),
+        CLICommandMetadata(name: "help", usage: "help [--json] | --help [--json]", summary: "Show human or machine-readable command metadata.")
+    ]
+
     private static func render(error: Error) -> String {
         if let localized = error as? LocalizedError, let description = localized.errorDescription {
             return description
@@ -720,7 +901,7 @@ enum CLIError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "Usage: pokemonhack-cli inspect <path> --json | index <path> --json | source-index <path> --json | script-outline <path> --json | script-readiness <path> --map <map-id> --json | script-readiness <path> --script <label> --json | script-command-edit-plan <project> <source-path> <line> <argument-index> <replacement> --json | script-command-edit-apply <project> <source-path> <line> <argument-index> <replacement> --json | moves-graph <path> --json | move-catalog <path> --json | item-catalog <path> --json | pokemon-compatibility <path> --json | migration-coverage <path> --json | rom-asset-migration-plan <rom> --json | species-graph <path> --json | resources --json | resource-index <path> --json | asset-index <path> --json | pokemon-catalog <path> --json | trainer-catalog <path> --json | validate <path> --json | maps <path> --json | map-visual <path> <map-id> --json | graphics <path> --json | graphics-import-plan <project> <package> --json | rom-graph <rom> --json | rom-inspect <rom> --json | nds-inspect <rom> --json | nds-files <rom> --json | narc-inspect <narc> --json | nds-data-catalog <path> --json | nds-data-edit-plan <project> <record-id> --draft-file <path> --json | nds-data-edit-apply <project> <record-id> --draft-file <path> --json | nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json | nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json | toolchain-health <path> --json | references --json | patch <patch> --json | patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json | patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json | rom-diff-preview <patch> --base-rom <rom> --json | build <path> --json | playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json | playtest-debug-plan <path> --json"
+            return PokemonHackCLI.helpText
         case .unknownCommand(let command):
             return "Unknown command: \(command)"
         }

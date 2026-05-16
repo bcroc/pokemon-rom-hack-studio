@@ -11,10 +11,58 @@ BUILD_DIR="$ROOT_DIR/DerivedData/PokemonHackStudio"
 CONFIGURATION="Debug"
 DESTINATION="platform=macOS,arch=$(uname -m)"
 
+usage() {
+  echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|test|--check-tools]" >&2
+}
+
+check_tool() {
+  local tool="$1"
+
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "missing required tool: $tool" >&2
+    return 1
+  fi
+}
+
+check_tools() {
+  local missing=0
+
+  check_tool xcodegen || missing=1
+  check_tool xcodebuild || missing=1
+  check_tool /usr/bin/open || missing=1
+
+  if [[ "$MODE" == "--debug" || "$MODE" == "debug" ]]; then
+    check_tool lldb || missing=1
+  fi
+
+  return "$missing"
+}
+
+case "$MODE" in
+  run|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify|test|--check-tools)
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+check_tools
+
+if [[ "$MODE" == "--check-tools" ]]; then
+  echo "build tools available."
+  exit 0
+fi
+
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 cd "$PROJECT_DIR"
 xcodegen generate
+
+build_action="build"
+if [[ "$MODE" == "test" ]]; then
+  build_action="test"
+fi
 
 xcodebuild \
   -project "$PROJECT_FILE" \
@@ -22,7 +70,7 @@ xcodebuild \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$BUILD_DIR" \
   -destination "$DESTINATION" \
-  build
+  "$build_action"
 
 APP_BUNDLE="$BUILD_DIR/Build/Products/$CONFIGURATION/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
@@ -51,8 +99,10 @@ case "$MODE" in
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
     ;;
+  test)
+    ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    usage
     exit 2
     ;;
 esac

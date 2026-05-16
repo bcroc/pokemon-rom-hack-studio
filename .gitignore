@@ -13,6 +13,11 @@
 *.i
 *.dump
 *.diff
+*.ips
+*.bps
+*.ups
+*.aps
+*.xdelta
 
 # Build and derived data
 build/

@@ -80,16 +80,16 @@ The May 12, 2026 central reference-corpus refresh made `/Users/bryan/projects/re
 
 ## Reference-Review Candidate Queue
 
-The May 12, 2026 subagent review against the dirty tree did not reopen shipped rows. The later NDS/reference push completed `PHS-T94` through `PHS-T101`, so the current queue should strengthen validation and migration coverage before widening more writers:
+The May 12, 2026 subagent review against the dirty tree did not reopen shipped rows. The later NDS/reference push completed `PHS-T94` through `PHS-T101`, and the audit remediation batch is now tracked as `PHS-T102` through `PHS-T110`, so the current queue should strengthen safety, validation, and migration coverage before widening more writers:
 
-- `PHS-T73`: patch apply/export should write only ignored output ROMs plus backup/export manifests after explicit user action; source-tree mutation remains out of scope.
-- `PHS-T76`: Poryscript follow-through starts with `.pory` detection, generated `.inc` relationships, poryswitch/line-marker facts, and blocked compiler/apply guidance.
+- `PHS-T73`: patch apply/export should stay BPS-first and write only ignored output ROMs plus backup/export manifests after explicit user action; source-tree mutation remains out of scope.
 - `PHS-T78`: Expansion work should split into one semantic writer family at a time instead of a broad adapter rewrite.
 - `PHS-T79`: binary mutation needs preflight, manifest, backup, hash-drift refusal, and mutation-plan review before any ROM byte write.
-- `PHS-T92` and `PHS-T93`: ROM-only work remains migration/extraction planning and source-first coverage diagnostics before export or extraction writers; the first shared diagnostic surface is `migration-coverage <path> --json`.
-- `PHS-T94` through `PHS-T101`: completed NDS read-only catalog, preview, and manual workflow rows remain the baseline; future NDS work should expand one semantic domain at a time, starting with Platinum before HGSS/DP.
+- `PHS-T98`: after `PHS-T98A` through `PHS-T98C`, future semantic NDS work should expand one source-backed domain at a time, starting with additional Platinum scalar domains or narrow HGSS/DP scalar ports only after parser safety is hardened.
+- `PHS-T111`: NDS SDAT/audio should start as metadata-only inventory with blocked decode/convert/rebuild/export/apply actions.
+- `PHS-T112`: Gen V support should start as low-priority read-only detection and readiness, not an editor lane.
 
-Preferred next implementation picks are `PHS-T83` for related-record context panels, then narrow compatibility splits from `PHS-T57`, plus bounded `PHS-T75`, `PHS-T84`, `PHS-T76`, and `PHS-T77` authoring rows. Keep `PHS-T93` coverage diagnostics ahead of `PHS-T92` ROM asset migration planning.
+Preferred next implementation picks are the active audit remediation rows, then narrow compatibility splits from `PHS-T57`; prefer Ruby/Sapphire table-family writers or Expansion descriptor splits before broad compatibility rewrites.
 
 ## Implementation Lanes
 
@@ -175,7 +175,7 @@ The first broad reference sweep rows are now historical context, and the app bas
 | `PHS-T24` | Done | mGBA, Porylive | Playtest handoff artifacts and later `PHS-T40` explicit external mGBA launch. |
 | `PHS-T25` | Done | PorySuite, HMA, PGE, PokeData | Cross-linked Resources navigation across maps, scripts, species, trainers, graphics, build rows, text, and items. |
 
-Current follow-up work is tracked on the live board, especially `PHS-T57` compatibility-specific data editors and newer Candidate rows such as `PHS-T68` species asset import validation. Rows `PHS-T17`, `PHS-T41`, `PHS-T42`, `PHS-T43`, and `PHS-T44` are no longer deferred in the live workboard.
+Current follow-up work is tracked on the live board, especially the audit remediation batch `PHS-T102` through `PHS-T110`, compatibility-specific data editors under `PHS-T57`, and future read-only research rows such as `PHS-T111` and `PHS-T112`. Older rows such as `PHS-T17`, `PHS-T41`, `PHS-T42`, `PHS-T43`, `PHS-T44`, `PHS-T68`, `PHS-T75`, `PHS-T76`, `PHS-T77`, `PHS-T83`, and `PHS-T84` are no longer deferred in the live workboard.
 
 ## Guardrails
 
@@ -184,5 +184,5 @@ Current follow-up work is tracked on the live board, especially `PHS-T57` compat
 - Store project-relative paths and source spans in diagnostics and mutation plans.
 - Show save/layout/text/capacity warnings before writes.
 - Treat GameCube disc images and FSYS/LZSS members as read-only local inputs until a later mutation/export policy exists.
-- Treat NDS ROMs, NDS source-tree roots, NitroFS files, overlay tables, and NARC members as read-only local inputs until a later mutation/export policy exists.
+- Treat NDS ROMs, NitroFS files, overlay tables, NARC members, generated rows, reference rows, and containers as read-only local inputs until a later mutation/export policy exists; eligible local source-backed Gen IV text/JSON rows may write only through the existing explicit mutation-plan gates.
 - Keep mGBA, GPL tools, LGPL tools, custom-licensed code, and unlicensed game assets behind clear distribution boundaries.

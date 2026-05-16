@@ -206,28 +206,78 @@ struct ResourceLibraryWorkbenchView: View {
             }
 
             if assets.isEmpty {
-                ContentUnavailableView(
-                    "No Assets",
-                    systemImage: "tray",
-                    description: Text(emptyAssetDescription)
-                )
-                .frame(maxWidth: .infinity, minHeight: 260)
+                if let ndsDataEditor, ndsDataEditor.isHiddenByFilters {
+                    ScrollView {
+                        hiddenNDSDraftPanel(editor: ndsDataEditor)
+                            .padding(layoutMode.isCompact ? 14 : 24)
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No Assets",
+                        systemImage: "tray",
+                        description: Text(emptyAssetDescription)
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 260)
+                }
             } else {
                 ScrollView {
-                    ResourceAssetDetailPane(
-                        asset: selectedAsset,
-                        onNavigate: onNavigateToAsset,
-                        ndsDataEditor: ndsDataEditor,
-                        onUpdateNDSDataDraft: onUpdateNDSDataDraft,
-                        onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
-                        onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
-                        onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
-                        onDiscardNDSDataEdits: onDiscardNDSDataEdits
-                    )
-                        .padding(layoutMode.isCompact ? 14 : 24)
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let ndsDataEditor, ndsDataEditor.isHiddenByFilters {
+                            hiddenNDSDraftPanel(editor: ndsDataEditor)
+                        }
+
+                        ResourceAssetDetailPane(
+                            asset: selectedAsset,
+                            onNavigate: onNavigateToAsset,
+                            ndsDataEditor: ndsDataEditor?.isHiddenByFilters == true ? nil : ndsDataEditor,
+                            onUpdateNDSDataDraft: onUpdateNDSDataDraft,
+                            onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
+                            onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
+                            onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
+                            onDiscardNDSDataEdits: onDiscardNDSDataEdits
+                        )
+                    }
+                    .padding(layoutMode.isCompact ? 14 : 24)
                 }
             }
         }
+    }
+
+    private func hiddenNDSDraftPanel(editor: NDSDataResourceEditorViewState) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label("Hidden NDS Draft", systemImage: "line.3.horizontal.decrease.circle")
+                    .font(.headline)
+                ResourceTag(text: editor.recordID)
+                Spacer()
+                Button("Show Draft", systemImage: "eye") {
+                    mode = .assets
+                    selectedCategory = Self.allCategories
+                    selectedAssetID = editor.assetID
+                }
+                .help("Select the draft and reset the category filter. Clear the search field if it is still hidden.")
+                Button("Discard", systemImage: "trash") {
+                    onDiscardNDSDataEdits()
+                }
+                .disabled(!editor.canDiscard)
+                .help("Discard the hidden NDS draft")
+            }
+
+            Text(editor.hiddenDraftSummary ?? "The selected NDS draft is outside the current Resources results.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            NDSDataRecordEditor(
+                editor: editor,
+                onUpdateDraft: onUpdateNDSDataDraft,
+                onUpdateSemanticField: onUpdateNDSDataSemanticField,
+                onPreview: onPreviewNDSDataMutationPlan,
+                onApply: onApplyNDSDataMutationPlan,
+                onDiscard: onDiscardNDSDataEdits
+            )
+        }
+        .padding(14)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var compactAssetList: some View {
@@ -613,13 +663,16 @@ private struct NDSDataRecordEditor: View {
     let onDiscard: () -> Void
 
     var body: some View {
-        EditorSection(title: "NDS Data Record") {
+        EditorSection(title: "NDS Editing Lens") {
             if let editor {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         ResourceTag(text: editor.recordID)
                         if editor.isDirty {
                             ResourceTag(text: "draft")
+                        }
+                        if editor.isHiddenByFilters {
+                            ResourceTag(text: "hidden by filters")
                         }
                         Spacer()
                         Button("Preview", systemImage: "doc.text.magnifyingglass") {
@@ -638,6 +691,19 @@ private struct NDSDataRecordEditor: View {
                             onDiscard()
                         }
                         .disabled(!editor.canDiscard)
+                        .help(editor.canDiscard ? "Discard staged NDS data edits" : "No NDS data edits are staged")
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(editor.lensSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            ResourceTag(text: "\(editor.sourceByteCount) source bytes")
+                            ResourceTag(text: "\(editor.draftByteCount) draft bytes")
+                            ResourceTag(text: editor.canEdit ? "source-backed" : "read-only")
+                        }
                     }
 
                     if !editor.semanticFields.isEmpty {

@@ -212,11 +212,11 @@ struct ContentView: View {
             Divider()
 
             Button("Build Target", systemImage: "hammer") {
-                store.selectWorkbenchModule(.build)
+                store.showBuildCommandTab()
             }
 
             Button("Run Target", systemImage: "play.fill") {
-                store.selectWorkbenchModule(.build)
+                store.showRunCommandTab()
             }
 
             Button("Show Diagnostics", systemImage: "checkmark.seal") {

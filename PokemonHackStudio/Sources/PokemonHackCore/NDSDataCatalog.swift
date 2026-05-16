@@ -332,6 +332,50 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.readiness = readiness
         self.diagnostics = diagnostics
     }
+
+    public func copy(
+        id: String? = nil,
+        domain: NDSDataDomain? = nil,
+        title: String? = nil,
+        relativePath: String? = nil,
+        containerPath: String?? = nil,
+        format: NDSDataSourceFormat? = nil,
+        role: NDSDataSourceRole? = nil,
+        exists: Bool? = nil,
+        recordCount: Int?? = nil,
+        byteCount: UInt64?? = nil,
+        sourceSpan: SourceSpan?? = nil,
+        facts: [SourceIndexFact]? = nil,
+        preview: String?? = nil,
+        containerSummary: NDSDataContainerSummary?? = nil,
+        textBankPreview: NDSDataTextBankPreview?? = nil,
+        migrationPlan: NDSDataMigrationPlan?? = nil,
+        relatedRecords: [NDSDataRelatedRecord]? = nil,
+        readiness: NDSDataReadinessSummary?? = nil,
+        diagnostics: [Diagnostic]? = nil
+    ) -> NDSDataCatalogRecord {
+        NDSDataCatalogRecord(
+            id: id ?? self.id,
+            domain: domain ?? self.domain,
+            title: title ?? self.title,
+            relativePath: relativePath ?? self.relativePath,
+            containerPath: containerPath ?? self.containerPath,
+            format: format ?? self.format,
+            role: role ?? self.role,
+            exists: exists ?? self.exists,
+            recordCount: recordCount ?? self.recordCount,
+            byteCount: byteCount ?? self.byteCount,
+            sourceSpan: sourceSpan ?? self.sourceSpan,
+            facts: facts ?? self.facts,
+            preview: preview ?? self.preview,
+            containerSummary: containerSummary ?? self.containerSummary,
+            textBankPreview: textBankPreview ?? self.textBankPreview,
+            migrationPlan: migrationPlan ?? self.migrationPlan,
+            relatedRecords: relatedRecords ?? self.relatedRecords,
+            readiness: readiness ?? self.readiness,
+            diagnostics: diagnostics ?? self.diagnostics
+        )
+    }
 }
 
 public struct ProjectNDSDataCatalog: Codable, Equatable {
@@ -369,6 +413,28 @@ public struct ProjectNDSDataCatalog: Codable, Equatable {
 }
 
 public enum NDSDataCatalogBuilder {
+    public static func sourceFingerprint(path: String, fileManager: FileManager = .default) throws -> String {
+        let index = try GameAdapterRegistry.index(path: path, fileManager: fileManager)
+        return sourceFingerprint(index: index, fileManager: fileManager)
+    }
+
+    public static func sourceFingerprint(index: ProjectIndex, fileManager: FileManager = .default) -> String {
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let payload = NDSDataSourceFingerprintPayload(
+            profile: index.profile,
+            adapterID: index.adapterID,
+            adapterName: index.adapterName,
+            rootPath: root.path,
+            files: sourceFingerprintEntries(root: root, profile: index.profile, fileManager: fileManager)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload) else {
+            return "\(root.path)|\(index.profile.rawValue)|\(index.adapterID)"
+        }
+        return pokemonHackSHA1Hex(data)
+    }
+
     public static func build(path: String, fileManager: FileManager = .default) throws -> ProjectNDSDataCatalog {
         let index = try GameAdapterRegistry.index(path: path, fileManager: fileManager)
         return build(index: index, fileManager: fileManager)
@@ -928,25 +994,10 @@ public enum NDSDataCatalogBuilder {
             let relationshipFacts = factsForRelationships(related, readiness: readiness)
             let diagnostics = record.diagnostics + diagnosticsForReadiness(readiness, record: record)
             let stableRelated = related.filter { recordsByID[$0.recordID] != nil }
-            return NDSDataCatalogRecord(
-                id: record.id,
-                domain: record.domain,
-                title: record.title,
-                relativePath: record.relativePath,
-                containerPath: record.containerPath,
-                format: record.format,
-                role: record.role,
-                exists: record.exists,
-                recordCount: record.recordCount,
-                byteCount: record.byteCount,
-                sourceSpan: record.sourceSpan,
+            return record.copy(
                 facts: record.facts + relationshipFacts,
-                preview: record.preview,
-                containerSummary: record.containerSummary,
-                textBankPreview: record.textBankPreview,
-                migrationPlan: record.migrationPlan,
                 relatedRecords: stableRelated,
-                readiness: readiness,
+                readiness: .some(readiness),
                 diagnostics: diagnostics
             )
         }
@@ -1977,6 +2028,98 @@ public enum NDSDataCatalogBuilder {
         return lhs.domain.sortOrder < rhs.domain.sortOrder
     }
 
+    private static func sourceFingerprintEntries(
+        root: URL,
+        profile: GameProfile,
+        fileManager: FileManager
+    ) -> [NDSDataSourceFingerprintEntry] {
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+            return [sourceFingerprintEntry(relativePath: root.lastPathComponent, url: root, kind: profile.rawValue)]
+        }
+        let roots = sourceFingerprintRoots(for: profile)
+        var entries: [NDSDataSourceFingerprintEntry] = []
+        for relativePath in roots {
+            let url = root.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: url.path) else {
+                entries.append(NDSDataSourceFingerprintEntry(relativePath: relativePath, kind: "missing", byteCount: nil, sha1: nil))
+                continue
+            }
+            entries.append(contentsOf: sourceFingerprintEntries(relativePath: relativePath, root: root, fileManager: fileManager))
+        }
+        return entries.sorted { lhs, rhs in lhs.relativePath < rhs.relativePath }
+    }
+
+    private static func sourceFingerprintRoots(for profile: GameProfile) -> [String] {
+        switch profile {
+        case .pokeplatinum:
+            return ["Makefile", "meson.build", "meson.options", "platinum.us", "res", "generated"]
+        case .pokeheartgold:
+            return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "heartgold.us", "soulsilver.us", "files", "src"]
+        case .pokediamond:
+            return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "pokediamond.us.sha1", "files", "arm9"]
+        case .pmdSky:
+            return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "nitrofs_files.txt", "pmdsky.us", "files", "src", "asm"]
+        case .ndsROM:
+            return []
+        default:
+            return descriptors(for: profile)?.map(\.relativePath) ?? []
+        }
+    }
+
+    private static func sourceFingerprintEntries(
+        relativePath: String,
+        root: URL,
+        fileManager: FileManager
+    ) -> [NDSDataSourceFingerprintEntry] {
+        let url = root.appendingPathComponent(relativePath)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return [NDSDataSourceFingerprintEntry(relativePath: relativePath, kind: "missing", byteCount: nil, sha1: nil)]
+        }
+        guard isDirectory.boolValue else {
+            return [sourceFingerprintEntry(relativePath: relativePath, url: url, kind: format(for: relativePath).rawValue)]
+        }
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return [NDSDataSourceFingerprintEntry(relativePath: relativePath, kind: "directory", byteCount: nil, sha1: nil)]
+        }
+        var entries: [NDSDataSourceFingerprintEntry] = [
+            NDSDataSourceFingerprintEntry(relativePath: relativePath, kind: "directory", byteCount: nil, sha1: nil)
+        ]
+        while let fileURL = enumerator.nextObject() as? URL {
+            let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                if excludedDirectoryNames.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            let entryPath = Self.relativePath(for: fileURL, root: root)
+            entries.append(sourceFingerprintEntry(relativePath: entryPath, url: fileURL, kind: format(for: entryPath).rawValue))
+        }
+        return entries
+    }
+
+    private static func sourceFingerprintEntry(
+        relativePath: String,
+        url: URL,
+        kind: String
+    ) -> NDSDataSourceFingerprintEntry {
+        guard let data = try? Data(contentsOf: url) else {
+            return NDSDataSourceFingerprintEntry(relativePath: relativePath, kind: kind, byteCount: nil, sha1: nil)
+        }
+        return NDSDataSourceFingerprintEntry(
+            relativePath: relativePath,
+            kind: kind,
+            byteCount: UInt64(data.count),
+            sha1: pokemonHackSHA1Hex(data)
+        )
+    }
+
     private static let excludedDirectoryNames: Set<String> = [
         ".git",
         ".pokemonhackstudio",
@@ -2061,6 +2204,21 @@ private struct CatalogPathDescriptor {
         self.format = format
         self.required = required
     }
+}
+
+private struct NDSDataSourceFingerprintPayload: Codable, Equatable {
+    let profile: GameProfile
+    let adapterID: String
+    let adapterName: String
+    let rootPath: String
+    let files: [NDSDataSourceFingerprintEntry]
+}
+
+private struct NDSDataSourceFingerprintEntry: Codable, Equatable {
+    let relativePath: String
+    let kind: String
+    let byteCount: UInt64?
+    let sha1: String?
 }
 
 private extension NDSDataDomain {

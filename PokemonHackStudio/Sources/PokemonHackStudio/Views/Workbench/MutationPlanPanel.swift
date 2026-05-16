@@ -179,6 +179,25 @@ struct MutationPlanPanel: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
+
+            if let evidenceDetail = change.evidenceDetail {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: change.evidenceIsTruncated ? "text.page.badge.magnifyingglass" : "lock.doc")
+                        .foregroundStyle(.tertiary)
+                    Text(evidenceDetail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                    if change.evidenceIsTruncated {
+                        Text("truncated")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(.secondary.opacity(0.12), in: Capsule())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
