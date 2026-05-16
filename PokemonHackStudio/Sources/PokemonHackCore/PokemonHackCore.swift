@@ -29,6 +29,7 @@ public enum GameProfile: String, Codable, Equatable, CaseIterable, Sendable {
     case pokediamond
     case pokeplatinum
     case pokeheartgold
+    case pokeblack
     case pmdSky
     case pokemonColosseum
     case pokemonXD
@@ -57,7 +58,7 @@ public extension GameProfile {
         switch self {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion, .binaryROM:
             return .gba
-        case .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+        case .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky:
             return .nds
         case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
             return .gameCube
@@ -69,7 +70,7 @@ public extension GameProfile {
     var projectKind: ProjectKind {
         switch self {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion,
-             .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+             .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky:
             return .sourceTree
         case .binaryROM, .ndsROM:
             return .binaryROM

@@ -612,7 +612,7 @@ public struct NDSROMAdapter: GameAdapter {
 public struct NDSDecompAdapter: GameAdapter {
     public let id = "nds.source-tree"
     public let displayName = "Nintendo DS source tree"
-    public let supportedProfiles: [GameProfile] = [.pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky]
+    public let supportedProfiles: [GameProfile] = [.pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky]
     public let supportedModules: [EditorModule] = [.rom, .build, .diagnostics]
     public let capabilities: [CoreCapability] = [.resourceIndex, .ndsSourceTreeIndex, .ndsDataCatalog, .diagnostics]
     public let writePolicy: WritePolicy = .readOnly
@@ -649,6 +649,8 @@ public struct NDSDecompAdapter: GameAdapter {
             return "pret.pokeplatinum"
         case .pokeheartgold:
             return "pret.pokeheartgold"
+        case .pokeblack:
+            return "pokemodding.pokeblack"
         case .pmdSky:
             return "pret.pmd-sky"
         default:

@@ -573,7 +573,7 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(csvSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
-    func testNDSDataSemanticEditorPlansHeartGoldSoulSilverPersonalJSONScalars() throws {
+    func testNDSDataSemanticEditorPlansHeartGoldSoulSilverPersonalAndTrainerJSONScalars() throws {
         let root = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)
 
@@ -602,8 +602,40 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
 
         let trainerSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:files/poketool/trainer/trainers.json")
-        XCTAssertFalse(trainerSnapshot.canEdit)
-        XCTAssertTrue(trainerSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PERSONAL_PATH_BLOCKED" })
+        XCTAssertTrue(trainerSnapshot.canEdit, trainerSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(trainerSnapshot.fields.contains { $0.key == "name" && $0.value == "Youngster Joey" })
+        XCTAssertTrue(trainerSnapshot.fields.contains { $0.key == "double_battle" && $0.value == "false" })
+        XCTAssertFalse(trainerSnapshot.fields.contains { $0.key == "party" })
+
+        let trainerPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:files/poketool/trainer/trainers.json",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "name", value: "Youngster Ben"),
+                    NDSDataSemanticFieldEdit(key: "double_battle", value: "true")
+                ]
+            )
+        )
+
+        XCTAssertTrue(trainerPlan.diagnostics.allSatisfy { $0.severity != .error }, trainerPlan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(trainerPlan.textDraft.editedText.contains("\"name\":\"Youngster Ben\""))
+        XCTAssertTrue(trainerPlan.textDraft.editedText.contains("\"double_battle\":true"))
+        XCTAssertTrue(trainerPlan.textDraft.editedText.contains("\"party\":[{\"species\":\"RATTATA\",\"level\":4}]"))
+        XCTAssertEqual(trainerPlan.editPlan.changes.count, 1)
+        XCTAssertTrue(trainerPlan.editPlan.validateApplyability().isApplyable)
+
+        let trainerResult = try NDSDataMutationApplier.apply(plan: trainerPlan.editPlan)
+        XCTAssertEqual(trainerResult.appliedChanges.count, 1)
+        let trainerUpdated = try String(contentsOf: root.appendingPathComponent("files/poketool/trainer/trainers.json"), encoding: .utf8)
+        XCTAssertTrue(trainerUpdated.contains("\"name\":\"Youngster Ben\""))
+        XCTAssertTrue(trainerUpdated.contains("\"double_battle\":true"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trainerResult.appliedChanges[0].backupPath))
+
+        let itemSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:files/itemtool/itemdata/item_data.csv")
+        XCTAssertFalse(itemSnapshot.canEdit)
+        XCTAssertTrue(itemSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+        XCTAssertTrue(itemSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
     }
 
     func testNDSDataSemanticEditorKeepsNonPlatinumAndContainerRowsBlocked() throws {
@@ -615,9 +647,9 @@ final class NDSDataCatalogTests: XCTestCase {
 
         let heartGold = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
         let heartGoldCatalog = try NDSDataCatalogBuilder.build(path: heartGold.path)
-        let heartGoldSnapshot = NDSDataSemanticEditor.snapshot(catalog: heartGoldCatalog, recordID: "trainers:files/poketool/trainer/trainers.json")
-        XCTAssertFalse(heartGoldSnapshot.canEdit)
-        XCTAssertTrue(heartGoldSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
+        let heartGoldItemSnapshot = NDSDataSemanticEditor.snapshot(catalog: heartGoldCatalog, recordID: "items:files/itemtool/itemdata/item_data.csv")
+        XCTAssertFalse(heartGoldItemSnapshot.canEdit)
+        XCTAssertTrue(heartGoldItemSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
 
         let diamond = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         let diamondCatalog = try NDSDataCatalogBuilder.build(path: diamond.path)
@@ -781,7 +813,7 @@ final class NDSDataCatalogTests: XCTestCase {
         try write(makeTestNARC(), to: root.appendingPathComponent("files/poketool/waza/waza_tbl.narc"))
         try write(Data("NARC".utf8) + Data(repeating: 0, count: 12), to: root.appendingPathComponent("files/data/broken.narc"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
-        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
+        try write("{\"id\":1,\"name\":\"Youngster Joey\",\"double_battle\":false,\"party\":[{\"species\":\"RATTATA\",\"level\":4}]}\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
         try write("[{\"slot\":1}]\n", to: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.json"))
         try write("{\"zone\":1}\n", to: root.appendingPathComponent("files/fielddata/eventdata/zone_event/zone_001.json"))
         try write("message\n", to: root.appendingPathComponent("files/msgdata/msg/0001.txt"))

@@ -65,6 +65,50 @@ public struct PokemonDataCompatibilitySummary: Codable, Equatable {
     }
 }
 
+public enum GBACryAudioMutationPlanStatus: String, Codable, Equatable, CaseIterable {
+    case previewOnly
+    case blocked
+}
+
+public struct GBACryAudioSourceFile: Codable, Equatable {
+    public let path: String
+    public let kind: String
+    public let sizeBytes: UInt64
+    public let sha1: String
+
+    public init(path: String, kind: String, sizeBytes: UInt64, sha1: String) {
+        self.path = path
+        self.kind = kind
+        self.sizeBytes = sizeBytes
+        self.sha1 = sha1
+    }
+}
+
+public struct GBACryAudioMutationPlan: Codable, Equatable {
+    public let status: GBACryAudioMutationPlanStatus
+    public let summary: String
+    public let sourceFiles: [GBACryAudioSourceFile]
+    public let plannedChanges: [String]
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: GBACryAudioMutationPlanStatus,
+        summary: String,
+        sourceFiles: [GBACryAudioSourceFile],
+        plannedChanges: [String],
+        blockedActions: [String],
+        diagnostics: [Diagnostic]
+    ) {
+        self.status = status
+        self.summary = summary
+        self.sourceFiles = sourceFiles
+        self.plannedChanges = plannedChanges
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
     public var id: String { surface.rawValue }
 
@@ -82,6 +126,7 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
     public let blockedReason: String?
     public let recommendedFutureRow: String?
     public let diagnostics: [Diagnostic]
+    public let cryAudioPlan: GBACryAudioMutationPlan?
 
     public init(
         surface: PokemonDataCompatibilitySurface,
@@ -97,7 +142,8 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
         unsupportedFields: [String] = [],
         blockedReason: String? = nil,
         recommendedFutureRow: String? = nil,
-        diagnostics: [Diagnostic] = []
+        diagnostics: [Diagnostic] = [],
+        cryAudioPlan: GBACryAudioMutationPlan? = nil
     ) {
         self.surface = surface
         self.status = status
@@ -113,6 +159,7 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
         self.blockedReason = blockedReason
         self.recommendedFutureRow = recommendedFutureRow
         self.diagnostics = diagnostics
+        self.cryAudioPlan = cryAudioPlan
     }
 }
 
@@ -315,15 +362,19 @@ public enum PokemonDataCompatibilityReportBuilder {
         fileManager: FileManager
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: .cries, profile: index.profile)
-        let count = existingPaths(["sound/direct_sound_samples/cries", "sound/songs/mus_cry"], root: index.root.path, fileManager: fileManager).count
+        let plan = cryAudioPlan(index: index, fileManager: fileManager)
+        let count = plan.sourceFiles.count
         return entry(
             surface: .cries,
             index: index,
             descriptor: descriptor,
             indexedCount: count,
             editableCount: 0,
-            unsupportedFields: ["cry table indexing", "audio import/export", "sample conversion"],
-            blockedReason: count == 0 ? "No known cry source path was detected for this fixture/profile." : nil
+            unsupportedFields: ["audio conversion", "generated audio output writes", "ROM cry table rewrites", "playback", "mutation apply"],
+            blockedReason: count == 0 ? "No explicit local GBA cry source files were detected for this fixture/profile." : nil,
+            recommendedFutureRow: nil,
+            diagnostics: plan.diagnostics,
+            cryAudioPlan: plan
         )
     }
 
@@ -356,7 +407,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         unsupportedFields: [String],
         blockedReason providedBlockedReason: String? = nil,
         recommendedFutureRow providedFutureRow: String? = nil,
-        diagnostics: [Diagnostic] = []
+        diagnostics: [Diagnostic] = [],
+        cryAudioPlan: GBACryAudioMutationPlan? = nil
     ) -> PokemonDataCompatibilityEntry {
         let readOnlyCount = max(0, indexedCount - editableCount)
         let blockedReason = providedBlockedReason ?? blockedReason(for: surface, profile: index.profile, indexedCount: indexedCount, descriptor: descriptor)
@@ -384,7 +436,8 @@ public enum PokemonDataCompatibilityReportBuilder {
             unsupportedFields: unsupportedFields,
             blockedReason: blockedReason,
             recommendedFutureRow: providedFutureRow ?? descriptor?.recommendedFutureRow,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            cryAudioPlan: cryAudioPlan
         )
     }
 
@@ -424,6 +477,145 @@ public enum PokemonDataCompatibilityReportBuilder {
     private static func existingPaths(_ paths: [String], root: String, fileManager: FileManager) -> [String] {
         let rootURL = URL(fileURLWithPath: root)
         return paths.filter { fileManager.fileExists(atPath: rootURL.appendingPathComponent($0).path) }
+    }
+
+    private static func cryAudioPlan(index: ProjectIndex, fileManager: FileManager) -> GBACryAudioMutationPlan {
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let sourceFiles = cryAudioSourceFiles(root: root, fileManager: fileManager)
+        let blockedActions = [
+            "Audio conversion",
+            "Generated audio output writes",
+            "Build artifact writes",
+            "Playback",
+            "ROM export",
+            "Mutation apply"
+        ]
+        if sourceFiles.isEmpty {
+            return GBACryAudioMutationPlan(
+                status: .blocked,
+                summary: "No mutation plan is available because no explicit local GBA cry source files were found.",
+                sourceFiles: [],
+                plannedChanges: [],
+                blockedActions: blockedActions,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .warning,
+                        code: "GBA_CRY_AUDIO_SOURCE_MISSING",
+                        message: "GBA cry/audio planning is blocked until an explicit local source file exists under sound/direct_sound_samples/cries or sound/songs/mus_cry*.s.",
+                        span: SourceSpan(relativePath: "sound/direct_sound_samples/cries", startLine: 1)
+                    )
+                ]
+            )
+        }
+
+        let previewCount = sourceFiles.count == 1 ? "1 source file" : "\(sourceFiles.count) source files"
+        return GBACryAudioMutationPlan(
+            status: .previewOnly,
+            summary: "Detected \(previewCount) for source-backed GBA cry/audio review. Replacement, conversion, generated outputs, playback, ROM export, and mutation apply remain disabled.",
+            sourceFiles: sourceFiles,
+            plannedChanges: [
+                "Review existing cry source provenance, size, and SHA1 before any future edit.",
+                "Stage only one-for-one source-file replacement after a dedicated cry import row defines validation.",
+                "Keep generated audio artifacts and ROM output unchanged."
+            ],
+            blockedActions: blockedActions,
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY",
+                    message: "Detected explicit local GBA cry/audio source files; this row reports diagnostics and a preview-only mutation plan without writing source, generated audio, or ROM output.",
+                    span: SourceSpan(relativePath: sourceFiles[0].path, startLine: 1)
+                )
+            ]
+        )
+    }
+
+    private static func cryAudioSourceFiles(root: URL, fileManager: FileManager) -> [GBACryAudioSourceFile] {
+        var files: [GBACryAudioSourceFile] = []
+        appendCryFiles(
+            under: root.appendingPathComponent("sound/direct_sound_samples/cries"),
+            root: root,
+            kind: "directSoundCrySample",
+            fileManager: fileManager,
+            into: &files
+        )
+        appendCrySongFiles(
+            under: root.appendingPathComponent("sound/songs"),
+            root: root,
+            fileManager: fileManager,
+            into: &files
+        )
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private static func appendCryFiles(
+        under directory: URL,
+        root: URL,
+        kind: String,
+        fileManager: FileManager,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let url = enumerator?.nextObject() as? URL {
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]),
+                  values.isDirectory != true
+            else {
+                continue
+            }
+            appendCrySourceFile(url: url, root: root, kind: kind, sizeBytes: values.fileSize, into: &files)
+        }
+    }
+
+    private static func appendCrySongFiles(
+        under directory: URL,
+        root: URL,
+        fileManager: FileManager,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for url in urls {
+            let name = url.lastPathComponent.lowercased()
+            guard name.hasPrefix("mus_cry"), ["s", "inc"].contains(url.pathExtension.lowercased()) else { continue }
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+            appendCrySourceFile(url: url, root: root, kind: "crySongAssembly", sizeBytes: values?.fileSize, into: &files)
+        }
+    }
+
+    private static func appendCrySourceFile(
+        url: URL,
+        root: URL,
+        kind: String,
+        sizeBytes: Int?,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        files.append(
+            GBACryAudioSourceFile(
+                path: relativePath(for: url, root: root),
+                kind: kind,
+                sizeBytes: UInt64(sizeBytes ?? data.count),
+                sha1: pokemonHackSHA1Hex(data)
+            )
+        )
+    }
+
+    private static func relativePath(for url: URL, root: URL) -> String {
+        let standardizedRoot = root.standardizedFileURL.path
+        let standardizedPath = url.standardizedFileURL.path
+        guard standardizedPath.hasPrefix(standardizedRoot + "/") else { return url.lastPathComponent }
+        return String(standardizedPath.dropFirst(standardizedRoot.count + 1))
     }
 }
 
@@ -507,7 +699,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
     case .cries:
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Cry assets are not structurally indexed or editable yet.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "sound/direct_sound_samples/cries", tableSymbol: nil, supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         default:
             return nil
         }

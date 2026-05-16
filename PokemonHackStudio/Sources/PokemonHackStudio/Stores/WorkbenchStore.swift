@@ -2135,6 +2135,7 @@ final class WorkbenchStore: ObservableObject {
         "pokediamond",
         "pokeplatinum",
         "pokeheartgold",
+        "pokeblack",
         "pmdSky"
     ]
 
@@ -5625,7 +5626,7 @@ final class WorkbenchStore: ObservableObject {
     private func defaultProjectRoots() -> [String] {
         #if DEBUG
         guard userSettings.includeDefaultDebugProjects else { return [] }
-        return ["pokeemerald", "pokefirered", "pokediamond", "pokeplatinum", "pokeheartgold", "pokesoulsilver", "pmd-sky"]
+        return ["pokeemerald", "pokefirered", "pokediamond", "pokeplatinum", "pokeheartgold", "pokesoulsilver", "pokeblack", "pmd-sky"]
             .map { workspaceRoot.appendingPathComponent($0).path }
             .filter { fileManager.fileExists(atPath: $0) }
         #else
@@ -5700,6 +5701,19 @@ final class WorkbenchStore: ObservableObject {
             return library
         }
 
+        return libraryByAppendingBundledAssets(
+            to: library,
+            projectsRoot: bundledProjectsRoot,
+            fileManager: fileManager
+        )
+    }
+
+    static func libraryByAppendingBundledAssets(
+        to library: PokemonHackCore.GenIIIResourceLibrary,
+        projectsRoot bundledProjectsRoot: URL,
+        fileManager: FileManager
+    ) -> PokemonHackCore.GenIIIResourceLibrary {
+
         let bundledLibrary = GenIIIResourceRegistry.load(
             workspaceRoot: bundledProjectsRoot.path,
             recentRoots: [],
@@ -5707,11 +5721,11 @@ final class WorkbenchStore: ObservableObject {
         )
         let existingSourceTitles = Set(
             library.entries
-                .filter { $0.platform == .gbaSource }
+                .filter { $0.platform == .gbaSource || $0.platform == .ndsSource }
                 .map { $0.title.lowercased() }
         )
         let bundledEntries = bundledLibrary.entries
-            .filter { $0.platform == .gbaSource }
+            .filter { $0.platform == .gbaSource || $0.platform == .ndsSource }
             .filter { !existingSourceTitles.contains($0.title.lowercased()) }
             .map { Self.bundledResourceEntry($0) }
 

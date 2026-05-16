@@ -72,12 +72,12 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 ## V7 Semantic Field Editing
 
-- `NDSDataSemanticEditor` adds the first semantic layer above raw source text by detecting top-level scalar fields in eligible Platinum source-backed JSON records for species/personal/move-style data, item data under `res/items/**/*.json`, trainer data under `res/trainers/data/**/*.json`, existing species evolution tuple method/parameter/target values under `res/pokemon/<species>/data.json`, and HeartGold/SoulSilver personal JSON rows under `files/poketool/personal/**/*.json`.
+- `NDSDataSemanticEditor` adds the first semantic layer above raw source text by detecting top-level scalar fields in eligible Platinum source-backed JSON records for species/personal/move-style data, item data under `res/items/**/*.json`, trainer data under `res/trainers/data/**/*.json`, existing species evolution tuple method/parameter/target values under `res/pokemon/<species>/data.json`, and HeartGold/SoulSilver personal/trainer JSON rows under `files/poketool/personal/**/*.json` and `files/poketool/trainer/**/*.json`.
 - Semantic edits preserve the source file shape by replacing only the selected scalar value, then flow through `NDSDataMutationPlanner`/`NDSDataMutationApplier` for preview, source hash/size checks, explicit apply, and backups.
 - Semantic eligibility diagnostics are carried into the lowered mutation plan so direct CLI/app apply paths cannot bypass trainer-data-only policy.
 - `pokemonhack-cli nds-data-semantic-plan <project> <record-id> --set <field=value> --json` and `nds-data-semantic-apply ...` expose field-level planning/apply without introducing a separate write path.
 - Resources renders semantic field controls above the raw text editor when a selected NDS data row is eligible; ineligible records keep the existing raw editor or read-only blocked state.
-- Evolution add/remove/reorder, trainer class/resource JSON, nested trainer/item arrays/objects outside the explicitly exposed scalar tuple values, HeartGold/SoulSilver trainer/item rows, Diamond/Pearl C source anchors, ROM-backed rows, NARC/container rows, generated/reference rows, PMD-Sky, extraction, rebuilds, binary writes, and ROM exports remain blocked/read-only.
+- Evolution add/remove/reorder, trainer class/resource JSON, nested trainer/item arrays/objects outside the explicitly exposed scalar tuple values, HeartGold/SoulSilver item rows, Diamond/Pearl C source anchors, ROM-backed rows, NARC/container rows, generated/reference rows, PMD-Sky, extraction, rebuilds, binary writes, and ROM exports remain blocked/read-only.
 
 ## V8 Map/Script/Text Readiness
 
@@ -118,4 +118,4 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 ## Next Useful Pass
 
-Expand semantic Gen IV coverage one dedicated source-backed domain at a time, continuing from the completed Platinum rows and the first HGSS personal JSON slice toward other HGSS or Diamond/Pearl source-backed schemas only when they fit the existing mutation-plan architecture. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist, and keep NDS build/playtest as manual guidance until a future implementation row opens runnable execution.
+Expand semantic Gen IV coverage one dedicated source-backed domain at a time, continuing from the completed Platinum rows plus HGSS personal/trainer JSON slices toward other HGSS or Diamond/Pearl source-backed schemas only when they fit the existing mutation-plan architecture. Keep container/ROM writes disabled until dedicated parser, preservation, and rebuild rows exist, and keep NDS build/playtest as manual guidance until a future implementation row opens runnable execution.

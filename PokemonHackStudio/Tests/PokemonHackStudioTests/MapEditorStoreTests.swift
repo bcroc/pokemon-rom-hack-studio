@@ -413,6 +413,29 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testBundledFallbackAppendsNDSSourceEntries() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let projectsRoot = temp.url.appendingPathComponent("PokemonHackStudioAssets/Projects")
+        try makeNDSBlackSourceProject(at: projectsRoot.appendingPathComponent("pokeblack"))
+        let baseLibrary = GenIIIResourceLibrary(workspaceRoot: temp.url.path, entries: [], diagnostics: [])
+
+        let library = WorkbenchStore.libraryByAppendingBundledAssets(
+            to: baseLibrary,
+            projectsRoot: projectsRoot,
+            fileManager: .default
+        )
+
+        let bundled = try XCTUnwrap(library.entries.first { $0.profile == .pokeblack })
+        XCTAssertEqual(bundled.platform, .ndsSource)
+        XCTAssertEqual(bundled.family, .blackWhite)
+        XCTAssertEqual(bundled.role, .referenceSource)
+        XCTAssertEqual(bundled.writePolicy, .readOnly)
+        XCTAssertTrue(bundled.title.hasSuffix(" (Bundled)"))
+        XCTAssertTrue(bundled.items.contains { $0.category == "NDS Variant" && $0.path == "pokeblack.nds" })
+    }
+
+    @MainActor
     func testNDSSourceProjectStaysReadOnlyInProjectAndResourceSummaries() async throws {
         let root = try makeNDSSourceProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -742,8 +765,30 @@ final class MapEditorStoreTests: XCTestCase {
         let trainerRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/poketool/trainer/trainers.json" })
         store.requestResourceAssetSelection(trainerRow.id)
         let trainerEditor = try XCTUnwrap(store.selectedNDSDataEditor)
-        XCTAssertTrue(trainerEditor.semanticFields.isEmpty)
-        store.updateSelectedNDSDataSemanticField(key: "id", value: "2")
+        XCTAssertTrue(trainerEditor.semanticFields.contains { $0.key == "name" && $0.value == "Youngster Joey" })
+        XCTAssertTrue(trainerEditor.semanticFields.contains { $0.key == "double_battle" && $0.value == "false" })
+        XCTAssertFalse(trainerEditor.semanticFields.contains { $0.key == "party" })
+        store.updateSelectedNDSDataSemanticField(key: "double_battle", value: "true")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertTrue(
+            try String(contentsOf: root.appendingPathComponent("files/poketool/trainer/trainers.json"), encoding: .utf8)
+                .contains("\"double_battle\":true")
+        )
+
+        let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/itemtool/itemdata/item_data.csv" })
+        store.requestResourceAssetSelection(itemRow.id)
+        let itemEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(itemEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "name", value: "SUPER_POTION")
         XCTAssertFalse(store.selectedNDSDataIsDirty)
     }
 
@@ -3071,7 +3116,7 @@ final class MapEditorStoreTests: XCTestCase {
         try write("filesystem: $(NITROFS_FILES)\n", to: root.appendingPathComponent("filesystem.mk"))
         try write("dddddddddddddddddddddddddddddddddddddddd  pokeheartgold.us.nds\n", to: root.appendingPathComponent("heartgold.us/rom.sha1"))
         try write("{\"species\":\"CHIKORITA\"}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
-        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
+        try write("{\"id\":1,\"name\":\"Youngster Joey\",\"double_battle\":false,\"party\":[{\"species\":\"RATTATA\",\"level\":4}]}\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
         try write("{\"zone\":1}\n", to: root.appendingPathComponent("files/fielddata/eventdata/zone_event/zone_001.json"))
         try write("message\n", to: root.appendingPathComponent("files/msgdata/msg/0001.txt"))
@@ -3080,6 +3125,22 @@ final class MapEditorStoreTests: XCTestCase {
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/maptable/map.bin"))
 
         return root
+    }
+
+    private func makeNDSBlackSourceProject(at root: URL) throws {
+        try write("GAME_VERSION  ?= BLACK\nSUPPORTED_ROMS   := black.us\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM            := pokeblack.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("main.rsf"))
+        try write("main linker script\n", to: root.appendingPathComponent("main.lsf"))
+        try write("ffffffffffffffffffffffffffffffffffffffff  pokeblack.nds\n", to: root.appendingPathComponent("black.us/rom.sha1"))
+        try write("void Init(void) {}\n", to: root.appendingPathComponent("src/init.c"))
+        try write("arm9\n", to: root.appendingPathComponent("asm/arm9_remaining.s"))
+        try write("#define BLACK 1\n", to: root.appendingPathComponent("include/globals.h"))
+        try write("encounter\n", to: root.appendingPathComponent("data/encounters/route_1.txt"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data("SDAT".utf8), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
+        try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
+        try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
     }
 
     private func makeTestNARC() -> Data {

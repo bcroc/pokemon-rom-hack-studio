@@ -709,20 +709,56 @@ final class PokemonHackCLITests: XCTestCase {
                 .contains("\"species\":\"CYNDAQUIL\"")
         )
 
-        let blockedHeartGoldTrainerApply = try decodeJSON(
+        let heartGoldTrainerPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                heartGoldRoot.path,
+                "trainers:files/poketool/trainer/trainers.json",
+                "--set",
+                "double_battle=true",
+                "--json"
+            ])
+        )
+        let heartGoldTrainerRequestedFieldKeys = try XCTUnwrap(heartGoldTrainerPlan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(heartGoldTrainerRequestedFieldKeys, ["double_battle"])
+        let heartGoldTrainerChanges = try XCTUnwrap(heartGoldTrainerPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldTrainerChanges.count, 1)
+        XCTAssertEqual(heartGoldTrainerChanges.first?["path"] as? String, "files/poketool/trainer/trainers.json")
+        XCTAssertNil(heartGoldTrainerChanges.first?["textPreview"])
+
+        let heartGoldTrainerApply = try decodeJSON(
             PokemonHackCLI.run(arguments: [
                 "nds-data-semantic-apply",
                 heartGoldRoot.path,
                 "trainers:files/poketool/trainer/trainers.json",
                 "--set",
-                "id=2",
+                "name=Youngster Ben",
+                "--set",
+                "double_battle=true",
                 "--json"
             ])
         )
-        let blockedHeartGoldTrainerChanges = try XCTUnwrap(blockedHeartGoldTrainerApply["appliedChanges"] as? [[String: Any]])
-        XCTAssertEqual(blockedHeartGoldTrainerChanges.count, 0)
-        let blockedHeartGoldTrainerDiagnostics = try XCTUnwrap(blockedHeartGoldTrainerApply["diagnostics"] as? [[String: Any]])
-        XCTAssertTrue(blockedHeartGoldTrainerDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PERSONAL_PATH_BLOCKED" })
+        let heartGoldTrainerAppliedChanges = try XCTUnwrap(heartGoldTrainerApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldTrainerAppliedChanges.count, 1)
+        let updatedTrainer = try String(contentsOf: heartGoldRoot.appendingPathComponent("files/poketool/trainer/trainers.json"), encoding: .utf8)
+        XCTAssertTrue(updatedTrainer.contains("\"name\":\"Youngster Ben\""))
+        XCTAssertTrue(updatedTrainer.contains("\"double_battle\":true"))
+        XCTAssertTrue(updatedTrainer.contains("\"party\":[{\"species\":\"RATTATA\",\"level\":4}]"))
+
+        let blockedHeartGoldItemApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                heartGoldRoot.path,
+                "items:files/itemtool/itemdata/item_data.csv",
+                "--set",
+                "name=SUPER_POTION",
+                "--json"
+            ])
+        )
+        let blockedHeartGoldItemChanges = try XCTUnwrap(blockedHeartGoldItemApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedHeartGoldItemChanges.count, 0)
+        let blockedHeartGoldItemDiagnostics = try XCTUnwrap(blockedHeartGoldItemApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedHeartGoldItemDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
     }
 
     func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
@@ -776,6 +812,7 @@ final class PokemonHackCLITests: XCTestCase {
 
     func testPokemonCompatibilityCommandEmitsPreviewJSON() throws {
         let root = try makeItemCatalogProject()
+        try write(Data([0x10, 0x20, 0x30]), to: root.appendingPathComponent("sound/direct_sound_samples/cries/treecko.aif"))
 
         let result = try decodeJSON(
             PokemonHackCLI.run(arguments: ["pokemon-compatibility", root.path, "--json"])
@@ -785,7 +822,15 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNotNil(result["summary"])
         let entries = try XCTUnwrap(result["entries"] as? [[String: Any]])
         XCTAssertTrue(entries.contains { $0["surface"] as? String == "items" && $0["status"] as? String == "editable" })
-        XCTAssertTrue(entries.contains { $0["surface"] as? String == "cries" && $0["status"] as? String == "blocked" })
+        let cries = try XCTUnwrap(entries.first { $0["surface"] as? String == "cries" })
+        XCTAssertEqual(cries["status"] as? String, "readOnly")
+        let cryAudioPlan = try XCTUnwrap(cries["cryAudioPlan"] as? [String: Any])
+        XCTAssertEqual(cryAudioPlan["status"] as? String, "previewOnly")
+        let sourceFiles = try XCTUnwrap(cryAudioPlan["sourceFiles"] as? [[String: Any]])
+        XCTAssertTrue(sourceFiles.contains { $0["path"] as? String == "sound/direct_sound_samples/cries/treecko.aif" && $0["sha1"] != nil })
+        let blockedActions = try XCTUnwrap(cryAudioPlan["blockedActions"] as? [String])
+        XCTAssertTrue(blockedActions.contains("Generated audio output writes"))
+        XCTAssertTrue(blockedActions.contains("Mutation apply"))
     }
 
     func testMigrationCoverageCommandEmitsSourceFirstAndBlockedJSON() throws {
@@ -981,7 +1026,7 @@ final class PokemonHackCLITests: XCTestCase {
         try write("filesystem: $(NITROFS_FILES)\n", to: root.appendingPathComponent("filesystem.mk"))
         try write("dddddddddddddddddddddddddddddddddddddddd  pokeheartgold.us.nds\n", to: root.appendingPathComponent("heartgold.us/rom.sha1"))
         try write("{\"species\":\"CHIKORITA\"}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
-        try write("[{\"id\":1}]\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
+        try write("{\"id\":1,\"name\":\"Youngster Joey\",\"double_battle\":false,\"party\":[{\"species\":\"RATTATA\",\"level\":4}]}\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin"))
         return root

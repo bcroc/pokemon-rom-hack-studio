@@ -14,6 +14,7 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
             ("pokediamond", .pokediamond, makeDiamondFixture),
             ("pokeplatinum", .pokeplatinum, makePlatinumFixture),
             ("pokeheartgold", .pokeheartgold, makeHeartGoldFixture),
+            ("pokeblack", .pokeblack, makeBlackFixture),
             ("pmd-sky", .pmdSky, makePMDSkyFixture)
         ]
 
@@ -57,6 +58,41 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
         XCTAssertTrue(entry.items.contains(where: { $0.category == "NDS Variant" && $0.path == "build/pokeplatinum.us.nds" }))
         XCTAssertTrue(entry.items.contains(where: { $0.category == "NDS Build Target" }))
         XCTAssertFalse(entry.modules.contains(.pokemon))
+    }
+
+    func testResourceRegistrySurfacesPokeBlackSourceInventory() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+
+        let entry = GenIIIResourceRegistry.resourceIndex(path: root.path)
+
+        XCTAssertEqual(entry.platform, .ndsSource)
+        XCTAssertEqual(entry.profile, .pokeblack)
+        XCTAssertEqual(entry.family, .blackWhite)
+        XCTAssertEqual(entry.writePolicy, .readOnly)
+        XCTAssertTrue(entry.variants.contains { $0.title == "Pokemon Black US" && $0.checksumPath == "black.us/rom.sha1" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Variant" && $0.path == "pokeblack.nds" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Data resources" && $0.path == "files/root.bin" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Data audio" && $0.path == "files/wb_sound_data.sdat" })
+    }
+
+    func testResourceRegistryLoadIncludesSiblingCentralPokeBlackReference() throws {
+        let temp = try NDSDecompTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let workspace = temp.url.appendingPathComponent("pokemonhack")
+        try makeDirectory(workspace)
+        let centralRoot = temp.url
+            .appendingPathComponent("reference-repos")
+            .appendingPathComponent("repos")
+            .appendingPathComponent("pokemodding__pokeblack")
+        try makeBlackFixture(root: centralRoot)
+
+        let library = GenIIIResourceRegistry.load(workspaceRoot: workspace.path)
+
+        let entry = try XCTUnwrap(library.entries.first { $0.path == centralRoot.path })
+        XCTAssertEqual(entry.profile, .pokeblack)
+        XCTAssertEqual(entry.platform, .ndsSource)
+        XCTAssertEqual(entry.role, .referenceSource)
+        XCTAssertEqual(entry.writePolicy, .readOnly)
     }
 
     func testGBAProjectAndNDSROMDetectionRemainUnchanged() throws {
@@ -140,6 +176,23 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
         try makeDirectory(root.appendingPathComponent("asm"))
     }
 
+    private func makeBlackFixture(root: URL) throws {
+        try write("GAME_VERSION  ?= BLACK\nSUPPORTED_ROMS   := black.us\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM            := pokeblack.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("main.rsf"))
+        try write("main linker script\n", to: root.appendingPathComponent("main.lsf"))
+        try write("ffffffffffffffffffffffffffffffffffffffff  pokeblack.nds\n", to: root.appendingPathComponent("black.us/rom.sha1"))
+        try write("void Init(void) {}\n", to: root.appendingPathComponent("src/init.c"))
+        try write("arm9\n", to: root.appendingPathComponent("asm/arm9_remaining.s"))
+        try write("#define BLACK 1\n", to: root.appendingPathComponent("include/globals.h"))
+        try write("encounter\n", to: root.appendingPathComponent("data/encounters/route_1.txt"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data("NARC".utf8), to: root.appendingPathComponent("files/soundstatus.narc"))
+        try write(Data("SDAT".utf8), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
+        try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
+        try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
+    }
+
     private func makeDirectory(_ url: URL) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
@@ -147,6 +200,11 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
     private func write(_ text: String, to url: URL) throws {
         try makeDirectory(url.deletingLastPathComponent())
         try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func write(_ data: Data, to url: URL) throws {
+        try makeDirectory(url.deletingLastPathComponent())
+        try data.write(to: url)
     }
 
     private func entryFamily(for profile: GameProfile) -> GenIIIGameFamily {
@@ -157,6 +215,8 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
             return .platinum
         case .pokeheartgold:
             return .heartGoldSoulSilver
+        case .pokeblack:
+            return .blackWhite
         default:
             return .ndsUnknown
         }

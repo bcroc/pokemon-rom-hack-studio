@@ -274,6 +274,7 @@ public enum GenIIIResourceRegistry {
         "pokeplatinum",
         "pokeheartgold",
         "pokesoulsilver",
+        "pokeblack",
         "pmd-sky"
     ]
 
@@ -285,7 +286,19 @@ public enum GenIIIResourceRegistry {
         "pokediamond",
         "pokeplatinum",
         "pokeheartgold",
+        "pokeblack",
         "pmd-sky"
+    ]
+
+    private static let centralReferenceRepoNames: [String] = [
+        "pret__pokeemerald",
+        "pret__pokefirered",
+        "pret__pokeruby",
+        "rh-hideout__pokeemerald-expansion",
+        "pret__pokediamond",
+        "pret__pokeplatinum",
+        "pret__pokeheartgold",
+        "pokemodding__pokeblack"
     ]
 
     public static func load(
@@ -305,6 +318,7 @@ public enum GenIIIResourceRegistry {
         }
 
         candidates.append(contentsOf: referenceCandidates(workspaceRoot: root, fileManager: fileManager, diagnostics: &diagnostics))
+        candidates.append(contentsOf: centralReferenceCandidates(workspaceRoot: root, fileManager: fileManager))
         candidates.append(contentsOf: topLevelMediaCandidates(workspaceRoot: root, fileManager: fileManager))
         candidates.append(contentsOf: recentRoots.map {
             Candidate(path: URL(fileURLWithPath: $0).standardizedFileURL.path, role: .editableSource)
@@ -377,6 +391,46 @@ public enum GenIIIResourceRegistry {
                     role: .referenceSource
                 )
             }
+    }
+
+    private static func centralReferenceCandidates(
+        workspaceRoot: URL,
+        fileManager: FileManager
+    ) -> [Candidate] {
+        centralReferenceRootCandidates(workspaceRoot: workspaceRoot, fileManager: fileManager).flatMap { referenceRoot -> [Candidate] in
+            let reposRoot = referenceRoot.appendingPathComponent("repos").standardizedFileURL
+            return centralReferenceRepoNames.compactMap { repoName in
+                let url = reposRoot.appendingPathComponent(repoName).standardizedFileURL
+                guard fileManager.fileExists(atPath: url.path) else { return nil }
+                return Candidate(path: url.path, role: .referenceSource)
+            }
+        }
+    }
+
+    private static func centralReferenceRootCandidates(
+        workspaceRoot: URL,
+        fileManager: FileManager
+    ) -> [URL] {
+        var candidates: [URL] = []
+        var seen: Set<String> = []
+
+        func append(_ url: URL) {
+            let standardized = url.standardizedFileURL
+            guard seen.insert(standardized.path).inserted,
+                  fileManager.fileExists(atPath: standardized.appendingPathComponent("repos").path)
+            else {
+                return
+            }
+            candidates.append(standardized)
+        }
+
+        if let configuredRoot = ProcessInfo.processInfo.environment["POKEMONHACKSTUDIO_REFERENCE_REPOS_ROOT"],
+           !configuredRoot.isEmpty {
+            append(URL(fileURLWithPath: configuredRoot))
+        }
+        append(workspaceRoot.deletingLastPathComponent().appendingPathComponent("reference-repos"))
+
+        return candidates
     }
 
     private static func topLevelMediaCandidates(workspaceRoot: URL, fileManager: FileManager) -> [Candidate] {
@@ -642,7 +696,7 @@ public enum GenIIIResourceRegistry {
             return variantsForGBAImage(path: index.root.path)
         case .ndsROM:
             return variantsForNDSImage(path: index.root.path)
-        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky:
             return variantsForNDSSource(index: index, fileManager: fileManager)
         case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:
             return variants(for: index.profile, title: URL(fileURLWithPath: index.root.path).lastPathComponent)
@@ -807,7 +861,7 @@ public enum GenIIIResourceRegistry {
         switch profile {
         case .pokeemerald, .pokefirered, .pokeruby, .pokeemeraldExpansion:
             return .gbaSource
-        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky:
             return .ndsSource
         case .binaryROM:
             return .gbaROM
@@ -836,6 +890,8 @@ public enum GenIIIResourceRegistry {
             return .platinum
         case .pokeheartgold:
             return .heartGoldSoulSilver
+        case .pokeblack:
+            return .blackWhite
         case .pmdSky:
             return .ndsUnknown
         case .pokemonColosseum:
@@ -912,7 +968,7 @@ public enum GenIIIResourceRegistry {
 
     private static func isNDSSourceProfile(_ profile: GameProfile) -> Bool {
         switch profile {
-        case .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky:
+        case .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky:
             return true
         default:
             return false

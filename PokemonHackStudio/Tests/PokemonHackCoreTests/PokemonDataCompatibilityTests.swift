@@ -144,7 +144,39 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(assets.recommendedFutureRow, "PHS-T57")
 
         let cries = entry(.cries, in: report)
-        XCTAssertEqual(cries.recommendedFutureRow, "PHS-T57")
+        XCTAssertNil(cries.recommendedFutureRow)
+        XCTAssertEqual(cries.status, .blocked)
+        XCTAssertEqual(cries.cryAudioPlan?.status, .blocked)
+        XCTAssertTrue(cries.cryAudioPlan?.blockedActions.contains("Generated audio output writes") == true)
+    }
+
+    func testCryAudioCompatibilityReportsSourceBackedPreviewOnlyPlan() throws {
+        let root = try temporaryRoot()
+        try write(Data([0x01, 0x02, 0x03, 0x04]), to: root.appendingPathComponent("sound/direct_sound_samples/cries/treecko.aif"))
+        try write("cry song\n", to: root.appendingPathComponent("sound/songs/mus_cry_treecko.s"))
+
+        let report = try PokemonDataCompatibilityReportBuilder.build(
+            index: projectIndex(root: root, profile: .pokeemerald),
+            sourceIndex: sourceIndex(profile: .pokeemerald, itemPath: "src/data/items.h")
+        )
+
+        let cries = entry(.cries, in: report)
+        XCTAssertEqual(cries.status, .readOnly)
+        XCTAssertEqual(cries.indexedCount, 2)
+        XCTAssertEqual(cries.editableCount, 0)
+        XCTAssertNil(cries.recommendedFutureRow)
+        XCTAssertNil(cries.blockedReason)
+        let plan = try XCTUnwrap(cries.cryAudioPlan)
+        XCTAssertEqual(plan.status, .previewOnly)
+        XCTAssertEqual(plan.sourceFiles.map(\.path), [
+            "sound/direct_sound_samples/cries/treecko.aif",
+            "sound/songs/mus_cry_treecko.s"
+        ])
+        XCTAssertTrue(plan.sourceFiles.allSatisfy { !$0.sha1.isEmpty && $0.sizeBytes > 0 })
+        XCTAssertTrue(plan.plannedChanges.contains("Keep generated audio artifacts and ROM output unchanged."))
+        XCTAssertTrue(plan.blockedActions.contains("Audio conversion"))
+        XCTAssertTrue(plan.blockedActions.contains("Mutation apply"))
+        XCTAssertTrue(cries.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY" })
     }
 
     private func assertNoCompletedRowRecommendations(

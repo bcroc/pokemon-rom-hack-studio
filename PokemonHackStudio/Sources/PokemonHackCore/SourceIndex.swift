@@ -638,7 +638,7 @@ struct SourceIndexDescriptorSet {
                     .wildEncountersJSON("src/data/wild_encounters.json")
                 ]
             )
-        case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky,
+        case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky,
              .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
             SourceIndexDescriptorSet(
                 tables: [],

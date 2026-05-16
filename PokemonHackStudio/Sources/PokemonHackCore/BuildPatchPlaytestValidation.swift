@@ -523,7 +523,7 @@ public enum BuildValidationReportBuilder {
             } else if basename.lowercased().contains("ruby") {
                 candidates.append("ruby.sha1")
             }
-        case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pmdSky,
+        case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky,
              .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia, .unknown:
             break
         }

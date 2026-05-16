@@ -669,6 +669,8 @@ public enum MigrationCoverageReportBuilder {
             return ["pret__pokeplatinum", "ds-pokemon-rom-editor__dspre", "roadrunnerwmc__ndspy"]
         case .pokeheartgold:
             return ["pret__pokeheartgold", "ds-pokemon-rom-editor__dspre"]
+        case .pokeblack:
+            return ["pokemodding__pokeblack", "hzla__pokeweb", "ds-pokemon-hacking__ctrmap-ce"]
         case .pmdSky:
             return ["pret__pmd-sky", "skytemple__skytemple"]
         case .pokemonColosseum, .pokemonXD, .pokemonBox, .pokemonChannel, .gameCubeMedia:

@@ -693,6 +693,19 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.audio, "files/sound", required: false),
                 CatalogPathDescriptor(.resources, "filesystem.mk", role: .nitroFSManifest)
             ]
+        case .pokeblack:
+            return [
+                CatalogPathDescriptor(.encounters, "data/encounters", required: false),
+                CatalogPathDescriptor(.resources, "data", required: false),
+                CatalogPathDescriptor(.resources, "files"),
+                CatalogPathDescriptor(.audio, "files/wb_sound_data.sdat", required: false),
+                CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
+                CatalogPathDescriptor(.scripts, "overlays", required: false),
+                CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false),
+                CatalogPathDescriptor(.resources, "black.us/rom.sha1"),
+                CatalogPathDescriptor(.resources, "main.rsf", role: .nitroFSManifest),
+                CatalogPathDescriptor(.resources, "main.lsf", required: false)
+            ]
         default:
             return nil
         }
@@ -882,6 +895,8 @@ public enum NDSDataCatalogBuilder {
             return literalNARCRecords(root: root, searchRoot: "files", fileManager: fileManager)
         case .pokediamond:
             return unpackedArchiveDirectoryRecords(root: root, searchRoot: "files", fileManager: fileManager)
+        case .pokeblack:
+            return literalNARCRecords(root: root, searchRoot: "files", fileManager: fileManager)
         default:
             return []
         }
@@ -2151,6 +2166,8 @@ public enum NDSDataCatalogBuilder {
             return .platinum
         case .pokeheartgold:
             return .heartGoldSoulSilver
+        case .pokeblack:
+            return .blackWhite
         case .ndsROM:
             guard
                 let data = try? Data(contentsOf: URL(fileURLWithPath: index.root.path)),
@@ -2256,6 +2273,8 @@ public enum NDSDataCatalogBuilder {
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "heartgold.us", "soulsilver.us", "files", "src"]
         case .pokediamond:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "pokediamond.us.sha1", "files", "arm9"]
+        case .pokeblack:
+            return ["Makefile", "config.mk", "main.rsf", "main.lsf", "black.us", "files", "data", "src", "asm", "include", "overlays", "ndsdisasm_config"]
         case .pmdSky:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "nitrofs_files.txt", "pmdsky.us", "files", "src", "asm"]
         case .ndsROM:
