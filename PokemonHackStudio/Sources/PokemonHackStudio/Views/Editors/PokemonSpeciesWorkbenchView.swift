@@ -1361,6 +1361,15 @@ private struct SpeciesAssetImportProvenanceView: View {
             Text("Detected \(provenance.detectedKind.rawValue); validation \(provenance.status.rawValue).")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            if let png = provenance.pngMetadata {
+                Text("PNG \(png.width)x\(png.height); palette \(png.paletteColorCount.map(String.init) ?? "unverified").")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if let palette = provenance.paletteMetadata {
+                Text("Palette \(palette.format), \(palette.colorCount) colors.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             ForEach(provenance.diagnostics.prefix(2)) { diagnostic in
                 Text(diagnostic.message)
                     .font(.caption2)
