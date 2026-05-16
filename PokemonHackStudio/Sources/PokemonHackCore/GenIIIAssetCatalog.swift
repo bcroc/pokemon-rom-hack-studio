@@ -1053,6 +1053,8 @@ public enum GenIIIAssetCatalogBuilder {
             return .scripts
         case NDSDataDomain.maps.rawValue:
             return .maps
+        case NDSDataDomain.audio.rawValue:
+            return .audio
         case NDSDataDomain.resources.rawValue:
             return .source
         default:

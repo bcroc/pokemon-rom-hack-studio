@@ -480,7 +480,7 @@ public enum ItemMutationPlanner {
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald/FireRed item rows and supported Emerald/FireRed item descriptions.")
+                    Diagnostic(severity: .error, code: "ITEM_PLAN_READ_ONLY_PROFILE", message: "Item apply is currently available only for classic Emerald/FireRed/Ruby/Sapphire item rows and supported Emerald/FireRed item descriptions.")
                 ]
             )
         }
@@ -874,7 +874,7 @@ private struct ItemCatalogDescriptor {
         case .pokefirered:
             ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: "src/data/items.h", tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: true, supportsDescriptionEditing: true)
         case .pokeruby:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", descriptionPath: nil, tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: false, supportsDescriptionEditing: false)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", descriptionPath: nil, tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: true, supportsDescriptionEditing: false)
         case .pokeemeraldExpansion:
             ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: nil, tableSymbol: "gItemsInfo", entryStyle: .bracketed, idField: nil, supportsRowEditing: false, supportsDescriptionEditing: false)
         default:
@@ -1129,7 +1129,7 @@ private func readOnlyDiagnostic(profile: GameProfile, span: SourceSpan?) -> Diag
     Diagnostic(
         severity: .warning,
         code: "ITEM_CATALOG_READ_ONLY_PROFILE",
-        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald/FireRed rows plus Emerald/FireRed item description text.",
+        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald/FireRed/Ruby/Sapphire rows plus Emerald/FireRed item description text.",
         span: span
     )
 }

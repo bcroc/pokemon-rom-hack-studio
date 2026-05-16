@@ -292,6 +292,23 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "MOVE_CATALOG_TUTOR_TABLE_MISSING" })
     }
 
+    func testExpansionMovesInfoRowsAreIndexedButReadOnly() throws {
+        let root = try temporaryRoot()
+        try makeExpansionMovesInfoProject(at: root)
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+
+        XCTAssertEqual(catalog.summary.moveCount, 1)
+        let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertEqual(pound.sourceSpan.relativePath, "src/data/moves_info.h")
+        XCTAssertFalse(pound.isEditable)
+        XCTAssertTrue(pound.diagnostics.contains { $0.code == "MOVE_CATALOG_READ_ONLY_PROFILE" && $0.severity == .error })
+        let draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "MOVE_PLAN_UNSUPPORTED_PROFILE" })
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PokemonMoveCatalogTests-\(UUID().uuidString)", isDirectory: true)
@@ -357,6 +374,42 @@ final class PokemonMoveCatalogTests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("src/data/battle_moves.h")
+        )
+    }
+
+    private func makeExpansionMovesInfoProject(at root: URL) throws {
+        try write(
+            """
+            const struct MoveInfo gMovesInfo[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                },
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/moves_info.h")
         )
     }
 

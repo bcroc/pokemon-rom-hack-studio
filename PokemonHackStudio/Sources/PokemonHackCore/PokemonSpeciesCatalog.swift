@@ -397,6 +397,8 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
 
     public var expectedPNGDimensions: (width: Int, height: Int)? {
         switch self {
+        case .icon:
+            return (32, 64)
         case .footprint:
             return (16, 16)
         default:
@@ -1852,13 +1854,15 @@ public enum SpeciesMutationPlanner {
         var changes: [SpeciesEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            if let speciesChange = rewriteChange(
-                root: root,
-                path: descriptor.speciesPath,
-                span: species.sourceSpan,
-                replacement: renderSpeciesInfoEntry(draft)
-            ) {
-                changes.append(speciesChange)
+            if speciesInfoChanged(species: species, draft: draft) {
+                if let speciesChange = rewriteChange(
+                    root: root,
+                    path: descriptor.speciesPath,
+                    span: species.sourceSpan,
+                    replacement: renderSpeciesInfoEntry(draft)
+                ) {
+                    changes.append(speciesChange)
+                }
             }
             if levelUpChanged(species: species, draft: draft) {
                 if let span = species.learnsets.levelUpSourceSpan,
@@ -2290,6 +2294,26 @@ public enum SpeciesMutationPlanner {
 
     private static func speciesAssetDirectory(for speciesID: String) -> String {
         "graphics/pokemon/\(assetSlug(for: speciesID))"
+    }
+
+    private static func speciesInfoChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        guard let original = SpeciesEditDraft(detail: species) else { return true }
+        return draft.baseStats != original.baseStats ||
+            draft.types != original.types ||
+            draft.abilities != original.abilities ||
+            draft.evYield != original.evYield ||
+            draft.catchRate != original.catchRate ||
+            draft.expYield != original.expYield ||
+            draft.genderRatio != original.genderRatio ||
+            draft.eggCycles != original.eggCycles ||
+            draft.friendship != original.friendship ||
+            draft.growthRate != original.growthRate ||
+            draft.safariZoneFleeRate != original.safariZoneFleeRate ||
+            draft.eggGroups != original.eggGroups ||
+            draft.itemCommon != original.itemCommon ||
+            draft.itemRare != original.itemRare ||
+            draft.bodyColor != original.bodyColor ||
+            draft.noFlip != original.noFlip
     }
 
     private static func pokedexChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {

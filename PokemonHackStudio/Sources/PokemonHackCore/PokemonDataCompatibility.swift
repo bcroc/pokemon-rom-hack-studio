@@ -455,7 +455,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", supportsEditing: false, readOnlyReason: "Ruby/Sapphire move rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: false, readOnlyReason: "Expansion gMovesInfo rows use a separate schema and are read-only in this row.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: false, readOnlyReason: "Expansion gMovesInfo rows use a separate schema and are read-only until a dedicated schema writer exists.", recommendedFutureRow: "PHS-T78")
         default:
             return nil
         }
@@ -466,7 +466,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokefirered:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: false, readOnlyReason: "Ruby/Sapphire positional item rows are read-only until positional rewrites are planned.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeemeraldExpansion:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItemsInfo", supportsEditing: false, readOnlyReason: "Expansion ItemInfo rows are indexed but blocked from apply until the schema is modeled.", recommendedFutureRow: "PHS-T57")
         default:
@@ -585,7 +585,7 @@ private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     case .pokefirered:
         return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokeruby:
-        return ["Ruby/Sapphire positional gItems rewrites", "item identity changes", "description text rewrites"]
+        return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits"]
     case .pokeemeraldExpansion:
         return ["Expansion ItemInfo rewrites", "item identity changes", "description text rewrites"]
     default:

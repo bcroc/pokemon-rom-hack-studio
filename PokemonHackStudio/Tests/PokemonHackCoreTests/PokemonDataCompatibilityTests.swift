@@ -82,9 +82,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertNil(items.recommendedFutureRow)
     }
 
-    func testRubyAndExpansionItemsReportReadOnlyBlockedShapes() throws {
+    func testRubyItemsReportEditableRowsWhileExpansionItemsStayReadOnly() throws {
+        let rubyRoot = try temporaryRoot()
+        try writeRubyItems(at: rubyRoot)
         let ruby = try PokemonDataCompatibilityReportBuilder.build(
-            index: projectIndex(profile: .pokeruby),
+            index: projectIndex(root: rubyRoot, profile: .pokeruby),
             sourceIndex: sourceIndex(profile: .pokeruby, itemPath: "src/data/items_en.h")
         )
         let expansion = try PokemonDataCompatibilityReportBuilder.build(
@@ -95,12 +97,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertNoCompletedRowRecommendations(in: ruby)
         assertNoCompletedRowRecommendations(in: expansion)
         let rubyItems = entry(.items, in: ruby)
-        XCTAssertEqual(rubyItems.status, .readOnly)
+        XCTAssertEqual(rubyItems.status, .editable)
         XCTAssertEqual(rubyItems.sourcePath, "src/data/items_en.h")
         XCTAssertEqual(rubyItems.tableSymbol, "gItems")
-        XCTAssertTrue(rubyItems.blockedReason?.contains("Ruby/Sapphire positional") == true)
-        XCTAssertTrue(rubyItems.unsupportedFields.contains("Ruby/Sapphire positional gItems rewrites"))
-        XCTAssertEqual(rubyItems.recommendedFutureRow, "PHS-T57")
+        XCTAssertEqual(rubyItems.editableCount, 1)
+        XCTAssertNil(rubyItems.blockedReason)
+        XCTAssertFalse(rubyItems.unsupportedFields.contains("Ruby/Sapphire positional gItems rewrites"))
+        XCTAssertTrue(rubyItems.unsupportedFields.contains("description text rewrites"))
+        XCTAssertTrue(rubyItems.unsupportedFields.contains("TM/HM item compatibility edits"))
+        XCTAssertNil(rubyItems.recommendedFutureRow)
 
         let expansionItems = entry(.items, in: expansion)
         XCTAssertEqual(expansionItems.status, .readOnly)
@@ -109,6 +114,24 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(expansionItems.blockedReason?.contains("Expansion ItemInfo") == true)
         XCTAssertTrue(expansionItems.unsupportedFields.contains("Expansion ItemInfo rewrites"))
         XCTAssertEqual(expansionItems.recommendedFutureRow, "PHS-T57")
+    }
+
+    func testExpansionMovesInfoRowsStayReadOnlyInCompatibilityReport() throws {
+        let expansion = try PokemonDataCompatibilityReportBuilder.build(
+            index: projectIndex(profile: .pokeemeraldExpansion),
+            sourceIndex: expansionMoveSourceIndex()
+        )
+
+        assertNoCompletedRowRecommendations(in: expansion)
+        let moves = entry(.moves, in: expansion)
+        XCTAssertEqual(moves.status, .readOnly)
+        XCTAssertEqual(moves.sourcePath, "src/data/moves_info.h")
+        XCTAssertEqual(moves.tableSymbol, "gMovesInfo")
+        XCTAssertEqual(moves.indexedCount, 1)
+        XCTAssertEqual(moves.editableCount, 0)
+        XCTAssertTrue(moves.blockedReason?.contains("Expansion gMovesInfo") == true)
+        XCTAssertTrue(moves.unsupportedFields.contains("Expansion gMovesInfo schema apply"))
+        XCTAssertEqual(moves.recommendedFutureRow, "PHS-T78")
     }
 
     func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
@@ -342,8 +365,68 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
     }
 
+    private func writeRubyItems(at root: URL) throws {
+        try write(
+            """
+            const struct Item gItems[] =
+            {
+                {
+                    .name = _(\"POTION\"),
+                    .itemId = ITEM_POTION,
+                    .price = 300,
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 0,
+                    .description = sPotionDesc,
+                    .pocket = POCKET_ITEMS,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = ITEM_B_USE_MEDICINE,
+                    .battleUseFunc = ItemUseInBattle_Medicine,
+                    .secondaryId = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/items_en.h")
+        )
+    }
+
+    private func expansionMoveSourceIndex() throws -> ProjectSourceIndex {
+        let root = try temporaryRoot()
+        return ProjectSourceIndex(
+            root: SourceLocation(path: root.path, exists: true),
+            profile: .pokeemeraldExpansion,
+            adapterID: "test.pokeemeraldExpansion",
+            adapterName: "pokeemeraldExpansion Fixture",
+            records: [
+                SourceIndexRecord(
+                    id: "moves:pokeemeraldExpansion:MOVE_POUND",
+                    module: .moves,
+                    title: "MOVE_POUND",
+                    subtitle: "src/data/moves_info.h",
+                    sourceSpan: SourceSpan(relativePath: "src/data/moves_info.h", startLine: 1),
+                    facts: [
+                        SourceIndexFact(label: "effect", value: "EFFECT_HIT"),
+                        SourceIndexFact(label: "power", value: "40"),
+                        SourceIndexFact(label: "type", value: "TYPE_NORMAL"),
+                        SourceIndexFact(label: "accuracy", value: "100"),
+                        SourceIndexFact(label: "pp", value: "35"),
+                        SourceIndexFact(label: "secondaryEffectChance", value: "0"),
+                        SourceIndexFact(label: "target", value: "MOVE_TARGET_SELECTED"),
+                        SourceIndexFact(label: "priority", value: "0"),
+                        SourceIndexFact(label: "flags", value: "FLAG_MAKES_CONTACT")
+                    ],
+                    preview: "[MOVE_POUND] = { .power = 40 }"
+                )
+            ]
+        )
+    }
+
     private func projectIndex(profile: GameProfile) throws -> ProjectIndex {
         let root = try temporaryRoot()
+        return projectIndex(root: root, profile: profile)
+    }
+
+    private func projectIndex(root: URL, profile: GameProfile) -> ProjectIndex {
         return ProjectIndex(
             root: SourceLocation(path: root.path, exists: true),
             profile: profile,

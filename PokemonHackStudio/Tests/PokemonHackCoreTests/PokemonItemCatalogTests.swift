@@ -55,17 +55,58 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.descriptionText, "Restores HP by\n60 points.")
     }
 
+    func testRubySapphireItemRowsPlanApplyBackUpAndReloadWithoutDescriptionWrites() throws {
+        let root = try temporaryRoot()
+        try makeRubyProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(potion.isEditable)
+        XCTAssertFalse(potion.isDescriptionEditable)
+        XCTAssertEqual(potion.name, "POTION")
+        XCTAssertEqual(potion.price, "300")
+        XCTAssertEqual(potion.descriptionSymbol, "sPotionDesc")
+        XCTAssertNil(potion.descriptionText)
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.name = "SUPER POTION"
+        draft.price = "700"
+        draft.holdEffectParam = "60"
+        draft.pocket = "POCKET_MEDICINE"
+        draft.type = "ITEM_USE_PARTY_MENU"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items_en.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(#".name = _("SUPER POTION")"#) == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".price = 700") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".holdEffectParam = 60") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".description = sPotionDesc") == true)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(edited.isEditable)
+        XCTAssertFalse(edited.isDescriptionEditable)
+        XCTAssertEqual(edited.name, "SUPER POTION")
+        XCTAssertEqual(edited.price, "700")
+        XCTAssertEqual(edited.holdEffectParam, "60")
+        XCTAssertEqual(edited.pocket, "POCKET_MEDICINE")
+        XCTAssertEqual(edited.type, "ITEM_USE_PARTY_MENU")
+        XCTAssertNil(edited.descriptionText)
+    }
+
     func testReadOnlyProfilesReportDiagnosticsWithoutCrashing() throws {
-        let ruby = try ProjectItemCatalogBuilder.build(
-            index: projectIndex(root: try temporaryRoot(), profile: .pokeruby),
-            sourceIndex: sourceIndex(profile: .pokeruby, path: "src/data/items_en.h", tags: ["item", "positional"])
-        )
         let expansion = try ProjectItemCatalogBuilder.build(
             index: projectIndex(root: try temporaryRoot(), profile: .pokeemeraldExpansion),
             sourceIndex: sourceIndex(profile: .pokeemeraldExpansion, path: "src/data/items.h", tags: ["item", "bracketed"])
         )
 
-        for catalog in [ruby, expansion] {
+        for catalog in [expansion] {
             XCTAssertEqual(catalog.items.first?.itemID, "ITEM_POTION")
             XCTAssertFalse(catalog.items.first?.isEditable ?? true)
             XCTAssertTrue(catalog.diagnostics.contains { $0.code == "ITEM_CATALOG_READ_ONLY_PROFILE" })
@@ -187,6 +228,32 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertLessThan(
             preview.range(of: ".customField")?.lowerBound ?? preview.endIndex,
             preview.range(of: ".price")?.lowerBound ?? preview.startIndex
+        )
+    }
+
+    private func makeRubyProject(at root: URL) throws {
+        try write(
+            """
+            const struct Item gItems[] =
+            {
+                {
+                    .name = _(\"POTION\"),
+                    .itemId = ITEM_POTION,
+                    .customField = CUSTOM_VALUE, // keep me
+                    .price = 300, // shop price
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 0,
+                    .description = sPotionDesc,
+                    .pocket = POCKET_ITEMS,
+                    .type = ITEM_USE_FIELD,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = 0,
+                    .battleUseFunc = NULL,
+                    .secondaryId = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/items_en.h")
         )
     }
 

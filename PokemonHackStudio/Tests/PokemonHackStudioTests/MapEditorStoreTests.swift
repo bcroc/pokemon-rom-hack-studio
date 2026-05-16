@@ -466,7 +466,7 @@ final class MapEditorStoreTests: XCTestCase {
         let actionReasons = Dictionary(uniqueKeysWithValues: store.buildWorkflowActions(includePatchActions: true).map { ($0.id, $0.disabledReason) })
         XCTAssertTrue(actionReasons["build-rom"]??.contains("No runnable declared make target") == true)
         XCTAssertTrue(actionReasons["open-playtest"]??.contains("ROM output and emulator") == true)
-        XCTAssertTrue(actionReasons["apply-patch"]??.contains("preview-only") == true)
+        XCTAssertTrue(actionReasons["apply-patch"]??.contains("compatible BPS or IPS patch") == true)
 
         let groupTitles = Set(report.healthMatrix.ndsGroups.map(\.title))
         XCTAssertTrue(groupTitles.contains("Build SDKs"), "\(groupTitles)")
@@ -1673,10 +1673,14 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(matchedReport.compatibilityLabel, "Base ROM matched")
         XCTAssertEqual(matchedReport.selectedBaseROM?.matchedCandidate, "rom.sha1")
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "pokeemerald.gba" })
-        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Output artifact plan" && $0.detail.contains("apply/export writes remain disabled") })
+        XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Output artifact plan" && $0.detail.contains("compatible BPS or IPS patch") })
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Checksum expectations" && $0.subtitle.contains("base sha1 a9993e36") })
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "Header policy" && $0.subtitle == "preserve-selected-base-rom-header" })
         XCTAssertTrue(store.filteredPatchManifestRows.contains { $0.title == "mGBA launch preview" && $0.subtitle == "Launch disabled" })
+        let patchActions = Dictionary(uniqueKeysWithValues: store.buildWorkflowActions(includePatchActions: true).map { ($0.id, $0) })
+        XCTAssertEqual(patchActions["apply-patch"]?.isEnabled, false)
+        XCTAssertEqual(patchActions["apply-patch"]?.isPreviewLocked, false)
+        XCTAssertTrue(patchActions["apply-patch"]?.disabledReason?.contains("compatible BPS or IPS patch") == true)
 
         store.requestBaseROMPath(wrongGBA.path)
 
@@ -1937,7 +1941,9 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(actions.first { $0.id == "capture-screenshot" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "capture-savestate" }?.isEnabled, true)
         XCTAssertEqual(actions.first { $0.id == "build-rom" }?.isEnabled, true)
-        XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isPreviewLocked, true)
+        XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isEnabled, false)
+        XCTAssertEqual(actions.first { $0.id == "apply-patch" }?.isPreviewLocked, false)
+        XCTAssertTrue(actions.first { $0.id == "apply-patch" }?.disabledReason?.contains("compatible BPS or IPS patch") == true)
 
         var capturedRequest: PlaytestProcessRequest?
         store.launchSelectedPlaytest(artifactRoot: root) { request in

@@ -10,6 +10,7 @@ public enum NDSDataDomain: String, Codable, Equatable, CaseIterable, Sendable {
     case text
     case scripts
     case maps
+    case audio
     case resources
 }
 
@@ -270,6 +271,36 @@ public struct NDSDataMigrationPlan: Codable, Equatable {
     }
 }
 
+public enum NDSDataAudioPreviewStatus: String, Codable, Equatable, CaseIterable {
+    case ready
+    case blocked
+}
+
+public struct NDSDataAudioPreview: Codable, Equatable {
+    public let status: NDSDataAudioPreviewStatus
+    public let format: String
+    public let summary: String
+    public let detectedHints: [String]
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: NDSDataAudioPreviewStatus,
+        format: String,
+        summary: String,
+        detectedHints: [String],
+        blockedActions: [String],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.status = status
+        self.format = format
+        self.summary = summary
+        self.detectedHints = detectedHints
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let id: String
     public let domain: NDSDataDomain
@@ -287,6 +318,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let containerSummary: NDSDataContainerSummary?
     public let textBankPreview: NDSDataTextBankPreview?
     public let migrationPlan: NDSDataMigrationPlan?
+    public let audioPreview: NDSDataAudioPreview?
     public let relatedRecords: [NDSDataRelatedRecord]
     public let readiness: NDSDataReadinessSummary?
     public let diagnostics: [Diagnostic]
@@ -308,6 +340,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         containerSummary: NDSDataContainerSummary? = nil,
         textBankPreview: NDSDataTextBankPreview? = nil,
         migrationPlan: NDSDataMigrationPlan? = nil,
+        audioPreview: NDSDataAudioPreview? = nil,
         relatedRecords: [NDSDataRelatedRecord] = [],
         readiness: NDSDataReadinessSummary? = nil,
         diagnostics: [Diagnostic] = []
@@ -328,6 +361,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.containerSummary = containerSummary
         self.textBankPreview = textBankPreview
         self.migrationPlan = migrationPlan
+        self.audioPreview = audioPreview
         self.relatedRecords = relatedRecords
         self.readiness = readiness
         self.diagnostics = diagnostics
@@ -350,6 +384,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         containerSummary: NDSDataContainerSummary?? = nil,
         textBankPreview: NDSDataTextBankPreview?? = nil,
         migrationPlan: NDSDataMigrationPlan?? = nil,
+        audioPreview: NDSDataAudioPreview?? = nil,
         relatedRecords: [NDSDataRelatedRecord]? = nil,
         readiness: NDSDataReadinessSummary?? = nil,
         diagnostics: [Diagnostic]? = nil
@@ -371,6 +406,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
             containerSummary: containerSummary ?? self.containerSummary,
             textBankPreview: textBankPreview ?? self.textBankPreview,
             migrationPlan: migrationPlan ?? self.migrationPlan,
+            audioPreview: audioPreview ?? self.audioPreview,
             relatedRecords: relatedRecords ?? self.relatedRecords,
             readiness: readiness ?? self.readiness,
             diagnostics: diagnostics ?? self.diagnostics
@@ -603,6 +639,7 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.maps, "res/field/matrices", required: false),
                 CatalogPathDescriptor(.maps, "res/field/events"),
                 CatalogPathDescriptor(.maps, "res/field/area_data", required: false),
+                CatalogPathDescriptor(.audio, "res/sound", required: false),
                 CatalogPathDescriptor(.resources, "generated", role: .generatedReference, allowedExtensions: ["txt"]),
                 CatalogPathDescriptor(.resources, "platinum.us/filesys.csv", role: .nitroFSManifest)
             ]
@@ -623,6 +660,8 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.maps, "files/fielddata/graphic", required: false),
                 CatalogPathDescriptor(.maps, "src/data/map_headers.h", format: .cHeader),
                 CatalogPathDescriptor(.maps, "src/data/fieldmap.h", format: .cHeader, required: false),
+                CatalogPathDescriptor(.audio, "files/data/sound", required: false),
+                CatalogPathDescriptor(.audio, "files/sound", required: false),
                 CatalogPathDescriptor(.resources, "filesystem.mk", role: .nitroFSManifest)
             ]
         case .pokediamond:
@@ -650,6 +689,8 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.maps, "files/fielddata/areadata", required: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/maptable", required: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/eventdata", required: false),
+                CatalogPathDescriptor(.audio, "files/data/sound", required: false),
+                CatalogPathDescriptor(.audio, "files/sound", required: false),
                 CatalogPathDescriptor(.resources, "filesystem.mk", role: .nitroFSManifest)
             ]
         default:
@@ -768,9 +809,20 @@ public enum NDSDataCatalogBuilder {
             role: descriptor.role,
             exists: exists
         )
+        let audioPreview = ndsAudioPreview(
+            url: url,
+            relativePath: relativePath,
+            domain: descriptor.domain,
+            format: format,
+            exists: exists,
+            isDirectory: isDirectory,
+            containerSummary: containerSummary,
+            fileManager: fileManager
+        )
         diagnostics.append(contentsOf: containerSummary?.diagnostics ?? [])
         diagnostics.append(contentsOf: textPreview?.diagnostics ?? [])
         diagnostics.append(contentsOf: migrationPlan?.diagnostics ?? [])
+        diagnostics.append(contentsOf: audioPreview?.diagnostics ?? [])
 
         let facts = factsForRecord(
             format: format,
@@ -779,7 +831,8 @@ public enum NDSDataCatalogBuilder {
             recordCount: recordCount,
             containerSummary: containerSummary,
             textBankPreview: textPreview,
-            migrationPlan: migrationPlan
+            migrationPlan: migrationPlan,
+            audioPreview: audioPreview
         )
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
@@ -797,6 +850,7 @@ public enum NDSDataCatalogBuilder {
             containerSummary: containerSummary,
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
+            audioPreview: audioPreview,
             diagnostics: diagnostics
         )
     }
@@ -934,7 +988,7 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static func romContainerRecords(report: NDSROMInspectorReport) -> [NDSDataCatalogRecord] {
-        let records = report.narcArchives.map { archive in
+        let narcRecords = report.narcArchives.map { archive in
             let domain = domain(forContainerPath: archive.path)
             let summary = containerSummary(
                 for: archive.index,
@@ -947,6 +1001,14 @@ public enum NDSDataCatalogBuilder {
                 format: .narc,
                 role: .binaryContainer,
                 exists: true
+            )
+            let audioPreview = ndsAudioPreview(
+                relativePath: archive.path,
+                domain: domain,
+                format: .narc,
+                exists: true,
+                isDirectory: false,
+                containerSummary: summary
             )
             return NDSDataCatalogRecord(
                 id: "\(domain.rawValue):\(archive.path)",
@@ -965,14 +1027,49 @@ public enum NDSDataCatalogBuilder {
                     byteCount: archive.size,
                     recordCount: summary.memberCount,
                     containerSummary: summary,
-                    migrationPlan: migrationPlan
+                    migrationPlan: migrationPlan,
+                    audioPreview: audioPreview
                 ),
                 preview: containerPreview(summary),
                 containerSummary: summary,
                 migrationPlan: migrationPlan,
-                diagnostics: archive.index.diagnostics + (migrationPlan?.diagnostics ?? [])
+                audioPreview: audioPreview,
+                diagnostics: archive.index.diagnostics + (migrationPlan?.diagnostics ?? []) + (audioPreview?.diagnostics ?? [])
             )
-        }.sorted(by: recordSort)
+        }
+        let audioRecords = report.fileSystem.files.filter { file in
+            file.kind == .audio || ndsAudioFileExtensions.contains(URL(fileURLWithPath: file.path).pathExtension.lowercased())
+        }.map { file -> NDSDataCatalogRecord in
+            let audioPreview = ndsAudioPreview(
+                relativePath: file.path,
+                domain: .audio,
+                format: format(for: file.path),
+                exists: true,
+                isDirectory: false,
+                containerSummary: nil
+            )
+            return NDSDataCatalogRecord(
+                id: "audio:\(file.path)",
+                domain: .audio,
+                title: title(for: file.path, domain: .audio),
+                relativePath: file.path,
+                format: format(for: file.path),
+                role: .binaryContainer,
+                exists: true,
+                byteCount: file.size,
+                sourceSpan: SourceSpan(relativePath: file.path, startLine: 1),
+                facts: factsForRecord(
+                    format: format(for: file.path),
+                    role: .binaryContainer,
+                    byteCount: file.size,
+                    recordCount: nil,
+                    audioPreview: audioPreview
+                ),
+                audioPreview: audioPreview,
+                diagnostics: audioPreview?.diagnostics ?? []
+            )
+        }
+        let records = (narcRecords + audioRecords).sorted(by: recordSort)
         return enrichRelationships(records: records, profile: .ndsROM)
     }
 
@@ -1076,6 +1173,15 @@ public enum NDSDataCatalogBuilder {
                         ? "Text data is indexed without decoded message-bank or same-key map/script context."
                         : "Text rows have decoded read-only preview facts or same-key map/script context for review."),
                 blockedActions: ndsTextBankPreviewBlockedActions
+            )
+        case .audio:
+            return NDSDataReadinessSummary(
+                status: record.audioPreview?.status == .ready ? .partial : .blocked,
+                title: "NDS audio preview readiness",
+                detail: record.audioPreview?.status == .ready
+                    ? "Audio rows expose read-only SDAT/SSEQ/SBNK/SWAR/STRM metadata only."
+                    : "Audio rows are indexed, but decode, playback, conversion, extraction, rebuild, export, and mutation apply are not available.",
+                blockedActions: ndsAudioPreviewBlockedActions
             )
         case .resources where record.role == .nitroFSManifest:
             return NDSDataReadinessSummary(
@@ -1462,7 +1568,7 @@ public enum NDSDataCatalogBuilder {
 
         let magic = safeASCII(Data(leadingBytes.prefix(8))) ?? ""
         let upperMagic = magic.uppercased()
-        for signature in ["NCLR", "RLCN", "NCGR", "RGCN", "NSCR", "RCSN", "NCER", "RECN", "NANR", "RNAN", "NFTR", "RTFN", "BMG", "MESG", "NSBMD", "BMD0", "NSBTX", "BTX0", "NARC"] {
+        for signature in ["NCLR", "RLCN", "NCGR", "RGCN", "NSCR", "RCSN", "NCER", "RECN", "NANR", "RNAN", "NFTR", "RTFN", "BMG", "MESG", "NSBMD", "BMD0", "NSBTX", "BTX0", "SDAT", "SSEQ", "SBNK", "SWAR", "STRM", "SWAV", "NARC"] {
             if upperMagic.hasPrefix(signature) {
                 return (formatHint(forSignature: signature), compressionHint(for: leadingBytes), "high")
             }
@@ -1486,6 +1592,12 @@ public enum NDSDataCatalogBuilder {
         case "bmg": return "messageBank"
         case "nsbmd", "bmd0": return "nitroModel"
         case "nsbtx", "btx0": return "nitroTexture"
+        case "sdat": return "nitroSoundArchive"
+        case "sseq": return "nitroSoundSequence"
+        case "sbnk": return "nitroSoundBank"
+        case "swar": return "nitroWaveArchive"
+        case "strm": return "nitroStream"
+        case "swav": return "nitroWaveSample"
         case "narc": return "narcContainer"
         default: return nil
         }
@@ -1502,6 +1614,12 @@ public enum NDSDataCatalogBuilder {
         case "BMG", "MESG": return "messageBank"
         case "NSBMD", "BMD0": return "nitroModel"
         case "NSBTX", "BTX0": return "nitroTexture"
+        case "SDAT": return "nitroSoundArchive"
+        case "SSEQ": return "nitroSoundSequence"
+        case "SBNK": return "nitroSoundBank"
+        case "SWAR": return "nitroWaveArchive"
+        case "STRM": return "nitroStream"
+        case "SWAV": return "nitroWaveSample"
         case "NARC": return "narcContainer"
         default: return "unknown"
         }
@@ -1518,6 +1636,12 @@ public enum NDSDataCatalogBuilder {
         case "messageBank": return "NDS message bank"
         case "nitroModel": return "Nitro model"
         case "nitroTexture": return "Nitro texture"
+        case "nitroSoundArchive": return "Nitro sound archive"
+        case "nitroSoundSequence": return "Nitro sound sequence"
+        case "nitroSoundBank": return "Nitro sound bank"
+        case "nitroWaveArchive": return "Nitro wave archive"
+        case "nitroStream": return "Nitro stream"
+        case "nitroWaveSample": return "Nitro wave sample"
         default: return "NDS member"
         }
     }
@@ -1722,6 +1846,62 @@ public enum NDSDataCatalogBuilder {
         samples.append(trimmed)
     }
 
+    private static func ndsAudioPreview(
+        url: URL? = nil,
+        relativePath: String,
+        domain: NDSDataDomain,
+        format: NDSDataSourceFormat,
+        exists: Bool,
+        isDirectory: Bool,
+        containerSummary: NDSDataContainerSummary?,
+        fileManager: FileManager? = nil
+    ) -> NDSDataAudioPreview? {
+        guard domain == .audio, exists else { return nil }
+
+        var hints: [String] = []
+        if let containerSummary {
+            hints.append(contentsOf: containerSummary.memberFingerprints.map(\.formatHint).filter { ndsAudioPreviewFormats.contains($0) })
+        }
+        if !isDirectory,
+           let url,
+           let fileManager,
+           let leading = leadingBytes(url: url, byteCount: maxMemberFingerprintBytes, fileManager: fileManager) {
+            let classification = classifyMember(path: relativePath, leadingBytes: leading)
+            if ndsAudioPreviewFormats.contains(classification.formatHint) {
+                hints.append(classification.formatHint)
+            }
+        } else if format == .binary || format == .narc {
+            let classification = classifyMember(path: relativePath, leadingBytes: Data())
+            if ndsAudioPreviewFormats.contains(classification.formatHint) {
+                hints.append(classification.formatHint)
+            }
+        }
+
+        let uniqueHints = Array(Set(hints)).sorted()
+        let status: NDSDataAudioPreviewStatus = uniqueHints.isEmpty ? .blocked : .ready
+        let formatLabel = uniqueHints.first ?? "ndsAudioCandidate"
+        let detail = uniqueHints.isEmpty
+            ? "Audio path is indexed, but no supported SDAT/SSEQ/SBNK/SWAR/STRM signature or extension was detected."
+            : "Read-only \(displayName(forMemberFormat: formatLabel)) metadata is available for review."
+        return NDSDataAudioPreview(
+            status: status,
+            format: formatLabel,
+            summary: "\(detail) Decode, playback, conversion, extraction, rebuild, export, and mutation apply remain disabled.",
+            detectedHints: uniqueHints,
+            blockedActions: ndsAudioPreviewBlockedActions,
+            diagnostics: [
+                Diagnostic(
+                    severity: status == .ready ? .info : .warning,
+                    code: status == .ready ? "NDS_AUDIO_PREVIEW_READ_ONLY" : "NDS_AUDIO_PREVIEW_BLOCKED",
+                    message: status == .ready
+                        ? "Detected read-only NDS audio metadata for \(relativePath); no decode, playback, conversion, extraction, rebuild, export, or write was attempted."
+                        : "NDS audio preview for \(relativePath) stays blocked because no supported SDAT/SSEQ/SBNK/SWAR/STRM metadata hint was detected.",
+                    span: SourceSpan(relativePath: relativePath, startLine: 1)
+                )
+            ]
+        )
+    }
+
     private static func ndsMigrationPlan(
         relativePath: String,
         domain: NDSDataDomain,
@@ -1784,6 +1964,10 @@ public enum NDSDataCatalogBuilder {
         case .maps:
             candidates.append("res/field/maps/\(stem)/map.bin")
             candidates.append("files/fielddata/mapmatrix/\(fileName)")
+        case .audio:
+            candidates.append("res/sound/\(fileName)")
+            candidates.append("files/data/sound/\(fileName)")
+            candidates.append("files/sound/\(fileName)")
         case .resources:
             if !relativePath.hasPrefix("res/prebuilt/") {
                 candidates.append("res/prebuilt/\(relativePath)")
@@ -1830,7 +2014,8 @@ public enum NDSDataCatalogBuilder {
         recordCount: Int?,
         containerSummary: NDSDataContainerSummary? = nil,
         textBankPreview: NDSDataTextBankPreview? = nil,
-        migrationPlan: NDSDataMigrationPlan? = nil
+        migrationPlan: NDSDataMigrationPlan? = nil,
+        audioPreview: NDSDataAudioPreview? = nil
     ) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Format", value: format.rawValue),
@@ -1879,6 +2064,14 @@ public enum NDSDataCatalogBuilder {
             facts.append(SourceIndexFact(label: "Unsupported Migration Steps", value: migrationPlan.unsupportedSteps.joined(separator: ", ")))
             facts.append(SourceIndexFact(label: "Migration Blocked Actions", value: migrationPlan.blockedActions.joined(separator: ", ")))
         }
+        if let audioPreview {
+            facts.append(SourceIndexFact(label: "Audio Preview", value: audioPreview.status.rawValue))
+            facts.append(SourceIndexFact(label: "Audio Format", value: audioPreview.format))
+            if !audioPreview.detectedHints.isEmpty {
+                facts.append(SourceIndexFact(label: "Audio Hints", value: audioPreview.detectedHints.joined(separator: ", ")))
+            }
+            facts.append(SourceIndexFact(label: "Audio Preview Blocked Actions", value: audioPreview.blockedActions.joined(separator: ", ")))
+        }
         if let recordCount {
             facts.append(SourceIndexFact(label: "Shallow Count", value: "\(recordCount)"))
         }
@@ -1916,7 +2109,7 @@ public enum NDSDataCatalogBuilder {
             return .cHeader
         case "narc":
             return .narc
-        case "bin", "dat", "sdat", "bmd0", "nsbmd", "ncgr", "nclr", "nscr", "ncer", "nanr":
+        case "bin", "dat", "sdat", "sseq", "sbnk", "swar", "strm", "swav", "bmd0", "nsbmd", "ncgr", "nclr", "nscr", "ncer", "nanr":
             return .binary
         case "txt", "mk", "rsf", "s", "inc", "gmm", "str":
             return .text
@@ -1992,6 +2185,11 @@ public enum NDSDataCatalogBuilder {
         }
         if lower.contains("msg") || lower.contains("text") || lower.contains("font") {
             return .text
+        }
+        if lower.contains("sound") || lower.contains("audio") || lower.contains("sdat") || lower.contains("sseq")
+            || lower.contains("sbnk") || lower.contains("swar") || lower.contains("strm")
+            || lower.contains("/seq") || lower.contains("bgm") || lower.contains("music") || lower.contains("cries") {
+            return .audio
         }
         if lower.contains("script") || lower.contains("scr_") || lower.contains("scrseq") {
             return .scripts
@@ -2143,6 +2341,22 @@ public enum NDSDataCatalogBuilder {
         "nitroModel",
         "nitroTexture"
     ]
+    private static let ndsAudioPreviewFormats: Set<String> = [
+        "nitroSoundArchive",
+        "nitroSoundSequence",
+        "nitroSoundBank",
+        "nitroWaveArchive",
+        "nitroStream",
+        "nitroWaveSample"
+    ]
+    private static let ndsAudioFileExtensions: Set<String> = [
+        "sdat",
+        "sseq",
+        "sbnk",
+        "swar",
+        "strm",
+        "swav"
+    ]
     private static let ndsGraphicsPreviewBlockedActions = [
         "Extraction",
         "Decompression",
@@ -2154,6 +2368,15 @@ public enum NDSDataCatalogBuilder {
     private static let ndsTextBankPreviewBlockedActions = [
         "Message decoder apply",
         "Text-bank writer",
+        "NARC rebuild",
+        "ROM export",
+        "Mutation apply"
+    ]
+    private static let ndsAudioPreviewBlockedActions = [
+        "Audio decode",
+        "Playback",
+        "Conversion",
+        "Extraction",
         "NARC rebuild",
         "ROM export",
         "Mutation apply"
@@ -2233,7 +2456,8 @@ private extension NDSDataDomain {
         case .text: return 6
         case .scripts: return 7
         case .maps: return 8
-        case .resources: return 9
+        case .audio: return 9
+        case .resources: return 10
         }
     }
 }

@@ -404,7 +404,7 @@ public enum MigrationCoverageReportBuilder {
                 status = .migrationPlanOnly
             } else if editableCount > 0 && catalog.profile == .pokeplatinum {
                 status = .sourceFirstEditable
-            } else if count.domain == .resources {
+            } else if count.domain == .resources || count.domain == .audio {
                 status = .previewOnly
             } else {
                 status = .sourceFirstReadOnly
@@ -560,6 +560,7 @@ public enum MigrationCoverageReportBuilder {
         case .text: .ndsTextBanks
         case .scripts: .scripts
         case .maps: .maps
+        case .audio: .audio
         case .resources: .ndsContainers
         }
     }

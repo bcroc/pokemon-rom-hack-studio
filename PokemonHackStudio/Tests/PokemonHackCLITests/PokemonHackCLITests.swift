@@ -260,16 +260,17 @@ final class PokemonHackCLITests: XCTestCase {
         let header = try XCTUnwrap(inspect["header"] as? [String: Any])
         XCTAssertEqual(header["gameCode"] as? String, "ADAE")
         let fileSystem = try XCTUnwrap(inspect["fileSystem"] as? [String: Any])
-        XCTAssertEqual(fileSystem["fileCount"] as? Int, 2)
+        XCTAssertEqual(fileSystem["fileCount"] as? Int, 3)
         let narcArchives = try XCTUnwrap(inspect["narcArchives"] as? [[String: Any]])
         XCTAssertEqual(narcArchives.count, 1)
 
         let files = try decodeJSON(
             PokemonHackCLI.run(arguments: ["nds-files", rom.path, "--json"])
         )
-        XCTAssertEqual(files["fileCount"] as? Int, 2)
+        XCTAssertEqual(files["fileCount"] as? Int, 3)
         let rows = try XCTUnwrap(files["files"] as? [[String: Any]])
         XCTAssertTrue(rows.contains { $0["path"] as? String == "sub/child.narc" })
+        XCTAssertTrue(rows.contains { $0["path"] as? String == "sound_data.sdat" && $0["kind"] as? String == "audio" })
 
         let dispatched = try decodeJSON(
             PokemonHackCLI.run(arguments: ["rom-inspect", rom.path, "--json"])
@@ -330,6 +331,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Variant" })
         XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Build Target" })
         XCTAssertTrue(items.contains { $0["category"] as? String == "NDS Data species" })
+        let audioItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data audio" && $0["path"] as? String == "res/sound/main.sdat" })
+        let audioFacts = try XCTUnwrap(audioItem["facts"] as? [[String: Any]])
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Audio Preview" && $0["value"] as? String == "ready" })
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Audio Preview Blocked Actions" && ($0["value"] as? String)?.contains("Playback") == true })
     }
 
     func testNDSDataCatalogCommandEmitsReadOnlyJSON() throws {
@@ -377,6 +382,16 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(textFacts.contains { $0["label"] as? String == "Decoded Strings" && $0["value"] as? String == "1" })
         let textDiagnostics = try XCTUnwrap(textRecord["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(textDiagnostics.contains { $0["code"] as? String == "NDS_TEXT_BANK_PREVIEW_READ_ONLY" })
+        let audioRecord = try XCTUnwrap(records.first { $0["domain"] as? String == "audio" && $0["relativePath"] as? String == "res/sound/main.sdat" })
+        let audioPreview = try XCTUnwrap(audioRecord["audioPreview"] as? [String: Any])
+        XCTAssertEqual(audioPreview["status"] as? String, "ready")
+        XCTAssertEqual(audioPreview["format"] as? String, "nitroSoundArchive")
+        let audioBlockedActions = try XCTUnwrap(audioPreview["blockedActions"] as? [String])
+        XCTAssertTrue(audioBlockedActions.contains("Playback"))
+        XCTAssertTrue(audioBlockedActions.contains("Mutation apply"))
+        let audioFacts = try XCTUnwrap(audioRecord["facts"] as? [[String: Any]])
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Audio Preview" && $0["value"] as? String == "ready" })
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Audio Preview Blocked Actions" && ($0["value"] as? String)?.contains("ROM export") == true })
         let diagnostics = try XCTUnwrap(catalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_READ_ONLY" })
 
@@ -398,6 +413,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(romMigrationPlan["status"] as? String, "previewOnly")
         let romExtractedCandidates = try XCTUnwrap(romMigrationPlan["extractedDirectoryCandidates"] as? [String])
         XCTAssertTrue(romExtractedCandidates.contains("sub/child"))
+        let romAudioRecord = try XCTUnwrap(romRecords.first { $0["domain"] as? String == "audio" && $0["relativePath"] as? String == "sound_data.sdat" })
+        let romAudioPreview = try XCTUnwrap(romAudioRecord["audioPreview"] as? [String: Any])
+        XCTAssertEqual(romAudioPreview["status"] as? String, "ready")
+        XCTAssertEqual(romAudioPreview["format"] as? String, "nitroSoundArchive")
         let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
     }
@@ -896,6 +915,8 @@ final class PokemonHackCLITests: XCTestCase {
         var fat = Data()
         appendUInt32LE(0x400, to: &fat)
         appendUInt32LE(0x404, to: &fat)
+        appendUInt32LE(0x440, to: &fat)
+        appendUInt32LE(0x450, to: &fat)
         appendUInt32LE(0x500, to: &fat)
         appendUInt32LE(UInt32(0x500 + narc.count), to: &fat)
         writeUInt32LE(0x380, into: &data, at: 0x48)
@@ -905,6 +926,7 @@ final class PokemonHackCLITests: XCTestCase {
         writeUInt16LE(0x5678, into: &data, at: 0x15E)
 
         data.replaceSubrange(0x400..<0x404, with: Data("ROOT".utf8))
+        data.replaceSubrange(0x440..<0x450, with: Data("SDAT".utf8) + Data(repeating: 0, count: 12))
         data.replaceSubrange(0x500..<(0x500 + narc.count), with: narc)
         try data.write(to: rom)
         return rom
@@ -942,6 +964,7 @@ final class PokemonHackCLITests: XCTestCase {
         try write("{\"cell_animation\":1}\n", to: root.appendingPathComponent("res/trainers/classes/youngster.json"))
         try write("[{\"slot\":1}]\n", to: root.appendingPathComponent("res/field/encounters/route201.json"))
         try write("{\"message\":\"hello\"}\n", to: root.appendingPathComponent("res/text/story.json"))
+        try write(Data("SDAT".utf8) + Data(repeating: 0, count: 12), to: root.appendingPathComponent("res/sound/main.sdat"))
         try write("scrcmd_end\n", to: root.appendingPathComponent("res/field/scripts/route201.s"))
         try write("{\"event\":1}\n", to: root.appendingPathComponent("res/field/events/route201.json"))
         try write(Data([0x01]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
@@ -967,6 +990,7 @@ final class PokemonHackCLITests: XCTestCase {
     private func makeTestFNT() -> Data {
         var rootEntries = Data()
         appendFNTFile("root.bin", to: &rootEntries)
+        appendFNTFile("sound_data.sdat", to: &rootEntries)
         appendFNTDirectory("sub", directoryID: 0xF001, to: &rootEntries)
         rootEntries.append(0)
 
@@ -979,7 +1003,7 @@ final class PokemonHackCLITests: XCTestCase {
         appendUInt16LE(0, to: &fnt)
         appendUInt16LE(2, to: &fnt)
         appendUInt32LE(UInt32(16 + rootEntries.count), to: &fnt)
-        appendUInt16LE(1, to: &fnt)
+        appendUInt16LE(2, to: &fnt)
         appendUInt16LE(0xF000, to: &fnt)
         fnt.append(rootEntries)
         fnt.append(childEntries)

@@ -730,7 +730,7 @@ public enum ProjectMoveCatalogBuilder {
         guard profile == .pokeemerald || profile == .pokefirered else {
             return [
                 Diagnostic(
-                    severity: .warning,
+                    severity: .error,
                     code: "MOVE_CATALOG_READ_ONLY_PROFILE",
                     message: "Move editing is currently available for classic Emerald and FireRed battle_moves.h rows.",
                     span: record.sourceSpan
@@ -740,7 +740,7 @@ public enum ProjectMoveCatalogBuilder {
         guard record.sourceSpan.relativePath == "src/data/battle_moves.h" else {
             return [
                 Diagnostic(
-                    severity: .warning,
+                    severity: .error,
                     code: "MOVE_CATALOG_READ_ONLY_SOURCE",
                     message: "Move editing requires classic src/data/battle_moves.h source.",
                     span: record.sourceSpan
