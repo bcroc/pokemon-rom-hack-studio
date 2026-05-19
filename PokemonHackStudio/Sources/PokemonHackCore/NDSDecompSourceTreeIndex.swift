@@ -143,7 +143,7 @@ public enum NDSDecompSourceTreeIndexBuilder {
             markerDocuments: markerDocuments,
             sourceDocuments: sourceDocuments,
             generatedOutputs: generatedOutputs,
-            variants: spec.variants,
+            variants: variants(for: spec, root: standardizedRoot, fileManager: fileManager),
             buildTargets: spec.buildTargets,
             diagnostics: diagnostics
         )
@@ -164,6 +164,19 @@ public enum NDSDecompSourceTreeIndexBuilder {
                 span: SourceSpan(relativePath: document.relativePath, startLine: 1)
             )
         }
+    }
+
+    private static func variants(
+        for spec: NDSDecompProfileSpec,
+        root: URL,
+        fileManager: FileManager
+    ) -> [NDSDecompSourceVariant] {
+        guard spec.profile == .pokeblack else { return spec.variants }
+        let present = spec.variants.filter { variant in
+            fileManager.fileExists(atPath: root.appendingPathComponent(variant.id).path)
+                || variant.checksumPath.map { fileManager.fileExists(atPath: root.appendingPathComponent($0).path) } == true
+        }
+        return present.isEmpty ? spec.variants : present
     }
 
     private static let specs: [NDSDecompProfileSpec] = [
@@ -300,7 +313,6 @@ public enum NDSDecompSourceTreeIndexBuilder {
                 ("config.mk", .configuration),
                 ("main.rsf", .configuration),
                 ("main.lsf", .configuration),
-                ("black.us/rom.sha1", .configuration),
                 ("files", .binary)
             ],
             optionalMarkers: [
@@ -308,8 +320,8 @@ public enum NDSDecompSourceTreeIndexBuilder {
                 ("arm7.ld", .configuration)
             ],
             anyMarkerGroups: [
-                [("black.us", .configuration)],
-                [("black.us/rom.sha1", .configuration)]
+                [("black.us", .configuration), ("white.us", .configuration)],
+                [("black.us/rom.sha1", .configuration), ("white.us/rom.sha1", .configuration)]
             ],
             sourceDocumentPaths: [
                 ("src", .cSource),
@@ -325,7 +337,8 @@ public enum NDSDecompSourceTreeIndexBuilder {
                 ("pokeblack.nds", .artifact)
             ],
             variants: [
-                NDSDecompSourceVariant(id: "black.us", title: "Pokemon Black US", outputPath: "pokeblack.nds", checksumPath: "black.us/rom.sha1")
+                NDSDecompSourceVariant(id: "black.us", title: "Pokemon Black US", outputPath: "pokeblack.nds", checksumPath: "black.us/rom.sha1"),
+                NDSDecompSourceVariant(id: "white.us", title: "Pokemon White US", checksumPath: "white.us/rom.sha1")
             ],
             buildTargets: [
                 BuildTarget(id: "black-rom", name: "Build Pokemon Black ROM", kind: .build, command: ["make"], outputPath: "pokeblack.nds")

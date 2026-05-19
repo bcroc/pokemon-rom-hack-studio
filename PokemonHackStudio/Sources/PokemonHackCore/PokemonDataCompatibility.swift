@@ -127,6 +127,7 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
     public let recommendedFutureRow: String?
     public let diagnostics: [Diagnostic]
     public let cryAudioPlan: GBACryAudioMutationPlan?
+    public let sourceTables: [PokemonDataCompatibilitySourceTable]?
 
     public init(
         surface: PokemonDataCompatibilitySurface,
@@ -143,7 +144,8 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
         blockedReason: String? = nil,
         recommendedFutureRow: String? = nil,
         diagnostics: [Diagnostic] = [],
-        cryAudioPlan: GBACryAudioMutationPlan? = nil
+        cryAudioPlan: GBACryAudioMutationPlan? = nil,
+        sourceTables: [PokemonDataCompatibilitySourceTable]? = nil
     ) {
         self.surface = surface
         self.status = status
@@ -160,6 +162,29 @@ public struct PokemonDataCompatibilityEntry: Codable, Equatable, Identifiable {
         self.recommendedFutureRow = recommendedFutureRow
         self.diagnostics = diagnostics
         self.cryAudioPlan = cryAudioPlan
+        self.sourceTables = sourceTables
+    }
+}
+
+public struct PokemonDataCompatibilitySourceTable: Codable, Equatable {
+    public let path: String
+    public let tableSymbol: String?
+    public let indexedCount: Int
+    public let status: PokemonDataCompatibilityStatus
+    public let note: String?
+
+    public init(
+        path: String,
+        tableSymbol: String?,
+        indexedCount: Int,
+        status: PokemonDataCompatibilityStatus,
+        note: String? = nil
+    ) {
+        self.path = path
+        self.tableSymbol = tableSymbol
+        self.indexedCount = indexedCount
+        self.status = status
+        self.note = note
     }
 }
 
@@ -191,7 +216,7 @@ public enum PokemonDataCompatibilityReportBuilder {
         entries.append(pokedexEntry(index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(assetsEntry(index: index, assetCatalog: assetCatalog))
         entries.append(criesEntry(index: index, fileManager: fileManager))
-        entries.append(formsEntry(index: index, sourceIndex: sourceIndex, fileManager: fileManager))
+        entries.append(formsEntry(index: index, sourceIndex: sourceIndex))
 
         let diagnostics = index.diagnostics
             + sourceIndex.diagnostics
@@ -380,22 +405,95 @@ public enum PokemonDataCompatibilityReportBuilder {
 
     private static func formsEntry(
         index: ProjectIndex,
-        sourceIndex: ProjectSourceIndex,
-        fileManager: FileManager
+        sourceIndex: ProjectSourceIndex
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: .forms, profile: index.profile)
-        let count = recordCount(.pokemon, in: sourceIndex, pathContains: "species_info/")
-            + existingPaths(["src/data/pokemon/form_change_tables.h"], root: index.root.path, fileManager: fileManager).count
+        let formRecords = sourceIndex.records.filter(isFormCompatibilityRecord)
+        let sourceTables = formSourceTables(in: sourceIndex)
+        let count = formRecords.count
         return entry(
             surface: .forms,
             index: index,
             descriptor: descriptor,
             indexedCount: count,
             editableCount: 0,
-            unsupportedFields: ["form table editing", "form graphics sync", "generated family supplement apply"],
-            blockedReason: count == 0 ? "No form supplement or form change table was detected for this fixture/profile." : nil,
-            recommendedFutureRow: "PHS-T57"
+            unsupportedFields: ["form editing", "form table mutation/apply", "form graphics sync", "generated family supplement apply", "binary-only form table writes", "ROM/export/source writes"],
+            blockedReason: count == 0 ? "No form table or species supplement source graph was detected for this fixture/profile." : nil,
+            recommendedFutureRow: "PHS-T57E",
+            diagnostics: formDiagnostics(records: formRecords),
+            sourceTables: sourceTables
         )
+    }
+
+    private static func formSourceTables(in sourceIndex: ProjectSourceIndex) -> [PokemonDataCompatibilitySourceTable] {
+        let formSpeciesPath = "src/data/pokemon/form_species_tables.h"
+        let formChangePath = "src/data/pokemon/form_change_tables.h"
+        let speciesInfoRoot = "src/data/pokemon/species_info/"
+        let formSpeciesCount = formRecords(in: sourceIndex, path: formSpeciesPath).count
+        let formChangeCount = formRecords(in: sourceIndex, path: formChangePath).count
+        let speciesInfoCount = sourceIndex.records.filter { record in
+            record.module == .pokemon
+                && isFormCompatibilityRecord(record)
+                && record.tags.contains("species-info")
+                && record.sourceSpan.relativePath.hasPrefix(speciesInfoRoot)
+        }.count
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: formSpeciesPath,
+                tableSymbol: "s*FormSpeciesIdTable",
+                indexedCount: formSpeciesCount,
+                status: formSpeciesCount > 0 ? .readOnly : .blocked,
+                note: "Read-only form species table metadata for PHS-T57E."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: formChangePath,
+                tableSymbol: "s*FormChangeTable",
+                indexedCount: formChangeCount,
+                status: formChangeCount > 0 ? .readOnly : .blocked,
+                note: "Read-only form change table metadata for PHS-T57E."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: speciesInfoRoot,
+                tableSymbol: "formSpeciesIdTable/formChangeTable",
+                indexedCount: speciesInfoCount,
+                status: speciesInfoCount > 0 ? .readOnly : .blocked,
+                note: "Read-only species-info form links; generated family supplement apply stays blocked."
+            )
+        ]
+    }
+
+    private static func formRecords(in sourceIndex: ProjectSourceIndex, path: String) -> [SourceIndexRecord] {
+        sourceIndex.records.filter { record in
+            record.module == .pokemon
+                && isFormCompatibilityRecord(record)
+                && record.sourceSpan.relativePath == path
+        }
+    }
+
+    private static func isFormCompatibilityRecord(_ record: SourceIndexRecord) -> Bool {
+        record.tags.contains("form") && record.tags.contains { tag in
+            tag == "form-species-table"
+                || tag == "form-change-table"
+                || tag == "form-supplement"
+        }
+    }
+
+    private static func formDiagnostics(records: [SourceIndexRecord]) -> [Diagnostic] {
+        guard !records.isEmpty else { return [] }
+        return [
+            Diagnostic(
+                severity: .info,
+                code: "GBA_FORMS_SOURCE_GRAPH_DETECTED",
+                message: "Detected \(records.count) read-only form source graph record(s); compatibility reports can distinguish form tables and supplements, but mutation workflows remain unavailable.",
+                span: records.first?.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "GBA_FORMS_MUTATION_WORKFLOW_BLOCKED",
+                message: "Form editing, table mutation/apply, graphics sync, generated supplement apply, binary-only form table writes, builds, ROM export, and mutation apply remain blocked.",
+                span: records.first?.sourceSpan
+            )
+        ]
     }
 
     private static func entry(
@@ -408,7 +506,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         blockedReason providedBlockedReason: String? = nil,
         recommendedFutureRow providedFutureRow: String? = nil,
         diagnostics: [Diagnostic] = [],
-        cryAudioPlan: GBACryAudioMutationPlan? = nil
+        cryAudioPlan: GBACryAudioMutationPlan? = nil,
+        sourceTables: [PokemonDataCompatibilitySourceTable]? = nil
     ) -> PokemonDataCompatibilityEntry {
         let readOnlyCount = max(0, indexedCount - editableCount)
         let blockedReason = providedBlockedReason ?? blockedReason(for: surface, profile: index.profile, indexedCount: indexedCount, descriptor: descriptor)
@@ -437,7 +536,8 @@ public enum PokemonDataCompatibilityReportBuilder {
             blockedReason: blockedReason,
             recommendedFutureRow: providedFutureRow ?? descriptor?.recommendedFutureRow,
             diagnostics: diagnostics,
-            cryAudioPlan: cryAudioPlan
+            cryAudioPlan: cryAudioPlan,
+            sourceTables: sourceTables
         )
     }
 
@@ -706,9 +806,9 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
     case .forms:
         switch profile {
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/form_change_tables.h", tableSymbol: "sFormChangeTable", supportsEditing: false, readOnlyReason: "Expansion form data is detected when present but not editable yet.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/form_species_tables.h", tableSymbol: "FormSpeciesIdTable/FormChangeTable", supportsEditing: false, readOnlyReason: "Expansion form tables and species supplements are detected for diagnostics only; form mutation workflows are not editable yet.", recommendedFutureRow: "PHS-T57E")
         case .pokeemerald, .pokefirered, .pokeruby:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/species_info.h", tableSymbol: nil, supportsEditing: false, readOnlyReason: "Classic form-specific tables are not present in the indexed fixture/profile.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/form_species_tables.h", tableSymbol: "FormSpeciesIdTable/FormChangeTable", supportsEditing: false, readOnlyReason: "Classic form tables are detected for diagnostics only when present; form mutation workflows are not editable yet.", recommendedFutureRow: "PHS-T57E")
         default:
             return nil
         }

@@ -433,6 +433,18 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(bundled.writePolicy, .readOnly)
         XCTAssertTrue(bundled.title.hasSuffix(" (Bundled)"))
         XCTAssertTrue(bundled.items.contains { $0.category == "NDS Variant" && $0.path == "pokeblack.nds" })
+        let whitePath = "unavailable-titles/Pokemon - White Version (USA, Europe) (NDSi Enhanced).nds"
+        let whiteReason = "No materialized White source decomp is available in the current central corpus; the available pokeblack tree currently supports black.us only."
+        let whiteUnavailable = try XCTUnwrap(bundled.items.first { $0.category == "NDS Data resources" && $0.path == whitePath })
+        XCTAssertEqual(whiteUnavailable.kind, "unknown")
+        XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Readiness" && $0.value == "unavailable" })
+        XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Source Role" && $0.value == "titleUnavailable" })
+        XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Unavailable Reason" && $0.value == whiteReason })
+        XCTAssertTrue(bundled.items.contains { item in
+            item.category == "NDS Data resources"
+                && item.facts.contains { $0.label == "Gen V Family" && $0.value == "black2White2" }
+                && item.facts.contains { $0.label == "Gen V Source Name" && $0.value == "none" }
+        })
     }
 
     @MainActor
@@ -729,7 +741,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testHGSSPersonalSemanticFieldEditsFlowThroughResourceEditor() async throws {
+    func testHGSSPersonalTrainerAndItemSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSHeartGoldSourceProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
@@ -784,11 +796,83 @@ final class MapEditorStoreTests: XCTestCase {
                 .contains("\"double_battle\":true")
         )
 
+        let itemJSONRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/itemtool/itemdata/potion.json" })
+        store.requestResourceAssetSelection(itemJSONRow.id)
+        let itemJSONEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(itemJSONEditor.semanticFields.contains { $0.key == "name" && $0.value == "POTION" })
+        XCTAssertTrue(itemJSONEditor.semanticFields.contains { $0.key == "price" && $0.value == "300" })
+        XCTAssertTrue(itemJSONEditor.semanticFields.contains { $0.key == "field_use" && $0.value == "true" })
+        XCTAssertFalse(itemJSONEditor.semanticFields.contains { $0.key == "effects" })
+        store.updateSelectedNDSDataSemanticField(key: "price", value: "700")
+        store.updateSelectedNDSDataSemanticField(key: "field_use", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updatedItemJSON = try String(
+            contentsOf: root.appendingPathComponent("files/itemtool/itemdata/potion.json"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(updatedItemJSON.contains("\"price\":700"))
+        XCTAssertTrue(updatedItemJSON.contains("\"field_use\":false"))
+        XCTAssertTrue(updatedItemJSON.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+
         let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/itemtool/itemdata/item_data.csv" })
         store.requestResourceAssetSelection(itemRow.id)
         let itemEditor = try XCTUnwrap(store.selectedNDSDataEditor)
         XCTAssertTrue(itemEditor.semanticFields.isEmpty)
         store.updateSelectedNDSDataSemanticField(key: "name", value: "SUPER_POTION")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+    }
+
+    @MainActor
+    func testDiamondPearlItemMappingSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let itemCRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "arm9/src/itemtool.c" })
+        store.requestResourceAssetSelection(itemCRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "items:arm9/src/itemtool.c")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "itemIndexMappings.1.itemDataIndex" && $0.value == "1" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "itemIndexMappings.1.iconIndex" && $0.value == "2" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "itemIndexMappings.2.itemDataIndex" })
+
+        store.updateSelectedNDSDataSemanticField(key: "itemIndexMappings.1.itemDataIndex", value: "42")
+        store.updateSelectedNDSDataSemanticField(key: "itemIndexMappings.1.iconIndex", value: "24")
+        store.updateSelectedNDSDataSemanticField(key: "itemIndexMappings.1.paletteIndex", value: "11")
+        store.updateSelectedNDSDataSemanticField(key: "itemIndexMappings.1.gen3Index", value: "9")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/itemtool.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("{ 42, 24, 11, 9 }"))
+        XCTAssertTrue(updated.contains("ITEM_DATA_COUNT"))
+
+        let binaryItemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/itemtool/itemdata/item_0000.bin" })
+        store.requestResourceAssetSelection(binaryItemRow.id)
+        let binaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(binaryEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "itemIndexMappings.0.itemDataIndex", value: "7")
         XCTAssertFalse(store.selectedNDSDataIsDirty)
     }
 
@@ -3056,9 +3140,27 @@ final class MapEditorStoreTests: XCTestCase {
         try write("0" + String(repeating: "a", count: 39) + "  pokediamond.us.nds\n", to: root.appendingPathComponent("pokediamond.us.sha1"))
         try write("arm9 source\n", to: root.appendingPathComponent("arm9/main.c"))
         try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
+        try write("void Waza_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/waza.c"))
+        try write(
+            """
+            #include "global.h"
+
+            static const u16 sItemIndexMappings[][4] = {
+                { 0, 1, 2, 0 },
+                { 1, 2, 3, 1 },
+                { ITEM_DATA_COUNT, 4, 5, 6 },
+            };
+
+            void Item_Load(void) {}
+
+            """,
+            to: root.appendingPathComponent("arm9/src/itemtool.c")
+        )
+        try write("void Trainer_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/trainer_data.c"))
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
         try write("arm7 source\n", to: root.appendingPathComponent("arm7/main.s"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
         try write("// header\n", to: root.appendingPathComponent("include/config.h"))
@@ -3118,6 +3220,7 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"species\":\"CHIKORITA\"}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
         try write("{\"id\":1,\"name\":\"Youngster Joey\",\"double_battle\":false,\"party\":[{\"species\":\"RATTATA\",\"level\":4}]}\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
+        try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
         try write("{\"zone\":1}\n", to: root.appendingPathComponent("files/fielddata/eventdata/zone_event/zone_001.json"))
         try write("message\n", to: root.appendingPathComponent("files/msgdata/msg/0001.txt"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/script/scr_seq/0001.bin"))

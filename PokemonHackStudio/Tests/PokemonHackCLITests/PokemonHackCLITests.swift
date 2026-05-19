@@ -421,6 +421,93 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
     }
 
+    func testNDSDataCatalogCommandEmitsPokeBlackReadinessJSON() throws {
+        let root = try makeTestBlackDecompRoot()
+
+        let catalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", root.path, "--json"])
+        )
+
+        XCTAssertEqual(catalog["profile"] as? String, "pokeblack")
+        XCTAssertEqual(catalog["family"] as? String, "blackWhite")
+        XCTAssertEqual(catalog["isReadOnly"] as? Bool, true)
+        let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
+        let encounter = try XCTUnwrap(records.first { $0["relativePath"] as? String == "data/encounters/route_1.txt" })
+        let encounterFacts = try XCTUnwrap(encounter["facts"] as? [[String: Any]])
+        XCTAssertTrue(encounterFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
+        XCTAssertTrue(encounterFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "encounterPreview" })
+        XCTAssertTrue(encounterFacts.contains { $0["label"] as? String == "Gen V Blocked Actions" && ($0["value"] as? String)?.contains("raw source writer") == true })
+        let encounterReadiness = try XCTUnwrap(encounter["readiness"] as? [String: Any])
+        XCTAssertEqual(encounterReadiness["status"] as? String, "partial")
+        let encounterDiagnostics = try XCTUnwrap(encounter["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(encounterDiagnostics.contains { $0["code"] as? String == "NDS_GEN_V_READINESS_PREVIEW_ONLY" })
+        XCTAssertTrue(encounterDiagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let overlay = try XCTUnwrap(records.first { $0["relativePath"] as? String == "overlays/overlay_93/source.s" })
+        let overlayFacts = try XCTUnwrap(overlay["facts"] as? [[String: Any]])
+        XCTAssertTrue(overlayFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "overlayRouting" })
+
+        let config = try XCTUnwrap(records.first { $0["relativePath"] as? String == "ndsdisasm_config/ARM9.cfg" })
+        let configFacts = try XCTUnwrap(config["facts"] as? [[String: Any]])
+        XCTAssertTrue(configFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "disassemblyConfig" })
+
+        let checksum = try XCTUnwrap(records.first { $0["relativePath"] as? String == "black.us/rom.sha1" })
+        let checksumFacts = try XCTUnwrap(checksum["facts"] as? [[String: Any]])
+        XCTAssertTrue(checksumFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "checksumExpectation" })
+
+        let audio = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/wb_sound_data.sdat" && $0["domain"] as? String == "audio" })
+        let audioFacts = try XCTUnwrap(audio["facts"] as? [[String: Any]])
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Audio Preview" && $0["value"] as? String == "ready" })
+        XCTAssertTrue(audioFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "audioMetadata" })
+
+        let unavailableRows = records.filter { $0["role"] as? String == "metadataUnavailable" }
+        XCTAssertEqual(unavailableRows.count, 3)
+        let whitePath = "unavailable-titles/Pokemon - White Version (USA, Europe) (NDSi Enhanced).nds"
+        let whiteReason = "No materialized White source decomp is available in the current central corpus; the available pokeblack tree currently supports black.us only."
+        let white = try XCTUnwrap(records.first { $0["relativePath"] as? String == whitePath })
+        XCTAssertEqual(white["domain"] as? String, "resources")
+        XCTAssertEqual(white["title"] as? String, "Pokemon - White Version (USA, Europe) (NDSi Enhanced).nds")
+        XCTAssertEqual(white["format"] as? String, "unknown")
+        XCTAssertEqual(white["exists"] as? Bool, false)
+        XCTAssertNil(white["byteCount"])
+        XCTAssertNil(white["preview"])
+        let whiteReadiness = try XCTUnwrap(white["readiness"] as? [String: Any])
+        XCTAssertEqual(whiteReadiness["status"] as? String, "blocked")
+        let whiteFacts = try XCTUnwrap(white["facts"] as? [[String: Any]])
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Title" && $0["value"] as? String == "Pokemon - White Version (USA, Europe) (NDSi Enhanced).nds" })
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Family" && $0["value"] as? String == "blackWhite" })
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Source Name" && $0["value"] as? String == "pokeblack" })
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Unavailable Reason" && $0["value"] as? String == whiteReason })
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "unavailable" })
+        XCTAssertTrue(whiteFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "titleUnavailable" })
+        let whiteDiagnostics = try XCTUnwrap(white["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(whiteDiagnostics.contains { $0["code"] as? String == "NDS_GEN_V_TITLE_UNAVAILABLE" })
+        XCTAssertTrue(whiteDiagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let black2 = try XCTUnwrap(records.first { $0["relativePath"] as? String == "unavailable-titles/Pokemon - Black Version 2 (USA, Europe) (NDSi Enhanced).nds" })
+        let black2Facts = try XCTUnwrap(black2["facts"] as? [[String: Any]])
+        XCTAssertTrue(black2Facts.contains { $0["label"] as? String == "Gen V Family" && $0["value"] as? String == "black2White2" })
+        XCTAssertTrue(black2Facts.contains { $0["label"] as? String == "Gen V Source Name" && $0["value"] as? String == "none" })
+        XCTAssertTrue(black2Facts.contains { $0["label"] as? String == "Gen V Unavailable Reason" && $0["value"] as? String == "No public/materialized Black 2 decomp source root was found in the configured central corpus." })
+
+        let white2 = try XCTUnwrap(records.first { $0["relativePath"] as? String == "unavailable-titles/Pokemon - White Version 2 (USA, Europe) (NDSi Enhanced).nds" })
+        let white2Facts = try XCTUnwrap(white2["facts"] as? [[String: Any]])
+        XCTAssertTrue(white2Facts.contains { $0["label"] as? String == "Gen V Family" && $0["value"] as? String == "black2White2" })
+        XCTAssertTrue(white2Facts.contains { $0["label"] as? String == "Gen V Source Name" && $0["value"] as? String == "none" })
+        XCTAssertTrue(white2Facts.contains { $0["label"] as? String == "Gen V Unavailable Reason" && $0["value"] as? String == "No public/materialized White 2 decomp source root was found in the configured central corpus." })
+
+        let resourceIndex = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
+        )
+        let items = try XCTUnwrap(resourceIndex["items"] as? [[String: Any]])
+        let whiteResourceItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == whitePath })
+        XCTAssertEqual(whiteResourceItem["kind"] as? String, "unknown")
+        let whiteResourceFacts = try XCTUnwrap(whiteResourceItem["facts"] as? [[String: Any]])
+        XCTAssertTrue(whiteResourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "unavailable" })
+        XCTAssertTrue(whiteResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "titleUnavailable" })
+        XCTAssertTrue(whiteResourceFacts.contains { $0["label"] as? String == "Gen V Unavailable Reason" && $0["value"] as? String == whiteReason })
+    }
+
     func testNDSDataEditCommandsPlanApplyAndBlockReadOnlyRows() throws {
         let root = try makeTestNDSDecompRoot()
         let draftFile = try makeTemporaryDirectory().appendingPathComponent("draft.json")
@@ -745,6 +832,47 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(updatedTrainer.contains("\"double_battle\":true"))
         XCTAssertTrue(updatedTrainer.contains("\"party\":[{\"species\":\"RATTATA\",\"level\":4}]"))
 
+        let heartGoldItemJSONPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                heartGoldRoot.path,
+                "items:files/itemtool/itemdata/potion.json",
+                "--set",
+                "price=700",
+                "--set",
+                "field_use=false",
+                "--json"
+            ])
+        )
+        let heartGoldItemJSONRequestedFieldKeys = try XCTUnwrap(heartGoldItemJSONPlan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(heartGoldItemJSONRequestedFieldKeys, ["price", "field_use"])
+        let heartGoldItemJSONChanges = try XCTUnwrap(heartGoldItemJSONPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldItemJSONChanges.count, 1)
+        XCTAssertEqual(heartGoldItemJSONChanges.first?["path"] as? String, "files/itemtool/itemdata/potion.json")
+        XCTAssertNil(heartGoldItemJSONChanges.first?["textPreview"])
+
+        let heartGoldItemJSONApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                heartGoldRoot.path,
+                "items:files/itemtool/itemdata/potion.json",
+                "--set",
+                "name=SUPER_POTION",
+                "--set",
+                "price=700",
+                "--set",
+                "field_use=false",
+                "--json"
+            ])
+        )
+        let heartGoldItemJSONAppliedChanges = try XCTUnwrap(heartGoldItemJSONApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(heartGoldItemJSONAppliedChanges.count, 1)
+        let updatedHeartGoldItem = try String(contentsOf: heartGoldRoot.appendingPathComponent("files/itemtool/itemdata/potion.json"), encoding: .utf8)
+        XCTAssertTrue(updatedHeartGoldItem.contains("\"name\":\"SUPER_POTION\""))
+        XCTAssertTrue(updatedHeartGoldItem.contains("\"price\":700"))
+        XCTAssertTrue(updatedHeartGoldItem.contains("\"field_use\":false"))
+        XCTAssertTrue(updatedHeartGoldItem.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+
         let blockedHeartGoldItemApply = try decodeJSON(
             PokemonHackCLI.run(arguments: [
                 "nds-data-semantic-apply",
@@ -759,6 +887,95 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(blockedHeartGoldItemChanges.count, 0)
         let blockedHeartGoldItemDiagnostics = try XCTUnwrap(blockedHeartGoldItemApply["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(blockedHeartGoldItemDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+
+    }
+
+    func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlItemMappingCScalars() throws {
+        let root = try makeTestDiamondDecompRoot()
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "items:arm9/src/itemtool.c",
+                "--set",
+                "itemIndexMappings.1.itemDataIndex=42",
+                "--set",
+                "itemIndexMappings.1.iconIndex=24",
+                "--set",
+                "itemIndexMappings.1.paletteIndex=11",
+                "--set",
+                "itemIndexMappings.1.gen3Index=9",
+                "--json"
+            ])
+        )
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(
+            requestedFieldKeys,
+            [
+                "itemIndexMappings.1.itemDataIndex",
+                "itemIndexMappings.1.iconIndex",
+                "itemIndexMappings.1.paletteIndex",
+                "itemIndexMappings.1.gen3Index"
+            ]
+        )
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, "arm9/src/itemtool.c")
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:arm9/src/itemtool.c",
+                "--set",
+                "itemIndexMappings.1.itemDataIndex=42",
+                "--set",
+                "itemIndexMappings.1.iconIndex=24",
+                "--set",
+                "itemIndexMappings.1.paletteIndex=11",
+                "--set",
+                "itemIndexMappings.1.gen3Index=9",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/itemtool.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("{ 42, 24, 11, 9 }"))
+        XCTAssertTrue(updated.contains("ITEM_DATA_COUNT"))
+
+        let invalidApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:arm9/src/itemtool.c",
+                "--set",
+                "itemIndexMappings.1.iconIndex=ITEM_ICON_POTION",
+                "--json"
+            ])
+        )
+        let invalidChanges = try XCTUnwrap(invalidApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(invalidChanges.count, 0)
+        let invalidDiagnostics = try XCTUnwrap(invalidApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(invalidDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_VALUE_INVALID" })
+
+        let blockedBinaryApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:files/itemtool/itemdata/item_0000.bin",
+                "--set",
+                "itemIndexMappings.0.itemDataIndex=7",
+                "--json"
+            ])
+        )
+        let blockedBinaryChanges = try XCTUnwrap(blockedBinaryApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedBinaryChanges.count, 0)
+        let blockedBinaryDiagnostics = try XCTUnwrap(blockedBinaryApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
     func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
@@ -813,6 +1030,25 @@ final class PokemonHackCLITests: XCTestCase {
     func testPokemonCompatibilityCommandEmitsPreviewJSON() throws {
         let root = try makeItemCatalogProject()
         try write(Data([0x10, 0x20, 0x30]), to: root.appendingPathComponent("sound/direct_sound_samples/cries/treecko.aif"))
+        try write(
+            """
+            static const u16 sTreeckoFormSpeciesIdTable[] = {
+                SPECIES_TREECKO,
+                SPECIES_TREECKO_MEGA,
+                FORM_SPECIES_END,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_species_tables.h")
+        )
+        try write(
+            """
+            static const struct FormChange sTreeckoFormChangeTable[] = {
+                { FORM_CHANGE_BATTLE_MEGA_EVOLUTION, SPECIES_TREECKO_MEGA },
+                { FORM_CHANGE_TERMINATOR },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_change_tables.h")
+        )
 
         let result = try decodeJSON(
             PokemonHackCLI.run(arguments: ["pokemon-compatibility", root.path, "--json"])
@@ -831,6 +1067,22 @@ final class PokemonHackCLITests: XCTestCase {
         let blockedActions = try XCTUnwrap(cryAudioPlan["blockedActions"] as? [String])
         XCTAssertTrue(blockedActions.contains("Generated audio output writes"))
         XCTAssertTrue(blockedActions.contains("Mutation apply"))
+        let forms = try XCTUnwrap(entries.first { $0["surface"] as? String == "forms" })
+        XCTAssertEqual(forms["status"] as? String, "readOnly")
+        XCTAssertEqual(forms["sourcePath"] as? String, "src/data/pokemon/form_species_tables.h")
+        XCTAssertEqual(forms["tableSymbol"] as? String, "FormSpeciesIdTable/FormChangeTable")
+        XCTAssertEqual(forms["indexedCount"] as? Int, 2)
+        XCTAssertEqual(forms["readOnlyCount"] as? Int, 2)
+        XCTAssertEqual(forms["recommendedFutureRow"] as? String, "PHS-T57E")
+        let unsupportedFields = try XCTUnwrap(forms["unsupportedFields"] as? [String])
+        XCTAssertTrue(unsupportedFields.contains("form table mutation/apply"))
+        XCTAssertTrue(unsupportedFields.contains("binary-only form table writes"))
+        let diagnostics = try XCTUnwrap(forms["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "GBA_FORMS_SOURCE_GRAPH_DETECTED" })
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "GBA_FORMS_MUTATION_WORKFLOW_BLOCKED" })
+        let sourceTables = try XCTUnwrap(forms["sourceTables"] as? [[String: Any]])
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/pokemon/form_species_tables.h" && $0["indexedCount"] as? Int == 1 && $0["status"] as? String == "readOnly" })
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/pokemon/form_change_tables.h" && $0["indexedCount"] as? Int == 1 && $0["status"] as? String == "readOnly" })
     }
 
     func testMigrationCoverageCommandEmitsSourceFirstAndBlockedJSON() throws {
@@ -1028,7 +1280,69 @@ final class PokemonHackCLITests: XCTestCase {
         try write("{\"species\":\"CHIKORITA\"}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
         try write("{\"id\":1,\"name\":\"Youngster Joey\",\"double_battle\":false,\"party\":[{\"species\":\"RATTATA\",\"level\":4}]}\n", to: root.appendingPathComponent("files/poketool/trainer/trainers.json"))
         try write("id,name\n1,POTION\n", to: root.appendingPathComponent("files/itemtool/itemdata/item_data.csv"))
+        try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin"))
+        return root
+    }
+
+    private func makeTestDiamondDecompRoot() throws -> URL {
+        let root = try makeTemporaryDirectory().appendingPathComponent("pokediamond")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("arm7"), withIntermediateDirectories: true)
+        try write("GAME_VERSION ?= DIAMOND\nGAME_CODE := ADA\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM := $(BUILD_DIR)/$(TARGET).nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("HostRoot files/\n", to: root.appendingPathComponent("rom.rsf"))
+        try write("filesystem: $(HOSTFS_FILES)\n", to: root.appendingPathComponent("filesystem.mk"))
+        try write("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  build/diamond.us/pokediamond.us.nds\n", to: root.appendingPathComponent("pokediamond.us.sha1"))
+        try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
+        try write("void Waza_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/waza.c"))
+        try write(
+            """
+            #include "global.h"
+
+            static const u16 sItemIndexMappings[][4] = {
+                { 0, 1, 2, 0 },
+                { 1, 2, 3, 1 },
+                { ITEM_DATA_COUNT, 4, 5, 6 },
+            };
+
+            void Item_Load(void) {}
+
+            """,
+            to: root.appendingPathComponent("arm9/src/itemtool.c")
+        )
+        try write("void Trainer_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/trainer_data.c"))
+        try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/encounter.c"))
+        try write("void MapHeader_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/map_header.c"))
+        try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
+        try write("void Message_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/msgdata.c"))
+        try write("{\"personal\":1}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
+        try write("ignored\n", to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/.knarcignore"))
+        try write(Data("NCLR".utf8), to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/narc_0000.nclr"))
+        try write(Data([0x03]), to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/narc_0001.bin"))
+        return root
+    }
+
+    private func makeTestBlackDecompRoot() throws -> URL {
+        let root = try makeTemporaryDirectory().appendingPathComponent("pokeblack")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try write("GAME_VERSION ?= BLACK\nSUPPORTED_ROMS := black.us\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM := pokeblack.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("main.rsf"))
+        try write("main linker script\n", to: root.appendingPathComponent("main.lsf"))
+        try write("ffffffffffffffffffffffffffffffffffffffff  pokeblack.nds\n", to: root.appendingPathComponent("black.us/rom.sha1"))
+        try write("void Init(void) {}\n", to: root.appendingPathComponent("src/init.c"))
+        try write("arm9\n", to: root.appendingPathComponent("asm/arm9_remaining.s"))
+        try write("#define BLACK 1\n", to: root.appendingPathComponent("include/globals.h"))
+        try write("route 1\n", to: root.appendingPathComponent("data/encounters/route_1.txt"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/a/0/0/0/resource.bin"))
+        try write(Data("NARC".utf8), to: root.appendingPathComponent("files/soundstatus.narc"))
+        try write(Data("SDAT".utf8) + Data(repeating: 0, count: 12), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
+        try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
+        try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
         return root
     }
 

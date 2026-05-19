@@ -179,6 +179,34 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(cries.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY" })
     }
 
+    func testFormsCompatibilityReportsSourceGraphWhileBlockingMutationWorkflows() throws {
+        let report = try PokemonDataCompatibilityReportBuilder.build(
+            index: projectIndex(profile: .pokeemeraldExpansion),
+            sourceIndex: formSourceIndex(profile: .pokeemeraldExpansion)
+        )
+
+        let forms = entry(.forms, in: report)
+        XCTAssertEqual(forms.status, .readOnly)
+        XCTAssertEqual(forms.sourcePath, "src/data/pokemon/form_species_tables.h")
+        XCTAssertEqual(forms.tableSymbol, "FormSpeciesIdTable/FormChangeTable")
+        XCTAssertEqual(forms.indexedCount, 3)
+        XCTAssertEqual(forms.editableCount, 0)
+        XCTAssertEqual(forms.readOnlyCount, 3)
+        XCTAssertEqual(forms.recommendedFutureRow, "PHS-T57E")
+        XCTAssertTrue(forms.blockedReason?.contains("diagnostics only") == true)
+        XCTAssertTrue(forms.unsupportedFields.contains("form editing"))
+        XCTAssertTrue(forms.unsupportedFields.contains("form table mutation/apply"))
+        XCTAssertTrue(forms.unsupportedFields.contains("form graphics sync"))
+        XCTAssertTrue(forms.unsupportedFields.contains("generated family supplement apply"))
+        XCTAssertTrue(forms.unsupportedFields.contains("binary-only form table writes"))
+        XCTAssertTrue(forms.diagnostics.contains { $0.code == "GBA_FORMS_SOURCE_GRAPH_DETECTED" })
+        XCTAssertTrue(forms.diagnostics.contains { $0.code == "GBA_FORMS_MUTATION_WORKFLOW_BLOCKED" })
+        let sourceTables = try XCTUnwrap(forms.sourceTables)
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/form_species_tables.h" && $0.indexedCount == 1 && $0.status == .readOnly })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/form_change_tables.h" && $0.indexedCount == 1 && $0.status == .readOnly })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info/" && $0.indexedCount == 1 && $0.status == .readOnly })
+    }
+
     private func assertNoCompletedRowRecommendations(
         in report: PokemonDataCompatibilityReport,
         file: StaticString = #filePath,
@@ -492,6 +520,54 @@ final class PokemonDataCompatibilityTests: XCTestCase {
                         SourceIndexFact(label: "type", value: "ITEM_USE_PARTY_MENU")
                     ],
                     preview: "ITEM_POTION"
+                )
+            ]
+        )
+    }
+
+    private func formSourceIndex(profile: GameProfile) throws -> ProjectSourceIndex {
+        let root = try temporaryRoot()
+        return ProjectSourceIndex(
+            root: SourceLocation(path: root.path, exists: true),
+            profile: profile,
+            adapterID: "test.\(profile.rawValue)",
+            adapterName: "\(profile.rawValue) Fixture",
+            records: [
+                SourceIndexRecord(
+                    id: "forms:src/data/pokemon/form_species_tables.h:sTreeckoFormSpeciesIdTable",
+                    module: .pokemon,
+                    title: "sTreeckoFormSpeciesIdTable",
+                    subtitle: "src/data/pokemon/form_species_tables.h",
+                    sourceSpan: SourceSpan(relativePath: "src/data/pokemon/form_species_tables.h", startLine: 1),
+                    tags: ["form", "form-species-table", "read-only"],
+                    facts: [SourceIndexFact(label: "Kind", value: "Form Species Table")]
+                ),
+                SourceIndexRecord(
+                    id: "forms:src/data/pokemon/form_change_tables.h:sTreeckoFormChangeTable",
+                    module: .pokemon,
+                    title: "sTreeckoFormChangeTable",
+                    subtitle: "src/data/pokemon/form_change_tables.h",
+                    sourceSpan: SourceSpan(relativePath: "src/data/pokemon/form_change_tables.h", startLine: 1),
+                    tags: ["form", "form-change-table", "read-only"],
+                    facts: [SourceIndexFact(label: "Kind", value: "Form Change Table")]
+                ),
+                SourceIndexRecord(
+                    id: "forms:src/data/pokemon/species_info/gen_3_families.h:SPECIES_TREECKO",
+                    module: .pokemon,
+                    title: "SPECIES_TREECKO",
+                    subtitle: "src/data/pokemon/species_info/gen_3_families.h",
+                    sourceSpan: SourceSpan(relativePath: "src/data/pokemon/species_info/gen_3_families.h", startLine: 1),
+                    tags: ["form", "form-supplement", "species-info", "read-only"],
+                    facts: [SourceIndexFact(label: "Form Species Table", value: "sTreeckoFormSpeciesIdTable")]
+                ),
+                SourceIndexRecord(
+                    id: "legacy:src/data/pokemon/forms.h:sLegacyForms",
+                    module: .pokemon,
+                    title: "sLegacyForms",
+                    subtitle: "src/data/pokemon/forms.h",
+                    sourceSpan: SourceSpan(relativePath: "src/data/pokemon/forms.h", startLine: 1),
+                    tags: ["forms", "read-only"],
+                    facts: []
                 )
             ]
         )

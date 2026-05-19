@@ -413,9 +413,30 @@ final class SourceIndexTests: XCTestCase {
                 .weight = 50,
                 .description = COMPOUND_STRING("It quickly scales even vertical walls."),
                 .evolutions = EVOLUTION({EVO_LEVEL, 16, SPECIES_GROVYLE}),
+                .formSpeciesIdTable = sTreeckoFormSpeciesIdTable,
+                .formChangeTable = sTreeckoFormChangeTable,
             },
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        )
+        try write(
+            """
+            static const u16 sTreeckoFormSpeciesIdTable[] = {
+                SPECIES_TREECKO,
+                SPECIES_TREECKO_MEGA,
+                FORM_SPECIES_END,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_species_tables.h")
+        )
+        try write(
+            """
+            static const struct FormChange sTreeckoFormChangeTable[] = {
+                { FORM_CHANGE_BATTLE_MEGA_EVOLUTION, SPECIES_TREECKO_MEGA },
+                { FORM_CHANGE_TERMINATOR },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_change_tables.h")
         )
         try write(partyText, to: root.appendingPathComponent("src/data/trainers.party"))
 
@@ -430,6 +451,15 @@ final class SourceIndexTests: XCTestCase {
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .learnsets && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/all_learnables.json" })
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .evolutions && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/species_info/gen_3_families.h" })
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .pokedex && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/species_info/gen_3_families.h" })
+        let formSupplement = try XCTUnwrap(sourceIndex.records.first { $0.tags.contains("form-supplement") && $0.title == "SPECIES_TREECKO" })
+        XCTAssertEqual(formSupplement.facts.first { $0.label == "Form Species Table" }?.value, "sTreeckoFormSpeciesIdTable")
+        XCTAssertEqual(formSupplement.facts.first { $0.label == "Form Change Table" }?.value, "sTreeckoFormChangeTable")
+        let formSpeciesTable = try XCTUnwrap(sourceIndex.records.first { $0.tags.contains("form-species-table") && $0.title == "sTreeckoFormSpeciesIdTable" })
+        XCTAssertEqual(formSpeciesTable.facts.first { $0.label == "Kind" }?.value, "Form Species Table")
+        XCTAssertEqual(formSpeciesTable.facts.first { $0.label == "Forms" }?.value, "2")
+        let formChangeTable = try XCTUnwrap(sourceIndex.records.first { $0.tags.contains("form-change-table") && $0.title == "sTreeckoFormChangeTable" })
+        XCTAssertEqual(formChangeTable.facts.first { $0.label == "Kind" }?.value, "Form Change Table")
+        XCTAssertEqual(formChangeTable.facts.first { $0.label == "Changes" }?.value, "1")
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .trainers && $0.title == "TRAINER_TREECKO" && $0.sourceSpan.relativePath == "src/data/trainers.party" })
         XCTAssertFalse(sourceIndex.diagnostics.contains { $0.code == "SOURCE_INDEX_DESCRIPTOR_MISSING" })
     }

@@ -70,9 +70,29 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
         XCTAssertEqual(entry.family, .blackWhite)
         XCTAssertEqual(entry.writePolicy, .readOnly)
         XCTAssertTrue(entry.variants.contains { $0.title == "Pokemon Black US" && $0.checksumPath == "black.us/rom.sha1" })
+        XCTAssertFalse(entry.variants.contains { $0.id == "white.us" })
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Variant" && $0.path == "pokeblack.nds" })
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Data resources" && $0.path == "files/root.bin" })
         XCTAssertTrue(entry.items.contains { $0.category == "NDS Data audio" && $0.path == "files/wb_sound_data.sdat" })
+    }
+
+    func testPokeBlackSourceIndexSurfacesWhiteVariantWhenMarkersExist() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+
+        let sourceTree = try NDSDecompSourceTreeIndexBuilder.build(root: root)
+        let entry = GenIIIResourceRegistry.resourceIndex(path: root.path)
+
+        XCTAssertEqual(sourceTree.profile, .pokeblack)
+        XCTAssertTrue(sourceTree.variants.contains { $0.id == "black.us" && $0.checksumPath == "black.us/rom.sha1" })
+        XCTAssertTrue(sourceTree.variants.contains { $0.id == "white.us" && $0.title == "Pokemon White US" && $0.checksumPath == "white.us/rom.sha1" })
+        XCTAssertTrue(sourceTree.markerDocuments.contains { $0.relativePath == "white.us/rom.sha1" && $0.exists })
+        XCTAssertTrue(sourceTree.paths.contains { $0.relativePath == "white.us/rom.sha1" && $0.exists && $0.role == .marker })
+        XCTAssertFalse(sourceTree.variants.contains { $0.id == "black2.us" || $0.id == "white2.us" })
+
+        XCTAssertTrue(entry.variants.contains { $0.id == "white.us" && $0.title == "Pokemon White US" && $0.checksumPath == "white.us/rom.sha1" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Variant" && $0.path == "white.us" && $0.kind == "Pokemon White US" })
+        XCTAssertFalse(entry.variants.contains { $0.id == "black2.us" || $0.id == "white2.us" })
     }
 
     func testResourceRegistryLoadIncludesSiblingCentralPokeBlackReference() throws {

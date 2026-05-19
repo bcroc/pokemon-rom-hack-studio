@@ -215,6 +215,39 @@ public struct NDSDataApplyResult: Codable, Equatable, Identifiable {
 }
 
 public enum NDSDataSemanticEditor {
+    private static let diamondPearlItemCAnchorPath = "arm9/src/itemtool.c"
+    private static let diamondPearlItemMappingTableSymbol = "sItemIndexMappings"
+
+    private enum DiamondPearlItemMappingField: Int, CaseIterable {
+        case itemDataIndex
+        case iconIndex
+        case paletteIndex
+        case gen3Index
+
+        var key: String {
+            switch self {
+            case .itemDataIndex: return "itemDataIndex"
+            case .iconIndex: return "iconIndex"
+            case .paletteIndex: return "paletteIndex"
+            case .gen3Index: return "gen3Index"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .itemDataIndex: return "Item Data Index"
+            case .iconIndex: return "Icon Index"
+            case .paletteIndex: return "Palette Index"
+            case .gen3Index: return "Gen III Index"
+            }
+        }
+    }
+
+    private enum SemanticFieldSyntax {
+        case json
+        case cScalar
+    }
+
     public static func snapshot(
         catalog: ProjectNDSDataCatalog,
         recordID: String,
@@ -231,11 +264,11 @@ public enum NDSDataSemanticEditor {
         var fields: [NDSDataSemanticField] = []
         if diagnostics.allSatisfy({ $0.severity != .error }),
            let sourceText = NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: recordID, fileManager: fileManager) {
-            let parsed = parseTopLevelScalarJSONFields(sourceText: sourceText, record: record)
+            let parsed = parseSemanticFields(sourceText: sourceText, record: record)
             fields = parsed.fields.map(\.semanticField)
             diagnostics.append(contentsOf: parsed.diagnostics)
             if fields.isEmpty, parsed.diagnostics.allSatisfy({ $0.severity != .error }) {
-                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_FIELDS", message: "No top-level scalar JSON fields are available for semantic editing: \(record.relativePath).", span: record.sourceSpan))
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_FIELDS", message: "No scalar fields are available for semantic editing: \(record.relativePath).", span: record.sourceSpan))
             }
         }
 
@@ -256,8 +289,9 @@ public enum NDSDataSemanticEditor {
     ) -> NDSDataSemanticEditPlan {
         let snapshot = snapshot(catalog: catalog, recordID: draft.recordID, fileManager: fileManager)
         let sourceText = NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: draft.recordID, fileManager: fileManager) ?? ""
+        let record = catalog.records.first(where: { $0.id == draft.recordID })
         let editResult = snapshot.canEdit
-            ? updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID)
+            ? updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID, record: record)
             : (text: sourceText, diagnostics: [])
         let textDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editResult.text)
         let semanticDiagnostics = snapshot.diagnostics + editResult.diagnostics
@@ -280,7 +314,7 @@ public enum NDSDataSemanticEditor {
     }
 
     public static func fields(sourceText: String, recordID: String) -> [NDSDataSemanticField] {
-        parseTopLevelScalarJSONFields(sourceText: sourceText, record: nil).fields.map(\.semanticField)
+        parseSemanticFields(sourceText: sourceText, record: nil, recordID: recordID).fields.map(\.semanticField)
     }
 
     public static func updateSourceText(
@@ -288,7 +322,16 @@ public enum NDSDataSemanticEditor {
         fieldEdits: [NDSDataSemanticFieldEdit],
         recordID: String
     ) -> (text: String, diagnostics: [Diagnostic]) {
-        let parsed = parseTopLevelScalarJSONFields(sourceText: sourceText, record: nil)
+        updateSourceText(sourceText, fieldEdits: fieldEdits, recordID: recordID, record: nil)
+    }
+
+    private static func updateSourceText(
+        _ sourceText: String,
+        fieldEdits: [NDSDataSemanticFieldEdit],
+        recordID: String,
+        record: NDSDataCatalogRecord?
+    ) -> (text: String, diagnostics: [Diagnostic]) {
+        let parsed = parseSemanticFields(sourceText: sourceText, record: record, recordID: recordID)
         var diagnostics = parsed.diagnostics
         var text = sourceText
         var fieldsByKey: [String: ParsedSemanticField] = [:]
@@ -326,7 +369,7 @@ public enum NDSDataSemanticEditor {
                 }
                 continue
             }
-            guard let rendered = renderedJSONValue(edit.value, as: field.semanticField.valueKind) else {
+            guard let rendered = renderedValue(edit.value, for: field) else {
                 diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_VALUE_INVALID", message: "Semantic NDS field \(edit.key) received a value that cannot be rendered as \(field.semanticField.valueKind.rawValue)."))
                 continue
             }
@@ -346,22 +389,25 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree JSON records plus HeartGold/SoulSilver personal and trainer JSON rows in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree JSON records, HeartGold/SoulSilver personal/trainer/item JSON rows, and the Diamond/Pearl item mapping C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers].contains(record.domain) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, and trainer JSON records in this slice.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, and trainer records in this slice.", span: record.sourceSpan))
         }
         if catalog.profile == .pokeheartgold, !isHeartGoldSoulSilverSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal and trainer JSON rows under files/poketool/trainer; item, NARC, generated, and binary rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, and item JSON rows under files/itemtool/itemdata; NARC, generated, and binary rows remain raw-source or read-only.", span: record.sourceSpan))
         }
-        if record.domain == .items, !isPlatinumItemDataPath(record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items; CSV, generated, binary, and non-Platinum item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
+        if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed item mapping scalars in arm9/src/itemtool.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+        }
+        if record.domain == .items, !isSemanticItemDataPath(catalog.profile, record.relativePath) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; CSV, generated, binary, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
         if record.domain == .trainers, !isSemanticTrainerDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED", message: "Semantic trainer editing is limited to Platinum trainer data JSON rows under res/trainers/data and HeartGold/SoulSilver trainer JSON rows under files/poketool/trainer; trainer classes, animation resources, and other trainer assets remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
-        if record.format != .json {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
+        if !isSemanticFormatSupported(catalog.profile, record) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON or the Diamond/Pearl item C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
         }
         return diagnostics
     }
@@ -385,21 +431,51 @@ public enum NDSDataSemanticEditor {
         relativePath.hasPrefix("res/items/") && relativePath.lowercased().hasSuffix(".json")
     }
 
+    private static func isSemanticItemDataPath(_ profile: GameProfile, _ relativePath: String) -> Bool {
+        switch profile {
+        case .pokeplatinum:
+            return isPlatinumItemDataPath(relativePath)
+        case .pokeheartgold:
+            return isHeartGoldSoulSilverItemDataPath(relativePath)
+        case .pokediamond:
+            return relativePath == diamondPearlItemCAnchorPath
+        default:
+            return false
+        }
+    }
+
     private static func isSemanticProfileSupported(_ profile: GameProfile, record: NDSDataCatalogRecord) -> Bool {
         switch profile {
         case .pokeplatinum:
             return true
         case .pokeheartgold:
             return isHeartGoldSoulSilverSemanticDataPath(record)
+        case .pokediamond:
+            return isDiamondPearlSemanticDataPath(record)
         default:
             return false
         }
+    }
+
+    private static func isDiamondPearlSemanticDataPath(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .items
+            && record.relativePath == diamondPearlItemCAnchorPath
+            && record.format == .cSource
+    }
+
+    private static func isSemanticFormatSupported(_ profile: GameProfile, _ record: NDSDataCatalogRecord) -> Bool {
+        if record.format == .json {
+            return true
+        }
+        return profile == .pokediamond && isDiamondPearlSemanticDataPath(record)
     }
 
     private static func isHeartGoldSoulSilverSemanticDataPath(_ record: NDSDataCatalogRecord) -> Bool {
         switch record.domain {
         case .personal:
             return isHeartGoldSoulSilverPersonalDataPath(record.relativePath)
+        case .items:
+            return isHeartGoldSoulSilverItemDataPath(record.relativePath)
         case .trainers:
             return isHeartGoldSoulSilverTrainerDataPath(record.relativePath)
         default:
@@ -415,15 +491,101 @@ public enum NDSDataSemanticEditor {
         relativePath.hasPrefix("files/poketool/trainer/") && relativePath.lowercased().hasSuffix(".json")
     }
 
+    private static func isHeartGoldSoulSilverItemDataPath(_ relativePath: String) -> Bool {
+        relativePath.hasPrefix("files/itemtool/itemdata/") && relativePath.lowercased().hasSuffix(".json")
+    }
+
     private struct ParsedSemanticField {
         let semanticField: NDSDataSemanticField
         let valueRange: Range<String.Index>
+        let syntax: SemanticFieldSyntax
+
+        init(semanticField: NDSDataSemanticField, valueRange: Range<String.Index>, syntax: SemanticFieldSyntax = .json) {
+            self.semanticField = semanticField
+            self.valueRange = valueRange
+            self.syntax = syntax
+        }
     }
 
     private struct ParsedSemanticFields {
         let fields: [ParsedSemanticField]
         let diagnostics: [Diagnostic]
         let unsupportedNestedKeys: Set<String>
+    }
+
+    private static func parseSemanticFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?,
+        recordID: String? = nil
+    ) -> ParsedSemanticFields {
+        if let record, isDiamondPearlSemanticDataPath(record) {
+            return parseDiamondPearlItemCAnchorFields(sourceText: sourceText, record: record)
+        }
+        if record == nil, recordID == "items:\(diamondPearlItemCAnchorPath)" {
+            return parseDiamondPearlItemCAnchorFields(sourceText: sourceText, record: nil)
+        }
+        return parseTopLevelScalarJSONFields(sourceText: sourceText, record: record)
+    }
+
+    private static func parseDiamondPearlItemCAnchorFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        guard let symbolRange = sourceText.range(of: diamondPearlItemMappingTableSymbol),
+              let tableStart = sourceText[symbolRange.upperBound...].firstIndex(of: "{"),
+              let tableEnd = matchingCBraceEnd(sourceText, start: tableStart)
+        else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_TABLE_MISSING", message: "Diamond/Pearl item mapping table \(diamondPearlItemMappingTableSymbol) was not found; item C anchors remain raw-source only.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var rowIndex = 0
+        var cursor = sourceText.index(after: tableStart)
+        let tableClose = sourceText.index(before: tableEnd)
+        while cursor < tableClose {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose else { break }
+            guard sourceText[cursor] == "{",
+                  let entryEnd = matchingCBraceEnd(sourceText, start: cursor),
+                  entryEnd <= tableEnd
+            else {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+
+            let entryClose = sourceText.index(before: entryEnd)
+            let scalars = cTopLevelScalars(in: sourceText, start: sourceText.index(after: cursor), end: entryClose)
+            for (offset, scalarRange) in scalars.prefix(DiamondPearlItemMappingField.allCases.count).enumerated() {
+                guard let mappingField = DiamondPearlItemMappingField(rawValue: offset) else { continue }
+                let trimmed = String(sourceText[scalarRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isCIntegerLiteral(trimmed) else {
+                    diagnostics.append(Diagnostic(severity: .info, code: "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED", message: "Diamond/Pearl item mapping field \(mappingField.key) is not an integer literal and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlItemCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))))
+                    continue
+                }
+                fields.append(
+                    ParsedSemanticField(
+                        semanticField: NDSDataSemanticField(
+                            key: "itemIndexMappings.\(rowIndex).\(mappingField.key)",
+                            label: "Item Mapping \(rowIndex) \(mappingField.label)",
+                            value: trimmed,
+                            valueKind: .number,
+                            sourceSpan: SourceSpan(relativePath: record?.relativePath ?? diamondPearlItemCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))
+                        ),
+                        valueRange: scalarRange,
+                        syntax: .cScalar
+                    )
+                )
+            }
+            rowIndex += 1
+            cursor = entryEnd
+        }
+
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_C_SCALARS", message: "No integer scalar fields were found in Diamond/Pearl \(diamondPearlItemMappingTableSymbol); item C anchors remain raw-source only.", span: record?.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
     }
 
     private static func parseTopLevelScalarJSONFields(
@@ -657,6 +819,76 @@ public enum NDSDataSemanticEditor {
         return nil
     }
 
+    private static func matchingCBraceEnd(_ text: String, start: String.Index) -> String.Index? {
+        guard start < text.endIndex, text[start] == "{" else { return nil }
+        var index = start
+        var depth = 0
+        while index < text.endIndex {
+            if text[index] == "{" {
+                depth += 1
+            } else if text[index] == "}" {
+                depth -= 1
+                if depth == 0 {
+                    return text.index(after: index)
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    private static func cTopLevelScalars(in text: String, start: String.Index, end: String.Index) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var scalarStart = start
+        var index = start
+        var depth = 0
+        while index < end {
+            let character = text[index]
+            if character == "(" || character == "[" || character == "{" {
+                depth += 1
+            } else if character == ")" || character == "]" || character == "}" {
+                depth = max(0, depth - 1)
+            } else if character == "," && depth == 0 {
+                if let range = trimmedRange(scalarStart..<index, in: text) {
+                    ranges.append(range)
+                }
+                scalarStart = text.index(after: index)
+            }
+            index = text.index(after: index)
+        }
+        if let range = trimmedRange(scalarStart..<end, in: text) {
+            ranges.append(range)
+        }
+        return ranges
+    }
+
+    private static func skipCWhitespaceCommentsAndCommas(_ text: String, index: inout String.Index, end: String.Index) {
+        while index < end, text[index].isWhitespace || text[index] == "," {
+            index = text.index(after: index)
+        }
+    }
+
+    private static func trimmedRange(_ range: Range<String.Index>, in text: String) -> Range<String.Index>? {
+        var lower = range.lowerBound
+        var upper = range.upperBound
+        while lower < upper, text[lower].isWhitespace {
+            lower = text.index(after: lower)
+        }
+        while lower < upper {
+            let beforeUpper = text.index(before: upper)
+            guard text[beforeUpper].isWhitespace else { break }
+            upper = beforeUpper
+        }
+        return lower < upper ? lower..<upper : nil
+    }
+
+    private static func isCIntegerLiteral(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).range(
+            of: #"^[+-]?(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9]+)(?:[uUlL]+)?$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
     private static func parseJSONStringToken(_ text: String, start: String.Index) -> (value: String, end: String.Index)? {
         guard start < text.endIndex, text[start] == "\"" else { return nil }
         var index = text.index(after: start)
@@ -717,6 +949,20 @@ public enum NDSDataSemanticEditor {
             return (normalized == "true" || normalized == "false") ? normalized : nil
         case .null:
             return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "null" ? "null" : nil
+        }
+    }
+
+    private static func renderedCScalarValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isCIntegerLiteral(trimmed) ? trimmed : nil
+    }
+
+    private static func renderedValue(_ value: String, for field: ParsedSemanticField) -> String? {
+        switch field.syntax {
+        case .json:
+            return renderedJSONValue(value, as: field.semanticField.valueKind)
+        case .cScalar:
+            return renderedCScalarValue(value)
         }
     }
 
@@ -930,6 +1176,9 @@ public enum NDSDataMutationPlanner {
         }
         if catalog.profile == .pmdSky {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_EDIT_SPINOFF_BLOCKED", message: "PMD-Sky is indexed as spin-off inventory only and is not editable in this source-backed Gen IV slice.", span: record.sourceSpan))
+        }
+        if catalog.profile == .pokeblack {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_GEN_V_WRITE_BLOCKED", message: "Pokemon Black/White source rows are read-only Gen V readiness metadata in this slice; semantic editing, raw source writes, rebuilds, playtest launch, ROM export, and binary writes remain disabled.", span: record.sourceSpan))
         }
         if catalog.root.path.contains("/reference-repos/") || catalog.root.path.contains("/references/") {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_EDIT_REFERENCE_BLOCKED", message: "Reference NDS projects are read-only research inputs and cannot be edited.", span: record.sourceSpan))

@@ -557,6 +557,11 @@ struct SourceIndexDescriptorSet {
         "pokemonScale", "pokemonOffset", "trainerScale", "trainerOffset"
     ]
 
+    private static let formScanners: [SourceIndexSpecialScanner] = [
+        .formSpeciesTables("src/data/pokemon/form_species_tables.h"),
+        .formChangeTables("src/data/pokemon/form_change_tables.h")
+    ]
+
     static func descriptors(for profile: GameProfile) -> SourceIndexDescriptorSet {
         switch profile {
         case .pokeruby:
@@ -574,7 +579,7 @@ struct SourceIndexDescriptorSet {
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data"],
                 textRoots: ["data/text", "src/data/text", "data-de"],
-                specialScanners: [
+                specialScanners: formScanners + [
                     .wildEncountersJSON("src/data/wild_encounters.json")
                 ]
             )
@@ -593,7 +598,7 @@ struct SourceIndexDescriptorSet {
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
                 textRoots: ["data/text", "src/data/text"],
-                specialScanners: [
+                specialScanners: formScanners + [
                     .wildEncountersJSON("src/data/wild_encounters.json")
                 ]
             )
@@ -612,7 +617,7 @@ struct SourceIndexDescriptorSet {
                 ],
                 scriptRoots: ["data/scripts", "data/maps"],
                 textRoots: ["data/text", "src/data/text"],
-                specialScanners: [
+                specialScanners: formScanners + [
                     .levelUpLearnsetDirectory("src/data/pokemon/level_up_learnsets"),
                     .allLearnablesJSON("src/data/pokemon/all_learnables.json"),
                     .speciesFamilySupplements("src/data/pokemon/species_info"),
@@ -634,7 +639,7 @@ struct SourceIndexDescriptorSet {
                 trainerPartyFiles: [],
                 scriptRoots: ["data/scripts", "data/maps"],
                 textRoots: ["data/text", "src/data/text"],
-                specialScanners: [
+                specialScanners: formScanners + [
                     .wildEncountersJSON("src/data/wild_encounters.json")
                 ]
             )
@@ -652,6 +657,8 @@ struct SourceIndexDescriptorSet {
 
 enum SourceIndexSpecialScanner {
     case allLearnablesJSON(String)
+    case formChangeTables(String)
+    case formSpeciesTables(String)
     case levelUpLearnsetDirectory(String)
     case speciesFamilySupplements(String)
     case wildEncountersJSON(String)
@@ -663,6 +670,16 @@ enum SourceIndexSpecialScanner {
             guard fileManager.fileExists(atPath: url.path) else { return ([], []) }
             let text = try readText(at: url)
             return try JSONSourceIndexScanner.learnableRecords(in: text, relativePath: relativePath)
+        case .formChangeTables(let relativePath):
+            let url = root.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: url.path) else { return ([], []) }
+            let text = try readText(at: url)
+            return (FormTableSourceScanner.formChangeRecords(in: text, relativePath: relativePath), [])
+        case .formSpeciesTables(let relativePath):
+            let url = root.appendingPathComponent(relativePath)
+            guard fileManager.fileExists(atPath: url.path) else { return ([], []) }
+            let text = try readText(at: url)
+            return (FormTableSourceScanner.formSpeciesRecords(in: text, relativePath: relativePath), [])
         case .levelUpLearnsetDirectory(let relativeRoot):
             let files = sourceFiles(root: root, relativeRoot: relativeRoot, extensions: ["h"], fileManager: fileManager)
             var records: [SourceIndexRecord] = []
@@ -938,12 +955,114 @@ private enum LevelUpLearnsetSourceScanner {
     }
 }
 
+private enum FormTableSourceScanner {
+    static func formSpeciesRecords(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        records(
+            in: text,
+            relativePath: relativePath,
+            symbolPattern: #"\bs[A-Za-z0-9_]+FormSpeciesIdTable\b"#,
+            tag: "form-species-table"
+        ) { body in
+            let species = uniqueTokens(in: body, prefix: "SPECIES_")
+            return [
+                SourceIndexFact(label: "Kind", value: "Form Species Table"),
+                SourceIndexFact(label: "Forms", value: "\(species.count)"),
+                SourceIndexFact(label: "First Species", value: species.prefix(4).joined(separator: ", "))
+            ]
+        }
+    }
+
+    static func formChangeRecords(in text: String, relativePath: String) -> [SourceIndexRecord] {
+        records(
+            in: text,
+            relativePath: relativePath,
+            symbolPattern: #"\bs[A-Za-z0-9_]+FormChangeTable\b"#,
+            tag: "form-change-table"
+        ) { body in
+            let formChangeTokens = uniqueTokens(in: body, prefix: "FORM_CHANGE_")
+            let changes = formChangeTokens.filter { token in
+                !["FORM_CHANGE_END", "FORM_CHANGE_TERMINATOR"].contains(token)
+            }
+            let species = uniqueTokens(in: body, prefix: "SPECIES_")
+            return [
+                SourceIndexFact(label: "Kind", value: "Form Change Table"),
+                SourceIndexFact(label: "Changes", value: "\(changes.count)"),
+                SourceIndexFact(label: "Methods", value: changes.prefix(4).joined(separator: ", ")),
+                SourceIndexFact(label: "Target Species", value: species.prefix(4).joined(separator: ", "))
+            ]
+        }
+    }
+
+    private static func records(
+        in text: String,
+        relativePath: String,
+        symbolPattern: String,
+        tag: String,
+        facts: (String) -> [SourceIndexFact]
+    ) -> [SourceIndexRecord] {
+        let symbols = Array(Set(regexMatches(symbolPattern, in: text).compactMap(\.first))).sorted()
+        return symbols.map { symbol in
+            let preview = preview(for: symbol, in: text)
+            let startLine = lineNumber(containing: symbol, in: text) ?? 1
+            let endLine = startLine + max(0, preview.components(separatedBy: .newlines).count - 1)
+            return SourceIndexRecord(
+                id: "forms:\(relativePath):\(symbol)",
+                module: .pokemon,
+                title: symbol,
+                subtitle: relativePath,
+                sourceSpan: SourceSpan(relativePath: relativePath, startLine: startLine, endLine: endLine),
+                tags: ["form", tag, "read-only"],
+                facts: facts(preview),
+                preview: preview
+            )
+        }
+    }
+
+    private static func preview(for symbol: String, in text: String) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        guard let start = lines.firstIndex(where: { $0.contains(symbol) }) else {
+            return lines.prefix(12).joined(separator: "\n")
+        }
+        var end = start
+        while end < lines.count, !lines[end].contains("};") {
+            end += 1
+        }
+        let clampedEnd = min(end, lines.count - 1)
+        return lines[start...clampedEnd].prefix(12).joined(separator: "\n")
+    }
+
+    private static func uniqueTokens(in text: String, prefix: String) -> [String] {
+        var seen = Set<String>()
+        return symbolTokens(in: text)
+            .filter { $0.hasPrefix(prefix) }
+            .filter { seen.insert($0).inserted }
+    }
+}
+
 private enum SpeciesFamilySupplementScanner {
     static func records(in text: String, relativePath: String) -> [SourceIndexRecord] {
         let blocks = bracketedSpeciesBlocks(in: text, relativePath: relativePath)
         var records: [SourceIndexRecord] = []
         for block in blocks {
             let fields = CFieldExtractor.fields(in: block.body)
+            if fields["formSpeciesIdTable"] != nil || fields["formChangeTable"] != nil {
+                records.append(
+                    SourceIndexRecord(
+                        id: "forms:\(relativePath):\(block.species)",
+                        module: .pokemon,
+                        title: block.species,
+                        subtitle: relativePath,
+                        sourceSpan: block.span,
+                        tags: ["form", "form-supplement", "species-info", "read-only"],
+                        facts: [
+                            SourceIndexFact(label: "Form Species Table", value: fields["formSpeciesIdTable"] ?? "None"),
+                            SourceIndexFact(label: "Form Change Table", value: fields["formChangeTable"] ?? "None"),
+                            SourceIndexFact(label: "Lines", value: "\(block.span.startLine)-\(block.span.endLine)")
+                        ],
+                        preview: block.body.components(separatedBy: .newlines).prefix(12).joined(separator: "\n")
+                    )
+                )
+            }
             if block.body.contains(".evolutions") {
                 records.append(
                     SourceIndexRecord(

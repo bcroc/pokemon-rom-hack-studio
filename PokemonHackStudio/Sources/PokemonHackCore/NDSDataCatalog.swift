@@ -19,6 +19,7 @@ public enum NDSDataSourceRole: String, Codable, Equatable, CaseIterable, Sendabl
     case generatedReference
     case nitroFSManifest
     case binaryContainer
+    case metadataUnavailable
 }
 
 public enum NDSDataSourceFormat: String, Codable, Equatable, Hashable, CaseIterable, Sendable {
@@ -567,12 +568,17 @@ public enum NDSDataCatalogBuilder {
             )
         }
 
-        let records = enrichRelationships(
-            records: uniqueRecords(
-                descriptors.flatMap { descriptor in
-                    catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                } + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-            ).sorted(by: recordSort),
+        let records = enrichGenVReadiness(
+            records: enrichRelationships(
+                records: uniqueRecords(
+                    descriptors.flatMap { descriptor in
+                        catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                    }
+                    + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                    + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                ).sorted(by: recordSort),
+                profile: index.profile
+            ),
             profile: index.profile
         )
 
@@ -702,7 +708,8 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
                 CatalogPathDescriptor(.scripts, "overlays", required: false),
                 CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false),
-                CatalogPathDescriptor(.resources, "black.us/rom.sha1"),
+                CatalogPathDescriptor(.resources, "black.us/rom.sha1", required: false),
+                CatalogPathDescriptor(.resources, "white.us/rom.sha1", required: false),
                 CatalogPathDescriptor(.resources, "main.rsf", role: .nitroFSManifest),
                 CatalogPathDescriptor(.resources, "main.lsf", required: false)
             ]
@@ -885,6 +892,37 @@ public enum NDSDataCatalogBuilder {
         return uniqueRecords(descriptors.flatMap { descriptor in
             catalogRecords(for: descriptor, root: root, fileManager: fileManager)
         }).sorted(by: recordSort)
+    }
+
+    private static func genVUnavailableTitleRecords(
+        for profile: GameProfile,
+        root: URL,
+        fileManager: FileManager
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeblack else { return [] }
+        return genVTitleCoverageSpecs.filter { !genVSourceMarkerExists(for: $0, root: root, fileManager: fileManager) }.map { spec in
+            let relativePath = "unavailable-titles/\(spec.title)"
+            return NDSDataCatalogRecord(
+                id: "resources:\(relativePath)",
+                domain: .resources,
+                title: spec.title,
+                relativePath: relativePath,
+                format: .unknown,
+                role: .metadataUnavailable,
+                exists: false,
+                sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
+                facts: [
+                    SourceIndexFact(label: "Gen V Title", value: spec.title),
+                    SourceIndexFact(label: "Gen V Variant ID", value: spec.id),
+                    SourceIndexFact(label: "Gen V Family", value: spec.family),
+                    SourceIndexFact(label: "Gen V Source Name", value: spec.sourceName),
+                    SourceIndexFact(label: "Gen V Source Marker", value: spec.sourceMarkerPaths.isEmpty ? "none" : spec.sourceMarkerPaths.joined(separator: ", ")),
+                    SourceIndexFact(label: "Gen V Variant State", value: "unavailable"),
+                    SourceIndexFact(label: "Gen V Unavailable Reason", value: spec.unavailableReason)
+                ],
+                preview: nil
+            )
+        }
     }
 
     private static func discoveredContainerRecords(for profile: GameProfile, root: URL, fileManager: FileManager) -> [NDSDataCatalogRecord] {
@@ -1100,36 +1138,60 @@ public enum NDSDataCatalogBuilder {
     private static func enrichRelationships(records: [NDSDataCatalogRecord], profile: GameProfile) -> [NDSDataCatalogRecord] {
         let recordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         let relationshipKeysByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, relationshipKeys(for: $0, profile: profile)) })
+        let relationshipRecordIDsByID = relationshipRecordIDs(records: records, relationshipKeysByID: relationshipKeysByID)
         return records.map { record in
-            let related = relatedRecords(for: record, allRecords: records, relationshipKeysByID: relationshipKeysByID)
+            let related = relatedRecords(for: record, recordsByID: recordsByID, relationshipRecordIDsByID: relationshipRecordIDsByID)
             let readiness = readinessSummary(for: record, profile: profile, relatedRecords: related)
             let relationshipFacts = factsForRelationships(related, readiness: readiness)
             let diagnostics = record.diagnostics + diagnosticsForReadiness(readiness, record: record)
-            let stableRelated = related.filter { recordsByID[$0.recordID] != nil }
             return record.copy(
                 facts: record.facts + relationshipFacts,
-                relatedRecords: stableRelated,
+                relatedRecords: related,
                 readiness: .some(readiness),
                 diagnostics: diagnostics
             )
         }
     }
 
+    private static let relationshipDomains: Set<NDSDataDomain> = [.maps, .scripts, .text]
+
+    private static func relationshipRecordIDs(
+        records: [NDSDataCatalogRecord],
+        relationshipKeysByID: [String: Set<String>]
+    ) -> [String: Set<String>] {
+        var recordIDsByKey: [String: Set<String>] = [:]
+        for record in records where relationshipDomains.contains(record.domain) {
+            for key in relationshipKeysByID[record.id] ?? [] {
+                recordIDsByKey[key, default: []].insert(record.id)
+            }
+        }
+
+        var relatedIDsByID: [String: Set<String>] = [:]
+        for record in records where relationshipDomains.contains(record.domain) {
+            var relatedIDs: Set<String> = []
+            for key in relationshipKeysByID[record.id] ?? [] {
+                relatedIDs.formUnion(recordIDsByKey[key] ?? [])
+            }
+            relatedIDs.remove(record.id)
+            if !relatedIDs.isEmpty {
+                relatedIDsByID[record.id] = relatedIDs
+            }
+        }
+        return relatedIDsByID
+    }
+
     private static func relatedRecords(
         for record: NDSDataCatalogRecord,
-        allRecords records: [NDSDataCatalogRecord],
-        relationshipKeysByID: [String: Set<String>]
+        recordsByID: [String: NDSDataCatalogRecord],
+        relationshipRecordIDsByID: [String: Set<String>]
     ) -> [NDSDataRelatedRecord] {
-        guard [.maps, .scripts, .text].contains(record.domain) else { return [] }
-        let keys = relationshipKeysByID[record.id] ?? []
-        guard !keys.isEmpty else { return [] }
+        guard relationshipDomains.contains(record.domain),
+              let relatedIDs = relationshipRecordIDsByID[record.id],
+              !relatedIDs.isEmpty
+        else { return [] }
 
-        return records.compactMap { candidate in
-            let candidateKeys = relationshipKeysByID[candidate.id] ?? []
-            guard candidate.id != record.id,
-                  [.maps, .scripts, .text].contains(candidate.domain),
-                  !keys.isDisjoint(with: candidateKeys)
-            else { return nil }
+        return relatedIDs.compactMap { relatedID in
+            guard let candidate = recordsByID[relatedID] else { return nil }
             return NDSDataRelatedRecord(
                 recordID: candidate.id,
                 label: relationshipLabel(for: candidate),
@@ -1149,6 +1211,10 @@ public enum NDSDataCatalogBuilder {
         profile: GameProfile,
         relatedRecords: [NDSDataRelatedRecord]
     ) -> NDSDataReadinessSummary? {
+        if profile == .pokeblack {
+            return genVReadinessSummary(for: record)
+        }
+
         if record.role == .binaryContainer {
             return NDSDataReadinessSummary(
                 status: .blocked,
@@ -1207,6 +1273,216 @@ public enum NDSDataCatalogBuilder {
             )
         default:
             return nil
+        }
+    }
+
+    private static func enrichGenVReadiness(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeblack else { return records }
+        return records.map { record in
+            let readiness = genVReadinessSummary(for: record)
+            return record.copy(
+                facts: record.facts + genVReadinessFacts(for: record),
+                readiness: .some(readiness),
+                diagnostics: record.diagnostics + genVReadinessDiagnostics(for: record, readiness: readiness)
+            )
+        }
+    }
+
+    private static func genVReadinessSummary(for record: NDSDataCatalogRecord) -> NDSDataReadinessSummary {
+        let sourceRole = genVSourceRole(for: record)
+        if isGenVUnavailableTitle(record) {
+            return NDSDataReadinessSummary(
+                status: .blocked,
+                title: "Gen V title unavailable",
+                detail: "\(genVUnavailableReason(for: record) ?? genVSourceRoleDetail(for: sourceRole)) This is diagnostic-only title coverage metadata; no source tree, editor, extraction, rebuild, playtest, export, or binary write path is available.",
+                blockedActions: genVBlockedActions
+            )
+        }
+        let status: NDSDataReadinessStatus = record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc
+            ? .blocked
+            : .partial
+        return NDSDataReadinessSummary(
+            status: status,
+            title: "Gen V read-only readiness",
+            detail: "\(genVSourceRoleDetail(for: sourceRole)) This is clean-room Gen V routing metadata only; editing, extraction, rebuild, playtest, export, and binary writes remain disabled.",
+            blockedActions: genVBlockedActions
+        )
+    }
+
+    private static func genVReadinessFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
+        var facts = [
+            SourceIndexFact(label: "Gen V Readiness", value: isGenVUnavailableTitle(record) ? "unavailable" : "previewOnly"),
+            SourceIndexFact(label: "Gen V Source Role", value: genVSourceRole(for: record)),
+            SourceIndexFact(label: "Gen V Blocked Actions", value: genVBlockedActions.joined(separator: ", ")),
+            SourceIndexFact(label: "Gen V Reference Posture", value: "cleanRoomReferenceOnly")
+        ]
+        facts.append(contentsOf: genVVariantFacts(for: record))
+        return facts
+    }
+
+    private static func genVVariantFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
+        guard let spec = genVTitleCoverageSpec(for: record) else { return [] }
+        var facts: [SourceIndexFact] = []
+        if genVTitle(for: record) == nil {
+            facts.append(SourceIndexFact(label: "Gen V Title", value: spec.title))
+        }
+        if record.facts.first(where: { $0.label == "Gen V Variant ID" }) == nil {
+            facts.append(SourceIndexFact(label: "Gen V Variant ID", value: spec.id))
+        }
+        if record.facts.first(where: { $0.label == "Gen V Family" }) == nil {
+            facts.append(SourceIndexFact(label: "Gen V Family", value: spec.family))
+        }
+        if record.facts.first(where: { $0.label == "Gen V Source Name" }) == nil {
+            facts.append(SourceIndexFact(label: "Gen V Source Name", value: spec.sourceName))
+        }
+        if record.facts.first(where: { $0.label == "Gen V Source Marker" }) == nil {
+            let exactMarker = spec.sourceMarkerPaths.first { record.relativePath == $0 }
+            let parentMarker = spec.sourceMarkerPaths.first { record.relativePath.hasPrefix($0 + "/") }
+            let marker = exactMarker ?? parentMarker ?? spec.sourceMarkerPaths.joined(separator: ", ")
+            facts.append(SourceIndexFact(label: "Gen V Source Marker", value: marker))
+        }
+        if record.facts.first(where: { $0.label == "Gen V Variant State" }) == nil {
+            facts.append(SourceIndexFact(label: "Gen V Variant State", value: isGenVUnavailableTitle(record) ? "unavailable" : "sourceMarkerPresent"))
+        }
+        return facts
+    }
+
+    private static func genVReadinessDiagnostics(
+        for record: NDSDataCatalogRecord,
+        readiness: NDSDataReadinessSummary
+    ) -> [Diagnostic] {
+        if isGenVUnavailableTitle(record) {
+            return [
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_GEN_V_TITLE_UNAVAILABLE",
+                    message: "\(genVTitle(for: record) ?? record.title) is listed as unavailable Gen V coverage. \(readiness.detail)",
+                    span: record.sourceSpan
+                ),
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_GEN_V_WRITE_BLOCKED",
+                    message: "Unavailable Gen V title rows are diagnostic-only; blocked actions: \(genVBlockedActions.joined(separator: ", ")).",
+                    span: record.sourceSpan
+                )
+            ]
+        }
+        return [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_GEN_V_READINESS_PREVIEW_ONLY",
+                message: "Gen V readiness for \(record.relativePath) is preview-only metadata. \(readiness.detail)",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_GEN_V_WRITE_BLOCKED",
+                message: "Pokemon Black/White source rows remain read-only in this slice; blocked actions: \(genVBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
+    private static func genVSourceRole(for record: NDSDataCatalogRecord) -> String {
+        if isGenVUnavailableTitle(record) {
+            return "titleUnavailable"
+        }
+        let lower = record.relativePath.lowercased()
+        if lower.hasPrefix("data/encounters/") {
+            return "encounterPreview"
+        }
+        if record.domain == .audio {
+            return "audioMetadata"
+        }
+        if record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc {
+            return "nitroArchiveRoute"
+        }
+        if lower.hasPrefix("files/a/") {
+            return "nitroArchiveGroup"
+        }
+        if lower.hasPrefix("files/") {
+            return "nitroFSResource"
+        }
+        if lower.hasPrefix("overlays/") {
+            return "overlayRouting"
+        }
+        if lower.hasPrefix("ndsdisasm_config/") {
+            return "disassemblyConfig"
+        }
+        if lower == "main.rsf" {
+            return "filesystemManifest"
+        }
+        if lower == "main.lsf" {
+            return "linkerScript"
+        }
+        if lower.hasSuffix("/rom.sha1") || lower.hasSuffix(".sha1") {
+            return "checksumExpectation"
+        }
+        return "sourceInventory"
+    }
+
+    private static func genVSourceRoleDetail(for role: String) -> String {
+        switch role {
+        case "encounterPreview":
+            return "Encounter data is indexed for preview context."
+        case "audioMetadata":
+            return "SDAT/SSEQ/SBNK/SWAR/STRM candidates retain read-only audio metadata facts."
+        case "nitroArchiveRoute":
+            return "NARC or container-like resources are routed for inventory and migration planning only."
+        case "nitroArchiveGroup":
+            return "files/a archive-group paths are identified for future Gen V container routing."
+        case "nitroFSResource":
+            return "NitroFS resource files are indexed as source-tree inventory."
+        case "overlayRouting":
+            return "Overlay sources are indexed for disassembly and script-routing context."
+        case "disassemblyConfig":
+            return "Disassembly configuration files are indexed as orientation metadata."
+        case "filesystemManifest":
+            return "Filesystem manifest metadata is indexed for source-tree routing."
+        case "linkerScript":
+            return "Linker script metadata is indexed for source-tree routing."
+        case "checksumExpectation":
+            return "Checksum expectation files are indexed for build-output comparison context."
+        case "titleUnavailable":
+            return "No materialized source root is available for this Gen V title."
+        default:
+            return "Gen V source inventory is indexed for reference orientation."
+        }
+    }
+
+    private static func isGenVUnavailableTitle(_ record: NDSDataCatalogRecord) -> Bool {
+        record.role == .metadataUnavailable && record.relativePath.hasPrefix("unavailable-titles/")
+    }
+
+    private static func genVTitle(for record: NDSDataCatalogRecord) -> String? {
+        record.facts.first { $0.label == "Gen V Title" }?.value
+    }
+
+    private static func genVUnavailableReason(for record: NDSDataCatalogRecord) -> String? {
+        record.facts.first { $0.label == "Gen V Unavailable Reason" }?.value
+    }
+
+    private static func genVTitleCoverageSpec(for record: NDSDataCatalogRecord) -> GenVTitleCoverageSpec? {
+        if let title = genVTitle(for: record) {
+            return genVTitleCoverageSpecs.first { $0.title == title }
+        }
+        return genVTitleCoverageSpecs.first { spec in
+            spec.sourceMarkerPaths.contains { marker in
+                record.relativePath == marker || record.relativePath.hasPrefix(marker + "/")
+            }
+        }
+    }
+
+    private static func genVSourceMarkerExists(
+        for spec: GenVTitleCoverageSpec,
+        root: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        spec.sourceMarkerPaths.contains { marker in
+            fileManager.fileExists(atPath: root.appendingPathComponent(marker).path)
         }
     }
 
@@ -2274,7 +2550,7 @@ public enum NDSDataCatalogBuilder {
         case .pokediamond:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "pokediamond.us.sha1", "files", "arm9"]
         case .pokeblack:
-            return ["Makefile", "config.mk", "main.rsf", "main.lsf", "black.us", "files", "data", "src", "asm", "include", "overlays", "ndsdisasm_config"]
+            return ["Makefile", "config.mk", "main.rsf", "main.lsf", "black.us", "white.us", "files", "data", "src", "asm", "include", "overlays", "ndsdisasm_config"]
         case .pmdSky:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "nitrofs_files.txt", "pmdsky.us", "files", "src", "asm"]
         case .ndsROM:
@@ -2413,6 +2689,62 @@ public enum NDSDataCatalogBuilder {
         "Decode container members",
         "Preserve file ordering and IDs",
         "Rebuild containers externally"
+    ]
+    private static let genVBlockedActions = [
+        "semantic editor",
+        "raw source writer",
+        "extraction",
+        "decompression",
+        "build execution",
+        "playtest launch",
+        "NARC pack",
+        "ROM export",
+        "binary write",
+        "mutation apply"
+    ]
+
+    private struct GenVTitleCoverageSpec: Sendable {
+        let id: String
+        let title: String
+        let family: String
+        let sourceName: String
+        let sourceMarkerPaths: [String]
+        let unavailableReason: String
+    }
+
+    private static let genVTitleCoverageSpecs = [
+        GenVTitleCoverageSpec(
+            id: "black.us",
+            title: "Pokemon - Black Version (USA, Europe) (NDSi Enhanced).nds",
+            family: "blackWhite",
+            sourceName: "pokeblack",
+            sourceMarkerPaths: ["black.us", "black.us/rom.sha1"],
+            unavailableReason: "No materialized Black source marker is available in the current pokeblack source tree."
+        ),
+        GenVTitleCoverageSpec(
+            id: "white.us",
+            title: "Pokemon - White Version (USA, Europe) (NDSi Enhanced).nds",
+            family: "blackWhite",
+            sourceName: "pokeblack",
+            sourceMarkerPaths: ["white.us", "white.us/rom.sha1"],
+            unavailableReason: "No materialized White source decomp is available in the current central corpus; the available pokeblack tree currently supports black.us only."
+        ),
+        GenVTitleCoverageSpec(
+            id: "black2.us",
+            title: "Pokemon - Black Version 2 (USA, Europe) (NDSi Enhanced).nds",
+            family: "black2White2",
+            sourceName: "none",
+            sourceMarkerPaths: [],
+            unavailableReason: "No public/materialized Black 2 decomp source root was found in the configured central corpus."
+        ),
+        GenVTitleCoverageSpec(
+            id: "white2.us",
+            title: "Pokemon - White Version 2 (USA, Europe) (NDSi Enhanced).nds",
+            family: "black2White2",
+            sourceName: "none",
+            sourceMarkerPaths: [],
+            unavailableReason: "No public/materialized White 2 decomp source root was found in the configured central corpus."
+        )
     ]
 
     private static let maxDiscoveredContainerRecords = 256
