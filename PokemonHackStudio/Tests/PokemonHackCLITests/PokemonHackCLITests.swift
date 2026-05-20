@@ -1038,6 +1038,127 @@ final class PokemonHackCLITests: XCTestCase {
         )
     }
 
+    func testNDSDataSemanticCommandsPlanAndApplyHeartGoldSoulSilverEncounterJSONFields() throws {
+        let root = try makeTestHeartGoldDecompRoot()
+        let encounterPath = "files/fielddata/encountdata/johto/route29.json"
+        try write(
+            """
+            {"morning_rate": 20, "day_rate": 15, "night_rate": 10, "enabled": true, "slots": [{"species":"RATTATA","rate":30}], "metadata": {"map":"ROUTE_29"}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("rate=15\n", to: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.txt"))
+        try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("files/fielddata/encountdata/encounter.c"))
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "encounters:\(encounterPath)",
+                "--set",
+                "morning_rate=25",
+                "--set",
+                "enabled=false",
+                "--json"
+            ])
+        )
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(requestedFieldKeys, ["morning_rate", "enabled"])
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, encounterPath)
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-semantic-plan",
+            root.path,
+            "encounters:\(encounterPath)",
+            "--set",
+            "morning_rate=25",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains("\"morning_rate\": 25"))
+        XCTAssertFalse(redactedPlan.contains("\"slots\""))
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "encounters:\(encounterPath)",
+                "--set",
+                "day_rate=18",
+                "--set",
+                "enabled=false",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"day_rate\": 18"))
+        XCTAssertTrue(updated.contains("\"enabled\": false"))
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"RATTATA\",\"rate\":30}]"))
+        XCTAssertTrue(updated.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
+
+        let nestedApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "encounters:\(encounterPath)",
+                "--set",
+                "slots.0.rate=35",
+                "--json"
+            ])
+        )
+        let nestedChanges = try XCTUnwrap(nestedApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(nestedChanges.count, 0)
+        let nestedDiagnostics = try XCTUnwrap(nestedApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(nestedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+
+        let blockedTextApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "encounters:files/fielddata/encountdata/gs_enc_data.txt",
+                "--set",
+                "morning_rate=20",
+                "--json"
+            ])
+        )
+        let blockedTextChanges = try XCTUnwrap(blockedTextApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedTextChanges.count, 0)
+        let blockedTextDiagnostics = try XCTUnwrap(blockedTextApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedTextDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+        XCTAssertTrue(blockedTextDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(blockedTextDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.txt"), encoding: .utf8),
+            "rate=15\n"
+        )
+
+        let blockedCApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "encounters:files/fielddata/encountdata/encounter.c",
+                "--set",
+                "morning_rate=20",
+                "--json"
+            ])
+        )
+        let blockedCChanges = try XCTUnwrap(blockedCApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedCChanges.count, 0)
+        let blockedCDiagnostics = try XCTUnwrap(blockedCApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedCDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+        XCTAssertTrue(blockedCDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(blockedCDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("files/fielddata/encountdata/encounter.c"), encoding: .utf8),
+            "void Encounter_Load(void) {}\n"
+        )
+    }
+
     func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlPersonalJSONFields() throws {
         let root = try makeTestDiamondDecompRoot()
         try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/personal/personal_0000.bin"))

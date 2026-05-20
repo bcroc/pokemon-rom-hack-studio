@@ -848,6 +848,95 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(textSnapshot.canEdit)
         XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
         XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let heartGold = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
+        let heartGoldCatalog = try NDSDataCatalogBuilder.build(path: heartGold.path)
+        let heartGoldSnapshot = NDSDataSemanticEditor.snapshot(catalog: heartGoldCatalog, recordID: "encounters:files/fielddata/encountdata/gs_enc_data.json")
+        XCTAssertFalse(heartGoldSnapshot.canEdit)
+        XCTAssertTrue(heartGoldSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED" })
+
+        let diamond = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let diamondCatalog = try NDSDataCatalogBuilder.build(path: diamond.path)
+        let diamondSnapshot = NDSDataSemanticEditor.snapshot(catalog: diamondCatalog, recordID: "encounters:arm9/src/encounter.c")
+        XCTAssertFalse(diamondSnapshot.canEdit)
+        XCTAssertTrue(diamondSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(diamondSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(diamondSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
+    func testNDSDataSemanticEditorPlansHeartGoldSoulSilverEncounterJSONScalars() throws {
+        let root = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
+        let encounterPath = "files/fielddata/encountdata/johto/route29.json"
+        try write(
+            """
+            {"morning_rate": 20, "day_rate": 15, "night_rate": 10, "enabled": true, "slots": [{"species":"RATTATA","rate":30}], "metadata": {"map":"ROUTE_29"}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("rate=15\n", to: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.txt"))
+        try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("files/fielddata/encountdata/encounter.c"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(encounterPath)")
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "morning_rate" && $0.value == "20" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "day_rate" && $0.value == "15" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "night_rate" && $0.value == "10" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "enabled" && $0.value == "true" && $0.valueKind == .bool })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "slots" })
+        XCTAssertFalse(snapshot.fields.contains { $0.key == "metadata" })
+
+        let nestedPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35")]
+            )
+        )
+        XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+        XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let semanticPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "morning_rate", value: "25"),
+                    NDSDataSemanticFieldEdit(key: "enabled", value: "false")
+                ]
+            )
+        )
+
+        XCTAssertTrue(semanticPlan.diagnostics.allSatisfy { $0.severity != .error }, semanticPlan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"morning_rate\": 25"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"enabled\": false"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"slots\": [{\"species\":\"RATTATA\",\"rate\":30}]"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
+        XCTAssertEqual(semanticPlan.editPlan.changes.count, 1)
+        XCTAssertTrue(semanticPlan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"morning_rate\": 25"))
+        XCTAssertTrue(updated.contains("\"enabled\": false"))
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"RATTATA\",\"rate\":30}]"))
+        XCTAssertTrue(updated.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let textSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:files/fielddata/encountdata/gs_enc_data.txt")
+        XCTAssertFalse(textSnapshot.canEdit)
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:files/fielddata/encountdata/encounter.c")
+        XCTAssertFalse(cAnchorSnapshot.canEdit)
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
     func testNDSDataSemanticEditorPlansHeartGoldSoulSilverPersonalTrainerAndItemJSONScalars() throws {
