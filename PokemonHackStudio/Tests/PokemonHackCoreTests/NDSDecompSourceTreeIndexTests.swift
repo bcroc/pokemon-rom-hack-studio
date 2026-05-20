@@ -95,6 +95,28 @@ final class NDSDecompSourceTreeIndexTests: XCTestCase {
         XCTAssertFalse(entry.variants.contains { $0.id == "black2.us" || $0.id == "white2.us" })
     }
 
+    func testPokeBlackSourceIndexSurfacesBlack2White2MarkersWhenSourceShapeExists() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("2222222222222222222222222222222222222222  pokeblack2.nds\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        try write("3333333333333333333333333333333333333333  pokewhite2.nds\n", to: root.appendingPathComponent("white2.us/rom.sha1"))
+
+        let sourceTree = try NDSDecompSourceTreeIndexBuilder.build(root: root)
+        let entry = GenIIIResourceRegistry.resourceIndex(path: root.path)
+
+        XCTAssertEqual(sourceTree.profile, .pokeblack)
+        XCTAssertTrue(sourceTree.variants.contains { $0.id == "black2.us" && $0.title == "Pokemon Black 2 US" && $0.checksumPath == "black2.us/rom.sha1" })
+        XCTAssertTrue(sourceTree.variants.contains { $0.id == "white2.us" && $0.title == "Pokemon White 2 US" && $0.checksumPath == "white2.us/rom.sha1" })
+        XCTAssertTrue(sourceTree.markerDocuments.contains { $0.relativePath == "black2.us/rom.sha1" && $0.exists })
+        XCTAssertTrue(sourceTree.markerDocuments.contains { $0.relativePath == "white2.us/rom.sha1" && $0.exists })
+        XCTAssertTrue(sourceTree.paths.contains { $0.relativePath == "black2.us/rom.sha1" && $0.exists && $0.role == .marker })
+        XCTAssertTrue(sourceTree.paths.contains { $0.relativePath == "white2.us/rom.sha1" && $0.exists && $0.role == .marker })
+
+        XCTAssertTrue(entry.variants.contains { $0.id == "black2.us" && $0.title == "Pokemon Black 2 US" && $0.checksumPath == "black2.us/rom.sha1" })
+        XCTAssertTrue(entry.variants.contains { $0.id == "white2.us" && $0.title == "Pokemon White 2 US" && $0.checksumPath == "white2.us/rom.sha1" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Variant" && $0.path == "black2.us" && $0.kind == "Pokemon Black 2 US" })
+        XCTAssertTrue(entry.items.contains { $0.category == "NDS Variant" && $0.path == "white2.us" && $0.kind == "Pokemon White 2 US" })
+    }
+
     func testResourceRegistryLoadIncludesSiblingCentralPokeBlackReference() throws {
         let temp = try NDSDecompTemporaryDirectory()
         temporaryDirectories.append(temp)

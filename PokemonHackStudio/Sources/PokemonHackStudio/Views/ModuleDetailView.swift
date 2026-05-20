@@ -39,6 +39,7 @@ struct ModuleDetailView: View {
                 romInspector: store.selectedROMInspectorReport,
                 gameCubeEntry: store.explicitGameCubeResourceEntry,
                 gameCubeLoadStatus: store.gameCubeResourceLoadStatus,
+                loadingResourceEntryID: store.loadingResourceLibraryEntryID,
                 assets: store.filteredResourceAssetRows,
                 assetLoadStatus: store.assetCatalogLoadStatus,
                 gameCubeResourcePath: Binding(
@@ -70,6 +71,9 @@ struct ModuleDetailView: View {
                 onLoadAssetCatalog: {
                     store.loadSelectedAssetCatalogIfNeeded()
                 },
+                onLoadResourceEntryDetails: { entry in
+                    store.loadResourceEntryDetails(entry)
+                },
                 onNavigateToAsset: store.navigateToAsset,
                 ndsDataEditor: store.selectedNDSDataEditor,
                 onUpdateNDSDataDraft: store.updateSelectedNDSDataDraftText,
@@ -78,6 +82,9 @@ struct ModuleDetailView: View {
                 onApplyNDSDataMutationPlan: store.applySelectedNDSDataMutationPlan,
                 onDiscardNDSDataEdits: store.discardNDSDataEdits
             )
+            .onAppear {
+                store.loadSelectedROMInspectorIfNeeded()
+            }
         case .maps:
             MapEditorView(
                 store: store,
@@ -229,6 +236,9 @@ struct ModuleDetailView: View {
             graphicsWorkbenchView
         case .build:
             BuildWorkbenchView(store: store)
+                .onAppear {
+                    store.loadSelectedBuildReportIfNeeded()
+                }
         case .issues:
             IssuesView(
                 issues: store.issues,
@@ -236,11 +246,17 @@ struct ModuleDetailView: View {
                 indexedDiagnostics: store.selectedDiagnosticRows,
                 diagnosticSummary: store.diagnosticSummary
             )
+            .onAppear {
+                store.loadSelectedBuildReportIfNeeded()
+            }
         }
     }
 
     private var graphicsWorkbenchView: some View {
         GraphicsWorkbenchView(store: store)
+            .onAppear {
+                store.loadSelectedGraphicsReportIfNeeded()
+            }
     }
 
     private var moduleStatus: ValidationState? {

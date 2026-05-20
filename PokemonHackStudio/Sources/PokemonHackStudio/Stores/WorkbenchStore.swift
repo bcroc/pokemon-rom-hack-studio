@@ -283,6 +283,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var workspaceAutosavePending = false
     @Published private(set) var recentProjectRoots: [String]
     @Published private(set) var resourceLibrary: ResourceLibraryViewState?
+    @Published private(set) var loadingResourceLibraryEntryID: ResourceLibraryEntryViewState.ID?
     @Published private(set) var explicitGameCubeResourceEntry: ResourceLibraryEntryViewState?
     @Published private(set) var gameCubeResourceLoadStatus: GameCubeResourceLoadStatus = .idle
     @Published private(set) var selectedScriptReadinessReport: ScriptReadinessReportViewState?
@@ -360,6 +361,8 @@ final class WorkbenchStore: ObservableObject {
     private var assetCatalogTask: Task<Void, Never>?
     private var mapCatalogTask: Task<Void, Never>?
     private var mapVisualTask: Task<Void, Never>?
+    private var resourceEntryDetailTask: Task<Void, Never>?
+    private var romInspectorTask: Task<Void, Never>?
     private var decompBuildTask: Task<Void, Never>?
     private var mapVisualSharedCacheDataByID: [String: Data] = [:]
     private var resourceAssetRowsCache: ResourceAssetRowsCache?
@@ -376,6 +379,7 @@ final class WorkbenchStore: ObservableObject {
     private var autosaveTask: Task<Void, Never>?
     private var savedMapDraftsByProjectID: [String: [PokemonHackCore.SavedMapDraftSnapshot]] = [:]
     private var projectLoadGeneration = 0
+    private var resourceLibraryGeneration = 0
 
     private static let recentRootsKey = "PokemonHackStudio.recentProjectRoots"
     private static let workflowContextKey = "PokemonHackStudio.workflowContext"
@@ -2385,6 +2389,7 @@ final class WorkbenchStore: ObservableObject {
         assetCatalogTask?.cancel()
         mapCatalogTask?.cancel()
         mapVisualTask?.cancel()
+        romInspectorTask?.cancel()
         pendingScriptAssetTargetID = nil
         clearSelectedMapVisualDocument()
         updateLazyLoadStatusesForSelection()
@@ -2431,9 +2436,7 @@ final class WorkbenchStore: ObservableObject {
         var summaries: [IndexedProjectSummary] = []
         var indexes: [String: PokemonHackCore.ProjectIndex] = [:]
         var buildReports: [String: BuildPatchPlaytestReportViewState] = [:]
-        var graphicsReports: [String: GraphicsDiagnosticsReportViewState] = [:]
         var retainedScriptReadinessReports: [String: ScriptReadinessReportViewState] = [:]
-        var romInspectorReports: [String: PokemonHackCore.BinaryROMInspectorReport] = [:]
         var retainedAssetCatalogs: [String: ResourceAssetCatalogViewState] = [:]
         var retainedFingerprints: [String: String] = [:]
 
@@ -2445,17 +2448,9 @@ final class WorkbenchStore: ObservableObject {
                 let summary = Self.summary(from: index)
                 summaries.append(summary)
                 indexes[summary.id] = index
-                if index.profile == .binaryROM,
-                   let report = try? BinaryROMInspectorReportBuilder.build(path: root, fileManager: fileManager, toolResolver: toolResolver) {
-                    romInspectorReports[summary.id] = report
+                if let cached = buildReportsByID[summary.id] {
+                    buildReports[summary.id] = cached
                 }
-                if userSettings.autoRefreshHealthOnProjectRefresh || buildReportsByID[summary.id] == nil {
-                    let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
-                    buildReports[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
-                } else {
-                    buildReports[summary.id] = buildReportsByID[summary.id]
-                }
-                graphicsReports[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
                 let fingerprint = Self.assetCatalogFingerprint(rootPath: summary.rootPath, fileManager: fileManager)
                 if
                     assetCatalogFingerprintsByID[summary.id] == fingerprint,
@@ -2477,14 +2472,14 @@ final class WorkbenchStore: ObservableObject {
         sourceIndexesByID = sourceIndexesByID.filter { indexes.keys.contains($0.key) }
         scriptOutlinesByID = scriptOutlinesByID.filter { indexes.keys.contains($0.key) }
         buildReportsByID = buildReports
-        graphicsReportsByID = graphicsReports
+        graphicsReportsByID = graphicsReportsByID.filter { indexes.keys.contains($0.key) }
         scriptReadinessReportsByID = retainedScriptReadinessReports
         speciesCatalogsByID = speciesCatalogsByID.filter { indexes.keys.contains($0.key) }
         trainerCatalogsByID = trainerCatalogsByID.filter { indexes.keys.contains($0.key) }
         coreMoveCatalogsByID = coreMoveCatalogsByID.filter { indexes.keys.contains($0.key) }
         moveCatalogsByID = moveCatalogsByID.filter { indexes.keys.contains($0.key) }
         itemCatalogsByID = itemCatalogsByID.filter { indexes.keys.contains($0.key) }
-        romInspectorReportsByID = romInspectorReports
+        romInspectorReportsByID = romInspectorReportsByID.filter { indexes.keys.contains($0.key) }
         assetCatalogsByID = retainedAssetCatalogs
         assetCatalogFingerprintsByID = retainedFingerprints
         ndsDataCatalogsByID = ndsDataCatalogsByID.filter { indexes.keys.contains($0.key) }
@@ -2841,6 +2836,10 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func requestResourceLibraryEntrySelection(_ entryID: ResourceLibraryEntryViewState.ID) {
+        if selectedResourceLibraryEntryID != entryID {
+            resourceEntryDetailTask?.cancel()
+            loadingResourceLibraryEntryID = nil
+        }
         selectedResourceLibraryEntryID = entryID
         recordRecentTarget(recentResourceEntryTarget(for: entryID))
     }
@@ -3519,11 +3518,7 @@ final class WorkbenchStore: ObservableObject {
             let index = try GameAdapterRegistry.index(path: standardizedPath, fileManager: fileManager)
             let summary = Self.summary(from: index)
             projectIndexesByID[summary.id] = index
-            if index.profile == .binaryROM {
-                romInspectorReportsByID[summary.id] = try? BinaryROMInspectorReportBuilder.build(path: standardizedPath, fileManager: fileManager, toolResolver: toolResolver)
-            } else {
-                romInspectorReportsByID.removeValue(forKey: summary.id)
-            }
+            romInspectorReportsByID.removeValue(forKey: summary.id)
             if Self.isGameCubeProfile(index.profile) {
                 selectedGameCubeResourcePath = standardizedPath
                 let entry = GenIIIResourceRegistry.resourceIndex(path: standardizedPath, role: .localInput, fileManager: fileManager)
@@ -3533,9 +3528,8 @@ final class WorkbenchStore: ObservableObject {
                 selectedResourceLibraryMode = .entries
                 gameCubeResourceLoadStatus = .loaded(itemCount: viewState.items.count)
             }
-            let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
-            buildReportsByID[summary.id] = Self.buildReport(from: index, project: summary, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
-            graphicsReportsByID[summary.id] = Self.graphicsReport(from: index, project: summary, fileManager: fileManager)
+            buildReportsByID.removeValue(forKey: summary.id)
+            graphicsReportsByID.removeValue(forKey: summary.id)
             sourceIndexesByID.removeValue(forKey: summary.id)
             scriptOutlinesByID.removeValue(forKey: summary.id)
             speciesCatalogsByID.removeValue(forKey: summary.id)
@@ -3574,6 +3568,7 @@ final class WorkbenchStore: ObservableObject {
         switch selection {
         case .resources:
             loadSelectedAssetCatalogIfNeeded()
+            loadSelectedROMInspectorIfNeeded()
         case .maps:
             loadSelectedMapCatalogIfNeeded()
             loadSelectedMapVisualDocumentIfNeeded()
@@ -3590,7 +3585,11 @@ final class WorkbenchStore: ObservableObject {
             loadSelectedMoveCatalogIfNeeded()
         case .items:
             loadSelectedItemCatalogIfNeeded()
-        case .dashboard, .build, .graphics, .issues, .encounters:
+        case .build, .issues:
+            loadSelectedBuildReportIfNeeded()
+        case .graphics:
+            loadSelectedGraphicsReportIfNeeded()
+        case .dashboard, .encounters:
             break
         }
     }
@@ -3619,7 +3618,9 @@ final class WorkbenchStore: ObservableObject {
             loadSelectedMoveCatalogIfNeeded(force: true)
         case .items:
             loadSelectedItemCatalogIfNeeded(force: true)
-        case .graphics, .build, .issues:
+        case .graphics:
+            loadSelectedGraphicsReportIfNeeded(force: true)
+        case .build, .issues:
             refreshHealthChecks()
         }
     }
@@ -5035,17 +5036,126 @@ final class WorkbenchStore: ObservableObject {
 
     @discardableResult
     func refreshResourceLibrary() -> PokemonHackCore.GenIIIResourceLibrary {
+        resourceLibraryGeneration += 1
+        resourceEntryDetailTask?.cancel()
+        loadingResourceLibraryEntryID = nil
         let workspaceLibrary = GenIIIResourceRegistry.load(
             workspaceRoot: workspaceRoot.path,
             recentRoots: recentProjectRoots,
-            fileManager: fileManager
+            fileManager: fileManager,
+            detailMode: .summary
         )
         let coreResourceLibrary = Self.libraryByAppendingBundledAssets(
             to: workspaceLibrary,
-            fileManager: fileManager
+            fileManager: fileManager,
+            detailMode: .summary
         )
         resourceLibrary = Self.resourceLibraryViewState(from: coreResourceLibrary)
         return coreResourceLibrary
+    }
+
+    func loadResourceEntryDetails(_ entry: ResourceLibraryEntryViewState, force: Bool = false) {
+        guard force || entry.detailMode == PokemonHackCore.GenIIIResourceDetailMode.summary.rawValue else { return }
+        guard !entry.path.isEmpty, entry.path != "Missing local media" else { return }
+
+        let entryID = entry.id
+        let path = entry.path
+        let roleRawValue = entry.role
+        let isBundledEntry = entry.id.hasPrefix("bundled:")
+        let generation = resourceLibraryGeneration
+        let selectionID = selectedResourceLibraryEntryID
+
+        resourceEntryDetailTask?.cancel()
+        loadingResourceLibraryEntryID = entryID
+        resourceEntryDetailTask = Task { @MainActor [weak self] in
+            do {
+                let data = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let role = PokemonHackCore.GenIIIResourceRole(rawValue: roleRawValue) ?? .localInput
+                    let entry = PokemonHackCore.GenIIIResourceRegistry.resourceIndex(
+                        path: path,
+                        role: role,
+                        fileManager: .default,
+                        detailMode: .full
+                    )
+                    return try JSONEncoder().encode(entry)
+                }.value
+                let decodedEntry = try JSONDecoder().decode(PokemonHackCore.GenIIIResourceEntry.self, from: data)
+                guard let self,
+                      self.resourceLibraryGeneration == generation,
+                      self.selectedResourceLibraryEntryID == selectionID,
+                      self.resourceLibrary?.entries.contains(where: { $0.id == entryID }) == true
+                else { return }
+
+                let hydratedEntry = isBundledEntry ? Self.bundledResourceEntry(decodedEntry) : decodedEntry
+                replaceResourceLibraryEntry(hydratedEntry, matching: entryID)
+                loadingResourceLibraryEntryID = nil
+                resourceEntryDetailTask = nil
+            } catch {
+                guard let self, self.resourceLibraryGeneration == generation else { return }
+                loadingResourceLibraryEntryID = nil
+                resourceEntryDetailTask = nil
+            }
+        }
+    }
+
+    private func replaceResourceLibraryEntry(
+        _ entry: PokemonHackCore.GenIIIResourceEntry,
+        matching entryID: ResourceLibraryEntryViewState.ID
+    ) {
+        guard let library = resourceLibrary else { return }
+        let viewState = Self.resourceEntryViewState(from: entry)
+        let entries = library.entries.map { existing in
+            existing.id == entryID ? viewState : existing
+        }
+        resourceLibrary = ResourceLibraryViewState(
+            id: library.id,
+            workspaceRoot: library.workspaceRoot,
+            entries: entries,
+            diagnostics: library.diagnostics
+        )
+        if selectedResourceLibraryEntryID == entryID {
+            selectedResourceLibraryEntryID = viewState.id
+        }
+        resourceAssetRowsCache = nil
+    }
+
+    func loadSelectedROMInspectorIfNeeded(force: Bool = false) {
+        guard let project = selectedIndexedProject,
+              let index = projectIndexesByID[project.id],
+              index.profile == .binaryROM
+        else { return }
+        if !force, romInspectorReportsByID[project.id] != nil {
+            return
+        }
+
+        let projectID = project.id
+        let path = project.rootPath
+        let generation = projectLoadGeneration
+
+        romInspectorTask?.cancel()
+        romInspectorTask = Task { @MainActor [weak self] in
+            do {
+                let data = try await Task.detached(priority: .userInitiated) { () throws -> Data in
+                    let report = try PokemonHackCore.BinaryROMInspectorReportBuilder.build(
+                        path: path,
+                        fileManager: .default,
+                        toolResolver: PokemonHackCore.ToolAvailabilityResolverFactory.pathEnvironment()
+                    )
+                    return try JSONEncoder().encode(report)
+                }.value
+                let report = try JSONDecoder().decode(PokemonHackCore.BinaryROMInspectorReport.self, from: data)
+                guard let self,
+                      self.projectLoadGeneration == generation,
+                      self.selectedProjectID == projectID
+                else { return }
+
+                romInspectorReportsByID[projectID] = report
+                romInspectorTask = nil
+            } catch {
+                guard let self, self.projectLoadGeneration == generation else { return }
+                romInspectorTask = nil
+            }
+        }
     }
 
     func chooseGameCubeResourceImage() {
@@ -5086,6 +5196,36 @@ final class WorkbenchStore: ObservableObject {
         selectedResourceLibraryEntryID = viewState.id
         selectedResourceLibraryMode = .entries
         gameCubeResourceLoadStatus = .loaded(itemCount: viewState.items.count)
+    }
+
+    func loadSelectedBuildReportIfNeeded(force: Bool = false) {
+        guard let project = selectedIndexedProject,
+              let index = projectIndexesByID[project.id]
+        else { return }
+        if !force, buildReportsByID[project.id] != nil {
+            return
+        }
+
+        let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
+        buildReportsByID[project.id] = Self.buildReport(
+            from: index,
+            project: project,
+            fileManager: fileManager,
+            toolResolver: toolResolver,
+            buildReport: coreBuildReport
+        )
+    }
+
+    func loadSelectedGraphicsReportIfNeeded(force: Bool = false) {
+        guard let project = selectedIndexedProject,
+              let index = projectIndexesByID[project.id],
+              index.editorModules.contains(.graphics)
+        else { return }
+        if !force, graphicsReportsByID[project.id] != nil {
+            return
+        }
+
+        graphicsReportsByID[project.id] = Self.graphicsReport(from: index, project: project, fileManager: fileManager)
     }
 
     func refreshHealthChecks() {
@@ -5695,7 +5835,8 @@ final class WorkbenchStore: ObservableObject {
 
     private static func libraryByAppendingBundledAssets(
         to library: PokemonHackCore.GenIIIResourceLibrary,
-        fileManager: FileManager
+        fileManager: FileManager,
+        detailMode: PokemonHackCore.GenIIIResourceDetailMode = .full
     ) -> PokemonHackCore.GenIIIResourceLibrary {
         guard let bundledProjectsRoot = bundledAssetProjectsRoot(fileManager: fileManager) else {
             return library
@@ -5704,20 +5845,23 @@ final class WorkbenchStore: ObservableObject {
         return libraryByAppendingBundledAssets(
             to: library,
             projectsRoot: bundledProjectsRoot,
-            fileManager: fileManager
+            fileManager: fileManager,
+            detailMode: detailMode
         )
     }
 
     static func libraryByAppendingBundledAssets(
         to library: PokemonHackCore.GenIIIResourceLibrary,
         projectsRoot bundledProjectsRoot: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        detailMode: PokemonHackCore.GenIIIResourceDetailMode = .full
     ) -> PokemonHackCore.GenIIIResourceLibrary {
 
         let bundledLibrary = GenIIIResourceRegistry.load(
             workspaceRoot: bundledProjectsRoot.path,
             recentRoots: [],
-            fileManager: fileManager
+            fileManager: fileManager,
+            detailMode: detailMode
         )
         let existingSourceTitles = Set(
             library.entries
@@ -5771,6 +5915,7 @@ final class WorkbenchStore: ObservableObject {
             adapterID: entry.adapterID,
             writePolicy: .readOnly,
             modules: entry.modules,
+            detailMode: entry.detailMode,
             resourceCount: entry.resourceCount,
             items: entry.items,
             diagnostics: entry.diagnostics
@@ -6564,6 +6709,7 @@ final class WorkbenchStore: ObservableObject {
             status: status,
             variantSummary: variants.isEmpty ? "No variants detected" : variants,
             moduleSummary: modules.isEmpty ? "No editor modules" : modules,
+            detailMode: entry.detailMode.rawValue,
             resourceCount: entry.resourceCount,
             diagnosticCount: entry.diagnostics.count,
             items: entry.items.map { resourceItemViewState(from: $0, entryPath: path) },

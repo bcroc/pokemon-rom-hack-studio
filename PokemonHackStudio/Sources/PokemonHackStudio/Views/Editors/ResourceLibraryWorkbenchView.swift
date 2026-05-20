@@ -8,6 +8,7 @@ struct ResourceLibraryWorkbenchView: View {
     let romInspector: BinaryROMInspectorReport?
     let gameCubeEntry: ResourceLibraryEntryViewState?
     let gameCubeLoadStatus: GameCubeResourceLoadStatus
+    let loadingResourceEntryID: ResourceLibraryEntryViewState.ID?
     let assets: [ResourceAssetRowViewState]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
     @Binding var gameCubeResourcePath: String
@@ -18,6 +19,7 @@ struct ResourceLibraryWorkbenchView: View {
     let onChooseGameCubeResource: () -> Void
     let onLoadGameCubeResource: () -> Void
     let onLoadAssetCatalog: () -> Void
+    let onLoadResourceEntryDetails: (ResourceLibraryEntryViewState) -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
@@ -187,7 +189,13 @@ struct ResourceLibraryWorkbenchView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(entries) { entry in
-                            ResourceLibraryDetailRow(entry: entry)
+                            ResourceLibraryDetailRow(
+                                entry: entry,
+                                isLoadingDetails: loadingResourceEntryID == entry.id,
+                                onLoadDetails: {
+                                    onLoadResourceEntryDetails(entry)
+                                }
+                            )
                         }
                     }
                 }
@@ -389,12 +397,32 @@ struct ResourceLibraryWorkbenchView: View {
 
 private struct ResourceLibraryDetailRow: View {
     let entry: ResourceLibraryEntryViewState
+    let isLoadingDetails: Bool
+    let onLoadDetails: () -> Void
     @State private var isExpanded = false
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 14) {
                 FactGrid(facts: entryFacts)
+
+                if entry.detailMode == "summary" {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .opacity(isLoadingDetails ? 1 : 0)
+                        Text(isLoadingDetails ? "Loading details..." : "Summary loaded")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Load Details", systemImage: "list.bullet.rectangle") {
+                            onLoadDetails()
+                        }
+                        .disabled(isLoadingDetails)
+                    }
+                    .padding(10)
+                    .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                }
 
                 if !entry.items.isEmpty {
                     EditorSection(title: "Resource Items") {
@@ -465,6 +493,11 @@ private struct ResourceLibraryDetailRow: View {
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded, entry.detailMode == "summary" {
+                onLoadDetails()
+            }
+        }
     }
 
     private var entryFacts: [Fact] {
@@ -473,6 +506,7 @@ private struct ResourceLibraryDetailRow: View {
             Fact(label: "Profile", value: entry.profile),
             Fact(label: "Role", value: entry.role),
             Fact(label: "Write Policy", value: entry.writePolicy),
+            Fact(label: "Details", value: entry.detailMode),
             Fact(label: "Items", value: "\(entry.items.count)"),
             Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)")
         ]

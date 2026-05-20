@@ -82,15 +82,17 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertNil(items.recommendedFutureRow)
     }
 
-    func testRubyItemsReportEditableRowsWhileExpansionItemsStayReadOnly() throws {
+    func testRubyAndExpansionItemsReportEditableSourceBackedRows() throws {
         let rubyRoot = try temporaryRoot()
         try writeRubyItems(at: rubyRoot)
         let ruby = try PokemonDataCompatibilityReportBuilder.build(
             index: projectIndex(root: rubyRoot, profile: .pokeruby),
             sourceIndex: sourceIndex(profile: .pokeruby, itemPath: "src/data/items_en.h")
         )
+        let expansionRoot = try temporaryRoot()
+        try writeExpansionItems(at: expansionRoot)
         let expansion = try PokemonDataCompatibilityReportBuilder.build(
-            index: projectIndex(profile: .pokeemeraldExpansion),
+            index: projectIndex(root: expansionRoot, profile: .pokeemeraldExpansion),
             sourceIndex: sourceIndex(profile: .pokeemeraldExpansion, itemPath: "src/data/items.h")
         )
 
@@ -108,30 +110,67 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertNil(rubyItems.recommendedFutureRow)
 
         let expansionItems = entry(.items, in: expansion)
-        XCTAssertEqual(expansionItems.status, .readOnly)
+        XCTAssertEqual(expansionItems.status, .editable)
         XCTAssertEqual(expansionItems.sourcePath, "src/data/items.h")
         XCTAssertEqual(expansionItems.tableSymbol, "gItemsInfo")
-        XCTAssertTrue(expansionItems.blockedReason?.contains("Expansion ItemInfo") == true)
-        XCTAssertTrue(expansionItems.unsupportedFields.contains("Expansion ItemInfo rewrites"))
-        XCTAssertEqual(expansionItems.recommendedFutureRow, "PHS-T57")
+        XCTAssertEqual(expansionItems.indexedCount, 1)
+        XCTAssertEqual(expansionItems.editableCount, 1)
+        XCTAssertNil(expansionItems.blockedReason)
+        XCTAssertTrue(expansionItems.unsupportedFields.contains("include/config/item.h rewrites"))
+        XCTAssertTrue(expansionItems.unsupportedFields.contains("generated item output writes"))
+        XCTAssertTrue(expansionItems.unsupportedFields.contains("reference-only item source writes"))
+        XCTAssertNil(expansionItems.recommendedFutureRow)
+        let expansionItemSources = try XCTUnwrap(expansionItems.sourceTables)
+        XCTAssertTrue(expansionItemSources.contains { $0.path == "src/data/items.h" && $0.tableSymbol == "gItemsInfo" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(expansionItemSources.contains { $0.path == "include/config/item.h" && $0.status == .blocked })
+        XCTAssertTrue(expansionItemSources.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(expansionItemSources.contains { $0.path == "references/pokeemerald-expansion/src/data/items.h" && $0.status == .blocked })
     }
 
-    func testExpansionMovesInfoRowsStayReadOnlyInCompatibilityReport() throws {
+    func testExpansionMovesInfoRowsReportEditableWithBlockedAdjacentSourcesAndJSON() throws {
+        let root = try temporaryRoot()
+        try writeExpansionMovesInfo(at: root)
+        let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
         let expansion = try PokemonDataCompatibilityReportBuilder.build(
-            index: projectIndex(profile: .pokeemeraldExpansion),
-            sourceIndex: expansionMoveSourceIndex()
+            index: index,
+            sourceIndex: sourceIndex
         )
 
         assertNoCompletedRowRecommendations(in: expansion)
         let moves = entry(.moves, in: expansion)
-        XCTAssertEqual(moves.status, .readOnly)
+        XCTAssertEqual(moves.status, .editable)
         XCTAssertEqual(moves.sourcePath, "src/data/moves_info.h")
         XCTAssertEqual(moves.tableSymbol, "gMovesInfo")
         XCTAssertEqual(moves.indexedCount, 1)
-        XCTAssertEqual(moves.editableCount, 0)
-        XCTAssertTrue(moves.blockedReason?.contains("Expansion gMovesInfo") == true)
-        XCTAssertTrue(moves.unsupportedFields.contains("Expansion gMovesInfo schema apply"))
-        XCTAssertEqual(moves.recommendedFutureRow, "PHS-T78")
+        XCTAssertEqual(moves.editableCount, 1)
+        XCTAssertNil(moves.blockedReason)
+        XCTAssertTrue(moves.unsupportedFields.contains("new/reordered move constants"))
+        XCTAssertTrue(moves.unsupportedFields.contains("contest data"))
+        XCTAssertTrue(moves.unsupportedFields.contains("description text rewrites"))
+        XCTAssertTrue(moves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
+        XCTAssertTrue(moves.unsupportedFields.contains("gMovesInfo non-simple flags expressions"))
+        XCTAssertTrue(moves.unsupportedFields.contains("generated move output writes"))
+        XCTAssertTrue(moves.unsupportedFields.contains("reference-only move source writes"))
+        XCTAssertTrue(moves.unsupportedFields.contains("binary ROM move writes"))
+        XCTAssertTrue(moves.unsupportedFields.contains("broad Expansion move schema rewrites"))
+        XCTAssertNil(moves.recommendedFutureRow)
+        let sourceTables = try XCTUnwrap(moves.sourceTables)
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/moves_info.h" && $0.tableSymbol == "gMovesInfo" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(sourceTables.contains { $0.path == "include/constants/moves.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/text/move_descriptions.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/contest_moves.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "references/pokeemerald-expansion/src/data/moves_info.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "ROM output" && $0.status == .blocked })
+
+        let json = String(data: try JSONEncoder().encode(expansion), encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains(#""sourceTables""#))
+        XCTAssertTrue(json.contains(#""gMovesInfo""#))
+        XCTAssertTrue(json.contains(#""generated""#))
+        XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/moves_info.h""#))
     }
 
     func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
@@ -450,34 +489,67 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
     }
 
-    private func expansionMoveSourceIndex() throws -> ProjectSourceIndex {
-        let root = try temporaryRoot()
-        return ProjectSourceIndex(
-            root: SourceLocation(path: root.path, exists: true),
-            profile: .pokeemeraldExpansion,
-            adapterID: "test.pokeemeraldExpansion",
-            adapterName: "pokeemeraldExpansion Fixture",
-            records: [
-                SourceIndexRecord(
-                    id: "moves:pokeemeraldExpansion:MOVE_POUND",
-                    module: .moves,
-                    title: "MOVE_POUND",
-                    subtitle: "src/data/moves_info.h",
-                    sourceSpan: SourceSpan(relativePath: "src/data/moves_info.h", startLine: 1),
-                    facts: [
-                        SourceIndexFact(label: "effect", value: "EFFECT_HIT"),
-                        SourceIndexFact(label: "power", value: "40"),
-                        SourceIndexFact(label: "type", value: "TYPE_NORMAL"),
-                        SourceIndexFact(label: "accuracy", value: "100"),
-                        SourceIndexFact(label: "pp", value: "35"),
-                        SourceIndexFact(label: "secondaryEffectChance", value: "0"),
-                        SourceIndexFact(label: "target", value: "MOVE_TARGET_SELECTED"),
-                        SourceIndexFact(label: "priority", value: "0"),
-                        SourceIndexFact(label: "flags", value: "FLAG_MAKES_CONTACT")
-                    ],
-                    preview: "[MOVE_POUND] = { .power = 40 }"
-                )
-            ]
+    private func writeExpansionItems(at root: URL) throws {
+        try write(
+            """
+            const struct ItemInfo gItemsInfo[] =
+            {
+                [ITEM_POTION] =
+                {
+                    .name = ITEM_NAME("Potion"),
+                    .price = 300,
+                    .holdEffectParam = 20,
+                    .description = COMPOUND_STRING("Restores HP."),
+                    .pocket = POCKET_ITEMS,
+                    .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = EFFECT_ITEM_RESTORE_HP,
+                    .battleUseFunc = NULL,
+                    .secondaryId = 0,
+                    .iconPic = gItemIcon_Potion,
+                    .iconPalette = gItemIconPalette_Potion,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
+        )
+    }
+
+    private func writeExpansionMovesInfo(at root: URL) throws {
+        try write(
+            """
+            const struct MoveInfo gMovesInfo[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                },
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                    .description = sPoundDescription,
+                    .contestCategory = CONTEST_CATEGORY_TOUGH,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/moves_info.h")
         )
     }
 

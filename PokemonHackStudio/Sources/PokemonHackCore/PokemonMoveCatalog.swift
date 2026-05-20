@@ -230,20 +230,26 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
             detail.facts.first { $0.label == key }?.value ?? previewFields[key]?.value
         }
 
+        let isExpansionMoveInfo = detail.sourceSpan.relativePath == "src/data/moves_info.h"
+        let secondaryEffectChance = fact("secondaryEffectChance").flatMap { Int(compactMoveValue($0)) }
+        let flags = simpleFlags(in: fact("flags") ?? "") ?? detail.flags
+
         guard
             let effect = fact("effect"),
             let power = fact("power").flatMap({ Int(compactMoveValue($0)) }),
             let type = fact("type"),
             let accuracy = fact("accuracy").flatMap({ Int(compactMoveValue($0)) }),
             let pp = fact("pp").flatMap({ Int(compactMoveValue($0)) }),
-            let secondaryEffectChance = fact("secondaryEffectChance").flatMap({ Int(compactMoveValue($0)) }),
             let target = fact("target"),
             let priority = fact("priority").flatMap({ Int(compactMoveValue($0)) })
         else {
             return nil
         }
 
-        let flags = simpleFlags(in: fact("flags") ?? "") ?? detail.flags
+        guard let resolvedSecondaryEffectChance = secondaryEffectChance ?? (isExpansionMoveInfo ? 0 : nil) else {
+            return nil
+        }
+
         self.init(
             moveID: detail.moveID,
             effect: compactMoveValue(effect),
@@ -251,7 +257,7 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
             type: compactMoveValue(type),
             accuracy: accuracy,
             pp: pp,
-            secondaryEffectChance: secondaryEffectChance,
+            secondaryEffectChance: resolvedSecondaryEffectChance,
             target: compactMoveValue(target),
             priority: priority,
             flags: flags
@@ -403,6 +409,7 @@ public enum ProjectMoveCatalogBuilder {
 
         diagnostics.append(contentsOf: sentinelDiagnostics(in: moveRecords))
         diagnostics.append(contentsOf: duplicateConstantDiagnostics(root: root, fileManager: fileManager))
+        diagnostics.append(contentsOf: expansionKnownFieldDiagnostics(root: root, profile: index.profile, fileManager: fileManager))
 
         let moveRecordGroups = Dictionary(grouping: moveRecords) { normalizedMoveID($0.title) }
         for (moveID, records) in moveRecordGroups where moveID != "MOVE_NONE" && records.count > 1 {
@@ -727,28 +734,28 @@ public enum ProjectMoveCatalogBuilder {
     }
 
     private static func editabilityDiagnostics(record: SourceIndexRecord, profile: GameProfile, preview: String?) -> [Diagnostic] {
-        guard profile == .pokeemerald || profile == .pokefirered else {
+        guard let expectedPath = editableMoveSourcePath(for: profile) else {
             return [
                 Diagnostic(
                     severity: .error,
                     code: "MOVE_CATALOG_READ_ONLY_PROFILE",
-                    message: "Move editing is currently available for classic Emerald and FireRed battle_moves.h rows.",
+                    message: "Move editing is currently available for classic Emerald/FireRed battle_moves.h rows and local Expansion gMovesInfo rows.",
                     span: record.sourceSpan
                 )
             ]
         }
-        guard record.sourceSpan.relativePath == "src/data/battle_moves.h" else {
+        guard record.sourceSpan.relativePath == expectedPath else {
             return [
                 Diagnostic(
                     severity: .error,
                     code: "MOVE_CATALOG_READ_ONLY_SOURCE",
-                    message: "Move editing requires classic src/data/battle_moves.h source.",
+                    message: "Move editing requires \(expectedPath) source for \(profile.rawValue).",
                     span: record.sourceSpan
                 )
             ]
         }
         let fields = preview.map { MoveTopLevelFieldScanner.fields(in: $0) } ?? [:]
-        let missing = editableMoveFields.filter { fields[$0] == nil }
+        let missing = requiredEditableMoveFields(for: profile).filter { fields[$0] == nil }
         if !missing.isEmpty {
             return [
                 Diagnostic(
@@ -781,6 +788,48 @@ public enum ProjectMoveCatalogBuilder {
             return nil
         }
         return moveSourceEntryText(in: text, span: record.sourceSpan)
+    }
+
+    private static func expansionKnownFieldDiagnostics(
+        root: URL,
+        profile: GameProfile,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        guard profile == .pokeemeraldExpansion else { return [] }
+        let relativePath = "src/data/moves_info.h"
+        let url = root.appendingPathComponent(relativePath)
+        guard
+            fileManager.fileExists(atPath: url.path),
+            let text = try? moveReadText(at: url)
+        else {
+            return []
+        }
+
+        let parsed = CInitializerParser.tableEntries(
+            in: text,
+            descriptor: CInitializerTableDescriptor(
+                module: .moves,
+                relativePath: relativePath,
+                tableSymbol: "gMovesInfo",
+                entryStyle: .bracketed
+            )
+        )
+        var diagnostics = parsed.diagnostics
+        let knownFields = Set(expansionKnownMoveFields)
+        for entry in parsed.entries {
+            let unknownFields = entry.fields.keys
+                .filter { !knownFields.contains($0) }
+                .sorted()
+            diagnostics.append(contentsOf: unknownFields.map { field in
+                Diagnostic(
+                    severity: .warning,
+                    code: "MOVE_CATALOG_UNKNOWN_FIELD",
+                    message: "\(entry.symbol) has unknown Expansion gMovesInfo field \(field); preserving it as raw source while simple move fields remain editable.",
+                    span: entry.span
+                )
+            })
+        }
+        return diagnostics
     }
 
     private static func ordinal(from record: SourceIndexRecord) -> Int? {
@@ -837,12 +886,12 @@ public enum MoveMutationPlanner {
         fileManager: FileManager = .default
     ) -> MoveEditPlan {
         let root = URL(fileURLWithPath: catalog.root.path).standardizedFileURL
-        guard catalog.profile == .pokeemerald || catalog.profile == .pokefirered else {
+        guard editableMoveSourcePath(for: catalog.profile) != nil else {
             return blockedPlan(
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "MOVE_PLAN_UNSUPPORTED_PROFILE", message: "Move apply is only available for classic Emerald and FireRed battle_moves.h source trees.")
+                    Diagnostic(severity: .error, code: "MOVE_PLAN_UNSUPPORTED_PROFILE", message: "Move apply is available for classic Emerald/FireRed battle_moves.h source trees and local Expansion gMovesInfo rows.")
                 ]
             )
         }
@@ -865,11 +914,11 @@ public enum MoveMutationPlanner {
             )
         }
 
-        var diagnostics = plannerDiagnostics(move: move, draft: draft)
+        var diagnostics = plannerDiagnostics(profile: catalog.profile, move: move, draft: draft)
         var changes: [MoveEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            let rewrite = rewriteChange(root: root, move: move, draft: draft)
+            let rewrite = rewriteChange(root: root, profile: catalog.profile, move: move, draft: draft)
             diagnostics.append(contentsOf: rewrite.diagnostics)
             if let change = rewrite.change {
                 changes.append(change)
@@ -884,7 +933,7 @@ public enum MoveMutationPlanner {
         }
         let mutationPlan = MutationPlan(
             title: "Apply move edits to \(draft.moveID)",
-            summary: "\(changes.count) source file change(s) for battle move data.",
+            summary: "\(changes.count) source file change(s) for move data.",
             changes: plannedChanges,
             diagnostics: diagnostics,
             requiresExplicitApply: true
@@ -918,13 +967,13 @@ public enum MoveMutationPlanner {
         )
     }
 
-    private static func plannerDiagnostics(move: MoveDetail, draft: MoveEditDraft) -> [Diagnostic] {
+    private static func plannerDiagnostics(profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> [Diagnostic] {
         var diagnostics = move.diagnostics.filter { $0.severity == .error }
         if move.diagnostics.contains(where: { $0.code == "MOVE_CATALOG_FLAGS_UNSUPPORTED_EXPRESSION" }) {
             diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAGS_UNSUPPORTED_EXPRESSION", message: "\(move.moveID) uses a non-simple flags expression that cannot be round-tripped safely.", span: move.sourceSpan))
         }
-        if move.sourceSpan.relativePath != "src/data/battle_moves.h" {
-            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_SOURCE_UNSUPPORTED", message: "\(move.moveID) is not backed by classic src/data/battle_moves.h source.", span: move.sourceSpan))
+        if let expectedPath = editableMoveSourcePath(for: profile), move.sourceSpan.relativePath != expectedPath {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_SOURCE_UNSUPPORTED", message: "\(move.moveID) is not backed by \(expectedPath) source for \(profile.rawValue).", span: move.sourceSpan))
         }
         if
             let preview = move.sourcePreview,
@@ -972,7 +1021,7 @@ public enum MoveMutationPlanner {
         }
     }
 
-    private static func rewriteChange(root: URL, move: MoveDetail, draft: MoveEditDraft) -> (change: MoveEditFileChange?, diagnostics: [Diagnostic]) {
+    private static func rewriteChange(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (change: MoveEditFileChange?, diagnostics: [Diagnostic]) {
         let path = move.sourceSpan.relativePath
         let url = root.appendingPathComponent(path)
         guard let originalText = try? moveReadText(at: url), let originalData = originalText.data(using: .utf8) else {
@@ -984,7 +1033,7 @@ public enum MoveMutationPlanner {
 
         let entryText = moveSourceEntryText(in: originalText, span: move.sourceSpan)
         let fields = MoveTopLevelFieldScanner.fields(in: entryText)
-        var diagnostics = missingFieldDiagnostics(move: move, fields: fields)
+        var diagnostics = missingFieldDiagnostics(profile: profile, move: move, fields: fields)
         if let flags = fields["flags"], simpleFlags(in: flags.value) == nil {
             diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAGS_UNSUPPORTED_EXPRESSION", message: "\(move.moveID) uses a non-simple flags expression that cannot be round-tripped safely.", span: move.sourceSpan))
         }
@@ -1025,8 +1074,8 @@ public enum MoveMutationPlanner {
         )
     }
 
-    private static func missingFieldDiagnostics(move: MoveDetail, fields: [String: MoveFieldSlice]) -> [Diagnostic] {
-        editableMoveFields.compactMap { field in
+    private static func missingFieldDiagnostics(profile: GameProfile, move: MoveDetail, fields: [String: MoveFieldSlice]) -> [Diagnostic] {
+        requiredEditableMoveFields(for: profile).compactMap { field in
             guard fields[field] == nil else { return nil }
             return Diagnostic(severity: .error, code: "MOVE_SOURCE_FIELD_MISSING", message: "\(move.moveID) is missing editable field \(field).", span: move.sourceSpan)
         }
@@ -1162,9 +1211,60 @@ private enum MoveEditApplySafety {
     }
 }
 
+private func editableMoveSourcePath(for profile: GameProfile) -> String? {
+    switch profile {
+    case .pokeemerald, .pokefirered:
+        return "src/data/battle_moves.h"
+    case .pokeemeraldExpansion:
+        return "src/data/moves_info.h"
+    default:
+        return nil
+    }
+}
+
+private func requiredEditableMoveFields(for profile: GameProfile) -> [String] {
+    switch profile {
+    case .pokeemeraldExpansion:
+        return editableMoveFields.filter { $0 != "secondaryEffectChance" && $0 != "flags" }
+    default:
+        return editableMoveFields
+    }
+}
+
 private let editableMoveFields = [
     "effect", "power", "type", "accuracy", "pp",
     "secondaryEffectChance", "target", "priority", "flags"
+]
+
+private let expansionKnownMoveFields = editableMoveFields + [
+    "absorbPercentage", "accIncreaseByTenOnSameType", "accuracy50InSun",
+    "additionalEffects", "alwaysCriticalHit", "alwaysHitsInHailSnow",
+    "alwaysHitsInRain", "alwaysHitsOnSameType", "argument", "assistBanned",
+    "ballisticMove", "battleAnimScript", "bitingMove", "cantUseTwice",
+    "category", "chance", "contestAppeal", "contestCategory",
+    "contestComboMoves", "contestComboStarterId", "contestEffect",
+    "contestJam", "copycatBanned", "criticalHitStage", "damageCategories",
+    "damagePercent", "damagePercentage", "damagesAirborne",
+    "damagesAirborneDoubleDamage", "damagesUnderground", "damagesUnderwater",
+    "dampBanned", "danceMove", "description", "encoreBanned", "explosion",
+    "fixedDamage", "forcePressure", "gravityBanned", "groundCheck",
+    "healingMove", "hitsBothFoes", "holdEffect",
+    "ignoreTypeIfFlyingAndUngrounded", "ignoresKingsRock", "ignoresProtect",
+    "ignoresSubstitute", "ignoresTargetAbility",
+    "ignoresTargetDefenseEvasionStages", "instructBanned", "magicCoatAffected",
+    "makesContact", "maxMovePower", "meFirstBanned", "metronomeBanned",
+    "mimicBanned", "minimizeDoubleDamage", "mirrorMoveBanned", "moveEffect",
+    "moveProperty", "multiHit", "name", "noAffectOnSameTypeTarget",
+    "nonVolatileStatus", "numOfHits", "onChargeTurnOnly",
+    "onlyIfTargetRaisedStats", "overwriteAbility", "parentalBondBanned",
+    "percent", "powderMove", "powerOverride", "preAttackEffect",
+    "protectMethod", "pulseMove", "punchingMove", "recoilPercentage", "self",
+    "sheerForceOverride", "sketchBanned", "skyBattleBanned", "sleepTalkBanned",
+    "slicingMove", "snatchAffected", "soundMove", "species", "split",
+    "status", "strikeCount", "stringId", "terrain", "terrainBoost",
+    "thawsUser", "twoTurnAttack", "validApprenticeMove", "weather",
+    "weatherType", "windMove", "wrapped", "zMove", "zMoveEffect",
+    "zMovePower"
 ]
 
 private struct MoveFieldSlice {

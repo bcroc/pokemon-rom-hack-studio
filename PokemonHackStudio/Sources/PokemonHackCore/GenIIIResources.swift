@@ -26,6 +26,11 @@ public enum GenIIIParseStatus: String, Codable, Equatable, CaseIterable {
     case failed
 }
 
+public enum GenIIIResourceDetailMode: String, Codable, Equatable, CaseIterable {
+    case summary
+    case full
+}
+
 public enum GenIIIGameFamily: String, Codable, Equatable, CaseIterable {
     case rubySapphire
     case emerald
@@ -118,6 +123,25 @@ public struct GenIIIResourceItem: Codable, Equatable, Identifiable {
 }
 
 public struct GenIIIResourceEntry: Codable, Equatable, Identifiable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case path
+        case platform
+        case family
+        case profile
+        case variants
+        case role
+        case parseStatus
+        case adapterID
+        case writePolicy
+        case modules
+        case detailMode
+        case resourceCount
+        case items
+        case diagnostics
+    }
+
     public let id: String
     public let title: String
     public let path: String
@@ -130,6 +154,7 @@ public struct GenIIIResourceEntry: Codable, Equatable, Identifiable {
     public let adapterID: String?
     public let writePolicy: WritePolicy
     public let modules: [EditorModule]
+    public let detailMode: GenIIIResourceDetailMode
     public let resourceCount: Int
     public let items: [GenIIIResourceItem]
     public let diagnostics: [Diagnostic]
@@ -147,6 +172,7 @@ public struct GenIIIResourceEntry: Codable, Equatable, Identifiable {
         adapterID: String? = nil,
         writePolicy: WritePolicy = .mutationPlanOnly,
         modules: [EditorModule] = [],
+        detailMode: GenIIIResourceDetailMode = .full,
         resourceCount: Int,
         items: [GenIIIResourceItem] = [],
         diagnostics: [Diagnostic] = []
@@ -163,9 +189,30 @@ public struct GenIIIResourceEntry: Codable, Equatable, Identifiable {
         self.adapterID = adapterID
         self.writePolicy = writePolicy
         self.modules = modules
+        self.detailMode = detailMode
         self.resourceCount = resourceCount
         self.items = items
         self.diagnostics = diagnostics
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.path = try container.decode(String.self, forKey: .path)
+        self.platform = try container.decode(GenIIIResourcePlatform.self, forKey: .platform)
+        self.family = try container.decode(GenIIIGameFamily.self, forKey: .family)
+        self.profile = try container.decode(GameProfile.self, forKey: .profile)
+        self.variants = try container.decode([GenIIIResourceVariant].self, forKey: .variants)
+        self.role = try container.decode(GenIIIResourceRole.self, forKey: .role)
+        self.parseStatus = try container.decode(GenIIIParseStatus.self, forKey: .parseStatus)
+        self.adapterID = try container.decodeIfPresent(String.self, forKey: .adapterID)
+        self.writePolicy = try container.decode(WritePolicy.self, forKey: .writePolicy)
+        self.modules = try container.decode([EditorModule].self, forKey: .modules)
+        self.detailMode = try container.decodeIfPresent(GenIIIResourceDetailMode.self, forKey: .detailMode) ?? .full
+        self.resourceCount = try container.decode(Int.self, forKey: .resourceCount)
+        self.items = try container.decode([GenIIIResourceItem].self, forKey: .items)
+        self.diagnostics = try container.decode([Diagnostic].self, forKey: .diagnostics)
     }
 }
 
@@ -304,7 +351,8 @@ public enum GenIIIResourceRegistry {
     public static func load(
         workspaceRoot: String = FileManager.default.currentDirectoryPath,
         recentRoots: [String] = [],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        detailMode: GenIIIResourceDetailMode = .full
     ) -> GenIIIResourceLibrary {
         let root = URL(fileURLWithPath: workspaceRoot).standardizedFileURL
         var candidates: [Candidate] = []
@@ -331,11 +379,11 @@ public enum GenIIIResourceRegistry {
             let standardized = URL(fileURLWithPath: candidate.path).standardizedFileURL.path
             guard seenPaths.insert(standardized).inserted else { continue }
             guard fileManager.fileExists(atPath: standardized) else {
-                entries.append(missingEntry(path: standardized, title: URL(fileURLWithPath: standardized).lastPathComponent))
+                entries.append(missingEntry(path: standardized, title: URL(fileURLWithPath: standardized).lastPathComponent, detailMode: detailMode))
                 continue
             }
 
-            entries.append(resourceEntry(path: standardized, role: candidate.role, workspaceRoot: root, fileManager: fileManager))
+            entries.append(resourceEntry(path: standardized, role: candidate.role, workspaceRoot: root, fileManager: fileManager, detailMode: detailMode))
         }
 
         return GenIIIResourceLibrary(
@@ -353,13 +401,15 @@ public enum GenIIIResourceRegistry {
     public static func resourceIndex(
         path: String,
         role: GenIIIResourceRole = .localInput,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        detailMode: GenIIIResourceDetailMode = .full
     ) -> GenIIIResourceEntry {
         resourceEntry(
             path: URL(fileURLWithPath: path).standardizedFileURL.path,
             role: role,
             workspaceRoot: URL(fileURLWithPath: fileManager.currentDirectoryPath).standardizedFileURL,
-            fileManager: fileManager
+            fileManager: fileManager,
+            detailMode: detailMode
         )
     }
 
@@ -367,11 +417,12 @@ public enum GenIIIResourceRegistry {
         from index: ProjectIndex,
         role: GenIIIResourceRole = .localInput,
         workspaceRoot: String = FileManager.default.currentDirectoryPath,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        detailMode: GenIIIResourceDetailMode = .full
     ) -> GenIIIResourceEntry {
         let workspaceURL = URL(fileURLWithPath: workspaceRoot).standardizedFileURL
         let resolvedRole = roleFor(index: index, requestedRole: role, workspaceRoot: workspaceURL)
-        return entry(from: index, role: resolvedRole, fileManager: fileManager)
+        return entry(from: index, role: resolvedRole, fileManager: fileManager, detailMode: detailMode)
     }
 
     private static func referenceCandidates(
@@ -458,7 +509,8 @@ public enum GenIIIResourceRegistry {
         path: String,
         role: GenIIIResourceRole,
         workspaceRoot: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        detailMode: GenIIIResourceDetailMode
     ) -> GenIIIResourceEntry {
         let url = URL(fileURLWithPath: path).standardizedFileURL
 
@@ -469,7 +521,7 @@ public enum GenIIIResourceRegistry {
         do {
             let index = try GameAdapterRegistry.index(path: url.path, fileManager: fileManager)
             let resolvedRole = roleFor(index: index, requestedRole: role, workspaceRoot: workspaceRoot)
-            return entry(from: index, role: resolvedRole, fileManager: fileManager)
+            return entry(from: index, role: resolvedRole, fileManager: fileManager, detailMode: detailMode)
         } catch {
             return GenIIIResourceEntry(
                 id: url.path,
@@ -481,6 +533,7 @@ public enum GenIIIResourceRegistry {
                 variants: [],
                 role: role,
                 parseStatus: .failed,
+                detailMode: detailMode,
                 resourceCount: 0,
                 diagnostics: [
                     Diagnostic(
@@ -493,7 +546,16 @@ public enum GenIIIResourceRegistry {
         }
     }
 
-    private static func entry(from index: ProjectIndex, role: GenIIIResourceRole, fileManager: FileManager) -> GenIIIResourceEntry {
+    private static func entry(
+        from index: ProjectIndex,
+        role: GenIIIResourceRole,
+        fileManager: FileManager,
+        detailMode: GenIIIResourceDetailMode
+    ) -> GenIIIResourceEntry {
+        guard detailMode == .full else {
+            return summaryEntry(from: index, role: role, fileManager: fileManager)
+        }
+
         if index.profile == .ndsROM,
            let report = try? NDSROMInspectorReportBuilder.build(index: index, fileManager: fileManager) {
             return entryByAppendingNDSDataCatalogItems(report.resourceEntry, index: index, fileManager: fileManager)
@@ -515,8 +577,35 @@ public enum GenIIIResourceRegistry {
             adapterID: index.adapterID,
             writePolicy: index.writePolicy,
             modules: index.editorModules,
+            detailMode: .full,
             resourceCount: items.count,
             items: items,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func summaryEntry(
+        from index: ProjectIndex,
+        role: GenIIIResourceRole,
+        fileManager: FileManager
+    ) -> GenIIIResourceEntry {
+        let diagnostics = index.diagnostics + resourceDiagnostics(from: index, fileManager: fileManager)
+        return GenIIIResourceEntry(
+            id: index.root.path,
+            title: title(for: index, fileManager: fileManager),
+            path: index.root.path,
+            platform: platform(for: index.profile),
+            family: family(for: index.profile, path: index.root.path),
+            profile: index.profile,
+            variants: summaryVariants(for: index, fileManager: fileManager),
+            role: role,
+            parseStatus: diagnostics.contains { $0.severity == .error } ? .partial : .parsed,
+            adapterID: index.adapterID,
+            writePolicy: index.writePolicy,
+            modules: index.editorModules,
+            detailMode: .summary,
+            resourceCount: summaryResourceCount(for: index),
+            items: [],
             diagnostics: diagnostics
         )
     }
@@ -550,6 +639,7 @@ public enum GenIIIResourceRegistry {
             adapterID: "gen3.gamecube-disc",
             writePolicy: .readOnly,
             modules: [.rom, .graphics, .pokemon, .trainers, .items, .moves, .text, .diagnostics],
+            detailMode: .full,
             resourceCount: items.count,
             items: items,
             diagnostics: index.diagnostics
@@ -684,6 +774,29 @@ public enum GenIIIResourceRegistry {
         return sourceItems + generatedItems
     }
 
+    private static func summaryResourceCount(for index: ProjectIndex) -> Int {
+        let indexedCount = index.documents.count + index.generatedOutputs.count
+        switch index.profile {
+        case .binaryROM, .ndsROM:
+            return max(1, indexedCount)
+        default:
+            return indexedCount
+        }
+    }
+
+    private static func summaryVariants(for index: ProjectIndex, fileManager: FileManager) -> [GenIIIResourceVariant] {
+        switch index.profile {
+        case .binaryROM:
+            return variantsForGBAImage(path: index.root.path)
+        case .ndsROM:
+            return variantsForNDSImage(path: index.root.path)
+        case .pokeemerald, .pokeemeraldExpansion, .pokefirered, .pokeruby:
+            return variants(for: index, fileManager: fileManager)
+        default:
+            return []
+        }
+    }
+
     private static func variants(for index: ProjectIndex, fileManager: FileManager) -> [GenIIIResourceVariant] {
         switch index.profile {
         case .pokeemerald:
@@ -746,7 +859,7 @@ public enum GenIIIResourceRegistry {
 
     private static func variantsForGBAImage(path: String) -> [GenIIIResourceVariant] {
         guard
-            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let data = filePrefix(path: path, byteCount: 0xC0),
             data.count >= 0xB2
         else {
             return [GenIIIResourceVariant(id: "gba-rom", title: URL(fileURLWithPath: path).lastPathComponent)]
@@ -758,7 +871,7 @@ public enum GenIIIResourceRegistry {
 
     private static func variantsForNDSImage(path: String) -> [GenIIIResourceVariant] {
         guard
-            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let data = filePrefix(path: path, byteCount: 0x160),
             let header = NDSROMHeaderParser.parse(path: path, data: data).header
         else {
             return [GenIIIResourceVariant(id: "nds-rom", title: URL(fileURLWithPath: path).lastPathComponent)]
@@ -823,6 +936,7 @@ public enum GenIIIResourceRegistry {
             adapterID: entry.adapterID,
             writePolicy: entry.writePolicy,
             modules: entry.modules,
+            detailMode: .full,
             resourceCount: items.count,
             items: items,
             diagnostics: entry.diagnostics + catalog.diagnostics
@@ -935,7 +1049,7 @@ public enum GenIIIResourceRegistry {
 
     private static func familyForNDSROM(path: String) -> GenIIIGameFamily {
         guard
-            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let data = filePrefix(path: path, byteCount: 0x160),
             let header = NDSROMHeaderParser.parse(path: path, data: data).header
         else {
             return .ndsUnknown
@@ -946,7 +1060,7 @@ public enum GenIIIResourceRegistry {
     private static func title(for index: ProjectIndex, fileManager: FileManager) -> String {
         if index.profile == .binaryROM {
             let url = URL(fileURLWithPath: index.root.path)
-            if let data = try? Data(contentsOf: url), data.count >= 0xB2 {
+            if let data = filePrefix(path: url.path, byteCount: 0xC0), data.count >= 0xB2 {
                 let image = ROMImage(path: url.path, data: data)
                 return titleForGBACode(image.gameCode) ?? image.title ?? url.lastPathComponent
             }
@@ -954,7 +1068,7 @@ public enum GenIIIResourceRegistry {
         }
         if index.profile == .ndsROM {
             let url = URL(fileURLWithPath: index.root.path)
-            if let data = try? Data(contentsOf: url),
+            if let data = filePrefix(path: url.path, byteCount: 0x160),
                let header = NDSROMHeaderParser.parse(path: url.path, data: data).header {
                 return header.displayTitle
             }
@@ -1001,6 +1115,14 @@ public enum GenIIIResourceRegistry {
         default:
             return nil
         }
+    }
+
+    private static func filePrefix(path: String, byteCount: Int) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: byteCount)
     }
 
     private static func category(for kind: GameCubeResourceKind) -> String {
@@ -1070,7 +1192,11 @@ public enum GenIIIResourceRegistry {
         }
     }
 
-    private static func missingEntry(path: String, title: String) -> GenIIIResourceEntry {
+    private static func missingEntry(
+        path: String,
+        title: String,
+        detailMode: GenIIIResourceDetailMode
+    ) -> GenIIIResourceEntry {
         GenIIIResourceEntry(
             id: "missing:\(path)",
             title: title,
@@ -1081,6 +1207,7 @@ public enum GenIIIResourceRegistry {
             variants: [],
             role: .missingInput,
             parseStatus: .missing,
+            detailMode: detailMode,
             resourceCount: 0,
             diagnostics: [
                 Diagnostic(

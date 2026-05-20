@@ -317,11 +317,15 @@ public enum NDSDecompSourceTreeIndexBuilder {
             ],
             optionalMarkers: [
                 ("arm9.ld", .configuration),
-                ("arm7.ld", .configuration)
+                ("arm7.ld", .configuration),
+                ("black2.us", .configuration),
+                ("black2.us/rom.sha1", .configuration),
+                ("white2.us", .configuration),
+                ("white2.us/rom.sha1", .configuration)
             ],
             anyMarkerGroups: [
-                [("black.us", .configuration), ("white.us", .configuration)],
-                [("black.us/rom.sha1", .configuration), ("white.us/rom.sha1", .configuration)]
+                [("black.us", .configuration), ("white.us", .configuration), ("black2.us", .configuration), ("white2.us", .configuration)],
+                [("black.us/rom.sha1", .configuration), ("white.us/rom.sha1", .configuration), ("black2.us/rom.sha1", .configuration), ("white2.us/rom.sha1", .configuration)]
             ],
             sourceDocumentPaths: [
                 ("src", .cSource),
@@ -338,7 +342,9 @@ public enum NDSDecompSourceTreeIndexBuilder {
             ],
             variants: [
                 NDSDecompSourceVariant(id: "black.us", title: "Pokemon Black US", outputPath: "pokeblack.nds", checksumPath: "black.us/rom.sha1"),
-                NDSDecompSourceVariant(id: "white.us", title: "Pokemon White US", checksumPath: "white.us/rom.sha1")
+                NDSDecompSourceVariant(id: "white.us", title: "Pokemon White US", checksumPath: "white.us/rom.sha1"),
+                NDSDecompSourceVariant(id: "black2.us", title: "Pokemon Black 2 US", checksumPath: "black2.us/rom.sha1"),
+                NDSDecompSourceVariant(id: "white2.us", title: "Pokemon White 2 US", checksumPath: "white2.us/rom.sha1")
             ],
             buildTargets: [
                 BuildTarget(id: "black-rom", name: "Build Pokemon Black ROM", kind: .build, command: ["make"], outputPath: "pokeblack.nds")

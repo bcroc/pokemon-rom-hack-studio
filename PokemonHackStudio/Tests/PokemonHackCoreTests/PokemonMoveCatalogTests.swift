@@ -247,7 +247,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
 
         let unsupportedCatalog = ProjectMoveCatalog(
             root: catalog.root,
-            profile: .pokeemeraldExpansion,
+            profile: .pokeruby,
             adapterID: catalog.adapterID,
             adapterName: catalog.adapterName,
             summary: catalog.summary,
@@ -255,6 +255,17 @@ final class PokemonMoveCatalogTests: XCTestCase {
         )
         let unsupportedPlan = MoveMutationPlanner.plan(catalog: unsupportedCatalog, draft: draft)
         XCTAssertTrue(unsupportedPlan.diagnostics.contains { $0.code == "MOVE_PLAN_UNSUPPORTED_PROFILE" })
+
+        let wrongSourceCatalog = ProjectMoveCatalog(
+            root: catalog.root,
+            profile: .pokeemeraldExpansion,
+            adapterID: catalog.adapterID,
+            adapterName: catalog.adapterName,
+            summary: catalog.summary,
+            moves: catalog.moves
+        )
+        let wrongSourcePlan = MoveMutationPlanner.plan(catalog: wrongSourceCatalog, draft: draft)
+        XCTAssertTrue(wrongSourcePlan.diagnostics.contains { $0.code == "MOVE_SOURCE_UNSUPPORTED" })
 
         try makeBattleMovesProject(at: root, flagsExpression: "FLAG_MAKES_CONTACT | MOVE_FLAG_ALIAS(FLAG_PROTECT_AFFECTED)")
         let nonSimpleCatalog = try liveMoveCatalog(root: root)
@@ -292,7 +303,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "MOVE_CATALOG_TUTOR_TABLE_MISSING" })
     }
 
-    func testExpansionMovesInfoRowsAreIndexedButReadOnly() throws {
+    func testExpansionMovesInfoRowsPlanApplyAndReloadThroughDescriptor() throws {
         let root = try temporaryRoot()
         try makeExpansionMovesInfoProject(at: root)
         let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
@@ -300,13 +311,105 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertEqual(catalog.summary.moveCount, 1)
         let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
         XCTAssertEqual(pound.sourceSpan.relativePath, "src/data/moves_info.h")
-        XCTAssertFalse(pound.isEditable)
-        XCTAssertTrue(pound.diagnostics.contains { $0.code == "MOVE_CATALOG_READ_ONLY_PROFILE" && $0.severity == .error })
-        let draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        XCTAssertTrue(pound.isEditable)
+        XCTAssertTrue(pound.diagnostics.allSatisfy { $0.severity != .error })
+        XCTAssertTrue(pound.sourcePreview?.contains(".description = sPoundDescription") == true)
+        XCTAssertTrue(pound.sourcePreview?.contains(".contestCategory = CONTEST_CATEGORY_TOUGH") == true)
+        XCTAssertFalse(catalog.diagnostics.contains { $0.code == "MOVE_CATALOG_UNKNOWN_FIELD" && ($0.message.contains("description") || $0.message.contains("contestCategory")) })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        draft.power = 55
+        draft.pp = 30
+        draft.flags = ["FLAG_MAKES_CONTACT", "FLAG_PROTECT_AFFECTED"]
+
         let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
-        XCTAssertFalse(plan.isApplyable)
-        XCTAssertTrue(plan.changes.isEmpty)
-        XCTAssertTrue(plan.diagnostics.contains { $0.code == "MOVE_PLAN_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/moves_info.h"])
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".power = 55"))
+        XCTAssertTrue(preview.contains(".pp = 30"))
+        XCTAssertTrue(preview.contains(".flags = FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED"))
+        XCTAssertTrue(preview.contains(".description = sPoundDescription"))
+        XCTAssertTrue(preview.contains(".contestCategory = CONTEST_CATEGORY_TOUGH"))
+
+        let applyabilityBeforeDrift = plan.validateApplyability()
+        XCTAssertTrue(applyabilityBeforeDrift.isApplyable)
+        try "changed\n".write(to: root.appendingPathComponent("src/data/moves_info.h"), atomically: true, encoding: .utf8)
+        let driftApplyability = plan.validateApplyability()
+        XCTAssertFalse(driftApplyability.isApplyable)
+        XCTAssertTrue(driftApplyability.diagnostics.contains { $0.code == "MOVE_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "MOVE_APPLY_ORIGINAL_HASH_MISMATCH" })
+
+        try makeExpansionMovesInfoProject(at: root)
+        let hashCatalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let hashPound = try XCTUnwrap(hashCatalog.moves.first { $0.moveID == "MOVE_POUND" })
+        var hashDraft = try XCTUnwrap(MoveEditDraft(detail: hashPound))
+        hashDraft.power = 65
+        let hashPlan = MoveMutationPlanner.plan(catalog: hashCatalog, draft: hashDraft)
+        var sameSizeText = try String(contentsOf: root.appendingPathComponent("src/data/moves_info.h"), encoding: .utf8)
+        sameSizeText = sameSizeText.replacingOccurrences(of: "TYPE_NORMAL", with: "TYPE_DRAGON")
+        try sameSizeText.write(to: root.appendingPathComponent("src/data/moves_info.h"), atomically: true, encoding: .utf8)
+        let hashApplyability = hashPlan.validateApplyability()
+        XCTAssertFalse(hashApplyability.isApplyable)
+        XCTAssertTrue(hashApplyability.diagnostics.contains { $0.code == "MOVE_APPLY_ORIGINAL_HASH_MISMATCH" })
+
+        try makeExpansionMovesInfoProject(at: root)
+        let freshCatalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let freshPound = try XCTUnwrap(freshCatalog.moves.first { $0.moveID == "MOVE_POUND" })
+        var freshDraft = try XCTUnwrap(MoveEditDraft(detail: freshPound))
+        freshDraft.power = 60
+        let freshPlan = MoveMutationPlanner.plan(catalog: freshCatalog, draft: freshDraft)
+        let result = try MoveMutationApplier.apply(plan: freshPlan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/moves_info.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        let reloaded = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertEqual(MoveEditDraft(detail: edited)?.power, 60)
+
+        let sentinelDraft = MoveEditDraft(
+            moveID: "MOVE_NONE",
+            effect: "EFFECT_NONE",
+            power: 0,
+            type: "TYPE_NORMAL",
+            accuracy: 0,
+            pp: 0,
+            secondaryEffectChance: 0,
+            target: "MOVE_TARGET_SELECTED",
+            priority: 0,
+            flags: []
+        )
+        let sentinelPlan = MoveMutationPlanner.plan(catalog: catalog, draft: sentinelDraft)
+        XCTAssertTrue(sentinelPlan.changes.isEmpty)
+        XCTAssertTrue(sentinelPlan.diagnostics.contains { $0.code == "MOVE_PLAN_SENTINEL_UNSUPPORTED" })
+
+        try makeExpansionMovesInfoProject(at: root, flagsExpression: "FLAG_MAKES_CONTACT | MOVE_FLAG_ALIAS(FLAG_PROTECT_AFFECTED)")
+        let nonSimpleCatalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let nonSimplePound = try XCTUnwrap(nonSimpleCatalog.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertFalse(nonSimplePound.isEditable)
+        XCTAssertTrue(nonSimplePound.diagnostics.contains { $0.code == "MOVE_CATALOG_FLAGS_UNSUPPORTED_EXPRESSION" })
+        let nonSimpleDraft = try XCTUnwrap(MoveEditDraft(detail: nonSimplePound))
+        let nonSimplePlan = MoveMutationPlanner.plan(catalog: nonSimpleCatalog, draft: nonSimpleDraft)
+        XCTAssertTrue(nonSimplePlan.changes.isEmpty)
+        XCTAssertTrue(nonSimplePlan.diagnostics.contains { $0.code == "MOVE_FLAGS_UNSUPPORTED_EXPRESSION" })
+    }
+
+    func testExpansionMovesInfoRowsWithoutLegacyChanceAndFlagsStillEditExistingScalars() throws {
+        let root = try temporaryRoot()
+        try makeExpansionMovesInfoProjectWithoutLegacyFields(at: root)
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+
+        let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertTrue(pound.isEditable)
+        XCTAssertTrue(pound.diagnostics.allSatisfy { $0.severity != .error })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        XCTAssertEqual(draft.secondaryEffectChance, 0)
+        XCTAssertEqual(draft.flags, [])
+        draft.power = 55
+
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".power = 55"))
+        XCTAssertFalse(preview.contains("secondaryEffectChance"))
+        XCTAssertFalse(preview.contains(".flags"))
     }
 
     private func temporaryRoot() throws -> URL {
@@ -377,7 +480,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         )
     }
 
-    private func makeExpansionMovesInfoProject(at root: URL) throws {
+    private func makeExpansionMovesInfoProject(at root: URL, flagsExpression: String = "FLAG_MAKES_CONTACT") throws {
         try write(
             """
             const struct MoveInfo gMovesInfo[] =
@@ -404,7 +507,44 @@ final class PokemonMoveCatalogTests: XCTestCase {
                     .secondaryEffectChance = 0,
                     .target = MOVE_TARGET_SELECTED,
                     .priority = 0,
-                    .flags = FLAG_MAKES_CONTACT,
+                    .flags = \(flagsExpression),
+                    .split = SPLIT_PHYSICAL,
+                    .description = sPoundDescription,
+                    .contestCategory = CONTEST_CATEGORY_TOUGH,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/moves_info.h")
+        )
+    }
+
+    private func makeExpansionMovesInfoProjectWithoutLegacyFields(at root: URL) throws {
+        try write(
+            """
+            const struct MoveInfo gMovesInfo[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                },
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .description = sPoundDescription,
+                    .category = DAMAGE_CATEGORY_PHYSICAL,
                 },
             };
 

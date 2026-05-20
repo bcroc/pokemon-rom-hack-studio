@@ -335,10 +335,14 @@ struct PokemonHackCLI {
     }
 
     private static func resources(arguments: [String]) throws -> String {
-        guard arguments == ["--json"] else {
+        switch arguments {
+        case ["--json"]:
+            return try encode(GenIIIResourceRegistry.load())
+        case ["--summary", "--json"]:
+            return try encode(GenIIIResourceRegistry.load(detailMode: .summary))
+        default:
             throw CLIError.usage
         }
-        return try encode(GenIIIResourceRegistry.load())
     }
 
     private static func resourceIndex(arguments: [String]) throws -> String {
@@ -853,7 +857,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "migration-coverage", usage: "migration-coverage <path> --json", summary: "Report source migration coverage."),
         CLICommandMetadata(name: "rom-asset-migration-plan", usage: "rom-asset-migration-plan <rom> --json", summary: "Preview ROM asset migration targets."),
         CLICommandMetadata(name: "species-graph", usage: "species-graph <path> --json", summary: "Emit species graph data."),
-        CLICommandMetadata(name: "resources", usage: "resources --json", summary: "Emit the built-in resource manifest."),
+        CLICommandMetadata(name: "resources", usage: "resources [--summary] --json", summary: "Emit the built-in resource manifest, optionally as launch-speed summary rows."),
         CLICommandMetadata(name: "resource-index", usage: "resource-index <path> --json", summary: "Emit resource rows for a project path."),
         CLICommandMetadata(name: "asset-index", usage: "asset-index <path> --json", summary: "Emit or reuse the generated asset catalog."),
         CLICommandMetadata(name: "pokemon-catalog", usage: "pokemon-catalog <path> --json", summary: "Emit Pokemon species catalog data."),

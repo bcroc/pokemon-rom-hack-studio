@@ -363,11 +363,17 @@ final class MapEditorStoreTests: XCTestCase {
 
         let library = try XCTUnwrap(store.resourceLibrary)
         let openedEntry = try XCTUnwrap(library.entries.first { $0.path == root.path })
-        XCTAssertFalse(openedEntry.items.isEmpty)
-        XCTAssertTrue(openedEntry.items.contains { $0.path == "Makefile" })
+        XCTAssertEqual(openedEntry.detailMode, "summary")
+        XCTAssertTrue(openedEntry.items.isEmpty)
         XCTAssertTrue(store.filteredResourceLibraryEntries.contains { $0.path == root.path })
         XCTAssertNil(store.selectedAssetCatalog)
         XCTAssertEqual(store.assetCatalogLoadStatus, .idle)
+
+        store.loadResourceEntryDetails(openedEntry)
+        let detailedEntry = try await waitForResourceEntry(store, id: openedEntry.id)
+        XCTAssertEqual(detailedEntry.detailMode, "full")
+        XCTAssertFalse(detailedEntry.items.isEmpty)
+        XCTAssertTrue(detailedEntry.items.contains { $0.path == "Makefile" })
 
         store.loadSelectedAssetCatalogIfNeeded()
         let assetCatalog = try await waitForSelectedAssetCatalog(store)
@@ -464,7 +470,11 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.selectedRunnableBuildTargets.isEmpty)
         XCTAssertFalse(store.canRunSelectedDecompBuild)
 
-        let entry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
+        let summaryEntry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
+        XCTAssertEqual(summaryEntry.detailMode, "summary")
+        XCTAssertTrue(summaryEntry.items.isEmpty)
+        store.loadResourceEntryDetails(summaryEntry)
+        let entry = try await waitForResourceEntry(store, id: summaryEntry.id)
         XCTAssertEqual(entry.platform, "ndsSource")
         XCTAssertEqual(entry.role, "editableSource")
         XCTAssertEqual(entry.writePolicy, "readOnly")
@@ -478,6 +488,34 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "species" })
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "maps" })
         XCTAssertFalse(entry.moduleSummary.contains("pokemon"))
+    }
+
+    @MainActor
+    func testResourceDetailHydrationIgnoresStaleSelectionResults() async throws {
+        let root = try makeNDSSourceProject()
+        for index in 0..<500 {
+            try write(
+                "{\"base_hp\":\(index),\"attack\":\(index + 1)}\n",
+                to: root.appendingPathComponent("files/poketool/personal/personal_\(String(format: "%04d", index)).json")
+            )
+        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let summaryEntry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
+        store.requestResourceLibraryEntrySelection(summaryEntry.id)
+
+        store.loadResourceEntryDetails(summaryEntry)
+        XCTAssertEqual(store.loadingResourceLibraryEntryID, summaryEntry.id)
+
+        store.requestResourceLibraryEntrySelection("other-resource-entry")
+        XCTAssertNil(store.loadingResourceLibraryEntryID)
+
+        try await Task.sleep(nanoseconds: 750_000_000)
+        let retainedEntry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.id == summaryEntry.id })
+        XCTAssertEqual(retainedEntry.detailMode, "summary")
+        XCTAssertTrue(retainedEntry.items.isEmpty)
     }
 
     @MainActor
@@ -2897,6 +2935,21 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForResourceEntry(
+        _ store: WorkbenchStore,
+        id: ResourceLibraryEntryViewState.ID
+    ) async throws -> ResourceLibraryEntryViewState {
+        for _ in 0..<100 {
+            if let entry = store.resourceLibrary?.entries.first(where: { $0.id == id }),
+               entry.detailMode == "full" {
+                return entry
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.resourceEntryTimedOut
+    }
+
+    @MainActor
     @discardableResult
     private func waitForSelectedSourceGraph(_ store: WorkbenchStore) async throws -> ProjectSourceIndex {
         for _ in 0..<100 {
@@ -3972,6 +4025,7 @@ private final class MapEditorStoreTemporaryDirectory {
 private enum StoreTestError: Error {
     case assetCatalogFailed(String)
     case assetCatalogTimedOut
+    case resourceEntryTimedOut
     case sourceGraphFailed(String)
     case sourceGraphTimedOut
     case speciesCatalogFailed(String)

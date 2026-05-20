@@ -270,7 +270,12 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: indexed,
             editableCount: editable,
             unsupportedFields: movesUnsupportedFields(profile: index.profile),
-            diagnostics: catalog?.diagnostics ?? []
+            diagnostics: catalog?.diagnostics ?? [],
+            sourceTables: moveSourceTables(
+                profile: index.profile,
+                indexedCount: indexed,
+                editableCount: editable
+            )
         )
     }
 
@@ -290,7 +295,12 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexedCount: indexed,
             editableCount: editable,
             unsupportedFields: itemsUnsupportedFields(profile: index.profile),
-            diagnostics: catalog?.diagnostics ?? []
+            diagnostics: catalog?.diagnostics ?? [],
+            sourceTables: itemSourceTables(
+                profile: index.profile,
+                indexedCount: indexed,
+                editableCount: editable
+            )
         )
     }
 
@@ -458,6 +468,133 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: speciesInfoCount,
                 status: speciesInfoCount > 0 ? .readOnly : .blocked,
                 note: "Read-only species-info form links; generated family supplement apply stays blocked."
+            )
+        ]
+    }
+
+    private static func itemSourceTables(
+        profile: GameProfile,
+        indexedCount: Int,
+        editableCount: Int
+    ) -> [PokemonDataCompatibilitySourceTable]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let sourceStatus: PokemonDataCompatibilityStatus
+        if editableCount > 0 {
+            sourceStatus = .editable
+        } else if indexedCount > 0 {
+            sourceStatus = .readOnly
+        } else {
+            sourceStatus = .blocked
+        }
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/items.h",
+                tableSymbol: "gItemsInfo",
+                indexedCount: indexedCount,
+                status: sourceStatus,
+                note: "Local source-backed Expansion ItemInfo rows use the item mutation-plan gate."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "include/config/item.h",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Config-gated item behavior remains blocked; this slice does not rewrite configuration rows."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "generated",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Generated item outputs remain blocked and must be refreshed outside this mutation plan."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/items.h",
+                tableSymbol: "gItemsInfo",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion clones remain read-only research inputs."
+            )
+        ]
+    }
+
+    private static func moveSourceTables(
+        profile: GameProfile,
+        indexedCount: Int,
+        editableCount: Int
+    ) -> [PokemonDataCompatibilitySourceTable]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let sourceStatus: PokemonDataCompatibilityStatus
+        if editableCount > 0 {
+            sourceStatus = .editable
+        } else if indexedCount > 0 {
+            sourceStatus = .readOnly
+        } else {
+            sourceStatus = .blocked
+        }
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/moves_info.h",
+                tableSymbol: "gMovesInfo",
+                indexedCount: indexedCount,
+                status: sourceStatus,
+                note: "Local source-backed Expansion MoveInfo rows use the move mutation-plan gate for simple core fields."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "include/constants/moves.h",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Move constants, identity changes, and row creation/reordering remain blocked."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/text/move_descriptions.h",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Move description text remains read-only for this slice."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/contest_moves.h",
+                tableSymbol: "gContestMoves",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Contest data remains read-only for this slice."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/tmhm_learnsets.h",
+                tableSymbol: "sTMHMLearnsets",
+                indexedCount: 0,
+                status: .blocked,
+                note: "TM/HM compatibility edits remain blocked from move row plans."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/tutor_learnsets.h",
+                tableSymbol: "gTutorLearnsets",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Tutor compatibility edits remain blocked from move row plans."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "generated",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Generated move outputs remain blocked and must be refreshed outside this mutation plan."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/moves_info.h",
+                tableSymbol: "gMovesInfo",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion clones remain read-only research inputs."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "ROM output",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Binary ROM writes remain blocked."
             )
         ]
     }
@@ -747,7 +884,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/battle_moves.c", tableSymbol: "gBattleMoves", supportsEditing: false, readOnlyReason: "Ruby/Sapphire move rows are indexed but not applyable yet.", recommendedFutureRow: "PHS-T57")
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: false, readOnlyReason: "Expansion gMovesInfo rows use a separate schema and are read-only until a dedicated schema writer exists.", recommendedFutureRow: "PHS-T78")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/moves_info.h", tableSymbol: "gMovesInfo", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         default:
             return nil
         }
@@ -760,7 +897,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items_en.h", tableSymbol: "gItems", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         case .pokeemeraldExpansion:
-            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItemsInfo", supportsEditing: false, readOnlyReason: "Expansion ItemInfo rows are indexed but blocked from apply until the schema is modeled.", recommendedFutureRow: "PHS-T57")
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/items.h", tableSymbol: "gItemsInfo", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         default:
             return nil
         }
@@ -865,7 +1002,13 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
         fields.append("TM/HM/tutor compatibility edits")
     }
     if profile == .pokeemeraldExpansion {
-        fields.append("Expansion gMovesInfo schema apply")
+        fields.append(contentsOf: [
+            "gMovesInfo non-simple flags expressions",
+            "generated move output writes",
+            "reference-only move source writes",
+            "binary ROM move writes",
+            "broad Expansion move schema rewrites"
+        ])
     }
     return fields
 }
@@ -879,7 +1022,7 @@ private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     case .pokeruby:
         return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits"]
     case .pokeemeraldExpansion:
-        return ["Expansion ItemInfo rewrites", "item identity changes", "description text rewrites"]
+        return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits", "item effect/icon asset rewrites", "include/config/item.h rewrites", "generated item output writes", "reference-only item source writes"]
     default:
         return ["item source apply"]
     }

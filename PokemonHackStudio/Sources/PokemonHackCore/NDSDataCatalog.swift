@@ -710,6 +710,8 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false),
                 CatalogPathDescriptor(.resources, "black.us/rom.sha1", required: false),
                 CatalogPathDescriptor(.resources, "white.us/rom.sha1", required: false),
+                CatalogPathDescriptor(.resources, "black2.us", required: false),
+                CatalogPathDescriptor(.resources, "white2.us", required: false),
                 CatalogPathDescriptor(.resources, "main.rsf", role: .nitroFSManifest),
                 CatalogPathDescriptor(.resources, "main.lsf", required: false)
             ]
@@ -1336,7 +1338,7 @@ public enum NDSDataCatalogBuilder {
             facts.append(SourceIndexFact(label: "Gen V Family", value: spec.family))
         }
         if record.facts.first(where: { $0.label == "Gen V Source Name" }) == nil {
-            facts.append(SourceIndexFact(label: "Gen V Source Name", value: spec.sourceName))
+            facts.append(SourceIndexFact(label: "Gen V Source Name", value: genVSourceName(for: record, spec: spec)))
         }
         if record.facts.first(where: { $0.label == "Gen V Source Marker" }) == nil {
             let exactMarker = spec.sourceMarkerPaths.first { record.relativePath == $0 }
@@ -1380,10 +1382,17 @@ public enum NDSDataCatalogBuilder {
             Diagnostic(
                 severity: .warning,
                 code: "NDS_GEN_V_WRITE_BLOCKED",
-                message: "Pokemon Black/White source rows remain read-only in this slice; blocked actions: \(genVBlockedActions.joined(separator: ", ")).",
+                message: "Gen V source rows remain read-only in this slice; blocked actions: \(genVBlockedActions.joined(separator: ", ")).",
                 span: record.sourceSpan
             )
         ]
+    }
+
+    private static func genVSourceName(for record: NDSDataCatalogRecord, spec: GenVTitleCoverageSpec) -> String {
+        guard spec.sourceName == "none", !isGenVUnavailableTitle(record), spec.family == "black2White2" else {
+            return spec.sourceName
+        }
+        return "localBlack2White2SourceInventory"
     }
 
     private static func genVSourceRole(for record: NDSDataCatalogRecord) -> String {
@@ -2550,7 +2559,7 @@ public enum NDSDataCatalogBuilder {
         case .pokediamond:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "pokediamond.us.sha1", "files", "arm9"]
         case .pokeblack:
-            return ["Makefile", "config.mk", "main.rsf", "main.lsf", "black.us", "white.us", "files", "data", "src", "asm", "include", "overlays", "ndsdisasm_config"]
+            return ["Makefile", "config.mk", "main.rsf", "main.lsf", "black.us", "white.us", "black2.us", "white2.us", "files", "data", "src", "asm", "include", "overlays", "ndsdisasm_config"]
         case .pmdSky:
             return ["Makefile", "config.mk", "filesystem.mk", "rom.rsf", "nitrofs_files.txt", "pmdsky.us", "files", "src", "asm"]
         case .ndsROM:
@@ -2734,7 +2743,7 @@ public enum NDSDataCatalogBuilder {
             title: "Pokemon - Black Version 2 (USA, Europe) (NDSi Enhanced).nds",
             family: "black2White2",
             sourceName: "none",
-            sourceMarkerPaths: [],
+            sourceMarkerPaths: ["black2.us", "black2.us/rom.sha1"],
             unavailableReason: "No public/materialized Black 2 decomp source root was found in the configured central corpus."
         ),
         GenVTitleCoverageSpec(
@@ -2742,7 +2751,7 @@ public enum NDSDataCatalogBuilder {
             title: "Pokemon - White Version 2 (USA, Europe) (NDSi Enhanced).nds",
             family: "black2White2",
             sourceName: "none",
-            sourceMarkerPaths: [],
+            sourceMarkerPaths: ["white2.us", "white2.us/rom.sha1"],
             unavailableReason: "No public/materialized White 2 decomp source root was found in the configured central corpus."
         )
     ]

@@ -329,6 +329,62 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(whiteResourceItem.facts.contains { $0.label == "Gen V Variant State" && $0.value == "sourceMarkerPresent" })
     }
 
+    func testPokeBlackCatalogSurfacesBlack2White2InventoryWhenSourceShapeExists() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("2222222222222222222222222222222222222222  pokeblack2.nds\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        try write("3333333333333333333333333333333333333333  pokewhite2.nds\n", to: root.appendingPathComponent("white2.us/rom.sha1"))
+        try write("Black 2 source note\n", to: root.appendingPathComponent("black2.us/source_notes.txt"))
+
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let black2Title = "Pokemon - Black Version 2 (USA, Europe) (NDSi Enhanced).nds"
+        let white2Title = "Pokemon - White Version 2 (USA, Europe) (NDSi Enhanced).nds"
+        let black2Checksum = try XCTUnwrap(catalog.records.first { $0.relativePath == "black2.us/rom.sha1" })
+        XCTAssertEqual(black2Checksum.role, .sourceTree)
+        XCTAssertEqual(factValue("Gen V Readiness", in: black2Checksum), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Source Role", in: black2Checksum), "checksumExpectation")
+        XCTAssertEqual(factValue("Gen V Title", in: black2Checksum), black2Title)
+        XCTAssertEqual(factValue("Gen V Variant ID", in: black2Checksum), "black2.us")
+        XCTAssertEqual(factValue("Gen V Family", in: black2Checksum), "black2White2")
+        XCTAssertEqual(factValue("Gen V Source Name", in: black2Checksum), "localBlack2White2SourceInventory")
+        XCTAssertEqual(factValue("Gen V Source Marker", in: black2Checksum), "black2.us/rom.sha1")
+        XCTAssertEqual(factValue("Gen V Variant State", in: black2Checksum), "sourceMarkerPresent")
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: black2Checksum)?.contains("binary write") == true)
+        XCTAssertEqual(black2Checksum.readiness?.status, .partial)
+        XCTAssertTrue(black2Checksum.diagnostics.contains { $0.code == "NDS_GEN_V_READINESS_PREVIEW_ONLY" })
+        XCTAssertTrue(black2Checksum.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let black2Note = try XCTUnwrap(catalog.records.first { $0.relativePath == "black2.us/source_notes.txt" })
+        XCTAssertEqual(factValue("Gen V Source Role", in: black2Note), "sourceInventory")
+        XCTAssertEqual(factValue("Gen V Title", in: black2Note), black2Title)
+        XCTAssertEqual(factValue("Gen V Variant ID", in: black2Note), "black2.us")
+        XCTAssertEqual(black2Note.readiness?.status, .partial)
+
+        let white2Checksum = try XCTUnwrap(catalog.records.first { $0.relativePath == "white2.us/rom.sha1" })
+        XCTAssertEqual(factValue("Gen V Title", in: white2Checksum), white2Title)
+        XCTAssertEqual(factValue("Gen V Variant ID", in: white2Checksum), "white2.us")
+        XCTAssertEqual(factValue("Gen V Family", in: white2Checksum), "black2White2")
+        XCTAssertEqual(factValue("Gen V Source Role", in: white2Checksum), "checksumExpectation")
+        XCTAssertEqual(factValue("Gen V Variant State", in: white2Checksum), "sourceMarkerPresent")
+        XCTAssertFalse(catalog.records.contains { $0.relativePath == "unavailable-titles/\(black2Title)" })
+        XCTAssertFalse(catalog.records.contains { $0.relativePath == "unavailable-titles/\(white2Title)" })
+
+        let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
+        let black2ResourceItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "black2.us/source_notes.txt" })
+        XCTAssertTrue(black2ResourceItem.facts.contains { $0.label == "Gen V Source Role" && $0.value == "sourceInventory" })
+        XCTAssertTrue(black2ResourceItem.facts.contains { $0.label == "Gen V Blocked Actions" && $0.value.contains("NARC pack") })
+        let white2ResourceItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "white2.us/rom.sha1" })
+        XCTAssertTrue(white2ResourceItem.facts.contains { $0.label == "Gen V Variant ID" && $0.value == "white2.us" })
+        XCTAssertTrue(white2ResourceItem.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+
+        let blockedPlan = NDSDataMutationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEditDraft(recordID: black2Note.id, editedText: "changed\n")
+        )
+        XCTAssertTrue(blockedPlan.changes.isEmpty)
+        XCTAssertTrue(blockedPlan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+    }
+
     func testBinaryNDSROMSurfacesReadOnlyNARCSummaries() throws {
         let temp = try NDSDataCatalogTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -836,6 +892,129 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(itemSnapshot.canEdit)
         XCTAssertTrue(itemSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED" })
         XCTAssertTrue(itemSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
+    }
+
+    func testNDSDataSemanticEditorPlansDiamondPearlPersonalJSONScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        try write("{\"personal\":2,\"growth_rate\":\"medium\",\"forms\":[{\"id\":1}]}\n", to: root.appendingPathComponent("files/poketool/personal_pearl/personal.json"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/personal/personal_0000.bin"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "personal:files/poketool/personal/personal.json")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(snapshot.fields.map(\.key), ["personal"])
+        XCTAssertEqual(snapshot.fields.first?.value, "1")
+        XCTAssertEqual(snapshot.fields.first?.valueKind, .number)
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "personal:files/poketool/personal/personal.json",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "personal", value: "5")]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"personal\":5"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("files/poketool/personal/personal.json"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"personal\":5"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let pearlSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "personal:files/poketool/personal_pearl/personal.json")
+        XCTAssertTrue(pearlSnapshot.canEdit, pearlSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(pearlSnapshot.fields.contains { $0.key == "personal" && $0.value == "2" })
+        XCTAssertTrue(pearlSnapshot.fields.contains { $0.key == "growth_rate" && $0.value == "medium" })
+        XCTAssertFalse(pearlSnapshot.fields.contains { $0.key == "forms" })
+
+        let nestedPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "personal:files/poketool/personal_pearl/personal.json",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "forms.0.id", value: "2")]
+            )
+        )
+        XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+        XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let binarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "personal:files/poketool/personal/personal_0000.bin")
+        XCTAssertFalse(binarySnapshot.canEdit)
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
+    func testNDSDataSemanticEditorPlansDiamondPearlTrainerJSONScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        try write(
+            "{\"id\":7,\"name\":\"Lass Dana\",\"double_battle\":false,\"party\":[{\"species\":\"BIDOOF\",\"level\":5}]}\n",
+            to: root.appendingPathComponent("files/poketool/trainer/routes/route201.json")
+        )
+        try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/trainer/trainer_0000.bin"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:files/poketool/trainer/routes/route201.json")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        let fields = Dictionary(uniqueKeysWithValues: snapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(fields["id"]?.value, "7")
+        XCTAssertEqual(fields["id"]?.valueKind, .number)
+        XCTAssertEqual(fields["name"]?.value, "Lass Dana")
+        XCTAssertEqual(fields["name"]?.valueKind, .string)
+        XCTAssertEqual(fields["double_battle"]?.value, "false")
+        XCTAssertEqual(fields["double_battle"]?.valueKind, .bool)
+        XCTAssertNil(fields["party"])
+
+        let nestedPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:files/poketool/trainer/routes/route201.json",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "party.0.level", value: "6")]
+            )
+        )
+        XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+        XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:files/poketool/trainer/routes/route201.json",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "name", value: "Ace Dana"),
+                    NDSDataSemanticFieldEdit(key: "double_battle", value: "true")
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"name\":\"Ace Dana\""))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"double_battle\":true"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"party\":[{\"species\":\"BIDOOF\",\"level\":5}]"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("files/poketool/trainer/routes/route201.json"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"name\":\"Ace Dana\""))
+        XCTAssertTrue(updated.contains("\"double_battle\":true"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let binarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:files/poketool/trainer/trainer_0000.bin")
+        XCTAssertFalse(binarySnapshot.canEdit)
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:arm9/src/trainer_data.c")
+        XCTAssertFalse(cAnchorSnapshot.canEdit)
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
     }
 
     func testNDSDataSemanticEditorPlansDiamondPearlItemCAnchorScalars() throws {

@@ -1732,6 +1732,7 @@ struct ResourceLibraryEntryViewState: Identifiable {
     let status: ValidationState
     let variantSummary: String
     let moduleSummary: String
+    let detailMode: String
     let resourceCount: Int
     let diagnosticCount: Int
     let items: [ResourceLibraryItemViewState]

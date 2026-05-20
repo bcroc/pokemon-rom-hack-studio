@@ -100,24 +100,42 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertNil(edited.descriptionText)
     }
 
-    func testReadOnlyProfilesReportDiagnosticsWithoutCrashing() throws {
-        let expansion = try ProjectItemCatalogBuilder.build(
-            index: projectIndex(root: try temporaryRoot(), profile: .pokeemeraldExpansion),
-            sourceIndex: sourceIndex(profile: .pokeemeraldExpansion, path: "src/data/items.h", tags: ["item", "bracketed"])
-        )
+    func testExpansionItemInfoRowsPlanApplyAndReloadThroughDescriptor() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
 
-        for catalog in [expansion] {
-            XCTAssertEqual(catalog.items.first?.itemID, "ITEM_POTION")
-            XCTAssertFalse(catalog.items.first?.isEditable ?? true)
-            XCTAssertTrue(catalog.diagnostics.contains { $0.code == "ITEM_CATALOG_READ_ONLY_PROFILE" })
-            XCTAssertNil(catalog.items.first.flatMap { ItemEditDraft(detail: $0) })
-            let blocked = ItemMutationPlanner.plan(
-                catalog: catalog,
-                draft: ItemEditDraft(itemID: "ITEM_POTION", price: "700")
-            )
-            XCTAssertTrue(blocked.diagnostics.contains { $0.code == "ITEM_PLAN_READ_ONLY_PROFILE" })
-            XCTAssertTrue(blocked.changes.isEmpty)
-        }
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(potion.isEditable)
+        XCTAssertFalse(potion.isDescriptionEditable)
+        XCTAssertEqual(potion.name, "Potion")
+        XCTAssertEqual(potion.price, "(I_PRICE >= GEN_7) ? 200 : 300")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.name = "Potion Plus"
+        draft.price = "250"
+        draft.holdEffectParam = "30"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(#".name = ITEM_NAME("Potion Plus")"#))
+        XCTAssertTrue(preview.contains(".price = 250"))
+        XCTAssertTrue(preview.contains(".holdEffectParam = 30"))
+        XCTAssertTrue(preview.contains(".description = COMPOUND_STRING("))
+        XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_HEALTH_RECOVERY,"))
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(edited.isEditable)
+        XCTAssertFalse(edited.isDescriptionEditable)
+        XCTAssertEqual(edited.name, "Potion Plus")
+        XCTAssertEqual(edited.price, "250")
+        XCTAssertEqual(edited.holdEffectParam, "30")
     }
 
     func testFireRedItemRowsAndDescriptionPlanAsSingleFileChange() throws {
@@ -254,6 +272,34 @@ final class PokemonItemCatalogTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/items_en.h")
+        )
+    }
+
+    private func makeExpansionItemInfoProject(at root: URL) throws {
+        try write(
+            """
+            const struct ItemInfo gItemsInfo[] =
+            {
+                [ITEM_POTION] =
+                {
+                    .name = ITEM_NAME("Potion"),
+                    .price = (I_PRICE >= GEN_7) ? 200 : 300,
+                    .holdEffectParam = 20,
+                    .description = COMPOUND_STRING(
+                        "Restores HP."),
+                    .pocket = POCKET_ITEMS,
+                    .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = EFFECT_ITEM_RESTORE_HP,
+                    .battleUseFunc = NULL,
+                    .secondaryId = 0,
+                    .iconPic = gItemIcon_Potion,
+                    .iconPalette = gItemIconPalette_Potion,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
         )
     }
 

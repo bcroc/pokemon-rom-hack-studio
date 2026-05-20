@@ -127,6 +127,35 @@ final class GenIIIResourceTests: XCTestCase {
         XCTAssertFalse(library.entries.contains { $0.platform == .gameCube })
     }
 
+    func testSummaryResourceRegistryDefersHeavyROMAndNDSSourceItems() throws {
+        let temp = try ResourceTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let workspace = temp.url
+
+        let ndsROM = workspace.appendingPathComponent("Pokemon Diamond.nds")
+        try writeNDS(title: "POKEMON D", gameCode: "ADAE", to: ndsROM)
+        let ndsSource = try makeNDSDecompFixture(under: workspace)
+
+        let library = GenIIIResourceRegistry.load(workspaceRoot: workspace.path, detailMode: .summary)
+
+        let romEntry = try XCTUnwrap(library.entries.first { $0.path == ndsROM.path })
+        XCTAssertEqual(romEntry.platform, .ndsROM)
+        XCTAssertEqual(romEntry.family, .diamondPearl)
+        XCTAssertEqual(romEntry.detailMode, .summary)
+        XCTAssertTrue(romEntry.items.isEmpty)
+        XCTAssertGreaterThanOrEqual(romEntry.resourceCount, 1)
+
+        let sourceEntry = try XCTUnwrap(library.entries.first { $0.path == ndsSource.path })
+        XCTAssertEqual(sourceEntry.platform, .ndsSource)
+        XCTAssertEqual(sourceEntry.detailMode, .summary)
+        XCTAssertTrue(sourceEntry.items.isEmpty)
+
+        let fullSourceEntry = GenIIIResourceRegistry.resourceIndex(path: ndsSource.path)
+        XCTAssertEqual(fullSourceEntry.detailMode, .full)
+        XCTAssertTrue(fullSourceEntry.items.contains { $0.category == "NDS Variant" })
+        XCTAssertTrue(fullSourceEntry.items.contains { $0.category == "NDS Data species" })
+    }
+
     func testGameCubeDiscAndFSYSParserIndexesSyntheticArchiveMembers() throws {
         let temp = try ResourceTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -234,6 +263,39 @@ final class GenIIIResourceTests: XCTestCase {
         try Data(bytes).write(to: url)
     }
 
+    private func writeNDS(title: String, gameCode: String, to url: URL) throws {
+        var bytes = [UInt8](repeating: 0, count: 0x900)
+        replaceASCII(title, at: 0x00, in: &bytes, maxLength: 12)
+        replaceASCII(gameCode, at: 0x0C, in: &bytes, maxLength: 4)
+        replaceASCII("01", at: 0x10, in: &bytes, maxLength: 2)
+        bytes[0x14] = 0x09
+        writeLE32(0x200, at: 0x20, in: &bytes)
+        writeLE32(0x20, at: 0x2C, in: &bytes)
+        writeLE32(0x220, at: 0x30, in: &bytes)
+        writeLE32(0x20, at: 0x3C, in: &bytes)
+        writeLE32(0x300, at: 0x40, in: &bytes)
+        writeLE32(0x10, at: 0x44, in: &bytes)
+        writeLE32(0x380, at: 0x48, in: &bytes)
+        writeLE32(0x08, at: 0x4C, in: &bytes)
+        writeLE32(0x700, at: 0x68, in: &bytes)
+        writeLE16(0x5678, at: 0x15E, in: &bytes)
+        try Data(bytes).write(to: url)
+    }
+
+    private func makeNDSDecompFixture(under workspace: URL) throws -> URL {
+        let root = workspace.appendingPathComponent("pokeplatinum")
+        try makeDirectory(root)
+        try write("rom: build/pokeplatinum.us.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("project('pokeplatinum')\n", to: root.appendingPathComponent("meson.build"))
+        try write("option('revision')\n", to: root.appendingPathComponent("meson.options"))
+        try write("path,sha1\n", to: root.appendingPathComponent("platinum.us/filesys.csv"))
+        try write("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  filesys\n", to: root.appendingPathComponent("platinum.us/filesys.sha1"))
+        try write("cccccccccccccccccccccccccccccccccccccccc  pokeplatinum.us.nds\n", to: root.appendingPathComponent("platinum.us/rom_rev1.sha1"))
+        try write("{\"base_hp\":25}\n", to: root.appendingPathComponent("res/pokemon/abra/data.json"))
+        try write("placeholder\n", to: root.appendingPathComponent("res/sound/main.sdat"))
+        return root
+    }
+
     private func replaceASCII(_ string: String, at offset: Int, in bytes: inout [UInt8], maxLength: Int? = nil) {
         let replacement = Array(string.utf8).prefix(maxLength ?? string.utf8.count)
         bytes.replaceSubrange(offset..<(offset + replacement.count), with: replacement)
@@ -244,6 +306,18 @@ final class GenIIIResourceTests: XCTestCase {
         bytes[offset + 1] = UInt8((value >> 16) & 0xFF)
         bytes[offset + 2] = UInt8((value >> 8) & 0xFF)
         bytes[offset + 3] = UInt8(value & 0xFF)
+    }
+
+    private func writeLE32(_ value: UInt32, at offset: Int, in bytes: inout [UInt8]) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
+    }
+
+    private func writeLE16(_ value: UInt16, at offset: Int, in bytes: inout [UInt8]) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
     }
 
     private func makeDirectory(_ url: URL) throws {

@@ -388,7 +388,7 @@ public enum ProjectItemCatalogBuilder {
         descriptions: [String: ItemDescriptionText]
     ) -> ItemDetail {
         let fields = entry.fields
-        let name = unwrappedTextMacro(compact(fields["name"]))
+        let name = unwrappedItemName(compact(fields["name"]), style: descriptor.nameStyle)
         let descriptionSymbol = compact(fields["description"])
         let diagnostics = editabilityDiagnostics(entry: entry, descriptor: descriptor)
         return ItemDetail(
@@ -552,7 +552,7 @@ public enum ItemMutationPlanner {
         var newText = originalText
         var previews: [String] = []
         var summaries: [String] = []
-        let rowChanges = changedFields(item: item, draft: draft)
+        let rowChanges = changedFields(item: item, draft: draft, descriptor: descriptor)
 
         if descriptor.supportsRowEditing, !rowChanges.isEmpty {
             let parsed = CInitializerParser.tableEntries(
@@ -669,7 +669,7 @@ public enum ItemMutationPlanner {
             return nil
         }
 
-        let changes = changedFields(item: item, draft: draft)
+        let changes = changedFields(item: item, draft: draft, descriptor: descriptor)
         guard !changes.isEmpty else { return nil }
         guard let patchedBody = ItemFieldPatcher.patch(entryBody: entry.body, changes: changes, diagnostics: &diagnostics, span: entry.span) else {
             return nil
@@ -729,9 +729,15 @@ public enum ItemMutationPlanner {
         )
     }
 
-    private static func changedFields(item: ItemDetail, draft: ItemEditDraft) -> [ItemFieldChange] {
+    private static func changedFields(
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        descriptor: ItemCatalogDescriptor
+    ) -> [ItemFieldChange] {
         [
-            fieldChange(key: "name", current: item.name, draft: draft.name, render: renderName),
+            fieldChange(key: "name", current: item.name, draft: draft.name) {
+                renderName($0, style: descriptor.nameStyle)
+            },
             fieldChange(key: "price", current: item.price, draft: draft.price),
             fieldChange(key: "holdEffect", current: item.holdEffect, draft: draft.holdEffect),
             fieldChange(key: "holdEffectParam", current: item.holdEffectParam, draft: draft.holdEffectParam),
@@ -757,8 +763,13 @@ public enum ItemMutationPlanner {
         return ItemFieldChange(key: key, replacement: render(draft))
     }
 
-    private static func renderName(_ name: String) -> String {
-        "_(\"\(escapeCString(name))\")"
+    private static func renderName(_ name: String, style: ItemNameStyle) -> String {
+        switch style {
+        case .textMacro:
+            return "_(\"\(escapeCString(name))\")"
+        case .itemNameMacro:
+            return "ITEM_NAME(\"\(escapeCString(name))\")"
+        }
     }
 
     private static func backupTimestamp() -> String {
@@ -862,6 +873,29 @@ private struct ItemCatalogDescriptor {
     let idField: String?
     let supportsRowEditing: Bool
     let supportsDescriptionEditing: Bool
+    let nameStyle: ItemNameStyle
+
+    init(
+        profile: GameProfile,
+        itemPath: String,
+        descriptionPath: String?,
+        tableSymbol: String,
+        entryStyle: CInitializerEntryStyle,
+        idField: String?,
+        supportsRowEditing: Bool,
+        supportsDescriptionEditing: Bool,
+        nameStyle: ItemNameStyle = .textMacro
+    ) {
+        self.profile = profile
+        self.itemPath = itemPath
+        self.descriptionPath = descriptionPath
+        self.tableSymbol = tableSymbol
+        self.entryStyle = entryStyle
+        self.idField = idField
+        self.supportsRowEditing = supportsRowEditing
+        self.supportsDescriptionEditing = supportsDescriptionEditing
+        self.nameStyle = nameStyle
+    }
 
     var supportsItemCatalogParsing: Bool {
         supportsRowEditing || supportsDescriptionEditing
@@ -876,11 +910,16 @@ private struct ItemCatalogDescriptor {
         case .pokeruby:
             ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items_en.h", descriptionPath: nil, tableSymbol: "gItems", entryStyle: .positional, idField: "itemId", supportsRowEditing: true, supportsDescriptionEditing: false)
         case .pokeemeraldExpansion:
-            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: nil, tableSymbol: "gItemsInfo", entryStyle: .bracketed, idField: nil, supportsRowEditing: false, supportsDescriptionEditing: false)
+            ItemCatalogDescriptor(profile: profile, itemPath: "src/data/items.h", descriptionPath: nil, tableSymbol: "gItemsInfo", entryStyle: .bracketed, idField: nil, supportsRowEditing: true, supportsDescriptionEditing: false, nameStyle: .itemNameMacro)
         default:
             nil
         }
     }
+}
+
+private enum ItemNameStyle {
+    case textMacro
+    case itemNameMacro
 }
 
 private struct ItemDescriptionText {
@@ -1121,17 +1160,32 @@ private enum ItemScannerState: Equatable {
 private let itemFields = [
     "itemId", "name", "price", "holdEffect", "holdEffectParam",
     "description", "descriptionPage1", "descriptionPage2",
-    "importance", "registrability", "pocket", "type",
-    "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "exitsBagOnUse"
+    "importance", "registrability", "pocket", "sortType", "type",
+    "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId",
+    "exitsBagOnUse", "iconPic", "iconPalette"
 ]
 
 private func readOnlyDiagnostic(profile: GameProfile, span: SourceSpan?) -> Diagnostic {
     Diagnostic(
         severity: .warning,
         code: "ITEM_CATALOG_READ_ONLY_PROFILE",
-        message: "Item row editing is currently read-only for \(profile.rawValue); this slice only supports classic Emerald/FireRed/Ruby/Sapphire rows plus Emerald/FireRed item description text.",
+        message: "Item row editing is currently read-only for \(profile.rawValue); this slice supports classic Emerald/FireRed/Ruby/Sapphire rows, source-backed Expansion ItemInfo rows, and supported Emerald/FireRed item description text.",
         span: span
     )
+}
+
+private func unwrappedItemName(_ value: String?, style: ItemNameStyle) -> String? {
+    guard let value = compact(value) else { return nil }
+    switch style {
+    case .textMacro:
+        return unwrappedTextMacro(value)
+    case .itemNameMacro:
+        let pattern = #"^ITEM_NAME\(\s*"((?:\\.|[^"])*)"\s*\)$"#
+        if let match = regexMatches(pattern, in: value).first, match.count >= 2 {
+            return unescapeCString(match[1])
+        }
+        return unwrappedTextMacro(value)
+    }
 }
 
 private func compact(_ value: String?) -> String? {
