@@ -492,7 +492,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: "gItemsInfo",
                 indexedCount: indexedCount,
                 status: sourceStatus,
-                note: "Local source-backed Expansion ItemInfo rows use the item mutation-plan gate."
+                note: "Local source-backed Expansion ItemInfo rows and simple inline COMPOUND_STRING descriptions use the item mutation-plan gate."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "include/config/item.h",
@@ -1022,7 +1022,19 @@ private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     case .pokeruby:
         return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits"]
     case .pokeemeraldExpansion:
-        return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits", "item effect/icon asset rewrites", "include/config/item.h rewrites", "generated item output writes", "reference-only item source writes"]
+        return [
+            "item identity changes",
+            "new/reordered item constants",
+            "non-simple/non-COMPOUND_STRING description rewrites",
+            "TM/HM item compatibility edits",
+            "item effect/icon asset rewrites",
+            "include/config/item.h rewrites",
+            "generated item output writes",
+            "reference-only item source writes",
+            "Modern Emerald item writers",
+            "binary ROM item writes",
+            "broad Expansion item schema rewrites"
+        ]
     default:
         return ["item source apply"]
     }

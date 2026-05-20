@@ -107,14 +107,16 @@ final class PokemonItemCatalogTests: XCTestCase {
         let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
         let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
         XCTAssertTrue(potion.isEditable)
-        XCTAssertFalse(potion.isDescriptionEditable)
+        XCTAssertTrue(potion.isDescriptionEditable)
         XCTAssertEqual(potion.name, "Potion")
         XCTAssertEqual(potion.price, "(I_PRICE >= GEN_7) ? 200 : 300")
+        XCTAssertEqual(potion.descriptionText, "Restores HP.")
 
         var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
         draft.name = "Potion Plus"
         draft.price = "250"
         draft.holdEffectParam = "30"
+        draft.descriptionText = "Restores HP by\n30 points."
 
         let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
         XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
@@ -124,6 +126,8 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(".price = 250"))
         XCTAssertTrue(preview.contains(".holdEffectParam = 30"))
         XCTAssertTrue(preview.contains(".description = COMPOUND_STRING("))
+        XCTAssertTrue(preview.contains(#""Restores HP by\n""#))
+        XCTAssertTrue(preview.contains(#""30 points.""#))
         XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_HEALTH_RECOVERY,"))
 
         let result = try ItemMutationApplier.apply(plan: plan)
@@ -132,10 +136,57 @@ final class PokemonItemCatalogTests: XCTestCase {
         let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
         let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
         XCTAssertTrue(edited.isEditable)
-        XCTAssertFalse(edited.isDescriptionEditable)
+        XCTAssertTrue(edited.isDescriptionEditable)
         XCTAssertEqual(edited.name, "Potion Plus")
         XCTAssertEqual(edited.price, "250")
         XCTAssertEqual(edited.holdEffectParam, "30")
+        XCTAssertEqual(edited.descriptionText, "Restores HP by\n30 points.")
+    }
+
+    func testExpansionInlineCompoundStringConcatenatesCLiteralsWithoutExtraBlankLines() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root, descriptionValue: #"COMPOUND_STRING("A\n" "B.")"#)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(potion.isDescriptionEditable)
+        XCTAssertEqual(potion.descriptionText, "A\nB.")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.descriptionText = "A\nC."
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(#""A\n""#))
+        XCTAssertTrue(preview.contains(#""C.""#))
+
+        _ = try ItemMutationApplier.apply(plan: plan)
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.descriptionText, "A\nC.")
+        XCTAssertFalse(edited.descriptionText?.contains("\n\n") == true)
+    }
+
+    func testExpansionItemInfoNonSimpleDescriptionStaysDescriptionReadOnly() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root, descriptionValue: "GetItemDescription(ITEM_POTION)")
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(potion.isEditable)
+        XCTAssertFalse(potion.isDescriptionEditable)
+        XCTAssertNil(potion.descriptionText)
+        XCTAssertEqual(potion.descriptionSymbol, "GetItemDescription(ITEM_POTION)")
+
+        let plan = ItemMutationPlanner.plan(
+            catalog: catalog,
+            draft: ItemEditDraft(itemID: "ITEM_POTION", descriptionText: "Should stay blocked.")
+        )
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_DESCRIPTION_NOT_EDITABLE" })
     }
 
     func testFireRedItemRowsAndDescriptionPlanAsSingleFileChange() throws {
@@ -275,7 +326,13 @@ final class PokemonItemCatalogTests: XCTestCase {
         )
     }
 
-    private func makeExpansionItemInfoProject(at root: URL) throws {
+    private func makeExpansionItemInfoProject(
+        at root: URL,
+        descriptionValue: String = """
+        COMPOUND_STRING(
+                        "Restores HP.")
+        """
+    ) throws {
         try write(
             """
             const struct ItemInfo gItemsInfo[] =
@@ -285,8 +342,7 @@ final class PokemonItemCatalogTests: XCTestCase {
                     .name = ITEM_NAME("Potion"),
                     .price = (I_PRICE >= GEN_7) ? 200 : 300,
                     .holdEffectParam = 20,
-                    .description = COMPOUND_STRING(
-                        "Restores HP."),
+                    .description = \(descriptionValue),
                     .pocket = POCKET_ITEMS,
                     .sortType = ITEM_TYPE_HEALTH_RECOVERY,
                     .type = ITEM_USE_PARTY_MENU,
