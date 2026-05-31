@@ -2836,12 +2836,17 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func requestResourceLibraryEntrySelection(_ entryID: ResourceLibraryEntryViewState.ID) {
-        if selectedResourceLibraryEntryID != entryID {
+        let entry = resourceLibraryEntriesForWorkbench.first { $0.id == entryID || $0.path == entryID }
+        let resolvedEntryID = entry?.id ?? entryID
+        if selectedResourceLibraryEntryID != resolvedEntryID {
             resourceEntryDetailTask?.cancel()
             loadingResourceLibraryEntryID = nil
         }
-        selectedResourceLibraryEntryID = entryID
-        recordRecentTarget(recentResourceEntryTarget(for: entryID))
+        selectedResourceLibraryEntryID = resolvedEntryID
+        recordRecentTarget(recentResourceEntryTarget(for: resolvedEntryID))
+        if let entry {
+            loadResourceEntryDetails(entry)
+        }
     }
 
     func requestScriptSourceSelection(_ sourceID: String) {

@@ -419,6 +419,43 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testResourceEntrySelectionHydratesStandaloneGBAAndNDSDetails() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let gbaROM = try makeStandaloneGBAROM(named: "Pokemon - Emerald Version (USA, Europe).gba", under: temp.url)
+        let ndsROM = try makeStandaloneNDSROM(named: "Pokemon - Diamond Version (USA).nds", under: temp.url)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, workspaceRoot: temp.url, autoLoadProjects: false)
+
+        store.refreshResourceLibrary()
+        store.selectedResourceLibraryMode = .entries
+
+        let gbaSummary = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == gbaROM.path })
+        XCTAssertEqual(gbaSummary.platform, "gbaROM")
+        XCTAssertEqual(gbaSummary.detailMode, "summary")
+        XCTAssertTrue(gbaSummary.items.isEmpty)
+
+        store.requestResourceLibraryEntrySelection(gbaROM.path)
+        XCTAssertEqual(store.selectedResourceLibraryEntryID, gbaSummary.id)
+        let gbaEntry = try await waitForResourceEntry(store, id: gbaSummary.id)
+        XCTAssertEqual(gbaEntry.detailMode, "full")
+        XCTAssertTrue(gbaEntry.items.contains { $0.category == "GBA ROM" })
+        XCTAssertTrue(gbaEntry.items.contains { $0.category == "ROM Header" })
+
+        let ndsSummary = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == ndsROM.path })
+        XCTAssertEqual(ndsSummary.platform, "ndsROM")
+        XCTAssertEqual(ndsSummary.detailMode, "summary")
+        XCTAssertTrue(ndsSummary.items.isEmpty)
+
+        store.requestResourceLibraryEntrySelection(ndsROM.path)
+        XCTAssertEqual(store.selectedResourceLibraryEntryID, ndsSummary.id)
+        let ndsEntry = try await waitForResourceEntry(store, id: ndsSummary.id)
+        XCTAssertEqual(ndsEntry.detailMode, "full")
+        XCTAssertTrue(ndsEntry.items.contains { $0.category == "NitroFS File" })
+        XCTAssertTrue(ndsEntry.items.contains { $0.category == "NARC Member" })
+    }
+
+    @MainActor
     func testBundledFallbackAppendsNDSSourceEntries() throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -3181,6 +3218,44 @@ final class MapEditorStoreTests: XCTestCase {
         return rom
     }
 
+    private func makeStandaloneNDSROM(named name: String, under parent: URL) throws -> URL {
+        let rom = parent.appendingPathComponent(name)
+        var data = Data(repeating: 0, count: 0x900)
+        writeASCII("POKEMON D", into: &data, at: 0x00, length: 12)
+        writeASCII("ADAE", into: &data, at: 0x0C, length: 4)
+        writeASCII("01", into: &data, at: 0x10, length: 2)
+        data[0x14] = 0x09
+        writeUInt32LE(0x200, into: &data, at: 0x20)
+        writeUInt32LE(0x20, into: &data, at: 0x2C)
+        writeUInt32LE(0x220, into: &data, at: 0x30)
+        writeUInt32LE(0x20, into: &data, at: 0x3C)
+
+        let fnt = makeTestFNT()
+        writeUInt32LE(0x300, into: &data, at: 0x40)
+        writeUInt32LE(UInt32(fnt.count), into: &data, at: 0x44)
+        data.replaceSubrange(0x300..<(0x300 + fnt.count), with: fnt)
+
+        let narc = makeTestNARC()
+        var fat = Data()
+        appendUInt32LE(0x400, to: &fat)
+        appendUInt32LE(0x404, to: &fat)
+        appendUInt32LE(0x440, to: &fat)
+        appendUInt32LE(0x450, to: &fat)
+        appendUInt32LE(0x500, to: &fat)
+        appendUInt32LE(UInt32(0x500 + narc.count), to: &fat)
+        writeUInt32LE(0x380, into: &data, at: 0x48)
+        writeUInt32LE(UInt32(fat.count), into: &data, at: 0x4C)
+        data.replaceSubrange(0x380..<(0x380 + fat.count), with: fat)
+        writeUInt32LE(0x700, into: &data, at: 0x68)
+        writeUInt16LE(0x5678, into: &data, at: 0x15E)
+
+        data.replaceSubrange(0x400..<0x404, with: Data("ROOT".utf8))
+        data.replaceSubrange(0x440..<0x450, with: Data("SDAT".utf8) + Data(repeating: 0, count: 12))
+        data.replaceSubrange(0x500..<(0x500 + narc.count), with: narc)
+        try data.write(to: rom)
+        return rom
+    }
+
     private func makeNDSSourceProject() throws -> URL {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -3299,6 +3374,29 @@ final class MapEditorStoreTests: XCTestCase {
         try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
     }
 
+    private func makeTestFNT() -> Data {
+        var rootEntries = Data()
+        appendFNTFile("root.bin", to: &rootEntries)
+        appendFNTFile("sound_data.sdat", to: &rootEntries)
+        appendFNTDirectory("sub", directoryID: 0xF001, to: &rootEntries)
+        rootEntries.append(0)
+
+        var childEntries = Data()
+        appendFNTFile("child.narc", to: &childEntries)
+        childEntries.append(0)
+
+        var fnt = Data()
+        appendUInt32LE(16, to: &fnt)
+        appendUInt16LE(0, to: &fnt)
+        appendUInt16LE(2, to: &fnt)
+        appendUInt32LE(UInt32(16 + rootEntries.count), to: &fnt)
+        appendUInt16LE(2, to: &fnt)
+        appendUInt16LE(0xF000, to: &fnt)
+        fnt.append(rootEntries)
+        fnt.append(childEntries)
+        return fnt
+    }
+
     private func makeTestNARC() -> Data {
         let payload = Data("NCLR".utf8) + Data([0x10, 0x00, 0x00, 0x00])
         var fat = Data("BTAF".utf8)
@@ -3339,6 +3437,30 @@ final class MapEditorStoreTests: XCTestCase {
         let bytes = Array(name.utf8)
         data.append(UInt8(bytes.count))
         data.append(contentsOf: bytes)
+    }
+
+    private func appendFNTDirectory(_ name: String, directoryID: UInt16, to data: inout Data) {
+        let bytes = Array(name.utf8)
+        data.append(UInt8(0x80 | bytes.count))
+        data.append(contentsOf: bytes)
+        appendUInt16LE(directoryID, to: &data)
+    }
+
+    private func writeASCII(_ string: String, into data: inout Data, at offset: Int, length: Int) {
+        let bytes = Array(string.utf8.prefix(length))
+        data.replaceSubrange(offset..<(offset + bytes.count), with: bytes)
+    }
+
+    private func writeUInt16LE(_ value: UInt16, into data: inout Data, at offset: Int) {
+        data[offset] = UInt8(value & 0xFF)
+        data[offset + 1] = UInt8((value >> 8) & 0xFF)
+    }
+
+    private func writeUInt32LE(_ value: UInt32, into data: inout Data, at offset: Int) {
+        data[offset] = UInt8(value & 0xFF)
+        data[offset + 1] = UInt8((value >> 8) & 0xFF)
+        data[offset + 2] = UInt8((value >> 16) & 0xFF)
+        data[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 
     private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
