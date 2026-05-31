@@ -1174,6 +1174,99 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
     }
 
+    func testNDSDataSemanticEditorPlansDiamondPearlEncounterJSONScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let encounterPath = "files/fielddata/encountdata/sinnoh/route201.json"
+        let textPath = "files/fielddata/encountdata/route202.txt"
+        let binaryPath = "files/fielddata/encountdata/encounter_0000.bin"
+        let duplicatePath = "files/fielddata/encountdata/duplicate.json"
+        let malformedPath = "files/fielddata/encountdata/malformed.json"
+        try write(
+            "{\"rate\":20,\"morning_rate\":10,\"enabled\":true,\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30}],\"metadata\":{\"map\":\"ROUTE_201\"}}\n",
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("rate=15\n", to: root.appendingPathComponent(textPath))
+        try write(Data([0x00]), to: root.appendingPathComponent(binaryPath))
+        try write("{\"rate\":10,\"rate\":12}\n", to: root.appendingPathComponent(duplicatePath))
+        try write("{\"rate\": }\n", to: root.appendingPathComponent(malformedPath))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(encounterPath)")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        let fields = Dictionary(uniqueKeysWithValues: snapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(fields["rate"]?.value, "20")
+        XCTAssertEqual(fields["rate"]?.valueKind, .number)
+        XCTAssertEqual(fields["morning_rate"]?.value, "10")
+        XCTAssertEqual(fields["enabled"]?.value, "true")
+        XCTAssertEqual(fields["enabled"]?.valueKind, .bool)
+        XCTAssertNil(fields["slots"])
+        XCTAssertNil(fields["metadata"])
+
+        let nestedPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35")]
+            )
+        )
+        XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+        XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "morning_rate", value: "25"),
+                    NDSDataSemanticFieldEdit(key: "enabled", value: "false")
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"morning_rate\":25"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"enabled\":false"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30}]"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"morning_rate\":25"))
+        XCTAssertTrue(updated.contains("\"enabled\":false"))
+        XCTAssertTrue(updated.contains("\"metadata\":{\"map\":\"ROUTE_201\"}"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let textSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(textPath)")
+        XCTAssertFalse(textSnapshot.canEdit)
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(textSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let binarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(binaryPath)")
+        XCTAssertFalse(binarySnapshot.canEdit)
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:arm9/src/encounter.c")
+        XCTAssertFalse(cAnchorSnapshot.canEdit)
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let duplicateSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(duplicatePath)")
+        XCTAssertFalse(duplicateSnapshot.canEdit)
+        XCTAssertTrue(duplicateSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE" })
+
+        let malformedSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:\(malformedPath)")
+        XCTAssertFalse(malformedSnapshot.canEdit)
+        XCTAssertTrue(malformedSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_JSON_MALFORMED" })
+    }
+
     func testNDSDataSemanticEditorPlansDiamondPearlItemCAnchorScalars() throws {
         let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)

@@ -952,6 +952,64 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDiamondPearlEncounterSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        let encounterPath = "files/fielddata/encountdata/sinnoh/route201.json"
+        try write(
+            """
+            {"rate": 20, "morning_rate": 10, "enabled": true, "slots": [{"species":"BIDOOF","rate":30}], "metadata": {"map":"ROUTE_201"}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("rate=15\n", to: root.appendingPathComponent("files/fielddata/encountdata/route202.txt"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let encounterRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == encounterPath })
+        store.requestResourceAssetSelection(encounterRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "encounters:\(encounterPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "rate" && $0.value == "20" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "enabled" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "slots" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "metadata" })
+
+        store.updateSelectedNDSDataSemanticField(key: "rate", value: "25")
+        store.updateSelectedNDSDataSemanticField(key: "enabled", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"rate\": 25"))
+        XCTAssertTrue(updated.contains("\"enabled\": false"))
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"BIDOOF\",\"rate\":30}]"))
+
+        let textRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/encountdata/route202.txt" })
+        store.requestResourceAssetSelection(textRow.id)
+        let textEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(textEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "rate", value: "20")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("files/fielddata/encountdata/route202.txt"), encoding: .utf8),
+            "rate=15\n"
+        )
+    }
+
+    @MainActor
     func testLocalPlatinumSourceAndROMSurfaceTextAndMigrationFactsInResources() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let sourcePath = environment["PHS_LOCAL_PLATINUM_SOURCE_PATH"], !sourcePath.isEmpty else {
