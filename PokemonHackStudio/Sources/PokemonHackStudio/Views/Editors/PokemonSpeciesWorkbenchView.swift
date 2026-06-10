@@ -79,11 +79,13 @@ struct PokemonSpeciesWorkbenchView: View {
                             }
                         }
 
-                        levelUpSection(draft: draft)
-                        evolutionSection(draft: draft)
-                        tmhmSection(draft: draft)
-                        tutorSection(draft: draft)
-                        eggMovesSection(draft: draft)
+                        if supportsClassicSpeciesMutationEditing {
+                            levelUpSection(draft: draft)
+                            evolutionSection(draft: draft)
+                            tmhmSection(draft: draft)
+                            tutorSection(draft: draft)
+                            eggMovesSection(draft: draft)
+                        }
                         relatedDataSection(for: selectedSpecies, layoutMode: layoutMode)
                         sourceSection(for: selectedSpecies)
                         diagnosticsSection(for: selectedSpecies)
@@ -420,7 +422,7 @@ struct PokemonSpeciesWorkbenchView: View {
     @ViewBuilder
     private func pokedexSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         EditorSection(title: "Pokedex") {
-            if let draft = draft, draft.pokedex != nil {
+            if supportsClassicSpeciesMutationEditing, let draft = draft, draft.pokedex != nil {
                 VStack(alignment: .leading, spacing: 12) {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                         GridRow {
@@ -596,6 +598,15 @@ struct PokemonSpeciesWorkbenchView: View {
 
     private func constants(_ group: PokemonHackCore.SpeciesConstantGroup) -> [PokemonHackCore.SpeciesConstant] {
         catalog?.constants[group] ?? []
+    }
+
+    private var supportsClassicSpeciesMutationEditing: Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered:
+            return true
+        default:
+            return false
+        }
     }
 
     private func speciesSwitcher(_ selected: PokemonHackCore.SpeciesDetail) -> some View {

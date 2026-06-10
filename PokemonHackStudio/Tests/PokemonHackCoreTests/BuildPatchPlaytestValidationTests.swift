@@ -418,6 +418,17 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(first.manifest?.outputROMSHA1, pokemonHackSHA1Hex(targetData))
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputPath.appending(".manifest.json")))
 
+        let blocked = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+        XCTAssertEqual(blocked.status, .blocked)
+        XCTAssertNil(blocked.backupPath)
+        XCTAssertTrue(blocked.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_EXISTS" })
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: outputPath)), targetData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
+
         let second = try PatchManifestBuilder.applyExport(
             patchPath: patch.path,
             projectPath: root.path,

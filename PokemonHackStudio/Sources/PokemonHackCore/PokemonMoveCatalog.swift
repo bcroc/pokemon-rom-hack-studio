@@ -1137,6 +1137,16 @@ public enum MoveMutationApplier {
         guard !plan.changes.isEmpty else {
             return MoveApplyResult(backupRootPath: backupRoot.path, appliedChanges: [])
         }
+        let backupDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            plan.backupRelativeRoot,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "MOVE_APPLY_BACKUP",
+            subject: "Move backup path"
+        )
+        guard backupDiagnostics.isEmpty else {
+            return MoveApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: backupDiagnostics)
+        }
 
         try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
         var applied: [AppliedMoveFileChange] = []
@@ -1182,8 +1192,15 @@ private enum MoveEditApplySafety {
 
     private static func diagnosticsForChange(_ change: MoveEditFileChange, root: URL, fileManager: FileManager) -> [Diagnostic] {
         let destination = root.appendingPathComponent(change.path).standardizedFileURL
-        guard isContained(destination, in: root) else {
-            return [pathDiagnostic("MOVE_APPLY_PATH_OUTSIDE_ROOT", "Move apply path is outside the project root: \(change.path).", path: change.path)]
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            change.path,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "MOVE_APPLY",
+            subject: "Move apply path"
+        )
+        guard pathDiagnostics.isEmpty else {
+            return pathDiagnostics
         }
         guard fileManager.fileExists(atPath: destination.path) else {
             return [pathDiagnostic("MOVE_APPLY_SOURCE_MISSING", "Move source file is missing before apply: \(change.path).", path: change.path)]
@@ -1198,12 +1215,6 @@ private enum MoveEditApplySafety {
             return [pathDiagnostic("MOVE_APPLY_ORIGINAL_HASH_MISMATCH", "Move source file contents changed since planning: \(change.path).", path: change.path)]
         }
         return []
-    }
-
-    private static func isContained(_ url: URL, in root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
-        return path == rootPath || path.hasPrefix(rootPath + "/")
     }
 
     private static func pathDiagnostic(_ code: String, _ message: String, path: String) -> Diagnostic {

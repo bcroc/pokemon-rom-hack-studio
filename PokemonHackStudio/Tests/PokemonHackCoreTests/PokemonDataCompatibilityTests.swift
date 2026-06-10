@@ -84,6 +84,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
 
     func testRubyAndExpansionItemsReportEditableSourceBackedRows() throws {
         let rubyRoot = try temporaryRoot()
+        try writeRubySpecies(at: rubyRoot)
         try writeRubyItems(at: rubyRoot)
         let ruby = try PokemonDataCompatibilityReportBuilder.build(
             index: projectIndex(root: rubyRoot, profile: .pokeruby),
@@ -98,6 +99,26 @@ final class PokemonDataCompatibilityTests: XCTestCase {
 
         assertNoCompletedRowRecommendations(in: ruby)
         assertNoCompletedRowRecommendations(in: expansion)
+        let rubySpecies = entry(.species, in: ruby)
+        XCTAssertEqual(rubySpecies.status, .editable)
+        XCTAssertEqual(rubySpecies.sourcePath, "src/data/pokemon/base_stats.h")
+        XCTAssertEqual(rubySpecies.tableSymbol, "gBaseStats")
+        XCTAssertEqual(rubySpecies.indexedCount, 1)
+        XCTAssertEqual(rubySpecies.editableCount, 1)
+        XCTAssertNil(rubySpecies.blockedReason)
+        XCTAssertFalse(rubySpecies.unsupportedFields.contains("Ruby/Sapphire base_stats positional apply"))
+        XCTAssertTrue(rubySpecies.unsupportedFields.contains("Pokedex rewrites"))
+        XCTAssertNil(rubySpecies.recommendedFutureRow)
+        let rubyPokedex = entry(.pokedex, in: ruby)
+        XCTAssertEqual(rubyPokedex.status, .readOnly)
+        XCTAssertEqual(rubyPokedex.sourcePath, "src/data/pokedex_entries_en.h")
+        XCTAssertEqual(rubyPokedex.tableSymbol, "gPokedexEntries")
+        XCTAssertEqual(rubyPokedex.editableCount, 0)
+        XCTAssertTrue(rubyPokedex.unsupportedFields.contains("description text rewrites"))
+        let rubyAssets = entry(.assets, in: ruby)
+        XCTAssertEqual(rubyAssets.status, .readOnly)
+        XCTAssertEqual(rubyAssets.editableCount, 0)
+
         let rubyItems = entry(.items, in: ruby)
         XCTAssertEqual(rubyItems.status, .editable)
         XCTAssertEqual(rubyItems.sourcePath, "src/data/items_en.h")
@@ -177,6 +198,60 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(json.contains(#""gMovesInfo""#))
         XCTAssertTrue(json.contains(#""generated""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/moves_info.h""#))
+    }
+
+    func testExpansionSpeciesRowsReportEditableWithBlockedAdjacentSourcesAndJSON() throws {
+        let root = try temporaryRoot()
+        try writeExpansionSpecies(at: root)
+        let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
+        let expansion = try PokemonDataCompatibilityReportBuilder.build(
+            index: index,
+            sourceIndex: sourceIndex
+        )
+
+        assertNoCompletedRowRecommendations(in: expansion)
+        let species = entry(.species, in: expansion)
+        XCTAssertEqual(species.status, .editable)
+        XCTAssertEqual(species.sourcePath, "src/data/pokemon/species_info.h")
+        XCTAssertEqual(species.tableSymbol, "gSpeciesInfo")
+        XCTAssertEqual(species.indexedCount, 1)
+        XCTAssertEqual(species.editableCount, 1)
+        XCTAssertNil(species.blockedReason)
+        XCTAssertNil(species.recommendedFutureRow)
+        XCTAssertTrue(species.unsupportedFields.contains("type/ability/egg group brace-list rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("learnset rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("TM/HM/tutor/egg move rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("evolution rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("Pokedex rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("Pokedex text rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("species asset/cries/form rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("generated species family supplement apply"))
+        XCTAssertTrue(species.unsupportedFields.contains("reference-only species source writes"))
+        XCTAssertTrue(species.unsupportedFields.contains("Modern Emerald species writers"))
+        XCTAssertTrue(species.unsupportedFields.contains("binary ROM species writes"))
+        let sourceTables = try XCTUnwrap(species.sourceTables)
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info.h" && $0.tableSymbol == "gSpeciesInfo" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(sourceTables.contains { $0.path == "include/config/species_enabled.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "include/config/pokemon.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info/" && $0.status == .blocked && $0.indexedCount == 1 })
+        XCTAssertTrue(sourceTables.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/species_info.h" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "Modern Emerald species surfaces" && $0.status == .blocked })
+        XCTAssertTrue(sourceTables.contains { $0.path == "ROM output" && $0.status == .blocked })
+
+        let forms = entry(.forms, in: expansion)
+        XCTAssertEqual(forms.status, .readOnly)
+        XCTAssertEqual(forms.recommendedFutureRow, "PHS-T57E")
+        let formSources = try XCTUnwrap(forms.sourceTables)
+        XCTAssertTrue(formSources.contains { $0.path == "src/data/pokemon/species_info/" && $0.indexedCount == 1 && $0.status == .readOnly })
+
+        let json = String(data: try JSONEncoder().encode(expansion), encoding: .utf8) ?? ""
+        XCTAssertTrue(json.contains(#""sourceTables""#))
+        XCTAssertTrue(json.contains(#""gSpeciesInfo""#))
+        XCTAssertTrue(json.contains(#""include\/config\/species_enabled.h""#))
+        XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/species_info.h""#))
+        XCTAssertTrue(json.contains(#""Modern Emerald species surfaces""#))
     }
 
     func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
@@ -306,7 +381,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
                     .baseSpeed = 70,
                     .baseSpAttack = 65,
                     .baseSpDefense = 55,
-                    .types = { TYPE_GRASS, TYPE_GRASS },
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
                     .abilities = { ABILITY_OVERGROW, ABILITY_NONE },
                     .growthRate = GROWTH_MEDIUM_SLOW,
                     .eggGroups = { EGG_GROUP_MONSTER, EGG_GROUP_DRAGON },
@@ -495,6 +571,72 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
     }
 
+    private func writeRubySpecies(at root: URL) throws {
+        try write(
+            """
+            const struct BaseStats gBaseStats[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40,
+                    .baseAttack = 45,
+                    .baseDefense = 35,
+                    .baseSpeed = 70,
+                    .baseSpAttack = 65,
+                    .baseSpDefense = 55,
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+                    .catchRate = 45,
+                    .expYield = 65,
+                    .evYield_HP = 0,
+                    .evYield_Attack = 0,
+                    .evYield_Defense = 0,
+                    .evYield_Speed = 1,
+                    .evYield_SpAttack = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = 70,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/base_stats.h")
+        )
+        try write(
+            """
+            const struct PokedexEntry gPokedexEntries[] =
+            {
+                [NATIONAL_DEX_TREECKO] = { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50, .description = gTreeckoPokedexText },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokedex_entries_en.h")
+        )
+        try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokedex_text_en.h"))
+        try write(Data([0x89, 0x50, 0x4E, 0x47]), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+        try write(
+            """
+            #define TYPE_GRASS 12
+            #define EGG_GROUP_MONSTER 1
+            #define EGG_GROUP_DRAGON 14
+            #define GROWTH_MEDIUM_SLOW 3
+            #define BODY_COLOR_GREEN 5
+            """,
+            to: root.appendingPathComponent("include/constants/pokemon.h")
+        )
+        try write("#define ABILITY_NONE 0\n#define ABILITY_OVERGROW 65\n", to: root.appendingPathComponent("include/constants/abilities.h"))
+        try write("#define ITEM_NONE 0\n", to: root.appendingPathComponent("include/constants/items.h"))
+    }
+
     private func writeExpansionItems(at root: URL) throws {
         try write(
             """
@@ -556,6 +698,82 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/moves_info.h")
+        )
+    }
+
+    private func writeExpansionSpecies(at root: URL) throws {
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40,
+                    .baseAttack = 45,
+                    .baseDefense = 35,
+                    .baseSpeed = 70,
+                    .baseSpAttack = 65,
+                    .baseSpDefense = 55,
+                    .types = { TYPE_GRASS, TYPE_GRASS },
+                    .catchRate = 45,
+                    .baseExp = 65,
+                    .evYield_HP = 0,
+                    .evYield_Attack = 0,
+                    .evYield_Defense = 0,
+                    .evYield_Speed = 1,
+                    .evYield_SpAttack = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = 70,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .hiddenAbility = ABILITY_CHLOROPHYLL,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write(
+            """
+            [SPECIES_TREECKO] =
+            {
+                .categoryName = _(\"WOOD GECKO\"),
+                .height = 5,
+                .weight = 50,
+                .description = COMPOUND_STRING(\"It quickly scales even vertical walls.\"),
+                .formSpeciesIdTable = sTreeckoFormSpeciesIdTable,
+                .formChangeTable = sTreeckoFormChangeTable,
+            },
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        )
+        try write(
+            """
+            static const u16 sTreeckoFormSpeciesIdTable[] = {
+                SPECIES_TREECKO,
+                SPECIES_TREECKO_MEGA,
+                FORM_SPECIES_END,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_species_tables.h")
+        )
+        try write(
+            """
+            static const struct FormChange sTreeckoFormChangeTable[] = {
+                { FORM_CHANGE_BATTLE_MEGA_EVOLUTION, SPECIES_TREECKO_MEGA },
+                { FORM_CHANGE_TERMINATOR },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/form_change_tables.h")
         )
     }
 

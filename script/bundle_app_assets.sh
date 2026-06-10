@@ -20,7 +20,15 @@ DESTINATION_ROOT="$RESOURCES_DIR/PokemonHackStudioAssets"
 PROJECTS_DESTINATION="$DESTINATION_ROOT/Projects"
 MANIFEST_PATH="$DESTINATION_ROOT/manifest.json"
 MANIFEST_SCHEMA_VERSION=2
-MANIFEST_SOURCE_POLICY="Local noncommercial build artifact. Source-heavy decomp mirrors and companion metadata only; commercial ROMs, saves, generated ROMs, build products, Git data, caches, and local extracted/built artifacts are excluded."
+BUNDLE_SOURCE_ASSETS="${POKEMONHACKSTUDIO_BUNDLE_SOURCE_ASSETS:-0}"
+BUNDLE_DEBUG_PATHS="${POKEMONHACKSTUDIO_BUNDLE_DEBUG_PATHS:-0}"
+if [[ "$BUNDLE_SOURCE_ASSETS" == "1" ]]; then
+  SOURCE_BUNDLE_MODE="sourceMirrors"
+  MANIFEST_SOURCE_POLICY="Local noncommercial build artifact. Source-heavy decomp mirrors are explicitly enabled; commercial ROMs, saves, generated ROMs, build products, Git data, caches, and local extracted/built artifacts are excluded."
+else
+  SOURCE_BUNDLE_MODE="metadataOnly"
+  MANIFEST_SOURCE_POLICY="Local noncommercial build artifact. Source-heavy decomp mirrors are disabled by default; the bundle records metadata and unavailable-title coverage only."
+fi
 
 DEFAULT_PROJECT_SPECS=(
   "pokeemerald|editableSource|pokeemerald|emerald|localEditable|Pokemon - Emerald Version (USA, Europe).gba|$ROOT_DIR/pokeemerald;$REFERENCE_REPOS_DIR/pret__pokeemerald"
@@ -89,6 +97,52 @@ json_escape() {
 
 json_value() {
   printf '%s' "$1" | json_escape
+}
+
+manifest_path_label() {
+  local path="$1"
+
+  if [[ "$BUNDLE_DEBUG_PATHS" == "1" ]]; then
+    printf '%s' "$path"
+  elif [[ "$path" == "$ROOT_DIR" ]]; then
+    printf '%s' "workspace"
+  elif [[ "$path" == "$ROOT_DIR/"* ]]; then
+    printf 'workspace:%s' "${path#"$ROOT_DIR/"}"
+  elif [[ "$path" == "$REFERENCE_REPOS_DIR" ]]; then
+    printf '%s' "central-reference-repos"
+  elif [[ "$path" == "$REFERENCE_REPOS_DIR/"* ]]; then
+    printf 'central-reference:%s' "${path#"$REFERENCE_REPOS_DIR/"}"
+  elif [[ "$path" == "$REFERENCE_REPOS_ROOT" ]]; then
+    printf '%s' "reference-repos"
+  elif [[ "$path" == "$REFERENCE_REPOS_ROOT/"* ]]; then
+    printf 'reference-repos:%s' "${path#"$REFERENCE_REPOS_ROOT/"}"
+  else
+    printf 'external:%s' "$(basename "$path")"
+  fi
+}
+
+is_safe_project_name() {
+  local project_name="$1"
+  [[ "$project_name" =~ ^[A-Za-z0-9._-]+$ ]] && [[ "$project_name" != "." ]] && [[ "$project_name" != ".." ]]
+}
+
+safe_project_destination() {
+  local project_name="$1"
+
+  if ! is_safe_project_name "$project_name"; then
+    return 1
+  fi
+  if [[ -L "$PROJECTS_DESTINATION" ]]; then
+    return 1
+  fi
+
+  local projects_root
+  projects_root="$(cd "$PROJECTS_DESTINATION" && pwd -P)"
+  local destination="$projects_root/$project_name"
+  if [[ -L "$destination" ]]; then
+    return 1
+  fi
+  printf '%s' "$destination"
 }
 
 bundle_changed=0
@@ -177,6 +231,10 @@ prune_stale_projects() {
   local project_name
 
   [[ -d "$PROJECTS_DESTINATION" ]] || return 0
+  if [[ -L "$PROJECTS_DESTINATION" ]]; then
+    echo "Refusing to prune bundled project assets through symlinked destination: $PROJECTS_DESTINATION" >&2
+    exit 2
+  fi
 
   for project_entry in "$PROJECTS_DESTINATION"/* "$PROJECTS_DESTINATION"/.[!.]* "$PROJECTS_DESTINATION"/..?*; do
     [[ -e "$project_entry" ]] || continue
@@ -277,8 +335,10 @@ write_manifest() {
     printf '  "schemaVersion": %s,\n' "$MANIFEST_SCHEMA_VERSION"
     printf '  "generatedAt": "%s",\n' "$(json_value "$generated_at")"
     printf '  "sourcePolicy": "%s",\n' "$(json_value "$MANIFEST_SOURCE_POLICY")"
-    printf '  "workspaceRoot": "%s",\n' "$(json_value "$ROOT_DIR")"
-    printf '  "referenceReposRoot": "%s",\n' "$(json_value "$REFERENCE_REPOS_ROOT")"
+    printf '  "sourceBundleMode": "%s",\n' "$(json_value "$SOURCE_BUNDLE_MODE")"
+    printf '  "debugPaths": "%s",\n' "$(json_value "$BUNDLE_DEBUG_PATHS")"
+    printf '  "workspaceRoot": "%s",\n' "$(json_value "$(manifest_path_label "$ROOT_DIR")")"
+    printf '  "referenceReposRoot": "%s",\n' "$(json_value "$(manifest_path_label "$REFERENCE_REPOS_ROOT")")"
     printf '  "projects": [\n'
     for index in "${!bundled_projects[@]}"; do
       comma=","
@@ -383,12 +443,25 @@ for spec in "${PROJECT_SPECS[@]}"; do
   [[ -n "${project_name:-}" ]] || continue
   filters_project "$project_name" || continue
 
+  if ! is_safe_project_name "$project_name"; then
+    record_unavailable_titles "$title_coverage" "$family" "$project_name" "Project name is not safe for bundled asset output."
+    continue
+  fi
+
+  if [[ "$BUNDLE_SOURCE_ASSETS" != "1" ]]; then
+    record_unavailable_titles "$title_coverage" "$family" "$project_name" "Source fixture bundling is disabled by default; set POKEMONHACKSTUDIO_BUNDLE_SOURCE_ASSETS=1 to mirror local sources into the app bundle."
+    continue
+  fi
+
   if ! source_root="$(find_source_root "$source_candidates")"; then
     record_unavailable_titles "$title_coverage" "$family" "$project_name" "No source root found for configured candidates: $source_candidates"
     continue
   fi
 
-  project_destination="$PROJECTS_DESTINATION/$project_name"
+  if ! project_destination="$(safe_project_destination "$project_name")"; then
+    record_unavailable_titles "$title_coverage" "$family" "$project_name" "Project destination is not safe for bundled asset output."
+    continue
+  fi
   if [[ ! -d "$project_destination" ]]; then
     mark_changed
   fi
@@ -396,7 +469,7 @@ for spec in "${PROJECT_SPECS[@]}"; do
   copy_project_mirror "$source_root" "$project_destination"
 
   bundled_projects+=("$project_name")
-  bundled_source_paths+=("$source_root")
+  bundled_source_paths+=("$(manifest_path_label "$source_root")")
   bundled_bundle_paths+=("PokemonHackStudioAssets/Projects/$project_name")
   bundled_profiles+=("$profile")
   bundled_families+=("$family")

@@ -24,6 +24,31 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(commands.contains { $0["name"] as? String == "help" })
     }
 
+    func testBlockedApplyExportOutputsMapToNonzeroExecutableExitCode() throws {
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["patch-apply-export"], output: #"{"status":"blocked"}"#),
+            1
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["patch-apply-export"], output: #"{"status":"exported"}"#),
+            0
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(
+                arguments: ["nds-data-semantic-apply"],
+                output: #"{"appliedChanges":[],"diagnostics":[{"severity":"error","code":"NDS_DATA_APPLY_PATH_OUTSIDE_ROOT","message":"blocked"}]}"#
+            ),
+            1
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(
+                arguments: ["nds-data-semantic-apply"],
+                output: #"{"appliedChanges":[{"path":"res/items/potion.json"}],"diagnostics":[]}"#
+            ),
+            0
+        )
+    }
+
     func testPlaytestHeadlessAndLaunchEmitJSONWithoutApplyingSideEffects() throws {
         let root = try makeEmeraldProject()
 
@@ -1412,6 +1437,95 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
+    func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlItemJSONFields() throws {
+        let root = try makeTestDiamondDecompRoot()
+        let itemPath = "files/itemtool/itemdata/potion.json"
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "items:\(itemPath)",
+                "--set",
+                "price=500",
+                "--set",
+                "field_use=false",
+                "--json"
+            ])
+        )
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(requestedFieldKeys, ["price", "field_use"])
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, itemPath)
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-semantic-plan",
+            root.path,
+            "items:\(itemPath)",
+            "--set",
+            "price=500",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains("\"price\":500"))
+        XCTAssertFalse(redactedPlan.contains("\"effects\""))
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:\(itemPath)",
+                "--set",
+                "name=SUPER_POTION",
+                "--set",
+                "price=700",
+                "--set",
+                "field_use=false",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(itemPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"name\":\"SUPER_POTION\""))
+        XCTAssertTrue(updated.contains("\"price\":700"))
+        XCTAssertTrue(updated.contains("\"field_use\":false"))
+        XCTAssertTrue(updated.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+
+        let nestedApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:\(itemPath)",
+                "--set",
+                "effects.0.amount=50",
+                "--json"
+            ])
+        )
+        let nestedChanges = try XCTUnwrap(nestedApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(nestedChanges.count, 0)
+        let nestedDiagnostics = try XCTUnwrap(nestedApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(nestedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+
+        let blockedBinaryApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "items:files/itemtool/itemdata/item_0000.bin",
+                "--set",
+                "price=800",
+                "--json"
+            ])
+        )
+        let blockedBinaryChanges = try XCTUnwrap(blockedBinaryApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedBinaryChanges.count, 0)
+        let blockedBinaryDiagnostics = try XCTUnwrap(blockedBinaryApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
     func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlItemMappingCScalars() throws {
         let root = try makeTestDiamondDecompRoot()
 
@@ -1839,6 +1953,9 @@ final class PokemonHackCLITests: XCTestCase {
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
         try write("void Message_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/msgdata.c"))
         try write("{\"personal\":1}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
+        try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
+        try write("{\"name\":\"POTION\",\"name\":\"SUPER_POTION\"}\n", to: root.appendingPathComponent("files/itemtool/itemdata/duplicate.json"))
+        try write("{\"name\": }\n", to: root.appendingPathComponent("files/itemtool/itemdata/malformed.json"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
         try write("ignored\n", to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/.knarcignore"))

@@ -364,6 +364,7 @@ final class WorkbenchStore: ObservableObject {
     private var resourceEntryDetailTask: Task<Void, Never>?
     private var romInspectorTask: Task<Void, Never>?
     private var decompBuildTask: Task<Void, Never>?
+    private var decompBuildRunID: UUID?
     private var mapVisualSharedCacheDataByID: [String: Data] = [:]
     private var resourceAssetRowsCache: ResourceAssetRowsCache?
     private var pendingRelatedMapTargetID: String?
@@ -603,11 +604,11 @@ final class WorkbenchStore: ObservableObject {
 
     var pendingMapNavigationMessage: String {
         guard let pendingMapNavigation else {
-            return "This map has staged edits. Preview or discard them before changing selection."
+            return "This project has staged edits. Preview or discard them before changing selection."
         }
         switch pendingMapNavigation {
         case .project:
-            return "This map has staged edits. Preview or discard them before switching projects."
+            return "This project has staged edits. Preview or discard them before switching projects."
         case .map(let mapID):
             let title = selectedMapCatalog?.maps.first { $0.id == mapID }?.name ?? mapID
             return "This map has staged edits. Preview or discard them before opening \(title)."
@@ -2390,6 +2391,7 @@ final class WorkbenchStore: ObservableObject {
         mapCatalogTask?.cancel()
         mapVisualTask?.cancel()
         romInspectorTask?.cancel()
+        cancelSelectedDecompBuild()
         pendingScriptAssetTargetID = nil
         clearSelectedMapVisualDocument()
         updateLazyLoadStatusesForSelection()
@@ -2734,7 +2736,7 @@ final class WorkbenchStore: ObservableObject {
 
     func requestProjectSelection(_ projectID: String) {
         guard projectID != selectedProjectID else { return }
-        if hasStagedMapEdits {
+        if hasStagedEdits {
             pendingMapNavigation = .project(projectID)
             clearPendingMapNavigationContext()
         } else {
@@ -2743,6 +2745,9 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func applyProjectSelection(_ projectID: String) {
+        if workspaceAutosavePending {
+            _ = saveDraftsNow()
+        }
         selectedProjectID = projectID
         prepareForSelectedProjectChange()
         selectedScriptReadinessReport = scriptReadinessReportsByID[projectID]
@@ -3460,10 +3465,13 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func previewBeforePendingMapNavigation() {
-        previewSelectedMapMutationPlan()
+        let target = toolbarMutationState.target
+        previewToolbarMutationTarget()
         pendingMapNavigation = nil
         clearPendingMapNavigationContext()
-        selection = .maps
+        if target == .map {
+            selection = .maps
+        }
     }
 
     func discardMapEdits() {
@@ -3482,7 +3490,11 @@ final class WorkbenchStore: ObservableObject {
         let pendingSearchIdentifier = pendingMapNavigationSearchIdentifier
         let pendingSource = pendingMapNavigationSource
         let shouldRefreshScriptReadiness = pendingMapNavigationShouldRefreshScriptReadiness
-        discardMapEdits()
+        if case .project = pendingMapNavigation {
+            discardToolbarMutationTarget()
+        } else {
+            discardMapEdits()
+        }
         self.pendingMapNavigation = nil
         clearPendingMapNavigationContext()
 
@@ -3556,7 +3568,7 @@ final class WorkbenchStore: ObservableObject {
             if userSettings.resourceAutoRefreshOnOpen {
                 refreshResourceLibrary()
             }
-            if hasStagedMapEdits {
+            if hasStagedEdits {
                 pendingMapNavigation = .project(summary.id)
                 clearPendingMapNavigationContext()
                 projectIndexStatus = .loaded(indexedProjects.count)
@@ -4108,6 +4120,9 @@ final class WorkbenchStore: ObservableObject {
         }
         guard let detail = selectedSpeciesDetail else {
             return "Select a Pokemon before importing assets."
+        }
+        if selectedSpeciesCatalog?.profile == .pokeruby {
+            return "Ruby/Sapphire species asset imports remain read-only; this row only edits source-backed base_stats.h rows."
         }
         guard let asset = detail.assets.first(where: { $0.kind == kind }) else {
             return "\(kind.title) has no indexed source asset row."
@@ -4876,17 +4891,34 @@ final class WorkbenchStore: ObservableObject {
             return false
         }
 
+        return saveAutosaveDrafts(
+            workspace,
+            root: URL(fileURLWithPath: project.rootPath),
+            projectID: project.id
+        )
+    }
+
+    @discardableResult
+    private func saveAutosaveDrafts(
+        _ workspace: PokemonHackCore.SavedHackWorkspace,
+        root: URL,
+        projectID: String
+    ) -> Bool {
         do {
-            try ProjectWorkspacePersistence.saveAutosave(workspace, root: URL(fileURLWithPath: project.rootPath), fileManager: fileManager)
-            latestSavedWorkspace = workspace
-            workspacePersistenceStatus = workspace.drafts.isEmpty ? "No drafts saved" : "Drafts saved"
-            workspacePersistenceError = nil
-            workspaceAutosavePending = false
+            try ProjectWorkspacePersistence.saveAutosave(workspace, root: root, fileManager: fileManager)
+            if selectedProjectID == projectID {
+                latestSavedWorkspace = workspace
+                workspacePersistenceStatus = workspace.drafts.isEmpty ? "No drafts saved" : "Drafts saved"
+                workspacePersistenceError = nil
+                workspaceAutosavePending = false
+            }
             return true
         } catch {
-            workspacePersistenceStatus = "Autosave failed"
-            workspacePersistenceError = error.localizedDescription
-            workspaceAutosavePending = false
+            if selectedProjectID == projectID {
+                workspacePersistenceStatus = "Autosave failed"
+                workspacePersistenceError = error.localizedDescription
+                workspaceAutosavePending = false
+            }
             return false
         }
     }
@@ -4963,17 +4995,22 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func scheduleDraftAutosave() {
-        guard selectedIndexedProject != nil else { return }
+        guard let project = selectedIndexedProject, let workspace = workspaceSnapshot() else { return }
         autosaveTask?.cancel()
         workspaceAutosavePending = true
+        let root = URL(fileURLWithPath: project.rootPath)
+        let projectID = project.id
         autosaveTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: Self.autosaveDelayNanoseconds)
             } catch {
                 return
             }
-            guard !Task.isCancelled else { return }
-            _ = self?.saveDraftsNow()
+            guard let self, !Task.isCancelled else { return }
+            _ = saveAutosaveDrafts(workspace, root: root, projectID: projectID)
+            if selectedProjectID == projectID {
+                autosaveTask = nil
+            }
         }
     }
 
@@ -5368,12 +5405,21 @@ final class WorkbenchStore: ObservableObject {
 
         selectedDecompBuildTargetID = targetID
         runningBuildTargetID = targetID
+        let runID = UUID()
+        decompBuildRunID = runID
         buildRunLogLinesByID[selectedIndexedProject.id] = []
         buildRunResultsByID.removeValue(forKey: selectedIndexedProject.id)
 
         let project = selectedIndexedProject
         let resolvedArtifactRoot = artifactRoot ?? workspaceRoot
         decompBuildTask = Task { @MainActor in
+            defer {
+                if decompBuildRunID == runID {
+                    runningBuildTargetID = nil
+                    decompBuildTask = nil
+                    decompBuildRunID = nil
+                }
+            }
             let result = await runner(
                 index,
                 targetID,
@@ -5386,6 +5432,7 @@ final class WorkbenchStore: ObservableObject {
                 }
             }
 
+            guard !Task.isCancelled else { return }
             guard projectIndexesByID[project.id] != nil else { return }
             buildRunResultsByID[project.id] = Self.buildRunResult(
                 from: result,
@@ -5393,13 +5440,14 @@ final class WorkbenchStore: ObservableObject {
             )
             let coreBuildReport = BuildValidationReportBuilder.build(index: index, fileManager: fileManager, toolResolver: toolResolver)
             buildReportsByID[project.id] = Self.buildReport(from: index, project: project, fileManager: fileManager, toolResolver: toolResolver, buildReport: coreBuildReport)
-            runningBuildTargetID = nil
-            decompBuildTask = nil
         }
     }
 
     func cancelSelectedDecompBuild() {
         decompBuildTask?.cancel()
+        decompBuildTask = nil
+        decompBuildRunID = nil
+        runningBuildTargetID = nil
     }
 
     func captureSelectedPlaytest(

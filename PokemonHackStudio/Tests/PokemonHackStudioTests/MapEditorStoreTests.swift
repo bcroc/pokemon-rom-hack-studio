@@ -952,6 +952,54 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDiamondPearlItemJSONSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        let itemPath = "files/itemtool/itemdata/potion.json"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == itemPath })
+        store.requestResourceAssetSelection(itemRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "items:\(itemPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "name" && $0.value == "POTION" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "price" && $0.value == "300" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "field_use" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "effects" })
+
+        store.updateSelectedNDSDataSemanticField(key: "name", value: "SUPER_POTION")
+        store.updateSelectedNDSDataSemanticField(key: "price", value: "700")
+        store.updateSelectedNDSDataSemanticField(key: "field_use", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(itemPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"name\":\"SUPER_POTION\""))
+        XCTAssertTrue(updated.contains("\"price\":700"))
+        XCTAssertTrue(updated.contains("\"field_use\":false"))
+        XCTAssertTrue(updated.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+
+        let binaryItemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/itemtool/itemdata/item_0000.bin" })
+        store.requestResourceAssetSelection(binaryItemRow.id)
+        let binaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(binaryEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "price", value: "800")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+    }
+
+    @MainActor
     func testDiamondPearlEncounterSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSSourceProject()
         let encounterPath = "files/fielddata/encountdata/sinnoh/route201.json"
@@ -1961,6 +2009,37 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPatchApplyExportStoreWritesPatchedROMAndManifest() throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abd".utf8)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(baseData, to: baseROM)
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.requestPatchPath(patch.path)
+        store.requestBaseROMPath(baseROM.path)
+        store.loadSelectedPatchManifestReport()
+
+        XCTAssertTrue(store.canApplyExportSelectedPatch)
+
+        store.applyExportSelectedPatchROM()
+
+        let result = try XCTUnwrap(store.latestPatchApplyExportResult)
+        let outputURL = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        XCTAssertEqual(result.status, .exported)
+        XCTAssertEqual(result.outputPath, outputURL.path)
+        XCTAssertEqual(result.manifest?.patchFormat, .bps)
+        XCTAssertEqual(try Data(contentsOf: outputURL), targetData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path.appending(".manifest.json")))
+    }
+
+    @MainActor
     func testGraphicsImportPackagePlanLoadsPreviewRowsAndCopiesJSON() throws {
         let root = try makeSourceIndexProject()
         let packageTemp = try MapEditorStoreTemporaryDirectory()
@@ -2052,6 +2131,110 @@ final class MapEditorStoreTests: XCTestCase {
         let appliedChange = try XCTUnwrap(result.appliedChanges.first { $0.path == "graphics/pokemon/treecko/front.png" })
         XCTAssertTrue(FileManager.default.fileExists(atPath: appliedChange.backupPath))
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png")), importedData)
+    }
+
+    @MainActor
+    func testRubySapphireSpeciesAssetImportIsBlockedBeforeStaging() async throws {
+        let root = try makeRubyPokemonProject()
+        let importURL = root.appendingPathComponent("incoming/front.png")
+        try write(testPNGData(width: 64, height: 64, paletteColorCount: 16), to: importURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        XCTAssertNotNil(store.selectedSpeciesDraft)
+        XCTAssertEqual(store.selectedSpeciesCatalog?.profile, .pokeruby)
+        XCTAssertTrue(store.selectedSpeciesAssetImportBlockedReason(kind: .front)?.contains("base_stats.h") == true)
+        XCTAssertNil(store.importSelectedSpeciesAsset(kind: .front, from: importURL))
+        XCTAssertNil(store.selectedSpeciesDraft?.assetData[.front])
+    }
+
+    @MainActor
+    func testExpansionSpeciesInfoScalarEditsFlowThroughPokemonEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        XCTAssertEqual(catalog.species.map(\.sourceSpan.relativePath), ["src/data/pokemon/species_info.h"])
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.baseStats.hp = 41
+        draft.types[1] = "TYPE_FIRE"
+        draft.abilities[1] = "ABILITY_CHLOROPHYLL"
+        draft.expYield = "66"
+        draft.itemCommon = "ITEM_POTION"
+        draft.eggGroups[1] = "EGG_GROUP_MONSTER"
+        draft.bodyColor = "BODY_COLOR_RED"
+        draft.noFlip = true
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/species_info.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".baseHP = 41") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".type2 = TYPE_FIRE") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".baseExp = 66") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".ability2 = ABILITY_CHLOROPHYLL") == true)
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/species_info.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        let source = try String(contentsOf: root.appendingPathComponent("src/data/pokemon/species_info.h"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".baseHP = 41"))
+        XCTAssertTrue(source.contains(".type2 = TYPE_FIRE"))
+        XCTAssertTrue(source.contains(".baseExp = 66"))
+        XCTAssertTrue(source.contains(".item1 = ITEM_POTION"))
+        XCTAssertTrue(source.contains(".ability2 = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(source.contains(".hiddenAbility = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(source.contains(".formSpeciesIdTable = sTreeckoFormSpeciesIdTable"))
+
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(reloaded.baseStats.hp, 41)
+        XCTAssertEqual(reloaded.types, ["TYPE_GRASS", "TYPE_FIRE"])
+        XCTAssertEqual(reloaded.abilities, ["ABILITY_OVERGROW", "ABILITY_CHLOROPHYLL", "ABILITY_CHLOROPHYLL"])
+        XCTAssertEqual(reloaded.training.expYield, "66")
+        XCTAssertEqual(reloaded.heldItems.common, "ITEM_POTION")
+        XCTAssertEqual(reloaded.bodyColor, "BODY_COLOR_RED")
+        XCTAssertEqual(reloaded.noFlip, "TRUE")
+
+        store.loadSelectedSourceGraphIfNeeded()
+        let sourceIndex = try await waitForSelectedSourceGraph(store)
+        XCTAssertTrue(sourceIndex.records.contains { record in
+            record.sourceSpan.relativePath == "src/data/pokemon/species_info/gen_3_families.h"
+                && record.tags.contains("form-supplement")
+                && record.tags.contains("read-only")
+        })
+
+        var blockedDraft = try XCTUnwrap(store.selectedSpeciesDraft)
+        blockedDraft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        store.updateSelectedSpeciesDraft(blockedDraft)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let blockedPlan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        XCTAssertEqual(blockedPlan.changes.count, 0)
+        XCTAssertFalse(blockedPlan.isApplyable)
+        XCTAssertTrue(blockedPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(store.canApplySelectedSpeciesMutationPlan)
     }
 
     @MainActor
@@ -2293,6 +2476,9 @@ final class MapEditorStoreTests: XCTestCase {
             autoLoadProjects: false
         )
         store.openProject(path: root.path)
+        store.loadSelectedBuildReportIfNeeded(force: true)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
 
         XCTAssertTrue(store.canRunSelectedDecompBuild)
         XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "build-rom" }?.isEnabled, true)
@@ -2315,9 +2501,54 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.buildWorkflowActions(includePatchActions: false).first { $0.id == "cancel-build" }?.isEnabled, true)
 
         store.cancelSelectedDecompBuild()
-        let result = try await waitForBuildRunResult(store)
-        XCTAssertEqual(result.statusLabel, "cancelled")
+
         XCTAssertNil(store.runningBuildTargetID)
+        XCTAssertTrue(store.canRunSelectedDecompBuild)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertNil(store.selectedBuildRunResult)
+        XCTAssertNil(store.runningBuildTargetID)
+    }
+
+    @MainActor
+    func testDecompBuildProjectSwitchClearsRunningStateAndSuppressesStaleResult() async throws {
+        let firstRoot = try makeSourceIndexProject()
+        let secondRoot = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(
+            userDefaults: defaults,
+            toolResolver: { tool in
+                tool == "make"
+                    ? ToolAvailability(name: tool, isAvailable: true, resolvedPath: "/usr/bin/make")
+                    : ToolAvailability(name: tool, isAvailable: false)
+            },
+            autoLoadProjects: false
+        )
+        store.openProject(path: firstRoot.path)
+        store.loadSelectedBuildReportIfNeeded(force: true)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+
+        store.runSelectedDecompBuild(artifactRoot: firstRoot) { index, targetID, _, _, _, _ in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return DecompBuildResult(
+                status: .succeeded,
+                projectRootPath: index.root.path,
+                targetID: targetID,
+                targetName: targetID,
+                command: ["make"],
+                artifacts: [],
+                diagnostics: []
+            )
+        }
+
+        XCTAssertNotNil(store.runningBuildTargetID)
+
+        store.openProject(path: secondRoot.path)
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertNil(store.runningBuildTargetID)
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertNil(store.selectedBuildRunResult)
     }
 
     @MainActor
@@ -3346,6 +3577,7 @@ final class MapEditorStoreTests: XCTestCase {
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
         try write("arm7 source\n", to: root.appendingPathComponent("arm7/main.s"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
@@ -3798,6 +4030,129 @@ final class MapEditorStoreTests: XCTestCase {
         return root
     }
 
+    private func makeExpansionPokemonProject() throws -> URL {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url
+
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include/constants"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try write("// Expansion marker\n", to: root.appendingPathComponent("include/constants/expansion.h"))
+        try writePokemonConstants(at: root)
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40,
+                    .baseAttack = 45,
+                    .baseDefense = 35,
+                    .baseSpeed = 70,
+                    .baseSpAttack = 65,
+                    .baseSpDefense = 55,
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+                    .catchRate = 45,
+                    .baseExp = 65,
+                    .evYield_HP = 0,
+                    .evYield_Attack = 0,
+                    .evYield_Defense = 0,
+                    .evYield_Speed = 1,
+                    .evYield_SpAttack = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = STANDARD_FRIENDSHIP,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .hiddenAbility = ABILITY_CHLOROPHYLL,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .formSpeciesIdTable = sTreeckoFormSpeciesIdTable,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write(
+            """
+            [SPECIES_TREECKO] =
+            {
+                .formSpeciesIdTable = sTreeckoFormSpeciesIdTable,
+            },
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        )
+        return root
+    }
+
+    private func makeRubyPokemonProject() throws -> URL {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url
+
+        try write("GAME_VERSION ?= RUBY\n", to: root.appendingPathComponent("config.mk"))
+        try write("placeholder\n", to: root.appendingPathComponent("ruby.sha1"))
+        try write("all:\n\t@true\n", to: root.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try writePokemonConstants(at: root)
+        try write(testPNGData(width: 64, height: 64, paletteColorCount: 16), to: root.appendingPathComponent("graphics/pokemon/treecko/front.png"))
+
+        try write(
+            """
+            const struct BaseStats gBaseStats[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40,
+                    .baseAttack = 45,
+                    .baseDefense = 35,
+                    .baseSpeed = 70,
+                    .baseSpAttack = 65,
+                    .baseSpDefense = 55,
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+                    .catchRate = 45,
+                    .expYield = 65,
+                    .evYield_HP = 0,
+                    .evYield_Attack = 0,
+                    .evYield_Defense = 0,
+                    .evYield_Speed = 1,
+                    .evYield_SpAttack = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = STANDARD_FRIENDSHIP,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/base_stats.h")
+        )
+
+        return root
+    }
+
     private func writeTrainerConstants(at root: URL) throws {
         try write(
             """
@@ -4108,6 +4463,62 @@ final class MapEditorStoreTests: XCTestCase {
         bytes[offset + 1] = UInt8((value >> 16) & 0xFF)
         bytes[offset + 2] = UInt8((value >> 8) & 0xFF)
         bytes[offset + 3] = UInt8(value & 0xFF)
+    }
+
+    private func makeBPSPatch(source: Data, target: Data) -> Data {
+        var body = Data("BPS1".utf8)
+        body.append(contentsOf: encodeBPSVariableLength(UInt64(source.count)))
+        body.append(contentsOf: encodeBPSVariableLength(UInt64(target.count)))
+        body.append(contentsOf: encodeBPSVariableLength(0))
+
+        var prefixLength = 0
+        let sourceBytes = Array(source)
+        let targetBytes = Array(target)
+        while prefixLength < min(sourceBytes.count, targetBytes.count),
+              sourceBytes[prefixLength] == targetBytes[prefixLength] {
+            prefixLength += 1
+        }
+        if prefixLength > 0 {
+            body.append(contentsOf: encodeBPSVariableLength(UInt64((prefixLength - 1) << 2)))
+        }
+        if prefixLength < targetBytes.count {
+            let length = targetBytes.count - prefixLength
+            body.append(contentsOf: encodeBPSVariableLength(UInt64(((length - 1) << 2) | 1)))
+            body.append(contentsOf: targetBytes[prefixLength...])
+        }
+
+        appendUInt32LE(crc32(source), to: &body)
+        appendUInt32LE(crc32(target), to: &body)
+        appendUInt32LE(crc32(body), to: &body)
+        return body
+    }
+
+    private func encodeBPSVariableLength(_ value: UInt64) -> [UInt8] {
+        var data = value
+        var bytes: [UInt8] = []
+        while true {
+            let byte = UInt8(data & 0x7F)
+            data >>= 7
+            if data == 0 {
+                bytes.append(byte | 0x80)
+                break
+            }
+            bytes.append(byte)
+            data -= 1
+        }
+        return bytes
+    }
+
+    private func crc32(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                let mask = 0 &- (crc & 1)
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask)
+            }
+        }
+        return ~crc
     }
 
     private static func syntheticAssetRow(index: Int) -> ResourceAssetRowViewState {

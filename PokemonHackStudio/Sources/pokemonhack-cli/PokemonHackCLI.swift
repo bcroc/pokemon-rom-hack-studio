@@ -95,8 +95,13 @@ private struct CLIHelpReport: Codable, Equatable {
 struct PokemonHackCLI {
     static func main() {
         do {
-            let output = try run(arguments: Array(CommandLine.arguments.dropFirst()))
+            let arguments = Array(CommandLine.arguments.dropFirst())
+            let output = try run(arguments: arguments)
             print(output)
+            let code = exitCode(arguments: arguments, output: output)
+            if code != 0 {
+                Foundation.exit(code)
+            }
         } catch {
             FileHandle.standardError.write(Data((render(error: error) + "\n").utf8))
             Foundation.exit(1)
@@ -205,6 +210,43 @@ struct PokemonHackCLI {
             return try playtestDebugPlan(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError.unknownCommand(command)
+        }
+    }
+
+    static func exitCode(arguments: [String], output: String) -> Int32 {
+        guard let command = arguments.first else { return 0 }
+        switch command {
+        case "patch-apply-export":
+            guard let object = jsonObject(output) else { return 0 }
+            return object["status"] as? String == "blocked" ? 1 : 0
+        case "script-command-edit-apply", "nds-data-edit-apply", "nds-data-semantic-apply":
+            guard let object = jsonObject(output) else { return 0 }
+            if diagnosticsContainError(object["diagnostics"]) {
+                return 1
+            }
+            if let changes = object["appliedChanges"] as? [Any], changes.isEmpty {
+                return 1
+            }
+            return 0
+        default:
+            return 0
+        }
+    }
+
+    private static func jsonObject(_ output: String) -> [String: Any]? {
+        guard
+            let data = output.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object
+    }
+
+    private static func diagnosticsContainError(_ diagnostics: Any?) -> Bool {
+        guard let diagnostics = diagnostics as? [[String: Any]] else { return false }
+        return diagnostics.contains { diagnostic in
+            diagnostic["severity"] as? String == "error"
         }
     }
 

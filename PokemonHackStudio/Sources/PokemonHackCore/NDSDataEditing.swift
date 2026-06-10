@@ -389,7 +389,7 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/item/trainer/encounter JSON records, HeartGold/SoulSilver personal/trainer/item/encounter JSON rows, Diamond/Pearl personal/trainer/encounter JSON rows, and the Diamond/Pearl item mapping C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/item/trainer/encounter JSON records, HeartGold/SoulSilver personal/trainer/item/encounter JSON rows, Diamond/Pearl personal/trainer/item/encounter JSON rows, and the Diamond/Pearl item mapping C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, and encounter records in this slice.", span: record.sourceSpan))
@@ -398,10 +398,10 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, and encounter JSON rows under files/fielddata/encountdata; NARC, generated, and binary rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, encounter JSON rows under files/fielddata/encountdata, and item mapping scalars in arm9/src/itemtool.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, and item mapping scalars in arm9/src/itemtool.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .items, !isSemanticItemDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; CSV, generated, binary, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows under files/itemtool/itemdata, Diamond/Pearl item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; CSV, generated, binary, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
         if record.domain == .trainers, !isSemanticTrainerDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED", message: "Semantic trainer editing is limited to Platinum trainer data JSON rows under res/trainers/data, HeartGold/SoulSilver trainer JSON rows under files/poketool/trainer, and Diamond/Pearl trainer JSON rows under files/poketool/trainer; trainer classes, animation resources, C anchors, and other trainer assets remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
@@ -443,7 +443,7 @@ public enum NDSDataSemanticEditor {
         case .pokeheartgold:
             return isHeartGoldSoulSilverItemDataPath(relativePath)
         case .pokediamond:
-            return relativePath == diamondPearlItemCAnchorPath
+            return isDiamondPearlItemDataPath(relativePath) || relativePath == diamondPearlItemCAnchorPath
         default:
             return false
         }
@@ -490,7 +490,8 @@ public enum NDSDataSemanticEditor {
         case .trainers:
             return isDiamondPearlTrainerDataPath(record.relativePath) && record.format == .json
         case .items:
-            return isDiamondPearlItemCAnchorRecord(record)
+            return (isDiamondPearlItemDataPath(record.relativePath) && record.format == .json)
+                || isDiamondPearlItemCAnchorRecord(record)
         case .encounters:
             return isDiamondPearlEncounterDataPath(record.relativePath) && record.format == .json
         default:
@@ -539,6 +540,12 @@ public enum NDSDataSemanticEditor {
     private static func isDiamondPearlTrainerDataPath(_ relativePath: String) -> Bool {
         let lower = relativePath.lowercased()
         return lower.hasPrefix("files/poketool/trainer/")
+            && lower.hasSuffix(".json")
+    }
+
+    private static func isDiamondPearlItemDataPath(_ relativePath: String) -> Bool {
+        let lower = relativePath.lowercased()
+        return lower.hasPrefix("files/itemtool/itemdata/")
             && lower.hasSuffix(".json")
     }
 
@@ -597,9 +604,7 @@ public enum NDSDataSemanticEditor {
         record: NDSDataCatalogRecord?
     ) -> ParsedSemanticFields {
         var diagnostics: [Diagnostic] = []
-        guard let symbolRange = sourceText.range(of: diamondPearlItemMappingTableSymbol),
-              let tableStart = sourceText[symbolRange.upperBound...].firstIndex(of: "{"),
-              let tableEnd = matchingCBraceEnd(sourceText, start: tableStart)
+        guard let tableRange = cInitializerTableBraceRange(sourceText, symbol: diamondPearlItemMappingTableSymbol)
         else {
             diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_TABLE_MISSING", message: "Diamond/Pearl item mapping table \(diamondPearlItemMappingTableSymbol) was not found; item C anchors remain raw-source only.", span: record?.sourceSpan))
             return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
@@ -607,14 +612,14 @@ public enum NDSDataSemanticEditor {
 
         var fields: [ParsedSemanticField] = []
         var rowIndex = 0
-        var cursor = sourceText.index(after: tableStart)
-        let tableClose = sourceText.index(before: tableEnd)
+        var cursor = sourceText.index(after: tableRange.openBrace)
+        let tableClose = sourceText.index(before: tableRange.closeBraceEnd)
         while cursor < tableClose {
             skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
             guard cursor < tableClose else { break }
             guard sourceText[cursor] == "{",
                   let entryEnd = matchingCBraceEnd(sourceText, start: cursor),
-                  entryEnd <= tableEnd
+                  entryEnd <= tableRange.closeBraceEnd
             else {
                 cursor = sourceText.index(after: cursor)
                 continue
@@ -622,6 +627,12 @@ public enum NDSDataSemanticEditor {
 
             let entryClose = sourceText.index(before: entryEnd)
             let scalars = cTopLevelScalars(in: sourceText, start: sourceText.index(after: cursor), end: entryClose)
+            guard scalars.count == DiamondPearlItemMappingField.allCases.count else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl item mapping row \(rowIndex) is not a four-scalar row and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlItemCAnchorPath, startLine: lineNumber(in: sourceText, before: cursor))))
+                rowIndex += 1
+                cursor = entryEnd
+                continue
+            }
             for (offset, scalarRange) in scalars.prefix(DiamondPearlItemMappingField.allCases.count).enumerated() {
                 guard let mappingField = DiamondPearlItemMappingField(rawValue: offset) else { continue }
                 let trimmed = String(sourceText[scalarRange]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -853,6 +864,52 @@ public enum NDSDataSemanticEditor {
         return nil
     }
 
+    private static func cInitializerTableBraceRange(
+        _ text: String,
+        symbol: String
+    ) -> (openBrace: String.Index, closeBraceEnd: String.Index)? {
+        var index = text.startIndex
+        while index < text.endIndex {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: text.endIndex) {
+                continue
+            }
+            guard isCIdentifierStart(text[index]) else {
+                index = text.index(after: index)
+                continue
+            }
+            let identifierStart = index
+            index = text.index(after: index)
+            while index < text.endIndex, isCIdentifierContinuation(text[index]) {
+                index = text.index(after: index)
+            }
+            guard String(text[identifierStart..<index]) == symbol,
+                  let openBrace = nextCInitializerOpenBrace(text, from: index),
+                  let closeBraceEnd = matchingCBraceEnd(text, start: openBrace)
+            else {
+                continue
+            }
+            return (openBrace, closeBraceEnd)
+        }
+        return nil
+    }
+
+    private static func nextCInitializerOpenBrace(_ text: String, from start: String.Index) -> String.Index? {
+        var index = start
+        while index < text.endIndex {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: text.endIndex) {
+                continue
+            }
+            if text[index] == ";" {
+                return nil
+            }
+            if text[index] == "{" {
+                return index
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
     private static func matchingBracketEnd(_ text: String, start: String.Index) -> String.Index? {
         guard start < text.endIndex, text[start] == "[" else { return nil }
         var index = start
@@ -889,6 +946,9 @@ public enum NDSDataSemanticEditor {
         var index = start
         var depth = 0
         while index < text.endIndex {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: text.endIndex) {
+                continue
+            }
             if text[index] == "{" {
                 depth += 1
             } else if text[index] == "}" {
@@ -908,6 +968,9 @@ public enum NDSDataSemanticEditor {
         var index = start
         var depth = 0
         while index < end {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: end) {
+                continue
+            }
             let character = text[index]
             if character == "(" || character == "[" || character == "{" {
                 depth += 1
@@ -928,9 +991,69 @@ public enum NDSDataSemanticEditor {
     }
 
     private static func skipCWhitespaceCommentsAndCommas(_ text: String, index: inout String.Index, end: String.Index) {
-        while index < end, text[index].isWhitespace || text[index] == "," {
-            index = text.index(after: index)
+        while index < end {
+            if text[index].isWhitespace || text[index] == "," {
+                index = text.index(after: index)
+            } else if skipCCommentOrQuotedLiteral(text, index: &index, end: end) {
+                continue
+            } else {
+                break
+            }
         }
+    }
+
+    private static func skipCCommentOrQuotedLiteral(_ text: String, index: inout String.Index, end: String.Index) -> Bool {
+        guard index < end else { return false }
+        if text[index] == "\"" || text[index] == "'" {
+            let quote = text[index]
+            index = text.index(after: index)
+            var escaped = false
+            while index < end {
+                let character = text[index]
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == quote {
+                    index = text.index(after: index)
+                    return true
+                }
+                index = text.index(after: index)
+            }
+            return true
+        }
+
+        guard text[index] == "/" else { return false }
+        let next = text.index(after: index)
+        guard next < end else { return false }
+        if text[next] == "/" {
+            index = text.index(after: next)
+            while index < end, text[index] != "\n" {
+                index = text.index(after: index)
+            }
+            return true
+        }
+        if text[next] == "*" {
+            index = text.index(after: next)
+            while index < end {
+                let after = text.index(after: index)
+                if text[index] == "*", after < end, text[after] == "/" {
+                    index = text.index(after: after)
+                    return true
+                }
+                index = after
+            }
+            return true
+        }
+        return false
+    }
+
+    private static func isCIdentifierStart(_ character: Character) -> Bool {
+        character == "_" || character.isLetter
+    }
+
+    private static func isCIdentifierContinuation(_ character: Character) -> Bool {
+        isCIdentifierStart(character) || character.isNumber
     }
 
     private static func trimmedRange(_ range: Range<String.Index>, in text: String) -> Range<String.Index>? {
@@ -957,19 +1080,23 @@ public enum NDSDataSemanticEditor {
     private static func parseJSONStringToken(_ text: String, start: String.Index) -> (value: String, end: String.Index)? {
         guard start < text.endIndex, text[start] == "\"" else { return nil }
         var index = text.index(after: start)
-        var value = ""
         var escaped = false
         while index < text.endIndex {
             let character = text[index]
             if escaped {
-                value.append(character)
                 escaped = false
             } else if character == "\\" {
                 escaped = true
             } else if character == "\"" {
-                return (value, text.index(after: index))
-            } else {
-                value.append(character)
+                let end = text.index(after: index)
+                let literal = String(text[start..<end])
+                guard
+                    let data = literal.data(using: .utf8),
+                    let value = try? JSONDecoder().decode(String.self, from: data)
+                else {
+                    return nil
+                }
+                return (value, end)
             }
             index = text.index(after: index)
         }
@@ -1262,8 +1389,16 @@ public enum NDSDataMutationPlanner {
         }
         let root = URL(fileURLWithPath: catalog.root.path).standardizedFileURL
         let sourceURL = root.appendingPathComponent(record.relativePath).standardizedFileURL
-        if !isContained(sourceURL, in: root) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_EDIT_PATH_OUTSIDE_ROOT", message: "NDS source path is outside the project root: \(record.relativePath).", span: record.sourceSpan))
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            record.relativePath,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "NDS_DATA_EDIT",
+            subject: "NDS source path",
+            spanLine: record.sourceSpan?.startLine ?? 1
+        )
+        if !pathDiagnostics.isEmpty {
+            diagnostics.append(contentsOf: pathDiagnostics)
         } else if record.exists {
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
@@ -1324,12 +1459,6 @@ public enum NDSDataMutationPlanner {
         return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
     }
 
-    private static func isContained(_ url: URL, in root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
-        return path == rootPath || path.hasPrefix(rootPath + "/")
-    }
-
     private static let safeEditableFormats: Set<NDSDataSourceFormat> = [.json, .csv, .text, .cSource, .cHeader]
 }
 
@@ -1343,6 +1472,16 @@ public enum NDSDataMutationApplier {
         }
         guard !plan.changes.isEmpty else {
             return NDSDataApplyResult(backupRootPath: backupRoot.path, appliedChanges: [])
+        }
+        let backupDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            plan.backupRelativeRoot,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "NDS_DATA_APPLY_BACKUP",
+            subject: "NDS data backup path"
+        )
+        guard backupDiagnostics.isEmpty else {
+            return NDSDataApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: backupDiagnostics)
         }
 
         try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
@@ -1389,8 +1528,15 @@ private enum NDSDataEditApplySafety {
 
     private static func diagnosticsForChange(_ change: NDSDataEditFileChange, root: URL, fileManager: FileManager) -> [Diagnostic] {
         let destination = root.appendingPathComponent(change.path).standardizedFileURL
-        guard isContained(destination, in: root) else {
-            return [pathDiagnostic("NDS_DATA_APPLY_PATH_OUTSIDE_ROOT", "NDS data apply path is outside the project root: \(change.path).", path: change.path)]
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            change.path,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "NDS_DATA_APPLY",
+            subject: "NDS data apply path"
+        )
+        guard pathDiagnostics.isEmpty else {
+            return pathDiagnostics
         }
         guard fileManager.fileExists(atPath: destination.path) else {
             return [pathDiagnostic("NDS_DATA_APPLY_SOURCE_MISSING", "NDS data source file is missing before apply: \(change.path).", path: change.path)]
@@ -1411,9 +1557,4 @@ private enum NDSDataEditApplySafety {
         Diagnostic(severity: .error, code: code, message: message, span: SourceSpan(relativePath: path, startLine: 1))
     }
 
-    private static func isContained(_ url: URL, in root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
-        return path == rootPath || path.hasPrefix(rootPath + "/")
-    }
 }

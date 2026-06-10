@@ -54,8 +54,6 @@ if [[ "$MODE" == "--check-tools" ]]; then
   exit 0
 fi
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-
 cd "$PROJECT_DIR"
 xcodegen generate
 
@@ -75,7 +73,16 @@ xcodebuild \
 APP_BUNDLE="$BUILD_DIR/Build/Products/$CONFIGURATION/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+terminate_running_app() {
+  if [[ -x "$APP_BINARY" ]]; then
+    pkill -f "$APP_BINARY" >/dev/null 2>&1 || true
+  else
+    pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+  fi
+}
+
 open_app() {
+  terminate_running_app
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
@@ -84,6 +91,7 @@ case "$MODE" in
     open_app
     ;;
   --debug|debug)
+    terminate_running_app
     lldb -- "$APP_BINARY"
     ;;
   --logs|logs)
@@ -97,7 +105,7 @@ case "$MODE" in
   --verify|verify)
     open_app
     sleep 1
-    pgrep -x "$APP_NAME" >/dev/null
+    pgrep -f "$APP_BINARY" >/dev/null
     ;;
   test)
     ;;

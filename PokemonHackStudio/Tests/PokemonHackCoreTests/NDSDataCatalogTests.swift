@@ -1174,6 +1174,92 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
     }
 
+    func testNDSDataSemanticEditorPlansDiamondPearlItemJSONScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let itemPath = "files/itemtool/itemdata/potion.json"
+        let escapedPath = "files/itemtool/itemdata/escaped.json"
+        let binaryPath = "files/itemtool/itemdata/item_0000.bin"
+        let duplicatePath = "files/itemtool/itemdata/duplicate.json"
+        let malformedPath = "files/itemtool/itemdata/malformed.json"
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:\(itemPath)")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        let fields = Dictionary(uniqueKeysWithValues: snapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(fields["name"]?.value, "POTION")
+        XCTAssertEqual(fields["name"]?.valueKind, .string)
+        XCTAssertEqual(fields["price"]?.value, "300")
+        XCTAssertEqual(fields["price"]?.valueKind, .number)
+        XCTAssertEqual(fields["field_use"]?.value, "true")
+        XCTAssertEqual(fields["field_use"]?.valueKind, .bool)
+        XCTAssertNil(fields["effects"])
+
+        let escapedSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:\(escapedPath)")
+        XCTAssertTrue(escapedSnapshot.canEdit, escapedSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        let escapedFields = Dictionary(uniqueKeysWithValues: escapedSnapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(escapedFields["name"]?.value, "POTION\nTAB\té")
+        XCTAssertEqual(escapedFields["description"]?.value, "quoted \"text\" and slash \\")
+
+        let nestedPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "items:\(itemPath)",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "effects.0.amount", value: "50")]
+            )
+        )
+        XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
+        XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "items:\(itemPath)",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "name", value: "SUPER_POTION"),
+                    NDSDataSemanticFieldEdit(key: "price", value: "700"),
+                    NDSDataSemanticFieldEdit(key: "field_use", value: "false")
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"name\":\"SUPER_POTION\""))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"price\":700"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"field_use\":false"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(itemPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"name\":\"SUPER_POTION\""))
+        XCTAssertTrue(updated.contains("\"price\":700"))
+        XCTAssertTrue(updated.contains("\"field_use\":false"))
+        XCTAssertTrue(updated.contains("\"effects\":[{\"kind\":\"heal\",\"amount\":20}]"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let binarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:\(binaryPath)")
+        XCTAssertFalse(binarySnapshot.canEdit)
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+
+        let duplicateSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:\(duplicatePath)")
+        XCTAssertFalse(duplicateSnapshot.canEdit)
+        XCTAssertTrue(duplicateSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE" })
+
+        let malformedSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:\(malformedPath)")
+        XCTAssertFalse(malformedSnapshot.canEdit)
+        XCTAssertTrue(malformedSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_JSON_MALFORMED" })
+
+        let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "items:arm9/src/itemtool.c")
+        XCTAssertTrue(cAnchorSnapshot.canEdit, cAnchorSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(cAnchorSnapshot.fields.contains { $0.key == "itemIndexMappings.1.itemDataIndex" && $0.value == "1" })
+    }
+
     func testNDSDataSemanticEditorPlansDiamondPearlEncounterJSONScalars() throws {
         let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         let encounterPath = "files/fielddata/encountdata/sinnoh/route201.json"
@@ -1444,6 +1530,53 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
     }
 
+    func testNDSDataMutationApplyBlocksSymlinkEscapedSourcePath() throws {
+        let temp = try NDSDataCatalogTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokediamond")
+        let outside = temp.url.appendingPathComponent("outside")
+        try makeDirectory(root)
+        try makeDirectory(outside)
+        let outsideFile = outside.appendingPathComponent("item.json")
+        let original = Data(#"{"name":"POTION"}"#.utf8)
+        let edited = Data(#"{"name":"SUPER_POTION"}"#.utf8)
+        try write(original, to: outsideFile)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("linked"),
+            withDestinationURL: outside
+        )
+
+        let plan = NDSDataEditPlan(
+            rootPath: root.path,
+            recordID: "items:linked/item.json",
+            draft: NDSDataEditDraft(recordID: "items:linked/item.json", editedText: #"{"name":"SUPER_POTION"}"#),
+            changes: [
+                NDSDataEditFileChange(
+                    path: "linked/item.json",
+                    summary: "Attempt escaped symlink write",
+                    originalSHA1: pokemonHackSHA1Hex(original),
+                    originalByteCount: original.count,
+                    newByteCount: edited.count,
+                    textPreview: #"{"name":"SUPER_POTION"}"#,
+                    newData: edited
+                )
+            ],
+            diagnostics: [],
+            mutationPlan: MutationPlan(title: "Apply escaped write", summary: "Test plan"),
+            backupRelativeRoot: ".pokemonhackstudio/backups/test"
+        )
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "NDS_DATA_APPLY_PATH_SYMLINK_OUTSIDE_ROOT" })
+
+        let result = try NDSDataMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 0)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "NDS_DATA_APPLY_PATH_SYMLINK_OUTSIDE_ROOT" })
+        XCTAssertEqual(try Data(contentsOf: outsideFile), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups/test").path))
+    }
+
     private func makeRoot(name: String, configure: (URL) throws -> Void) throws -> URL {
         let temp = try NDSDataCatalogTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -1531,6 +1664,11 @@ final class NDSDataCatalogTests: XCTestCase {
             """
             #include "global.h"
 
+            /* static const u16 sItemIndexMappings[][4] = {
+                { 99, 99, 99, 99 },
+            }; */
+            static const char *sItemIndexMappingsDebug = "sItemIndexMappings { { 88, 88, 88, 88 } }";
+
             static const u16 sItemIndexMappings[][4] = {
                 { 0, 1, 2, 0 },
                 { 1, 2, 3, 1 },
@@ -1548,6 +1686,10 @@ final class NDSDataCatalogTests: XCTestCase {
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
         try write("void Message_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/msgdata.c"))
         try write("{\"personal\":1}\n", to: root.appendingPathComponent("files/poketool/personal/personal.json"))
+        try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
+        try write(#"{"name":"POTION\nTAB\t\u00e9","description":"quoted \"text\" and slash \\","price":300}"# + "\n", to: root.appendingPathComponent("files/itemtool/itemdata/escaped.json"))
+        try write("{\"name\":\"POTION\",\"name\":\"SUPER_POTION\"}\n", to: root.appendingPathComponent("files/itemtool/itemdata/duplicate.json"))
+        try write("{\"name\": }\n", to: root.appendingPathComponent("files/itemtool/itemdata/malformed.json"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
         try write("ignored\n", to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/.knarcignore"))

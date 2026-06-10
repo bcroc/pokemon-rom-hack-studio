@@ -211,6 +211,67 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testProjectSwitchGuardCoversSpeciesDrafts() async throws {
+        let firstRoot = try makeUnifiedDataProject()
+        let secondRoot = try makeUnifiedDataProject()
+        let store = try makeStore(workspaceRoot: firstRoot.deletingLastPathComponent())
+
+        store.openProject(path: firstRoot.path)
+        store.selectWorkbenchModule(.pokemon)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+        let firstProjectID = store.selectedProjectID
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.baseStats.hp = 47
+        store.updateSelectedSpeciesDraft(draft)
+        XCTAssertTrue(store.selectedSpeciesIsDirty)
+
+        store.openProject(path: secondRoot.path)
+
+        XCTAssertEqual(store.selectedProjectID, firstProjectID)
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, firstRoot.path)
+        XCTAssertTrue(store.selectedSpeciesIsDirty)
+        XCTAssertNotNil(store.pendingMapNavigation)
+
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+    }
+
+    @MainActor
+    func testNDSDataApplyBlocksWhenSourceChangesAfterPreview() async throws {
+        let root = try makeNDSSourceProject()
+        let store = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let catalog = try await waitForSelectedAssetCatalog(store)
+        let sourceRow = try XCTUnwrap(catalog.rows.first { $0.path == "arm9/src/pokemon.c" })
+        store.requestResourceAssetSelection(sourceRow.id)
+        store.updateSelectedNDSDataDraftText("void Pokemon_Load(void) { /* edited */ }\n")
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        try write("void Pokemon_Load(void) { /* changed elsewhere */ }\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
+
+        store.applySelectedNDSDataMutationPlan()
+
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 0)
+        XCTAssertTrue(store.latestNDSDataApplyResult?.diagnostics.contains { $0.code.hasPrefix("NDS_DATA_APPLY_SOURCE_") } == true)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("arm9/src/pokemon.c"), encoding: .utf8),
+            "void Pokemon_Load(void) { /* changed elsewhere */ }\n"
+        )
+    }
+
+    @MainActor
     private func makeStore(workspaceRoot: URL) throws -> WorkbenchStore {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ProjectWorkspaceStoreTests.\(UUID().uuidString)"))
         let settings = WorkbenchUserSettings(defaults: defaults)

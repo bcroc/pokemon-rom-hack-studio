@@ -234,7 +234,7 @@ public enum GraphicsMutationPlanner {
         var draftsByPath: [String: GraphicsSourceDraft] = [:]
 
         for operation in draft.operations {
-            guard validateSourcePath(operation.path, root: root, diagnostics: &diagnostics) else {
+            guard validateSourcePath(operation.path, root: root, fileManager: fileManager, diagnostics: &diagnostics) else {
                 continue
             }
             var source = draftsByPath[operation.path]
@@ -285,7 +285,7 @@ public enum GraphicsMutationPlanner {
         )
     }
 
-    private static func validateSourcePath(_ path: String, root: URL, diagnostics: inout [Diagnostic]) -> Bool {
+    private static func validateSourcePath(_ path: String, root: URL, fileManager: FileManager, diagnostics: inout [Diagnostic]) -> Bool {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             diagnostics.append(Diagnostic(severity: .error, code: "GRAPHICS_SOURCE_PATH_MISSING", message: "Graphics edit path is missing."))
@@ -296,15 +296,22 @@ public enum GraphicsMutationPlanner {
             return false
         }
         let destination = root.appendingPathComponent(trimmed).standardizedFileURL
-        guard isContained(destination, in: root) else {
-            diagnostics.append(pathDiagnostic("GRAPHICS_SOURCE_PATH_OUTSIDE_ROOT", "Graphics edit path is outside the project root: \(path).", path: path))
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            trimmed,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "GRAPHICS_SOURCE",
+            subject: "Graphics edit path"
+        )
+        guard pathDiagnostics.isEmpty else {
+            diagnostics.append(contentsOf: pathDiagnostics)
             return false
         }
         guard !isBlockedSourcePath(trimmed) else {
             diagnostics.append(pathDiagnostic("GRAPHICS_SOURCE_PATH_BLOCKED", "Graphics authoring cannot write generated, build, cache, backup, ROM, or reference paths: \(path).", path: path))
             return false
         }
-        guard FileManager.default.fileExists(atPath: destination.path) else {
+        guard fileManager.fileExists(atPath: destination.path) else {
             diagnostics.append(pathDiagnostic("GRAPHICS_SOURCE_MISSING", "Graphics source file does not exist: \(path).", path: path))
             return false
         }
@@ -468,6 +475,16 @@ public enum GraphicsMutationApplier {
         guard !plan.changes.isEmpty else {
             return GraphicsApplyResult(backupRootPath: backupRoot.path, appliedChanges: [])
         }
+        let backupDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            plan.backupRelativeRoot,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "GRAPHICS_APPLY_BACKUP",
+            subject: "Graphics backup path"
+        )
+        guard backupDiagnostics.isEmpty else {
+            return GraphicsApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: backupDiagnostics)
+        }
 
         try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
         var applied: [AppliedGraphicsFileChange] = []
@@ -520,8 +537,15 @@ private enum GraphicsEditApplySafety {
 
     private static func diagnosticsForChange(_ change: GraphicsEditFileChange, root: URL, fileManager: FileManager) -> [Diagnostic] {
         let destination = root.appendingPathComponent(change.path).standardizedFileURL
-        guard isContained(destination, in: root) else {
-            return [pathDiagnostic("GRAPHICS_APPLY_PATH_OUTSIDE_ROOT", "Graphics apply path is outside the project root: \(change.path).", path: change.path)]
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            change.path,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "GRAPHICS_APPLY",
+            subject: "Graphics apply path"
+        )
+        guard pathDiagnostics.isEmpty else {
+            return pathDiagnostics
         }
         guard fileManager.fileExists(atPath: destination.path) else {
             return [pathDiagnostic("GRAPHICS_APPLY_SOURCE_MISSING", "Graphics source file is missing before apply: \(change.path).", path: change.path)]
@@ -573,12 +597,6 @@ private func backupTimestamp() -> String {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyyMMdd-HHmmss"
     return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
-}
-
-private func isContained(_ url: URL, in root: URL) -> Bool {
-    let rootPath = root.standardizedFileURL.path
-    let path = url.standardizedFileURL.path
-    return path == rootPath || path.hasPrefix(rootPath + "/")
 }
 
 private func pathDiagnostic(_ code: String, _ message: String, path: String) -> Diagnostic {

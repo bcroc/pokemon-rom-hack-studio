@@ -116,6 +116,239 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(edited.pokedex?.pokemonScale, "257")
     }
 
+    func testRubySapphireSpeciesBaseStatsPlanApplyBackUpAndReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertTrue(treecko.isEditable)
+        XCTAssertEqual(treecko.sourceSpan.relativePath, "src/data/pokemon/base_stats.h")
+        XCTAssertEqual(treecko.types, ["TYPE_GRASS", "TYPE_GRASS"])
+        XCTAssertEqual(treecko.heldItems.common, "ITEM_NONE")
+        XCTAssertEqual(treecko.breeding.eggGroups, ["EGG_GROUP_MONSTER", "EGG_GROUP_DRAGON"])
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.baseStats.hp = 41
+        draft.types[1] = "TYPE_FIRE"
+        draft.abilities[1] = "ABILITY_CHLOROPHYLL"
+        draft.evYield.hp = 1
+        draft.evYield.speed = 0
+        draft.growthRate = "GROWTH_FAST"
+        draft.itemCommon = "ITEM_POTION"
+        draft.noFlip = true
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/base_stats.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".baseHP = 41"))
+        XCTAssertTrue(preview.contains(".type2 = TYPE_FIRE"))
+        XCTAssertTrue(preview.contains(".item1 = ITEM_POTION"))
+        XCTAssertTrue(preview.contains(".ability2 = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(preview.contains(".noFlip = TRUE"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/base_stats.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.baseStats.hp, 41)
+        XCTAssertEqual(edited.types, ["TYPE_GRASS", "TYPE_FIRE"])
+        XCTAssertEqual(edited.abilities, ["ABILITY_OVERGROW", "ABILITY_CHLOROPHYLL"])
+        XCTAssertEqual(edited.evYield.hp, 1)
+        XCTAssertEqual(edited.evYield.speed, 0)
+        XCTAssertEqual(edited.training.growthRate, "GROWTH_FAST")
+        XCTAssertEqual(edited.heldItems.common, "ITEM_POTION")
+        XCTAssertEqual(edited.noFlip, "TRUE")
+    }
+
+    func testRubySapphireSpeciesPlannerBlocksAdjacentDraftScopes() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_TACKLE"))
+        draft.tmhmMoves.append("MOVE_CUT")
+        draft.eggMoves.append("MOVE_LEECH_SEED")
+        draft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "16", targetSpecies: "SPECIES_TREECKO"))
+        draft.pokedex?.height = "6"
+        draft.pokedex?.description = "Ruby/Sapphire Pokedex text stays read-only."
+        draft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+    }
+
+    func testExpansionSpeciesInfoScalarPlanApplyBackupReloadPreservesRawFields() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertTrue(treecko.isEditable)
+        XCTAssertEqual(treecko.sourceSpan.relativePath, "src/data/pokemon/species_info.h")
+        XCTAssertEqual(treecko.baseStats.hp, 40)
+        XCTAssertEqual(treecko.types, ["TYPE_GRASS", "TYPE_GRASS"])
+        XCTAssertEqual(treecko.abilities, ["ABILITY_OVERGROW", "ABILITY_NONE", "ABILITY_CHLOROPHYLL"])
+        XCTAssertEqual(treecko.breeding.eggGroups, ["EGG_GROUP_MONSTER", "EGG_GROUP_DRAGON"])
+        XCTAssertEqual(treecko.heldItems.common, "ITEM_NONE")
+        XCTAssertTrue(treecko.diagnostics.contains { $0.code == "SPECIES_ENTRY_EXPANSION_FIELD_READ_ONLY" })
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.baseStats.hp = 41
+        draft.baseStats.attack = 46
+        draft.types[1] = "TYPE_FIRE"
+        draft.abilities[1] = "ABILITY_CHLOROPHYLL"
+        draft.evYield.hp = 1
+        draft.evYield.speed = 0
+        draft.catchRate = "46"
+        draft.expYield = "66"
+        draft.itemCommon = "ITEM_POTION"
+        draft.friendship = "71"
+        draft.growthRate = "GROWTH_FAST"
+        draft.eggGroups[1] = "EGG_GROUP_MONSTER"
+        draft.bodyColor = "BODY_COLOR_RED"
+        draft.noFlip = true
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/species_info.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".baseHP = 41, // preserve comment"))
+        XCTAssertTrue(preview.contains(".baseAttack    = 46"))
+        XCTAssertTrue(preview.contains(".type2 = TYPE_FIRE"))
+        XCTAssertTrue(preview.contains(".baseExp = 66"))
+        XCTAssertTrue(preview.contains(".evYield_HP        = 1"))
+        XCTAssertTrue(preview.contains(".item1 = ITEM_POTION"))
+        XCTAssertTrue(preview.contains(".eggGroup2 = EGG_GROUP_MONSTER"))
+        XCTAssertTrue(preview.contains(".ability2 = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(preview.contains(".hiddenAbility = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(preview.contains(".formSpeciesIdTable = sTreeckoFormSpeciesIdTable"))
+        XCTAssertTrue(preview.contains(".mysteryExpansionField = KEEP_ME"))
+        XCTAssertTrue(preview.contains(".noFlip = TRUE"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/species_info.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+
+        let source = try String(contentsOf: root.appendingPathComponent("src/data/pokemon/species_info.h"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".baseHP = 41, // preserve comment"))
+        XCTAssertTrue(source.contains(".type2 = TYPE_FIRE"))
+        XCTAssertTrue(source.contains(".hiddenAbility = ABILITY_CHLOROPHYLL"))
+        XCTAssertTrue(source.contains(".formSpeciesIdTable = sTreeckoFormSpeciesIdTable"))
+        XCTAssertTrue(source.contains(".mysteryExpansionField = KEEP_ME"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.baseStats.hp, 41)
+        XCTAssertEqual(edited.baseStats.attack, 46)
+        XCTAssertEqual(edited.types, ["TYPE_GRASS", "TYPE_FIRE"])
+        XCTAssertEqual(edited.abilities, ["ABILITY_OVERGROW", "ABILITY_CHLOROPHYLL", "ABILITY_CHLOROPHYLL"])
+        XCTAssertEqual(edited.evYield.hp, 1)
+        XCTAssertEqual(edited.evYield.speed, 0)
+        XCTAssertEqual(edited.training.catchRate, "46")
+        XCTAssertEqual(edited.training.expYield, "66")
+        XCTAssertEqual(edited.heldItems.common, "ITEM_POTION")
+        XCTAssertEqual(edited.training.friendship, "71")
+        XCTAssertEqual(edited.training.growthRate, "GROWTH_FAST")
+        XCTAssertEqual(edited.breeding.eggGroups, ["EGG_GROUP_MONSTER", "EGG_GROUP_MONSTER"])
+        XCTAssertEqual(edited.bodyColor, "BODY_COLOR_RED")
+        XCTAssertEqual(edited.noFlip, "TRUE")
+    }
+
+    func testExpansionSpeciesInfoPlannerBlocksCompositeAndAdjacentScopes() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, scalarAliases: false)
+        let speciesPath = root.appendingPathComponent("src/data/pokemon/species_info.h")
+        let originalText = try String(contentsOf: speciesPath, encoding: .utf8)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var compositeDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        compositeDraft.types[1] = "TYPE_FIRE"
+        compositeDraft.abilities[1] = "ABILITY_CHLOROPHYLL"
+        compositeDraft.eggGroups[1] = "EGG_GROUP_MONSTER"
+
+        let compositePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: compositeDraft)
+
+        XCTAssertEqual(compositePlan.changes.count, 0)
+        XCTAssertFalse(compositePlan.isApplyable)
+        XCTAssertTrue(compositePlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_NON_SCALAR_FIELD_BLOCKED" && $0.message.contains("types") })
+        XCTAssertTrue(compositePlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_NON_SCALAR_FIELD_BLOCKED" && $0.message.contains("abilities") })
+        XCTAssertTrue(compositePlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_NON_SCALAR_FIELD_BLOCKED" && $0.message.contains("eggGroups") })
+        XCTAssertEqual(try String(contentsOf: speciesPath, encoding: .utf8), originalText)
+
+        var adjacentDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        adjacentDraft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 7, move: "MOVE_ABSORB"))
+        adjacentDraft.tmhmMoves.append("MOVE_CUT")
+        adjacentDraft.eggMoves.append("MOVE_LEECH_SEED")
+        adjacentDraft.tutorMoves.append("MOVE_SWORD_DANCE")
+        adjacentDraft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "16", targetSpecies: "SPECIES_TREECKO"))
+        adjacentDraft.pokedex?.height = "6"
+        adjacentDraft.pokedex?.description = "Expansion Pokedex text remains read-only."
+        adjacentDraft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        adjacentDraft.bodyColor = "BODY_COLOR_BLUE"
+
+        let adjacentPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: adjacentDraft)
+
+        XCTAssertEqual(adjacentPlan.changes.count, 0)
+        XCTAssertFalse(adjacentPlan.isApplyable)
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" })
+        XCTAssertEqual(try String(contentsOf: speciesPath, encoding: .utf8), originalText)
+    }
+
+    func testExpansionSpeciesInfoScalarPlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.baseStats.attack = 46
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let speciesPath = root.appendingPathComponent("src/data/pokemon/species_info.h")
+        let source = try String(contentsOf: speciesPath, encoding: .utf8)
+            .replacingOccurrences(of: ".baseHP = 40, // preserve comment", with: ".baseHP = 41, // preserve comment")
+        try write(source, to: speciesPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
     func testSpeciesMutationPlannerRewritesPokedexEntriesAndText() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url
@@ -768,6 +1001,195 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        )
+    }
+
+    private func makeExpansionSpeciesProject(at root: URL, scalarAliases: Bool = true) throws {
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write("// Expansion marker\n", to: root.appendingPathComponent("include/constants/expansion.h"))
+        try writeClassicConstants(at: root)
+        let typeFields = scalarAliases
+            ? """
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+            """
+            : """
+                    .types = { TYPE_GRASS, TYPE_GRASS },
+            """
+        let eggGroupFields = scalarAliases
+            ? """
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+            """
+            : """
+                    .eggGroups = { EGG_GROUP_MONSTER, EGG_GROUP_DRAGON },
+            """
+        let abilityFields = scalarAliases
+            ? """
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .hiddenAbility = ABILITY_CHLOROPHYLL,
+            """
+            : """
+                    .abilities = {ABILITY_OVERGROW, ABILITY_NONE},
+                    .hiddenAbility = ABILITY_CHLOROPHYLL,
+            """
+
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP = 40, // preserve comment
+                    .baseAttack    = 45,
+                    .baseDefense   = 35,
+                    .baseSpeed     = 70,
+                    .baseSpAttack  = 65,
+                    .baseSpDefense = 55,
+            \(typeFields)
+                    .catchRate = 45,
+                    .baseExp = 65,
+                    .evYield_HP        = 0,
+                    .evYield_Attack    = 0,
+                    .evYield_Defense   = 0,
+                    .evYield_Speed     = 1,
+                    .evYield_SpAttack  = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = 70,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+            \(eggGroupFields)
+            \(abilityFields)
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .formSpeciesIdTable = sTreeckoFormSpeciesIdTable,
+                    .mysteryExpansionField = KEEP_ME,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write(
+            """
+            // Generated family supplement stays read-only for PHS-T57D.
+            static const u16 sTreeckoFormSpeciesIdTable[] = {
+                SPECIES_TREECKO,
+                SPECIES_NONE,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        )
+        try write(
+            """
+            const struct PokedexEntry gPokedexEntries[] =
+            {
+                [NATIONAL_DEX_TREECKO] =
+                {
+                    .categoryName = _("WOOD GECKO"),
+                    .height = 5,
+                    .weight = 50,
+                    .description = gTreeckoPokedexText,
+                    .pokemonScale = 256,
+                    .pokemonOffset = 0,
+                    .trainerScale = 256,
+                    .trainerOffset = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        )
+        try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h"))
+    }
+
+    private func makeRubyProject(at root: URL) throws {
+        try write(
+            """
+            GAME_VERSION ?= RUBY
+            BUILD_NAME := ruby
+            """,
+            to: root.appendingPathComponent("config.mk")
+        )
+        try write("ROM := poke$(BUILD_NAME).gba\n", to: root.appendingPathComponent("Makefile"))
+        try write("placeholder\n", to: root.appendingPathComponent("ruby.sha1"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try writeClassicConstants(at: root)
+
+        try write(
+            """
+            const struct BaseStats gBaseStats[] =
+            {
+                [SPECIES_NONE] = {0},
+
+                [SPECIES_TREECKO] =
+                {
+                    .baseHP        = 40,
+                    .baseAttack    = 45,
+                    .baseDefense   = 35,
+                    .baseSpeed     = 70,
+                    .baseSpAttack  = 65,
+                    .baseSpDefense = 55,
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+                    .catchRate = 45,
+                    .expYield = 65,
+                    .evYield_HP        = 0,
+                    .evYield_Attack    = 0,
+                    .evYield_Defense   = 0,
+                    .evYield_Speed     = 1,
+                    .evYield_SpAttack  = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = 70,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .noFlip = FALSE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/base_stats.h")
+        )
+        try write(
+            """
+            const struct PokedexEntry gPokedexEntries[] =
+            {
+                [NATIONAL_DEX_TREECKO] =
+                {
+                    .categoryName = _("WOOD GECKO"),
+                    .height = 5,
+                    .weight = 50,
+                    .description = gTreeckoPokedexText,
+                    .pokemonScale = 256,
+                    .pokemonOffset = 0,
+                    .trainerScale = 256,
+                    .trainerOffset = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokedex_entries_en.h")
+        )
+        try write(
+            """
+            const u8 gTreeckoPokedexText[] = _("It makes its nest in a giant tree.");
+            """,
+            to: root.appendingPathComponent("src/data/pokedex_text_en.h")
         )
     }
 

@@ -141,15 +141,16 @@ public enum ScriptCommandEditPlanner {
         let sourceURL = root.appendingPathComponent(draft.sourcePath).standardizedFileURL
         var changes: [ScriptCommandEditFileChange] = []
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            if !isContained(sourceURL, in: root) {
-                diagnostics.append(
-                    Diagnostic(
-                        severity: .error,
-                        code: "SCRIPT_COMMAND_EDIT_PATH_OUTSIDE_ROOT",
-                        message: "Script command edit path is outside the project root: \(draft.sourcePath).",
-                        span: SourceSpan(relativePath: draft.sourcePath, startLine: draft.line)
-                    )
-                )
+            let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+                draft.sourcePath,
+                root: root,
+                fileManager: fileManager,
+                codePrefix: "SCRIPT_COMMAND_EDIT",
+                subject: "Script command edit path",
+                spanLine: draft.line
+            )
+            if !pathDiagnostics.isEmpty {
+                diagnostics.append(contentsOf: pathDiagnostics)
             } else if !fileManager.fileExists(atPath: sourceURL.path) {
                 diagnostics.append(
                     Diagnostic(
@@ -326,6 +327,17 @@ public enum ScriptCommandEditApplier {
         guard applyability.isApplyable else {
             return ScriptCommandEditApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: applyability.diagnostics)
         }
+        let backupDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            plan.backupRelativeRoot,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "SCRIPT_COMMAND_EDIT_APPLY_BACKUP",
+            subject: "Script backup path",
+            spanLine: plan.draft.line
+        )
+        guard backupDiagnostics.isEmpty else {
+            return ScriptCommandEditApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: backupDiagnostics)
+        }
 
         try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
         var applied: [AppliedScriptCommandEditChange] = []
@@ -457,8 +469,16 @@ private enum ScriptCommandEditApplySafety {
         }
         for change in plan.changes {
             let destination = root.appendingPathComponent(change.path).standardizedFileURL
-            if !isContained(destination, in: root) {
-                diagnostics.append(Diagnostic(severity: .error, code: "SCRIPT_COMMAND_EDIT_APPLY_PATH_OUTSIDE_ROOT", message: "Script edit path is outside the project root: \(change.path).", span: SourceSpan(relativePath: change.path, startLine: plan.draft.line)))
+            let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+                change.path,
+                root: root,
+                fileManager: fileManager,
+                codePrefix: "SCRIPT_COMMAND_EDIT_APPLY",
+                subject: "Script edit path",
+                spanLine: plan.draft.line
+            )
+            if !pathDiagnostics.isEmpty {
+                diagnostics.append(contentsOf: pathDiagnostics)
                 continue
             }
             guard fileManager.fileExists(atPath: destination.path), let currentData = try? Data(contentsOf: destination) else {
@@ -494,12 +514,6 @@ private func readText(_ url: URL) throws -> String {
         return utf8
     }
     return try String(contentsOf: url, encoding: .isoLatin1)
-}
-
-private func isContained(_ url: URL, in root: URL) -> Bool {
-    let rootPath = root.standardizedFileURL.path
-    let path = url.standardizedFileURL.path
-    return path == rootPath || path.hasPrefix(rootPath + "/")
 }
 
 private func backupTimestamp() -> String {

@@ -86,7 +86,7 @@ The CLI is the automation companion for the app:
 - `playtest`: prepare headless mGBA-compatible run plans and explicitly launch runnable interactive handoffs through the external emulator boundary.
 - `migration-coverage`: report source-first, read-only, migration-plan-only, binary-only, and blocked domains across GBA/NDS inputs so CLI and app-facing diagnostics share one fact model before ROM asset migration planning.
 
-Repo-level validation should keep `make validate` as the canonical local proof, with `make validate-nds` as the opt-in central NDS reference smoke. App-hosted Xcode tests should use a unique DerivedData path for each focused ladder to avoid shared build database locks.
+Repo-level validation should keep `make validate` as the canonical local SwiftPM plus CLI smoke proof. Use `make validate-nds` for the focused NDS semantic/reference lane; `REQUIRE_NDS_REFERENCES=1 make validate-nds` should fail missing central NDS references on strict validation machines. Use focused app-hosted Xcode `xcodebuild ... -only-testing` ladders for WorkbenchStore/UI paths that SwiftPM cannot prove, preferably with a unique DerivedData path, and use `REQUIRE_GBA_FIXTURES=1 make validate` only on machines with live GBA fixtures.
 
 CLI output should be script-friendly by default, with JSON output available for workflows that feed back into the app or tests.
 

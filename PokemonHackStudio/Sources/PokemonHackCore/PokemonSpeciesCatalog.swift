@@ -1158,8 +1158,14 @@ public enum ProjectSpeciesCatalogBuilder {
                     growthRate: compact(fields["growthRate"]),
                     safariZoneFleeRate: compact(fields["safariZoneFleeRate"])
                 ),
-                breeding: SpeciesBreedingData(eggGroups: constantList(fields["eggGroups"])),
-                heldItems: SpeciesHeldItems(common: compact(fields["itemCommon"]), rare: compact(fields["itemRare"])),
+                breeding: SpeciesBreedingData(
+                    eggGroups: constantList(fields["eggGroups"])
+                        + [fields["eggGroup1"], fields["eggGroup2"]].compactMap { compact($0) }
+                ),
+                heldItems: SpeciesHeldItems(
+                    common: compact(fields["itemCommon"] ?? fields["item1"]),
+                    rare: compact(fields["itemRare"] ?? fields["item2"])
+                ),
                 bodyColor: compact(fields["bodyColor"]),
                 noFlip: compact(fields["noFlip"]),
                 learnsets: SpeciesLearnsets(
@@ -1178,7 +1184,7 @@ public enum ProjectSpeciesCatalogBuilder {
                 assets: assets,
                 diagnostics: detailDiagnostics,
                 sourcePreview: preview(entry.body),
-                isEditable: descriptor.supportsEditing && editDiagnostics.allSatisfy { $0.severity != .error }
+                isEditable: descriptor.editCapabilities.speciesInfo && editDiagnostics.allSatisfy { $0.severity != .error }
             )
         }
 
@@ -1283,12 +1289,12 @@ public enum ProjectSpeciesCatalogBuilder {
         entry: CInitializerEntry,
         descriptor: SpeciesCatalogDescriptor
     ) -> [Diagnostic] {
-        guard descriptor.supportsEditing else {
+        guard descriptor.editCapabilities.speciesInfo else {
             return [
                 Diagnostic(
                     severity: .warning,
                     code: "SPECIES_EDIT_UNSUPPORTED_PROFILE",
-                    message: "Species editing is currently available for classic Emerald and FireRed source trees.",
+                    message: "Species row editing is not available for this project profile.",
                     span: entry.span
                 )
             ]
@@ -1302,6 +1308,17 @@ public enum ProjectSpeciesCatalogBuilder {
                     span: entry.span
                 )
             ]
+        }
+        if descriptor.speciesInfoStyle == .expansionSpeciesScalars {
+            let unsupported = Set(entry.fields.keys).subtracting(Self.knownExpansionSpeciesInfoFields)
+            return unsupported.sorted().map { field in
+                Diagnostic(
+                    severity: .warning,
+                    code: "SPECIES_ENTRY_EXPANSION_FIELD_READ_ONLY",
+                    message: "\(entry.symbol) has Expansion species field \(field); preserving it as raw source while scalar fields remain editable.",
+                    span: entry.span
+                )
+            }
         }
         let unsupported = Set(entry.fields.keys).subtracting(Self.supportedSpeciesInfoFields)
         guard !unsupported.isEmpty else { return [] }
@@ -1336,11 +1353,15 @@ public enum ProjectSpeciesCatalogBuilder {
         "evYield_SpDefense",
         "itemCommon",
         "itemRare",
+        "item1",
+        "item2",
         "genderRatio",
         "eggCycles",
         "friendship",
         "growthRate",
         "eggGroups",
+        "eggGroup1",
+        "eggGroup2",
         "abilities",
         "ability1",
         "ability2",
@@ -1349,6 +1370,11 @@ public enum ProjectSpeciesCatalogBuilder {
         "bodyColor",
         "noFlip"
     ]
+
+    private static let knownExpansionSpeciesInfoFields: Set<String> = supportedSpeciesInfoFields.union([
+        "formSpeciesIdTable",
+        "formChangeTable"
+    ])
 
     private static func readSpeciesEntries(
         descriptor: SpeciesCatalogDescriptor,
@@ -1835,7 +1861,7 @@ public enum SpeciesMutationPlanner {
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "SPECIES_PLAN_UNSUPPORTED_PROFILE", message: "Species apply is only available for classic Emerald and FireRed source trees.")
+                    Diagnostic(severity: .error, code: "SPECIES_PLAN_UNSUPPORTED_PROFILE", message: "Species apply is not available for this project profile.")
                 ]
             )
         }
@@ -1849,18 +1875,30 @@ public enum SpeciesMutationPlanner {
             )
         }
 
-        var diagnostics = plannerDiagnostics(catalog: catalog, species: species, draft: draft)
-        diagnostics.append(contentsOf: assetDiagnostics(catalog: catalog, species: species, draft: draft, root: root, fileManager: fileManager))
+        var diagnostics = plannerDiagnostics(catalog: catalog, species: species, draft: draft, descriptor: descriptor)
+        if descriptor.editCapabilities.assets {
+            diagnostics.append(contentsOf: assetDiagnostics(catalog: catalog, species: species, draft: draft, root: root, fileManager: fileManager))
+        } else if !draft.assetData.isEmpty || !draft.assetImports.isEmpty {
+            diagnostics.append(
+                unsupportedEditDiagnostic(
+                    code: "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE",
+                    message: "\(draft.speciesID) asset imports are read-only for \(catalog.profile.rawValue).",
+                    span: species.sourceSpan
+                )
+            )
+        }
         var changes: [SpeciesEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
             if speciesInfoChanged(species: species, draft: draft) {
-                if let speciesChange = rewriteChange(
+                let speciesRewrite = rewriteSpeciesInfoChange(
                     root: root,
-                    path: descriptor.speciesPath,
-                    span: species.sourceSpan,
-                    replacement: renderSpeciesInfoEntry(draft)
-                ) {
+                    descriptor: descriptor,
+                    species: species,
+                    draft: draft
+                )
+                diagnostics.append(contentsOf: speciesRewrite.diagnostics)
+                if let speciesChange = speciesRewrite.change {
                     changes.append(speciesChange)
                 }
             }
@@ -2009,17 +2047,55 @@ public enum SpeciesMutationPlanner {
         )
     }
 
-    private static func plannerDiagnostics(catalog: ProjectSpeciesCatalog, species: SpeciesDetail, draft: SpeciesEditDraft) -> [Diagnostic] {
+    private static func plannerDiagnostics(catalog: ProjectSpeciesCatalog, species: SpeciesDetail, draft: SpeciesEditDraft, descriptor: SpeciesCatalogDescriptor) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []
         appendStructuralDiagnostics(draft: draft, species: species, diagnostics: &diagnostics)
-        appendConstantDiagnostics(catalog: catalog, draft: draft, species: species, diagnostics: &diagnostics)
-        appendEvolutionDiagnostics(catalog: catalog, draft: draft, species: species, diagnostics: &diagnostics)
+        appendCapabilityDiagnostics(descriptor: descriptor, species: species, draft: draft, diagnostics: &diagnostics)
+        appendConstantDiagnostics(catalog: catalog, draft: draft, species: species, descriptor: descriptor, diagnostics: &diagnostics)
+        appendEvolutionDiagnostics(catalog: catalog, draft: draft, species: species, descriptor: descriptor, diagnostics: &diagnostics)
 
-        if eggChanged(species: species, draft: draft), species.learnsets.eggSourceSpan == nil {
+        if descriptor.editCapabilities.eggMoves, eggChanged(species: species, draft: draft), species.learnsets.eggSourceSpan == nil {
             diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EGG_MOVES_SPAN_MISSING", message: "\(draft.speciesID) has no editable egg-move source span.", span: species.sourceSpan))
         }
 
         return diagnostics
+    }
+
+    private static func appendCapabilityDiagnostics(
+        descriptor: SpeciesCatalogDescriptor,
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        let capabilities = descriptor.editCapabilities
+        if speciesInfoChanged(species: species, draft: draft), !capabilities.speciesInfo {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_INFO_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) base stat/species-info rows are read-only for this profile.", span: species.sourceSpan))
+        }
+        if levelUpChanged(species: species, draft: draft), !capabilities.levelUp {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) level-up learnsets are read-only for this profile.", span: species.learnsets.levelUpSourceSpan ?? species.sourceSpan))
+        }
+        if tmhmChanged(species: species, draft: draft), !capabilities.tmhm {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) TM/HM learnsets are read-only for this profile.", span: species.learnsets.tmhmSourceSpan ?? species.sourceSpan))
+        }
+        if eggChanged(species: species, draft: draft), !capabilities.eggMoves {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) egg moves are read-only for this profile.", span: species.learnsets.eggSourceSpan ?? species.sourceSpan))
+        }
+        if tutorChanged(species: species, draft: draft), !capabilities.tutor {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) tutor learnsets are read-only for this profile.", span: species.learnsets.tutorSourceSpan ?? species.sourceSpan))
+        }
+        if evolutionChanged(species: species, draft: draft), !capabilities.evolutions {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) evolution rows are read-only for this profile.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
+        }
+        if pokedexChanged(species: species, draft: draft), !capabilities.pokedex {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) Pokedex rows are read-only for this profile.", span: species.pokedex?.sourceSpan ?? species.sourceSpan))
+        }
+        if pokedexTextChanged(species: species, draft: draft), !capabilities.pokedexText {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) Pokedex description text is read-only for this profile.", span: species.pokedex?.descriptionSpan ?? species.pokedex?.sourceSpan ?? species.sourceSpan))
+        }
+    }
+
+    private static func unsupportedEditDiagnostic(code: String, message: String, span: SourceSpan?) -> Diagnostic {
+        Diagnostic(severity: .error, code: code, message: message, span: span)
     }
 
     private static func appendStructuralDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
@@ -2087,21 +2163,54 @@ public enum SpeciesMutationPlanner {
         }
     }
 
-    private static func appendConstantDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
+    private static func appendConstantDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, descriptor: SpeciesCatalogDescriptor, diagnostics: inout [Diagnostic]) {
         let constants = catalog.constants.mapValues { Set($0.map(\.symbol)) }
+        if descriptor.speciesInfoStyle == .expansionSpeciesScalars {
+            guard let original = SpeciesEditDraft(detail: species) else { return }
+            if draft.types != original.types {
+                appendUnknown(draft.types, group: .types, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if draft.abilities != original.abilities {
+                appendUnknown(draft.abilities, group: .abilities, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if draft.eggGroups != original.eggGroups {
+                appendUnknown(draft.eggGroups, group: .eggGroups, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if draft.growthRate != original.growthRate {
+                appendUnknown([draft.growthRate], group: .growthRates, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if draft.bodyColor != original.bodyColor {
+                appendUnknown([draft.bodyColor], group: .bodyColors, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            let changedItems = [
+                draft.itemCommon != original.itemCommon ? draft.itemCommon : nil,
+                draft.itemRare != original.itemRare ? draft.itemRare : nil
+            ]
+            appendUnknown(changedItems.compactMap { $0 }.filter { $0 != "ITEM_NONE" }, group: .items, constants: constants, species: species, diagnostics: &diagnostics)
+            return
+        }
         appendUnknown(draft.types, group: .types, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown(draft.abilities, group: .abilities, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown(draft.eggGroups, group: .eggGroups, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown([draft.growthRate], group: .growthRates, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown([draft.bodyColor], group: .bodyColors, constants: constants, species: species, diagnostics: &diagnostics)
         appendUnknown([draft.itemCommon, draft.itemRare].filter { $0 != "ITEM_NONE" }, group: .items, constants: constants, species: species, diagnostics: &diagnostics)
-        appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
-        appendUnknown(draft.eggMoves.filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
-        appendUnknown(draft.tutorMoves, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
-        appendUnknown(draft.tmhmMoves, group: .tmhmMoves, constants: constants, species: species, diagnostics: &diagnostics)
+        if descriptor.editCapabilities.levelUp || levelUpChanged(species: species, draft: draft) {
+            appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+        }
+        if descriptor.editCapabilities.eggMoves || eggChanged(species: species, draft: draft) {
+            appendUnknown(draft.eggMoves.filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+        }
+        if descriptor.editCapabilities.tutor || tutorChanged(species: species, draft: draft) {
+            appendUnknown(draft.tutorMoves, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+        }
+        if descriptor.editCapabilities.tmhm || tmhmChanged(species: species, draft: draft) {
+            appendUnknown(draft.tmhmMoves, group: .tmhmMoves, constants: constants, species: species, diagnostics: &diagnostics)
+        }
     }
 
-    private static func appendEvolutionDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
+    private static func appendEvolutionDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, descriptor: SpeciesCatalogDescriptor, diagnostics: inout [Diagnostic]) {
+        guard descriptor.editCapabilities.evolutions || evolutionChanged(species: species, draft: draft) else { return }
         let constants = catalog.constants.mapValues { Set($0.map(\.symbol)) }
         appendUnknown(draft.evolutions.map(\.method), group: .evolutionMethods, constants: constants, species: species, diagnostics: &diagnostics)
 
@@ -2242,6 +2351,144 @@ public enum SpeciesMutationPlanner {
         }
     }
 
+    private static func rewriteSpeciesInfoChange(
+        root: URL,
+        descriptor: SpeciesCatalogDescriptor,
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft
+    ) -> (change: SpeciesEditFileChange?, diagnostics: [Diagnostic]) {
+        switch descriptor.speciesInfoStyle {
+        case .classicSpeciesInfo, .rubyBaseStats:
+            return (
+                rewriteChange(
+                    root: root,
+                    path: descriptor.speciesPath,
+                    span: species.sourceSpan,
+                    replacement: renderSpeciesInfoEntry(draft, style: descriptor.speciesInfoStyle)
+                ),
+                []
+            )
+        case .expansionSpeciesScalars:
+            return rewriteExpansionSpeciesInfoScalarChange(
+                root: root,
+                path: descriptor.speciesPath,
+                species: species,
+                draft: draft
+            )
+        }
+    }
+
+    private static func rewriteExpansionSpeciesInfoScalarChange(
+        root: URL,
+        path: String,
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft
+    ) -> (change: SpeciesEditFileChange?, diagnostics: [Diagnostic]) {
+        let url = root.appendingPathComponent(path)
+        guard let originalText = try? readText(at: url), let originalData = originalText.data(using: .utf8) else {
+            return (
+                nil,
+                [Diagnostic(severity: .error, code: "SPECIES_SOURCE_MISSING", message: "Species source file is missing or unreadable: \(path).", span: species.sourceSpan)]
+            )
+        }
+
+        let entryText = sourceEntryText(in: originalText, span: species.sourceSpan)
+        let fields = SpeciesInfoScalarFieldPatcher.fields(in: entryText)
+        let fieldChanges = expansionSpeciesInfoScalarFieldChanges(species: species, draft: draft, fields: fields)
+        guard !fieldChanges.isEmpty else { return (nil, []) }
+
+        var diagnostics: [Diagnostic] = []
+        guard let replacementEntry = SpeciesInfoScalarFieldPatcher.patch(
+            entryBody: entryText,
+            changes: fieldChanges,
+            diagnostics: &diagnostics,
+            span: species.sourceSpan
+        ) else {
+            return (nil, diagnostics)
+        }
+
+        let newText = replaceLines(in: originalText, span: species.sourceSpan, replacement: replacementEntry)
+        guard newText != originalText, let newData = newText.data(using: .utf8) else {
+            return (nil, diagnostics)
+        }
+        return (
+            SpeciesEditFileChange(
+                path: path,
+                summary: "Update Expansion species_info.h scalar fields",
+                originalByteCount: originalData.count,
+                originalSHA1: pokemonHackSHA1Hex(originalData),
+                newByteCount: newData.count,
+                newData: newData,
+                textPreview: replacementEntry
+            ),
+            diagnostics
+        )
+    }
+
+    private static func expansionSpeciesInfoScalarFieldChanges(
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft,
+        fields: [String: SpeciesInfoFieldSlice]
+    ) -> [SpeciesInfoScalarFieldChange] {
+        guard let original = SpeciesEditDraft(detail: species) else { return [] }
+        var changes: [SpeciesInfoScalarFieldChange] = []
+
+        appendExpansionFieldChange(["baseHP"], newValue: "\(draft.baseStats.hp)", didChange: draft.baseStats.hp != original.baseStats.hp, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["baseAttack"], newValue: "\(draft.baseStats.attack)", didChange: draft.baseStats.attack != original.baseStats.attack, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["baseDefense"], newValue: "\(draft.baseStats.defense)", didChange: draft.baseStats.defense != original.baseStats.defense, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["baseSpeed"], newValue: "\(draft.baseStats.speed)", didChange: draft.baseStats.speed != original.baseStats.speed, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["baseSpAttack"], newValue: "\(draft.baseStats.spAttack)", didChange: draft.baseStats.spAttack != original.baseStats.spAttack, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["baseSpDefense"], newValue: "\(draft.baseStats.spDefense)", didChange: draft.baseStats.spDefense != original.baseStats.spDefense, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["type1", "types"], newValue: fixedValue(draft.types, index: 0, fallback: "TYPE_NORMAL"), didChange: fixedValue(draft.types, index: 0, fallback: "TYPE_NORMAL") != fixedValue(original.types, index: 0, fallback: "TYPE_NORMAL"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["type2", "types"], newValue: fixedValue(draft.types, index: 1, fallback: "TYPE_NORMAL"), didChange: fixedValue(draft.types, index: 1, fallback: "TYPE_NORMAL") != fixedValue(original.types, index: 1, fallback: "TYPE_NORMAL"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["catchRate"], newValue: draft.catchRate, didChange: draft.catchRate != original.catchRate, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["expYield", "baseExp"], newValue: draft.expYield, didChange: draft.expYield != original.expYield, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_HP"], newValue: "\(draft.evYield.hp)", didChange: draft.evYield.hp != original.evYield.hp, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_Attack"], newValue: "\(draft.evYield.attack)", didChange: draft.evYield.attack != original.evYield.attack, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_Defense"], newValue: "\(draft.evYield.defense)", didChange: draft.evYield.defense != original.evYield.defense, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_Speed"], newValue: "\(draft.evYield.speed)", didChange: draft.evYield.speed != original.evYield.speed, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_SpAttack"], newValue: "\(draft.evYield.spAttack)", didChange: draft.evYield.spAttack != original.evYield.spAttack, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["evYield_SpDefense"], newValue: "\(draft.evYield.spDefense)", didChange: draft.evYield.spDefense != original.evYield.spDefense, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["itemCommon", "item1"], newValue: draft.itemCommon, didChange: draft.itemCommon != original.itemCommon, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["itemRare", "item2"], newValue: draft.itemRare, didChange: draft.itemRare != original.itemRare, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["genderRatio"], newValue: draft.genderRatio, didChange: draft.genderRatio != original.genderRatio, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["eggCycles"], newValue: draft.eggCycles, didChange: draft.eggCycles != original.eggCycles, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["friendship"], newValue: draft.friendship, didChange: draft.friendship != original.friendship, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["growthRate"], newValue: draft.growthRate, didChange: draft.growthRate != original.growthRate, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["eggGroup1", "eggGroups"], newValue: fixedValue(draft.eggGroups, index: 0, fallback: "EGG_GROUP_NONE"), didChange: fixedValue(draft.eggGroups, index: 0, fallback: "EGG_GROUP_NONE") != fixedValue(original.eggGroups, index: 0, fallback: "EGG_GROUP_NONE"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["eggGroup2", "eggGroups"], newValue: fixedValue(draft.eggGroups, index: 1, fallback: "EGG_GROUP_NONE"), didChange: fixedValue(draft.eggGroups, index: 1, fallback: "EGG_GROUP_NONE") != fixedValue(original.eggGroups, index: 1, fallback: "EGG_GROUP_NONE"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["ability1", "abilities"], newValue: fixedValue(draft.abilities, index: 0, fallback: "ABILITY_NONE"), didChange: fixedValue(draft.abilities, index: 0, fallback: "ABILITY_NONE") != fixedValue(original.abilities, index: 0, fallback: "ABILITY_NONE"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["ability2", "abilities"], newValue: fixedValue(draft.abilities, index: 1, fallback: "ABILITY_NONE"), didChange: fixedValue(draft.abilities, index: 1, fallback: "ABILITY_NONE") != fixedValue(original.abilities, index: 1, fallback: "ABILITY_NONE"), fields: fields, changes: &changes)
+        appendExpansionFieldChange(["safariZoneFleeRate"], newValue: draft.safariZoneFleeRate, didChange: draft.safariZoneFleeRate != original.safariZoneFleeRate, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["bodyColor"], newValue: draft.bodyColor, didChange: draft.bodyColor != original.bodyColor, fields: fields, changes: &changes)
+        appendExpansionFieldChange(["noFlip"], newValue: draft.noFlip ? "TRUE" : "FALSE", didChange: draft.noFlip != original.noFlip, fields: fields, changes: &changes)
+
+        return changes
+    }
+
+    private static func appendExpansionFieldChange(
+        _ candidateFields: [String],
+        newValue: String,
+        didChange: Bool,
+        fields: [String: SpeciesInfoFieldSlice],
+        changes: inout [SpeciesInfoScalarFieldChange]
+    ) {
+        guard didChange else { return }
+        let field = candidateFields.first { fields[$0] != nil } ?? candidateFields[0]
+        if let current = fields[field], compact(current.value) == compact(newValue) {
+            return
+        }
+        changes.append(SpeciesInfoScalarFieldChange(field: field, replacement: newValue))
+    }
+
+    private static func sourceEntryText(in text: String, span: SourceSpan) -> String {
+        let lines = text.components(separatedBy: "\n")
+        let start = max(0, span.startLine - 1)
+        let end = min(max(start, span.endLine - 1), max(0, lines.count - 1))
+        guard start <= end, start < lines.count else { return "" }
+        return lines[start...end].joined(separator: "\n")
+    }
+
     private static func rewriteChange(root: URL, path: String, span: SourceSpan, replacement: String) -> SpeciesEditFileChange? {
         let url = root.appendingPathComponent(path)
         guard let originalText = try? readText(at: url), let originalData = originalText.data(using: .utf8) else {
@@ -2379,38 +2626,109 @@ public enum SpeciesMutationPlanner {
         return result
     }
 
-    private static func renderSpeciesInfoEntry(_ draft: SpeciesEditDraft) -> String {
-        """
-            [\(draft.speciesID)] =
-            {
-                .baseHP = \(draft.baseStats.hp),
-                .baseAttack = \(draft.baseStats.attack),
-                .baseDefense = \(draft.baseStats.defense),
-                .baseSpeed = \(draft.baseStats.speed),
-                .baseSpAttack = \(draft.baseStats.spAttack),
-                .baseSpDefense = \(draft.baseStats.spDefense),
-                .types = {\(draft.types.joined(separator: ", "))},
-                .catchRate = \(draft.catchRate),
-                .expYield = \(draft.expYield),
-                .evYield_HP = \(draft.evYield.hp),
-                .evYield_Attack = \(draft.evYield.attack),
-                .evYield_Defense = \(draft.evYield.defense),
-                .evYield_Speed = \(draft.evYield.speed),
-                .evYield_SpAttack = \(draft.evYield.spAttack),
-                .evYield_SpDefense = \(draft.evYield.spDefense),
-                .itemCommon = \(draft.itemCommon),
-                .itemRare = \(draft.itemRare),
-                .genderRatio = \(draft.genderRatio),
-                .eggCycles = \(draft.eggCycles),
-                .friendship = \(draft.friendship),
-                .growthRate = \(draft.growthRate),
-                .eggGroups = {\(draft.eggGroups.joined(separator: ", "))},
-                .abilities = {\(draft.abilities.joined(separator: ", "))},
-                .safariZoneFleeRate = \(draft.safariZoneFleeRate),
-                .bodyColor = \(draft.bodyColor),
-                .noFlip = \(draft.noFlip ? "TRUE" : "FALSE"),
-            },
-        """
+    private static func renderSpeciesInfoEntry(_ draft: SpeciesEditDraft, style: SpeciesInfoStyle) -> String {
+        switch style {
+        case .classicSpeciesInfo:
+            return """
+                [\(draft.speciesID)] =
+                {
+                    .baseHP = \(draft.baseStats.hp),
+                    .baseAttack = \(draft.baseStats.attack),
+                    .baseDefense = \(draft.baseStats.defense),
+                    .baseSpeed = \(draft.baseStats.speed),
+                    .baseSpAttack = \(draft.baseStats.spAttack),
+                    .baseSpDefense = \(draft.baseStats.spDefense),
+                    .types = {\(draft.types.joined(separator: ", "))},
+                    .catchRate = \(draft.catchRate),
+                    .expYield = \(draft.expYield),
+                    .evYield_HP = \(draft.evYield.hp),
+                    .evYield_Attack = \(draft.evYield.attack),
+                    .evYield_Defense = \(draft.evYield.defense),
+                    .evYield_Speed = \(draft.evYield.speed),
+                    .evYield_SpAttack = \(draft.evYield.spAttack),
+                    .evYield_SpDefense = \(draft.evYield.spDefense),
+                    .itemCommon = \(draft.itemCommon),
+                    .itemRare = \(draft.itemRare),
+                    .genderRatio = \(draft.genderRatio),
+                    .eggCycles = \(draft.eggCycles),
+                    .friendship = \(draft.friendship),
+                    .growthRate = \(draft.growthRate),
+                    .eggGroups = {\(draft.eggGroups.joined(separator: ", "))},
+                    .abilities = {\(draft.abilities.joined(separator: ", "))},
+                    .safariZoneFleeRate = \(draft.safariZoneFleeRate),
+                    .bodyColor = \(draft.bodyColor),
+                    .noFlip = \(draft.noFlip ? "TRUE" : "FALSE"),
+                },
+            """
+        case .expansionSpeciesScalars:
+            return """
+                [\(draft.speciesID)] =
+                {
+                    .baseHP = \(draft.baseStats.hp),
+                    .baseAttack = \(draft.baseStats.attack),
+                    .baseDefense = \(draft.baseStats.defense),
+                    .baseSpeed = \(draft.baseStats.speed),
+                    .baseSpAttack = \(draft.baseStats.spAttack),
+                    .baseSpDefense = \(draft.baseStats.spDefense),
+                    .catchRate = \(draft.catchRate),
+                    .expYield = \(draft.expYield),
+                    .evYield_HP = \(draft.evYield.hp),
+                    .evYield_Attack = \(draft.evYield.attack),
+                    .evYield_Defense = \(draft.evYield.defense),
+                    .evYield_Speed = \(draft.evYield.speed),
+                    .evYield_SpAttack = \(draft.evYield.spAttack),
+                    .evYield_SpDefense = \(draft.evYield.spDefense),
+                    .itemCommon = \(draft.itemCommon),
+                    .itemRare = \(draft.itemRare),
+                    .genderRatio = \(draft.genderRatio),
+                    .eggCycles = \(draft.eggCycles),
+                    .friendship = \(draft.friendship),
+                    .growthRate = \(draft.growthRate),
+                    .safariZoneFleeRate = \(draft.safariZoneFleeRate),
+                    .bodyColor = \(draft.bodyColor),
+                    .noFlip = \(draft.noFlip ? "TRUE" : "FALSE"),
+                },
+            """
+        case .rubyBaseStats:
+            return """
+                [\(draft.speciesID)] =
+                {
+                    .baseHP = \(draft.baseStats.hp),
+                    .baseAttack = \(draft.baseStats.attack),
+                    .baseDefense = \(draft.baseStats.defense),
+                    .baseSpeed = \(draft.baseStats.speed),
+                    .baseSpAttack = \(draft.baseStats.spAttack),
+                    .baseSpDefense = \(draft.baseStats.spDefense),
+                    .type1 = \(fixedValue(draft.types, index: 0, fallback: "TYPE_NORMAL")),
+                    .type2 = \(fixedValue(draft.types, index: 1, fallback: "TYPE_NORMAL")),
+                    .catchRate = \(draft.catchRate),
+                    .expYield = \(draft.expYield),
+                    .evYield_HP = \(draft.evYield.hp),
+                    .evYield_Attack = \(draft.evYield.attack),
+                    .evYield_Defense = \(draft.evYield.defense),
+                    .evYield_Speed = \(draft.evYield.speed),
+                    .evYield_SpAttack = \(draft.evYield.spAttack),
+                    .evYield_SpDefense = \(draft.evYield.spDefense),
+                    .item1 = \(draft.itemCommon),
+                    .item2 = \(draft.itemRare),
+                    .genderRatio = \(draft.genderRatio),
+                    .eggCycles = \(draft.eggCycles),
+                    .friendship = \(draft.friendship),
+                    .growthRate = \(draft.growthRate),
+                    .eggGroup1 = \(fixedValue(draft.eggGroups, index: 0, fallback: "EGG_GROUP_NONE")),
+                    .eggGroup2 = \(fixedValue(draft.eggGroups, index: 1, fallback: "EGG_GROUP_NONE")),
+                    .ability1 = \(fixedValue(draft.abilities, index: 0, fallback: "ABILITY_NONE")),
+                    .ability2 = \(fixedValue(draft.abilities, index: 1, fallback: "ABILITY_NONE")),
+                    .safariZoneFleeRate = \(draft.safariZoneFleeRate),
+                    .bodyColor = \(draft.bodyColor),
+                    .noFlip = \(draft.noFlip ? "TRUE" : "FALSE"),
+                },
+            """
+        }
+    }
+
+    private static func fixedValue(_ values: [String], index: Int, fallback: String) -> String {
+        values.indices.contains(index) ? values[index] : fallback
     }
 
     private static func renderLevelUpLearnset(symbol: String, moves: [SpeciesLevelUpMoveDraft]) -> String {
@@ -2558,6 +2876,16 @@ public enum SpeciesMutationApplier {
         guard !plan.changes.isEmpty else {
             return SpeciesApplyResult(backupRootPath: backupRoot.path, appliedChanges: [])
         }
+        let backupDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            plan.backupRelativeRoot,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "SPECIES_APPLY_BACKUP",
+            subject: "Pokemon backup path"
+        )
+        guard backupDiagnostics.isEmpty else {
+            return SpeciesApplyResult(backupRootPath: backupRoot.path, appliedChanges: [], diagnostics: backupDiagnostics)
+        }
 
         try fileManager.createDirectory(at: backupRoot, withIntermediateDirectories: true)
         var applied: [AppliedSpeciesFileChange] = []
@@ -2603,8 +2931,15 @@ private enum SpeciesEditApplySafety {
 
     private static func diagnosticsForChange(_ change: SpeciesEditFileChange, root: URL, fileManager: FileManager) -> [Diagnostic] {
         let destination = root.appendingPathComponent(change.path).standardizedFileURL
-        guard isContained(destination, in: root) else {
-            return [pathDiagnostic("SPECIES_APPLY_PATH_OUTSIDE_ROOT", "Pokemon apply path is outside the project root: \(change.path).", path: change.path)]
+        let pathDiagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            change.path,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "SPECIES_APPLY",
+            subject: "Pokemon apply path"
+        )
+        guard pathDiagnostics.isEmpty else {
+            return pathDiagnostics
         }
         guard fileManager.fileExists(atPath: destination.path) else {
             return [pathDiagnostic("SPECIES_APPLY_SOURCE_MISSING", "Pokemon source file is missing before apply: \(change.path).", path: change.path)]
@@ -2621,12 +2956,6 @@ private enum SpeciesEditApplySafety {
         return []
     }
 
-    private static func isContained(_ url: URL, in root: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
-        return path == rootPath || path.hasPrefix(rootPath + "/")
-    }
-
     private static func pathDiagnostic(_ code: String, _ message: String, path: String) -> Diagnostic {
         Diagnostic(severity: .error, code: code, message: message, span: SourceSpan(relativePath: path, startLine: 1))
     }
@@ -2635,6 +2964,7 @@ private enum SpeciesEditApplySafety {
 private struct SpeciesCatalogDescriptor {
     let speciesPath: String
     let speciesTableSymbol: String
+    let speciesInfoStyle: SpeciesInfoStyle
     let levelUpPointerPath: String?
     let levelUpPaths: [String]
     let levelUpDirectory: String?
@@ -2646,8 +2976,12 @@ private struct SpeciesCatalogDescriptor {
     let pokedexTextPath: String?
     let tutorPath: String?
     let tutorTableSymbols: [String]
-    let supportsEditing: Bool
+    let editCapabilities: SpeciesEditCapabilities
     let constants: [SpeciesConstantDescriptor]
+
+    var supportsEditing: Bool {
+        editCapabilities.supportsAnyEditing
+    }
 
     static func descriptor(for profile: GameProfile) -> SpeciesCatalogDescriptor? {
         switch profile {
@@ -2655,6 +2989,7 @@ private struct SpeciesCatalogDescriptor {
             return SpeciesCatalogDescriptor(
                 speciesPath: "src/data/pokemon/species_info.h",
                 speciesTableSymbol: "gSpeciesInfo",
+                speciesInfoStyle: .classicSpeciesInfo,
                 levelUpPointerPath: "src/data/pokemon/level_up_learnset_pointers.h",
                 levelUpPaths: ["src/data/pokemon/level_up_learnsets.h"],
                 levelUpDirectory: nil,
@@ -2666,13 +3001,14 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
-                supportsEditing: true,
+                editCapabilities: .classic,
                 constants: classicConstants
             )
         case .pokefirered:
             return SpeciesCatalogDescriptor(
                 speciesPath: "src/data/pokemon/species_info.h",
                 speciesTableSymbol: "gSpeciesInfo",
+                speciesInfoStyle: .classicSpeciesInfo,
                 levelUpPointerPath: "src/data/pokemon/level_up_learnset_pointers.h",
                 levelUpPaths: ["src/data/pokemon/level_up_learnsets.h"],
                 levelUpDirectory: nil,
@@ -2684,13 +3020,14 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
-                supportsEditing: true,
+                editCapabilities: .classic,
                 constants: classicConstants
             )
         case .pokeruby:
             return SpeciesCatalogDescriptor(
                 speciesPath: "src/data/pokemon/base_stats.h",
                 speciesTableSymbol: "gBaseStats",
+                speciesInfoStyle: .rubyBaseStats,
                 levelUpPointerPath: "src/data/pokemon/level_up_learnset_pointers.h",
                 levelUpPaths: ["src/data/pokemon/level_up_learnsets.h"],
                 levelUpDirectory: nil,
@@ -2702,13 +3039,14 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokedex_text_en.h",
                 tutorPath: nil,
                 tutorTableSymbols: [],
-                supportsEditing: false,
+                editCapabilities: .rubyBaseStats,
                 constants: classicConstants
             )
         case .pokeemeraldExpansion:
             return SpeciesCatalogDescriptor(
                 speciesPath: "src/data/pokemon/species_info.h",
                 speciesTableSymbol: "gSpeciesInfo",
+                speciesInfoStyle: .expansionSpeciesScalars,
                 levelUpPointerPath: nil,
                 levelUpPaths: ["src/data/pokemon/level_up_learnsets.h"],
                 levelUpDirectory: "src/data/pokemon/level_up_learnsets",
@@ -2720,7 +3058,7 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
-                supportsEditing: false,
+                editCapabilities: .expansionSpeciesScalars,
                 constants: classicConstants
             )
         case .binaryROM, .ndsROM, .pokediamond, .pokeplatinum, .pokeheartgold, .pokeblack, .pmdSky,
@@ -2753,6 +3091,346 @@ private struct SpeciesConstantDescriptor: Sendable {
         self.prefixes = prefixes
         self.exactSymbols = exactSymbols
     }
+}
+
+private enum SpeciesInfoStyle {
+    case classicSpeciesInfo
+    case rubyBaseStats
+    case expansionSpeciesScalars
+}
+
+private struct SpeciesInfoScalarFieldChange {
+    let field: String
+    let replacement: String
+}
+
+private struct SpeciesInfoFieldSlice {
+    let name: String
+    let value: String
+    let valueRange: Range<String.Index>
+}
+
+private enum SpeciesInfoScalarFieldPatcher {
+    static func fields(in text: String) -> [String: SpeciesInfoFieldSlice] {
+        guard let open = firstOpenBrace(in: text) else {
+            return [:]
+        }
+        let close = matchingCloseBrace(from: open, in: text) ?? text.endIndex
+
+        var fields: [String: SpeciesInfoFieldSlice] = [:]
+        var index = text.index(after: open)
+        var depth = 0
+        var state = SpeciesInfoScannerState.normal
+        while index < close {
+            let character = text[index]
+            if consumeScannerState(&state, text: text, index: &index) {
+                continue
+            }
+
+            if state == .normal {
+                if character == "{" || character == "(" || character == "[" {
+                    depth += 1
+                    index = text.index(after: index)
+                    continue
+                }
+                if character == "}" || character == ")" || character == "]" {
+                    depth = max(0, depth - 1)
+                    index = text.index(after: index)
+                    continue
+                }
+                if depth == 0, character == "." {
+                    if let slice = fieldSlice(startingAt: index, close: close, in: text) {
+                        fields[slice.name] = slice
+                        index = slice.valueRange.upperBound
+                        continue
+                    }
+                }
+            }
+            index = text.index(after: index)
+        }
+        return fields
+    }
+
+    static func patch(
+        entryBody: String,
+        changes: [SpeciesInfoScalarFieldChange],
+        diagnostics: inout [Diagnostic],
+        span: SourceSpan
+    ) -> String? {
+        let fields = fields(in: entryBody)
+        var replacements: [(field: SpeciesInfoFieldSlice, value: String)] = []
+        for change in changes {
+            guard let field = fields[change.field] else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_EXPANSION_SCALAR_FIELD_MISSING",
+                        message: "Cannot edit \(change.field) because the existing Expansion species entry does not contain that top-level scalar field.",
+                        span: span
+                    )
+                )
+                continue
+            }
+            guard isSafeScalarValue(field.value) else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_EXPANSION_NON_SCALAR_FIELD_BLOCKED",
+                        message: "Cannot edit \(change.field) because the existing Expansion species field is not a single-value top-level scalar.",
+                        span: span
+                    )
+                )
+                continue
+            }
+            replacements.append((field, change.replacement))
+        }
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else { return nil }
+        guard !replacements.isEmpty else { return nil }
+
+        var patched = entryBody
+        for replacement in replacements.sorted(by: { $0.field.valueRange.lowerBound > $1.field.valueRange.lowerBound }) {
+            patched.replaceSubrange(replacement.field.valueRange, with: replacement.value)
+        }
+        return patched
+    }
+
+    private static func fieldSlice(startingAt dot: String.Index, close: String.Index, in text: String) -> SpeciesInfoFieldSlice? {
+        var cursor = text.index(after: dot)
+        let nameStart = cursor
+        while cursor < close, isIdentifier(text[cursor]) {
+            cursor = text.index(after: cursor)
+        }
+        guard cursor > nameStart else { return nil }
+        let name = String(text[nameStart..<cursor])
+        cursor = skipWhitespace(from: cursor, upTo: close, in: text)
+        guard cursor < close, text[cursor] == "=" else { return nil }
+        cursor = text.index(after: cursor)
+        cursor = skipWhitespace(from: cursor, upTo: close, in: text)
+        let valueEnd = valueEnd(start: cursor, close: close, in: text)
+        let range = trimmedRange(cursor..<valueEnd, in: text)
+        return SpeciesInfoFieldSlice(name: name, value: String(text[range]), valueRange: range)
+    }
+
+    private static func valueEnd(start: String.Index, close: String.Index, in text: String) -> String.Index {
+        var index = start
+        var depth = 0
+        var state = SpeciesInfoScannerState.normal
+        while index < close {
+            let character = text[index]
+            if consumeScannerState(&state, text: text, index: &index) {
+                continue
+            }
+            if state == .normal {
+                if character == "{" || character == "(" || character == "[" {
+                    depth += 1
+                } else if character == "}" || character == ")" || character == "]" {
+                    if depth == 0 {
+                        return index
+                    }
+                    depth -= 1
+                } else if character == "," && depth == 0 {
+                    return index
+                }
+            }
+            index = text.index(after: index)
+        }
+        return index
+    }
+
+    private static func firstOpenBrace(in text: String) -> String.Index? {
+        text.firstIndex(of: "{")
+    }
+
+    private static func matchingCloseBrace(from open: String.Index, in text: String) -> String.Index? {
+        var index = open
+        var depth = 0
+        var state = SpeciesInfoScannerState.normal
+        while index < text.endIndex {
+            let character = text[index]
+            if consumeScannerState(&state, text: text, index: &index) {
+                continue
+            }
+            if state == .normal {
+                if character == "{" {
+                    depth += 1
+                } else if character == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return index
+                    }
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    private static func skipWhitespace(from start: String.Index, upTo end: String.Index, in text: String) -> String.Index {
+        var index = start
+        while index < end, text[index].isWhitespace {
+            index = text.index(after: index)
+        }
+        return index
+    }
+
+    private static func trimmedRange(_ range: Range<String.Index>, in text: String) -> Range<String.Index> {
+        var lower = range.lowerBound
+        var upper = range.upperBound
+        while lower < upper, text[lower].isWhitespace {
+            lower = text.index(after: lower)
+        }
+        while upper > lower {
+            let before = text.index(before: upper)
+            guard text[before].isWhitespace else { break }
+            upper = before
+        }
+        return lower..<upper
+    }
+
+    private static func isIdentifier(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber || character == "_"
+    }
+
+    private static func isSafeScalarValue(_ value: String) -> Bool {
+        !value.contains("{") && !value.contains("}")
+    }
+}
+
+private enum SpeciesInfoScannerState {
+    case normal
+    case lineComment
+    case blockComment
+    case string
+    case character
+}
+
+private func consumeScannerState(_ state: inout SpeciesInfoScannerState, text: String, index: inout String.Index) -> Bool {
+    let character = text[index]
+    let nextIndex = text.index(after: index)
+    let next = nextIndex < text.endIndex ? text[nextIndex] : nil
+
+    switch state {
+    case .normal:
+        if character == "/", next == "/" {
+            state = .lineComment
+            index = text.index(after: nextIndex)
+            return true
+        }
+        if character == "/", next == "*" {
+            state = .blockComment
+            index = text.index(after: nextIndex)
+            return true
+        }
+        if character == "\"" {
+            state = .string
+            index = nextIndex
+            return true
+        }
+        if character == "'" {
+            state = .character
+            index = nextIndex
+            return true
+        }
+        return false
+    case .lineComment:
+        if character == "\n" {
+            state = .normal
+        }
+        index = nextIndex
+        return true
+    case .blockComment:
+        if character == "*", next == "/" {
+            state = .normal
+            index = text.index(after: nextIndex)
+        } else {
+            index = nextIndex
+        }
+        return true
+    case .string:
+        if character == "\\" {
+            index = nextIndex < text.endIndex ? text.index(after: nextIndex) : nextIndex
+        } else {
+            if character == "\"" {
+                state = .normal
+            }
+            index = nextIndex
+        }
+        return true
+    case .character:
+        if character == "\\" {
+            index = nextIndex < text.endIndex ? text.index(after: nextIndex) : nextIndex
+        } else {
+            if character == "'" {
+                state = .normal
+            }
+            index = nextIndex
+        }
+        return true
+    }
+}
+
+private struct SpeciesEditCapabilities {
+    let speciesInfo: Bool
+    let levelUp: Bool
+    let tmhm: Bool
+    let eggMoves: Bool
+    let evolutions: Bool
+    let pokedex: Bool
+    let pokedexText: Bool
+    let tutor: Bool
+    let assets: Bool
+
+    var supportsAnyEditing: Bool {
+        speciesInfo || levelUp || tmhm || eggMoves || evolutions || pokedex || pokedexText || tutor || assets
+    }
+
+    static let classic = SpeciesEditCapabilities(
+        speciesInfo: true,
+        levelUp: true,
+        tmhm: true,
+        eggMoves: true,
+        evolutions: true,
+        pokedex: true,
+        pokedexText: true,
+        tutor: true,
+        assets: true
+    )
+
+    static let rubyBaseStats = SpeciesEditCapabilities(
+        speciesInfo: true,
+        levelUp: false,
+        tmhm: false,
+        eggMoves: false,
+        evolutions: false,
+        pokedex: false,
+        pokedexText: false,
+        tutor: false,
+        assets: false
+    )
+
+    static let expansionSpeciesScalars = SpeciesEditCapabilities(
+        speciesInfo: true,
+        levelUp: false,
+        tmhm: false,
+        eggMoves: false,
+        evolutions: false,
+        pokedex: false,
+        pokedexText: false,
+        tutor: false,
+        assets: false
+    )
+
+    static let none = SpeciesEditCapabilities(
+        speciesInfo: false,
+        levelUp: false,
+        tmhm: false,
+        eggMoves: false,
+        evolutions: false,
+        pokedex: false,
+        pokedexText: false,
+        tutor: false,
+        assets: false
+    )
 }
 
 private func constantList(_ value: String?) -> [String] {

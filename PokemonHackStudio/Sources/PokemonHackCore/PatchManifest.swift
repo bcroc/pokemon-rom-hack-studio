@@ -800,6 +800,25 @@ public enum PatchManifestBuilder {
 
         let outputURL = URL(fileURLWithPath: report.artifactPlan.absoluteOutputPath).standardizedFileURL
         var diagnostics = report.diagnostics
+        if fileManager.fileExists(atPath: outputURL.path), !overwrite {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_EXPORT_OUTPUT_EXISTS",
+                    message: "Patched ROM output already exists at \(outputURL.path); export was blocked because overwrite was not requested."
+                )
+            )
+            return PatchApplyExportResult(
+                status: .blocked,
+                outputPath: outputURL.path,
+                manifestPath: report.artifactPlan.binaryDiffPreview?.backupExportManifest.manifestPath,
+                backupPath: nil,
+                outputROMSHA1: nil,
+                diagnostics: diagnostics,
+                manifest: nil
+            )
+        }
+
         try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         var backupPath: String?
@@ -811,26 +830,7 @@ public enum PatchManifestBuilder {
             }
             try fileManager.copyItem(at: outputURL, to: backupURL)
             backupPath = backupURL.path
-            if overwrite {
-                try fileManager.removeItem(at: outputURL)
-            } else {
-                diagnostics.append(
-                    Diagnostic(
-                        severity: .error,
-                        code: "PATCH_EXPORT_OUTPUT_EXISTS",
-                        message: "Patched ROM output already exists at \(outputURL.path); it was backed up to \(backupURL.path), but export was blocked because overwrite was not requested."
-                    )
-                )
-                return PatchApplyExportResult(
-                    status: .blocked,
-                    outputPath: outputURL.path,
-                    manifestPath: report.artifactPlan.binaryDiffPreview?.backupExportManifest.manifestPath,
-                    backupPath: backupPath,
-                    outputROMSHA1: nil,
-                    diagnostics: diagnostics,
-                    manifest: nil
-                )
-            }
+            try fileManager.removeItem(at: outputURL)
         }
 
         let baseData = try Data(contentsOf: URL(fileURLWithPath: selectedBaseROM.absolutePath))
