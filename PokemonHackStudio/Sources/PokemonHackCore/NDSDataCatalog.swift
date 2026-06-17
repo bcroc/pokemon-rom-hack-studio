@@ -701,6 +701,11 @@ public enum NDSDataCatalogBuilder {
             ]
         case .pokeblack:
             return [
+                CatalogPathDescriptor(.resources, "Makefile", format: .text, required: false),
+                CatalogPathDescriptor(.resources, "config.mk", required: false),
+                CatalogPathDescriptor(.resources, "src", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "asm", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "include", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.encounters, "data/encounters", required: false),
                 CatalogPathDescriptor(.resources, "data", required: false),
                 CatalogPathDescriptor(.resources, "files"),
@@ -708,6 +713,12 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
                 CatalogPathDescriptor(.scripts, "overlays", required: false),
                 CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false),
+                CatalogPathDescriptor(.resources, "arm9.ld", format: .text, required: false),
+                CatalogPathDescriptor(.resources, "arm7.ld", format: .text, required: false),
+                CatalogPathDescriptor(.resources, "black.us", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "white.us", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "black2.us", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "white2.us", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "black.us/rom.sha1", required: false),
                 CatalogPathDescriptor(.resources, "white.us/rom.sha1", required: false),
                 CatalogPathDescriptor(.resources, "black2.us", required: false),
@@ -734,6 +745,10 @@ public enum NDSDataCatalogBuilder {
 
         guard isDirectory.boolValue else {
             return [record(for: descriptor, relativePath: descriptor.relativePath, root: root, exists: true, fileManager: fileManager)]
+        }
+
+        if descriptor.summarizeDirectory {
+            return [record(for: descriptor, relativePath: descriptor.relativePath, root: root, exists: true, isDirectory: true, fileManager: fileManager)]
         }
 
         let files = matchingFiles(root: url, projectRoot: root, descriptor: descriptor, fileManager: fileManager)
@@ -824,13 +839,15 @@ public enum NDSDataCatalogBuilder {
             exists: exists,
             isDirectory: isDirectory
         )
-        let migrationPlan = ndsMigrationPlan(
-            relativePath: relativePath,
-            domain: descriptor.domain,
-            format: format,
-            role: descriptor.role,
-            exists: exists
-        )
+        let migrationPlan = descriptor.includeMigrationPlan
+            ? ndsMigrationPlan(
+                relativePath: relativePath,
+                domain: descriptor.domain,
+                format: format,
+                role: descriptor.role,
+                exists: exists
+            )
+            : nil
         let audioPreview = ndsAudioPreview(
             url: url,
             relativePath: relativePath,
@@ -1299,7 +1316,7 @@ public enum NDSDataCatalogBuilder {
             return NDSDataReadinessSummary(
                 status: .blocked,
                 title: "Gen V title unavailable",
-                detail: "\(genVUnavailableReason(for: record) ?? genVSourceRoleDetail(for: sourceRole)) This is diagnostic-only title coverage metadata; no source tree, editor, extraction, rebuild, playtest, export, or binary write path is available.",
+                detail: "\(genVUnavailableReason(for: record) ?? genVSourceRoleDetail(for: sourceRole)) This is diagnostic-only title coverage metadata; no source tree, editor, extraction, rebuild, playtest, export, or binary write path is available. \(Self.genVActionStateSummary)",
                 blockedActions: genVBlockedActions
             )
         }
@@ -1309,7 +1326,7 @@ public enum NDSDataCatalogBuilder {
         return NDSDataReadinessSummary(
             status: status,
             title: "Gen V read-only readiness",
-            detail: "\(genVSourceRoleDetail(for: sourceRole)) This is clean-room Gen V routing metadata only; editing, extraction, rebuild, playtest, export, and binary writes remain disabled.",
+            detail: "\(genVSourceRoleDetail(for: sourceRole)) This is clean-room Gen V routing metadata only; \(Self.genVActionStateSummary)",
             blockedActions: genVBlockedActions
         )
     }
@@ -1319,6 +1336,7 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Readiness", value: isGenVUnavailableTitle(record) ? "unavailable" : "previewOnly"),
             SourceIndexFact(label: "Gen V Source Role", value: genVSourceRole(for: record)),
             SourceIndexFact(label: "Gen V Blocked Actions", value: genVBlockedActions.joined(separator: ", ")),
+            SourceIndexFact(label: "Gen V Action State", value: Self.genVActionStateSummary),
             SourceIndexFact(label: "Gen V Reference Posture", value: "cleanRoomReferenceOnly")
         ]
         facts.append(contentsOf: genVVariantFacts(for: record))
@@ -1409,6 +1427,24 @@ public enum NDSDataCatalogBuilder {
         if record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc {
             return "nitroArchiveRoute"
         }
+        if lower == "makefile" || lower == "config.mk" {
+            return "buildConfig"
+        }
+        if lower == "arm9.ld" || lower == "arm7.ld" {
+            return "linkerConfig"
+        }
+        if lower == "src" {
+            return "sourceCodeInventory"
+        }
+        if lower == "asm" {
+            return "assemblyInventory"
+        }
+        if lower == "include" {
+            return "headerInventory"
+        }
+        if genVTitleCoverageSpecs.contains(where: { $0.id == lower }) {
+            return "variantSourceInventory"
+        }
         if lower.hasPrefix("files/a/") {
             return "nitroArchiveGroup"
         }
@@ -1441,6 +1477,18 @@ public enum NDSDataCatalogBuilder {
             return "SDAT/SSEQ/SBNK/SWAR/STRM candidates retain read-only audio metadata facts."
         case "nitroArchiveRoute":
             return "NARC or container-like resources are routed for inventory and migration planning only."
+        case "buildConfig":
+            return "Build configuration is indexed for manual setup and checksum orientation only."
+        case "linkerConfig":
+            return "Linker configuration is indexed for manual build orientation only."
+        case "sourceCodeInventory":
+            return "C source roots are summarized as manual-only source inventory."
+        case "assemblyInventory":
+            return "Assembly roots are summarized as manual-only disassembly inventory."
+        case "headerInventory":
+            return "Header roots are summarized as manual-only source inventory."
+        case "variantSourceInventory":
+            return "Variant marker folders are summarized for title coverage and manual-only source orientation."
         case "nitroArchiveGroup":
             return "files/a archive-group paths are identified for future Gen V container routing."
         case "nitroFSResource":
@@ -2711,6 +2759,7 @@ public enum NDSDataCatalogBuilder {
         "binary write",
         "mutation apply"
     ]
+    private static let genVActionStateSummary = "editing/apply, build, playtest, and export actions are disabled; source inventory stays preview-only"
 
     private struct GenVTitleCoverageSpec: Sendable {
         let id: String
@@ -2771,6 +2820,8 @@ private struct CatalogPathDescriptor {
     let allowedExtensions: Set<String>?
     let format: NDSDataSourceFormat?
     let required: Bool
+    let summarizeDirectory: Bool
+    let includeMigrationPlan: Bool
 
     init(
         _ domain: NDSDataDomain,
@@ -2778,7 +2829,9 @@ private struct CatalogPathDescriptor {
         role: NDSDataSourceRole = .sourceTree,
         allowedExtensions: Set<String>? = nil,
         format: NDSDataSourceFormat? = nil,
-        required: Bool = true
+        required: Bool = true,
+        summarizeDirectory: Bool = false,
+        includeMigrationPlan: Bool = true
     ) {
         self.domain = domain
         self.relativePath = relativePath
@@ -2786,6 +2839,8 @@ private struct CatalogPathDescriptor {
         self.allowedExtensions = allowedExtensions
         self.format = format
         self.required = required
+        self.summarizeDirectory = summarizeDirectory
+        self.includeMigrationPlan = includeMigrationPlan
     }
 }
 

@@ -1,57 +1,5 @@
 import SwiftUI
 
-struct SourceInspectorContext {
-    let title: String
-    let subtitle: String
-    let systemImage: String
-    let status: ValidationState?
-    let facts: [SourceInspectorFact]
-    let sources: [SourceInspectorSource]
-    let diagnostics: [SourceInspectorDiagnostic]
-}
-
-struct SourceInspectorFact: Identifiable {
-    let id: String
-    let label: String
-    let value: String
-
-    init(label: String, value: String) {
-        id = label
-        self.label = label
-        self.value = value
-    }
-}
-
-struct SourceInspectorSource: Identifiable {
-    let id: String
-    let title: String
-    let source: SourceLocation
-    let status: ValidationState?
-
-    init(title: String, source: SourceLocation, status: ValidationState? = nil) {
-        id = "\(title):\(source.label):\(source.symbol)"
-        self.title = title
-        self.source = source
-        self.status = status
-    }
-}
-
-struct SourceInspectorDiagnostic: Identifiable {
-    let id: String
-    let title: String
-    let message: String
-    let status: ValidationState
-    let source: SourceLocation?
-
-    init(id: String, title: String, message: String, status: ValidationState, source: SourceLocation? = nil) {
-        self.id = id
-        self.title = title
-        self.message = message
-        self.status = status
-        self.source = source
-    }
-}
-
 struct SourceInspector: View {
     let context: SourceInspectorContext
 

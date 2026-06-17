@@ -440,6 +440,82 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.backupPath ?? ""))
     }
 
+    func testPatchApplyExportBlocksSymlinkEscapedArtifactDirectory() throws {
+        let root = try makeTemporaryRoot()
+        let outside = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(".pokemonhackstudio"),
+            withDestinationURL: outside
+        )
+
+        let baseData = Data(repeating: 0xFF, count: 0xC0)
+        var targetBytes = Array(baseData)
+        targetBytes[0x10] = 0x42
+        let targetData = Data(targetBytes)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+
+        let result = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_PATH_SYMLINK_OUTSIDE_ROOT" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/pokeemerald-cleanroom.gba").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/pokeemerald-cleanroom.gba.manifest.json").path))
+    }
+
+    func testPatchApplyExportBackupRootsAreCollisionResistantAcrossRapidOverwrites() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        var baseBytes = Array(repeating: UInt8(0xFF), count: 0xC0)
+        baseBytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        baseBytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        let targetBytes = baseBytes.enumerated().map { index, byte in index == 0x10 ? UInt8(0x42) : byte }
+        let baseData = Data(baseBytes)
+        let targetData = Data(targetBytes)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+
+        _ = try PatchManifestBuilder.applyExport(patchPath: patch.path, projectPath: root.path, baseROMPath: baseROM.path)
+        let firstOverwrite = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true
+        )
+        let secondOverwrite = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true
+        )
+
+        let firstBackup = try XCTUnwrap(firstOverwrite.backupPath)
+        let secondBackup = try XCTUnwrap(secondOverwrite.backupPath)
+        XCTAssertNotEqual(firstBackup, secondBackup)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstBackup))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondBackup))
+    }
+
     func testPatchApplyExportBlocksMismatchedBaseROM() throws {
         let root = try makeTemporaryRoot()
         try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))

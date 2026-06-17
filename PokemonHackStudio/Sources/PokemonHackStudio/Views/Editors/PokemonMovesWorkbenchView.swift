@@ -286,6 +286,11 @@ struct PokemonMovesWorkbenchView: View {
                 TextField("Flags", text: flagsBinding)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
+
+                if draft.descriptionText != nil {
+                    Divider()
+                    descriptionEditor(text: descriptionBinding)
+                }
             }
         }
     }
@@ -347,6 +352,37 @@ struct PokemonMovesWorkbenchView: View {
                 onUpdateDraft(draft)
             }
         )
+    }
+
+    private var descriptionBinding: Binding<String> {
+        Binding(
+            get: { draft?.descriptionText ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft.descriptionText = value
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
+    private func descriptionEditor(text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Description Text")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextEditor(text: text)
+                .font(.system(.body, design: .monospaced))
+                .frame(minHeight: 92)
+                .scrollContentBackground(.hidden)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.22))
+                )
+        }
     }
 
     private func learnerSection(

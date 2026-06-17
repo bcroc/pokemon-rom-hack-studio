@@ -483,11 +483,104 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Readiness" && $0.value == "unavailable" })
         XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Source Role" && $0.value == "titleUnavailable" })
         XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Unavailable Reason" && $0.value == whiteReason })
+        XCTAssertTrue(whiteUnavailable.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("build, playtest, and export actions are disabled") })
         XCTAssertTrue(bundled.items.contains { item in
             item.category == "NDS Data resources"
                 && item.facts.contains { $0.label == "Gen V Family" && $0.value == "black2White2" }
                 && item.facts.contains { $0.label == "Gen V Source Name" && $0.value == "none" }
         })
+    }
+
+    @MainActor
+    func testGenVSourceInventoryRowsStayPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let encounterRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "data/encounters/route_1.txt" })
+        XCTAssertTrue(encounterRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertTrue(encounterRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
+
+        store.requestResourceAssetSelection(encounterRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(editor.recordID.hasSuffix("data/encounters/route_1.txt"))
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("data/encounters/route_1.txt"), encoding: .utf8),
+            "encounter\n"
+        )
+    }
+
+    @MainActor
+    func testGenVManualOnlySourceRootsStayPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let makefileRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "Makefile"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "buildConfig" }
+        })
+        XCTAssertTrue(makefileRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("build, playtest, and export actions are disabled") })
+
+        let sourceRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "src"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "sourceCodeInventory" }
+        })
+        XCTAssertTrue(sourceRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertTrue(sourceRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
+        XCTAssertFalse(sourceRootRow.facts.contains { $0.label == "Migration Status" })
+
+        let assemblyRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "asm"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "assemblyInventory" }
+        })
+        XCTAssertTrue(assemblyRootRow.facts.contains { $0.label == "Gen V Blocked Actions" && $0.value.contains("mutation apply") })
+
+        let blackMarkerRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "black.us"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "variantSourceInventory" }
+        })
+        XCTAssertTrue(blackMarkerRow.facts.contains { $0.label == "Gen V Variant ID" && $0.value == "black.us" })
+        XCTAssertFalse(blackMarkerRow.facts.contains { $0.label == "Migration Status" })
+
+        store.requestResourceAssetSelection(sourceRootRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "resources:src")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("src/init.c").path))
     }
 
     @MainActor
@@ -816,6 +909,123 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPlatinumMoveSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let movePath = "res/battle/moves/tackle.json"
+        let nestedPath = "res/battle/moves/custom/tackle.json"
+        try write(
+            "{\"power\":40,\"accuracy\":100,\"contact\":true,\"flags\":{\"protect\":true},\"contest\":[\"cool\"]}\n",
+            to: root.appendingPathComponent(movePath)
+        )
+        try write("{\"power\":60}\n", to: root.appendingPathComponent(nestedPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let moveRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == movePath })
+        store.requestResourceAssetSelection(moveRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "moves:\(movePath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "power" && $0.value == "40" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "accuracy" && $0.value == "100" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "contact" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "flags" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "contest" })
+
+        store.updateSelectedNDSDataSemanticField(key: "power", value: "60")
+        store.updateSelectedNDSDataSemanticField(key: "accuracy", value: "95")
+        store.updateSelectedNDSDataSemanticField(key: "contact", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(movePath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"power\":60"))
+        XCTAssertTrue(updated.contains("\"accuracy\":95"))
+        XCTAssertTrue(updated.contains("\"contact\":false"))
+        XCTAssertTrue(updated.contains("\"flags\":{\"protect\":true}"))
+
+        let nestedMoveRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedMoveRow.id)
+        let nestedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(nestedEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "power", value: "70")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8),
+            "{\"power\":60}\n"
+        )
+    }
+
+    @MainActor
+    func testPlatinumFieldEventSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let eventPath = "res/field/events/route201.json"
+        let nestedPath = "res/field/events/nested/route202.json"
+        try write(
+            "{\"event_id\":1,\"weather\":\"CLEAR\",\"has_rival\":true,\"object_events\":[{\"id\":1,\"script\":\"Route201_Rival\"}]}\n",
+            to: root.appendingPathComponent(eventPath)
+        )
+        try write("{\"event_id\":2}\n", to: root.appendingPathComponent(nestedPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let eventRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == eventPath })
+        store.requestResourceAssetSelection(eventRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "maps:\(eventPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "event_id" && $0.value == "1" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "weather" && $0.value == "CLEAR" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "has_rival" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "object_events" })
+
+        store.updateSelectedNDSDataSemanticField(key: "event_id", value: "5")
+        store.updateSelectedNDSDataSemanticField(key: "weather", value: "RAIN")
+        store.updateSelectedNDSDataSemanticField(key: "has_rival", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(eventPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"event_id\":5"))
+        XCTAssertTrue(updated.contains("\"weather\":\"RAIN\""))
+        XCTAssertTrue(updated.contains("\"has_rival\":false"))
+        XCTAssertTrue(updated.contains("\"object_events\":[{\"id\":1,\"script\":\"Route201_Rival\"}]"))
+
+        let nestedEventRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedEventRow.id)
+        let nestedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(nestedEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "event_id", value: "6")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8),
+            "{\"event_id\":2}\n"
+        )
+    }
+
+    @MainActor
     func testHGSSPersonalTrainerAndItemSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSHeartGoldSourceProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -1055,6 +1265,155 @@ final class MapEditorStoreTests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent("files/fielddata/encountdata/route202.txt"), encoding: .utf8),
             "rate=15\n"
         )
+    }
+
+    @MainActor
+    func testDiamondPearlFieldEventSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        let eventPath = "files/fielddata/eventdata/route201.json"
+        let nestedPath = "files/fielddata/eventdata/sinnoh/route202.json"
+        let textPath = "files/fielddata/eventdata/route203.txt"
+        try write(
+            """
+            {"event_id": 10, "weather": "CLEAR", "has_rival": true, "object_events": [{"id":1,"script":"Route201_Rival"}], "metadata": {"map":"ROUTE_201"}}
+
+            """,
+            to: root.appendingPathComponent(eventPath)
+        )
+        try write("{\"event_id\":11}\n", to: root.appendingPathComponent(nestedPath))
+        try write("event_id=12\n", to: root.appendingPathComponent(textPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let eventRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == eventPath })
+        store.requestResourceAssetSelection(eventRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "maps:\(eventPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "event_id" && $0.value == "10" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "weather" && $0.value == "CLEAR" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "has_rival" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "object_events" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "metadata" })
+
+        store.updateSelectedNDSDataSemanticField(key: "event_id", value: "15")
+        store.updateSelectedNDSDataSemanticField(key: "weather", value: "RAIN")
+        store.updateSelectedNDSDataSemanticField(key: "has_rival", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(eventPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"event_id\": 15"))
+        XCTAssertTrue(updated.contains("\"weather\": \"RAIN\""))
+        XCTAssertTrue(updated.contains("\"has_rival\": false"))
+        XCTAssertTrue(updated.contains("\"object_events\": [{\"id\":1,\"script\":\"Route201_Rival\"}]"))
+
+        let nestedRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedRow.id)
+        let nestedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(nestedEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "event_id", value: "20")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8),
+            "{\"event_id\":11}\n"
+        )
+
+        let textRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == textPath })
+        store.requestResourceAssetSelection(textRow.id)
+        let textEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(textEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "event_id", value: "20")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8),
+            "event_id=12\n"
+        )
+    }
+
+    @MainActor
+    func testHGSSZoneEventSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSHeartGoldSourceProject()
+        let zoneEventPath = "files/fielddata/eventdata/zone_event/zone_001.json"
+        let nestedPath = "files/fielddata/eventdata/zone_event/johto/zone_002.json"
+        try write(
+            "{\"zone_id\":1,\"script\":\"Route29_Intro\",\"enabled\":true,\"object_events\":[{\"id\":1,\"script\":\"Route29_NPC\"}],\"metadata\":{\"map\":\"ROUTE_29\"}}\n",
+            to: root.appendingPathComponent(zoneEventPath)
+        )
+        try write("{\"zone_id\":2}\n", to: root.appendingPathComponent(nestedPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let zoneEventRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == zoneEventPath })
+        store.requestResourceAssetSelection(zoneEventRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "scripts:\(zoneEventPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "zone_id" && $0.value == "1" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "script" && $0.value == "Route29_Intro" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "enabled" && $0.value == "true" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "object_events" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "metadata" })
+
+        store.updateSelectedNDSDataSemanticField(key: "zone_id", value: "3")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+        store.discardNDSDataEdits()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(zoneEventPath), encoding: .utf8),
+            "{\"zone_id\":1,\"script\":\"Route29_Intro\",\"enabled\":true,\"object_events\":[{\"id\":1,\"script\":\"Route29_NPC\"}],\"metadata\":{\"map\":\"ROUTE_29\"}}\n"
+        )
+
+        store.updateSelectedNDSDataSemanticField(key: "script", value: "Route29_Edit")
+        store.updateSelectedNDSDataSemanticField(key: "enabled", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(zoneEventPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"script\":\"Route29_Edit\""))
+        XCTAssertTrue(updated.contains("\"enabled\":false"))
+        XCTAssertTrue(updated.contains("\"object_events\":[{\"id\":1,\"script\":\"Route29_NPC\"}]"))
+        XCTAssertTrue(updated.contains("\"metadata\":{\"map\":\"ROUTE_29\"}"))
+
+        let nestedZoneEventRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedZoneEventRow.id)
+        let nestedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(nestedEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "zone_id", value: "6")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8),
+            "{\"zone_id\":2}\n"
+        )
+
+        let scriptBinaryRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/script/scr_seq/0001.bin" })
+        store.requestResourceAssetSelection(scriptBinaryRow.id)
+        let scriptBinaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(scriptBinaryEditor.semanticFields.isEmpty)
     }
 
     @MainActor
@@ -1463,6 +1822,48 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.selection, .pokemon)
         XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
         XCTAssertEqual(store.searchText, "SPECIES_TREECKO")
+    }
+
+    @MainActor
+    func testRubySapphireMoveDraftPreviewApplyAndReloadsThroughStore() async throws {
+        let root = try makeRubyPokemonProject()
+        try writeRubyBattleMoveTable(to: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.moves, search: .replace("pound"))
+        let catalog = try await waitForSelectedMoveCatalog(store)
+        XCTAssertEqual(catalog.profile, "pokeruby")
+        XCTAssertTrue(store.focusMove("MOVE_POUND"))
+        XCTAssertEqual(store.selectedMoveDetail?.source.path, "src/data/battle_moves.c")
+
+        var draft = try XCTUnwrap(store.selectedMoveDraft)
+        draft.power = 55
+        draft.pp = 30
+        draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
+        store.updateSelectedMoveDraft(draft)
+
+        XCTAssertTrue(store.selectedMoveIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedMoveMutationPlan)
+        store.previewSelectedMoveMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestMoveEditPlan)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/battle_moves.c"])
+        XCTAssertTrue(store.canApplySelectedMoveMutationPlan)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".power = 55") == true)
+
+        store.applySelectedMoveMutationPlan()
+
+        XCTAssertEqual(store.latestMoveApplyResult?.appliedChanges.map(\.path), ["src/data/battle_moves.c"])
+        XCTAssertFalse(store.selectedMoveIsDirty)
+        XCTAssertEqual(store.selectedMoveID, "MOVE_POUND")
+        let editedDraft = try XCTUnwrap(store.selectedMoveDraft)
+        XCTAssertEqual(editedDraft.power, 55)
+        XCTAssertEqual(editedDraft.pp, 30)
+        XCTAssertEqual(editedDraft.flags, ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"])
     }
 
     @MainActor
@@ -2235,6 +2636,56 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(blockedPlan.isApplyable)
         XCTAssertTrue(blockedPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(store.canApplySelectedSpeciesMutationPlan)
+    }
+
+    @MainActor
+    func testExpansionSpeciesLevelUpLearnsetEditsFlowThroughPokemonEditor() async throws {
+        let root = try makeExpansionPokemonProject(includeLevelUpLearnsets: true)
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let allLearnablesPath = root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalAllLearnablesText = try String(contentsOf: allLearnablesPath, encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let selected = try XCTUnwrap(store.selectedSpeciesDetail)
+        XCTAssertEqual(selected.learnsets.levelUpSourceSpan?.relativePath, "src/data/pokemon/level_up_learnsets/treecko.h")
+        XCTAssertEqual(selected.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_ABSORB"])
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/level_up_learnsets/treecko.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),") == true)
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/level_up_learnsets/treecko.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: allLearnablesPath, encoding: .utf8), originalAllLearnablesText)
+
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_ABSORB", "MOVE_FLASH"])
+        XCTAssertEqual(reloaded.learnsets.levelUp.map(\.level), [1, 6, 9])
     }
 
     @MainActor
@@ -3653,6 +4104,8 @@ final class MapEditorStoreTests: XCTestCase {
         try write("ROM            := pokeblack.nds\n", to: root.appendingPathComponent("Makefile"))
         try write("NitroROMSpec\n", to: root.appendingPathComponent("main.rsf"))
         try write("main linker script\n", to: root.appendingPathComponent("main.lsf"))
+        try write("arm9 linker script\n", to: root.appendingPathComponent("arm9.ld"))
+        try write("arm7 linker script\n", to: root.appendingPathComponent("arm7.ld"))
         try write("ffffffffffffffffffffffffffffffffffffffff  pokeblack.nds\n", to: root.appendingPathComponent("black.us/rom.sha1"))
         try write("void Init(void) {}\n", to: root.appendingPathComponent("src/init.c"))
         try write("arm9\n", to: root.appendingPathComponent("asm/arm9_remaining.s"))
@@ -4030,7 +4483,7 @@ final class MapEditorStoreTests: XCTestCase {
         return root
     }
 
-    private func makeExpansionPokemonProject() throws -> URL {
+    private func makeExpansionPokemonProject(includeLevelUpLearnsets: Bool = false) throws -> URL {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
         let root = temp.url
@@ -4093,6 +4546,29 @@ final class MapEditorStoreTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
         )
+        if includeLevelUpLearnsets {
+            try write(
+                """
+                static const u16 sTreeckoLevelUpLearnset[] = {
+                    LEVEL_UP_MOVE( 1, MOVE_POUND),
+                    LEVEL_UP_MOVE( 6, MOVE_ABSORB),
+                    LEVEL_UP_END
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+            )
+            try write(
+                """
+                {
+                  "SPECIES_TREECKO": [
+                    "MOVE_POUND",
+                    "MOVE_ABSORB"
+                  ]
+                }
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+            )
+        }
         return root
     }
 
@@ -4312,6 +4788,45 @@ final class MapEditorStoreTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/battle_moves.h")
+        )
+    }
+
+    private func writeRubyBattleMoveTable(to root: URL) throws {
+        try write(
+            """
+            const struct BattleMove gBattleMoves[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+                    .pp = 0,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                    .description = gMoveDescription_None,
+                    .contestEffect = CONTEST_EFFECT_NONE,
+                },
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                    .description = gMoveDescription_Pound,
+                    .contestEffect = CONTEST_EFFECT_NONE,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/battle_moves.c")
         )
     }
 

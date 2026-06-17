@@ -146,6 +146,9 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(firstStore.currentDraftCounts.graphics, 1)
+        XCTAssertTrue(firstStore.selectedGraphicsIsDirty)
+        XCTAssertTrue(firstStore.canPreviewSelectedGraphicsMutationPlan)
+        XCTAssertEqual(firstStore.toolbarMutationState.target, .graphics)
         XCTAssertTrue(firstStore.saveDraftsNow())
         XCTAssertEqual(firstStore.savedDraftCount, 1)
 
@@ -240,6 +243,87 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
         XCTAssertNil(store.pendingMapNavigation)
         XCTAssertFalse(store.selectedSpeciesIsDirty)
+    }
+
+    @MainActor
+    func testProjectSwitchGuardCoversOffSelectionDrafts() async throws {
+        let firstRoot = try makeUnifiedDataProject()
+        let secondRoot = try makeUnifiedDataProject()
+        let store = try makeStore(workspaceRoot: firstRoot.deletingLastPathComponent())
+
+        store.openProject(path: firstRoot.path)
+        store.selectWorkbenchModule(.trainers)
+        store.loadSelectedTrainerCatalogIfNeeded()
+        try await waitForSelectedTrainerCatalog(store)
+        store.requestTrainerSelection("TRAINER_TEST")
+        let firstProjectID = store.selectedProjectID
+
+        var draft = try XCTUnwrap(store.selectedTrainerDraft)
+        draft.trainerName = "OFFSCREEN"
+        store.updateSelectedTrainerDraft(draft)
+        XCTAssertEqual(store.currentDraftCounts.trainers, 1)
+        store.requestTrainerSelection("TRAINER_BOSS")
+        XCTAssertFalse(store.selectedTrainerIsDirty)
+        XCTAssertTrue(store.hasStagedEdits)
+
+        store.openProject(path: secondRoot.path)
+
+        XCTAssertEqual(store.selectedProjectID, firstProjectID)
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, firstRoot.path)
+        XCTAssertNotNil(store.pendingMapNavigation)
+
+        store.discardMapEditsAndContinueNavigation()
+
+        XCTAssertEqual(store.selectedIndexedProject?.rootPath, secondRoot.path)
+        XCTAssertNil(store.pendingMapNavigation)
+        XCTAssertEqual(store.currentDraftCount, 0)
+    }
+
+    @MainActor
+    func testItemsHiddenByFilterKeepDetailAndDraftAligned() async throws {
+        let root = try makeUnifiedDataProject()
+        let store = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.items)
+        store.loadSelectedItemCatalogIfNeeded()
+        try await waitForSelectedItemCatalog(store)
+        store.requestItemSelection("ITEM_POTION")
+
+        store.searchText = "super"
+
+        XCTAssertEqual(store.filteredItemDetails.map(\.itemID), ["ITEM_SUPER_POTION"])
+        XCTAssertEqual(store.selectedItemDetail?.itemID, "ITEM_POTION")
+        XCTAssertEqual(store.selectedItemDraft?.itemID, "ITEM_POTION")
+        XCTAssertEqual(store.selectedCoreItemDetail?.itemID, "ITEM_POTION")
+
+        let selectedItem = try XCTUnwrap(store.selectedItemDetail)
+        XCTAssertEqual(selectedItem.source.path, "src/data/items.h")
+        XCTAssertEqual(selectedItem.source.symbol, "ITEM_POTION")
+
+        let inspector = store.itemSourceInspectorContext
+        XCTAssertEqual(inspector.title, selectedItem.displayName)
+        XCTAssertEqual(inspector.subtitle, "ITEM_POTION")
+        XCTAssertEqual(inspector.sources.first?.title, "Item Definition")
+        XCTAssertEqual(inspector.sources.first?.source.path, selectedItem.source.path)
+        XCTAssertEqual(inspector.sources.first?.source.symbol, selectedItem.source.symbol)
+        XCTAssertEqual(inspector.sources.first?.source.line, selectedItem.source.line)
+    }
+
+    @MainActor
+    func testEncountersFirstOpenLoadsLiveSourceRows() async throws {
+        let root = try makeUnifiedDataProject()
+        let store = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+
+        store.openProject(path: root.path)
+        XCTAssertNil(store.selectedSourceIndex)
+        store.selectWorkbenchModule(.encounters)
+
+        _ = try await waitForSelectedSourceGraph(store)
+
+        let encounters = store.records(for: .encounters)
+        XCTAssertTrue(encounters.contains { $0.title == "MAP_ROUTE101" })
+        XCTAssertTrue(encounters.contains { $0.source.path == "src/data/wild_encounters.json" })
     }
 
     @MainActor
@@ -340,6 +424,17 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     }
 
     @MainActor
+    private func waitForSelectedSourceGraph(_ store: WorkbenchStore) async throws -> ProjectSourceIndex {
+        for _ in 0..<80 {
+            if let sourceIndex = store.selectedSourceIndex {
+                return sourceIndex
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw StoreTestError.sourceGraphTimedOut
+    }
+
+    @MainActor
     private func waitForSelectedAssetCatalog(_ store: WorkbenchStore) async throws -> ResourceAssetCatalogViewState {
         for _ in 0..<80 {
             if let catalog = store.selectedAssetCatalog { return catalog }
@@ -373,6 +468,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         try writeTrainerSources(root: root)
         try writeMoveSources(root: root)
         try writeItemSources(root: root)
+        try writeEncounterSources(root: root)
         return root
     }
 
@@ -639,9 +735,50 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
                     .fieldUseFunc = ItemUseOutOfBattle_CannotUse,
                     .battleUseFunc = NULL,
                 },
+                [ITEM_SUPER_POTION] =
+                {
+                    .name = _("SUPER POTION"),
+                    .itemId = ITEM_SUPER_POTION,
+                    .price = 700,
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 0,
+                    .pocket = POCKET_ITEMS,
+                    .type = ITEM_USE_BAG_MENU,
+                    .battleUsage = 0,
+                    .secondaryId = 0,
+                    .fieldUseFunc = ItemUseOutOfBattle_CannotUse,
+                    .battleUseFunc = NULL,
+                },
             };
             """,
             to: root.appendingPathComponent("src/data/items.h")
+        )
+    }
+
+    private func writeEncounterSources(root: URL) throws {
+        try write(
+            """
+            {
+              "wild_encounter_groups": [
+                {
+                  "label": "gWildMonHeaders",
+                  "encounters": [
+                    {
+                      "map": "MAP_ROUTE101",
+                      "base_label": "gRoute101",
+                      "land_mons": {
+                        "encounter_rate": 20,
+                        "mons": [
+                          { "species": "SPECIES_TREECKO", "min_level": 2, "max_level": 2 }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """,
+            to: root.appendingPathComponent("src/data/wild_encounters.json")
         )
     }
 
@@ -814,5 +951,6 @@ private enum StoreTestError: Error {
     case itemCatalogTimedOut
     case mapVisualTimedOut
     case graphicsReportTimedOut
+    case sourceGraphTimedOut
     case assetCatalogTimedOut
 }

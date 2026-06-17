@@ -79,8 +79,10 @@ struct PokemonSpeciesWorkbenchView: View {
                             }
                         }
 
-                        if supportsClassicSpeciesMutationEditing {
+                        if supportsLevelUpEditing(for: selectedSpecies) {
                             levelUpSection(draft: draft)
+                        }
+                        if supportsClassicSpeciesMutationEditing {
                             evolutionSection(draft: draft)
                             tmhmSection(draft: draft)
                             tutorSection(draft: draft)
@@ -604,6 +606,19 @@ struct PokemonSpeciesWorkbenchView: View {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered:
             return true
+        default:
+            return false
+        }
+    }
+
+    private func supportsLevelUpEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered:
+            return true
+        case .pokeemeraldExpansion:
+            guard let path = species.learnsets.levelUpSourceSpan?.relativePath else { return false }
+            return path == "src/data/pokemon/level_up_learnsets.h"
+                || path.hasPrefix("src/data/pokemon/level_up_learnsets/")
         default:
             return false
         }

@@ -163,7 +163,19 @@ struct WorkbenchSidebarPanel: View {
         case .build:
             buildTools
         case .graphics:
-            previewOnlyTools(title: "Graphics Tools", actions: ["Import", "Convert", "Apply"])
+            VStack(alignment: .leading, spacing: 12) {
+                mutationTools(
+                    title: "Graphics Mutation",
+                    isDirty: store.selectedGraphicsIsDirty,
+                    canPreview: store.canPreviewSelectedGraphicsMutationPlan,
+                    canApply: store.canApplySelectedGraphicsMutationPlan,
+                    canDiscard: store.canDiscardGraphicsEdits,
+                    preview: store.previewSelectedGraphicsMutationPlan,
+                    apply: store.applySelectedGraphicsMutationPlan,
+                    discard: store.discardGraphicsEdits
+                )
+                previewOnlyTools(title: "Graphics Package Tools", actions: ["Import", "Convert", "Apply Package"])
+            }
         case .pokemon:
             mutationTools(
                 title: "Pokemon Mutation",

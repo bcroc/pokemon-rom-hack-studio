@@ -657,69 +657,50 @@ final class WorkbenchStore: ObservableObject {
         return Self.itemCatalog(from: catalog, project: selectedIndexedProject)
     }
 
+    private var selectedItemsFacade: WorkbenchItemsFacade {
+        WorkbenchItemsFacade(
+            catalog: selectedItemCatalog,
+            viewState: selectedItemCatalogView,
+            selectedItemID: selectedItemID,
+            filter: selectedItemWorkbenchFilter,
+            searchText: searchText
+        )
+    }
+
+    private var selectedMovesFacade: WorkbenchMovesFacade {
+        WorkbenchMovesFacade(
+            viewState: selectedMoveCatalog,
+            catalog: selectedCoreMoveCatalog,
+            selectedProjectID: selectedIndexedProject?.id,
+            selectedMoveID: selectedMoveID,
+            filter: selectedMoveWorkbenchFilter,
+            searchText: searchText,
+            draftsByKey: moveDraftsByKey
+        )
+    }
+
     var filteredMoveDetails: [MoveDetailViewState] {
-        guard let catalog = selectedMoveCatalog else { return [] }
-        let filteredByMode: [MoveDetailViewState]
-        switch selectedMoveWorkbenchFilter {
-        case .all:
-            filteredByMode = catalog.moves
-        case .tmhm:
-            filteredByMode = catalog.moves.filter { !$0.tmhmLearners.isEmpty }
-        case .tutor:
-            filteredByMode = catalog.moves.filter { !$0.tutorLearners.isEmpty }
-        case .learnedBy:
-            filteredByMode = catalog.moves.filter { $0.learnerCount > 0 }
-        case .diagnostics:
-            filteredByMode = catalog.moves.filter { !$0.diagnostics.isEmpty }
-        }
-        guard !searchText.isEmpty else { return filteredByMode }
-        let needle = searchText.lowercased()
-        return filteredByMode.filter { $0.searchBlob.contains(needle) }
+        selectedMovesFacade.filteredDetails
     }
 
     var selectedMoveDetail: MoveDetailViewState? {
-        guard let catalog = selectedMoveCatalog else { return nil }
-        if let selected = catalog.moves.first(where: { $0.moveID == selectedMoveID }) {
-            return selected
-        }
-        return catalog.moves.first { $0.isEditable } ?? catalog.moves.first
+        selectedMovesFacade.selectedDetail
     }
 
     var selectedCoreMoveDetail: PokemonHackCore.MoveDetail? {
-        guard let catalog = selectedCoreMoveCatalog else { return nil }
-        if let selected = catalog.moves.first(where: { $0.moveID == selectedMoveID }) {
-            return selected
-        }
-        return catalog.moves.first { $0.isEditable } ?? catalog.moves.first
+        selectedMovesFacade.selectedCoreDetail
     }
 
     var selectedMoveIsHiddenByCurrentFilter: Bool {
-        guard !selectedMoveID.isEmpty, selectedMoveCatalog != nil else { return false }
-        return !filteredMoveDetails.contains { $0.moveID == selectedMoveID }
+        selectedMovesFacade.selectedIsHiddenByCurrentFilter
     }
 
     var selectedMoveDraft: PokemonHackCore.MoveEditDraft? {
-        guard let detail = selectedCoreMoveDetail else { return nil }
-        if let selectedIndexedProject {
-            let key = moveDraftKey(projectID: selectedIndexedProject.id, moveID: detail.moveID)
-            if let draft = moveDraftsByKey[key] {
-                return draft
-            }
-        }
-        return PokemonHackCore.MoveEditDraft(detail: detail)
+        selectedMovesFacade.selectedDraft
     }
 
     var selectedMoveIsDirty: Bool {
-        guard
-            let selectedIndexedProject,
-            let detail = selectedCoreMoveDetail,
-            let baseDraft = PokemonHackCore.MoveEditDraft(detail: detail)
-        else {
-            return false
-        }
-        let key = moveDraftKey(projectID: selectedIndexedProject.id, moveID: detail.moveID)
-        guard let draft = moveDraftsByKey[key] else { return false }
-        return draft != baseDraft
+        selectedMovesFacade.selectedIsDirty
     }
 
     var canPreviewSelectedMoveMutationPlan: Bool {
@@ -752,35 +733,60 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var filteredItemDetails: [ItemDetailViewState] {
-        guard let catalog = selectedItemCatalogView else { return [] }
-        let filteredByMode: [ItemDetailViewState]
-        switch selectedItemWorkbenchFilter {
-        case .all:
-            filteredByMode = catalog.items
-        case .editable:
-            filteredByMode = catalog.items.filter(\.isEditable)
-        case .diagnostics:
-            filteredByMode = catalog.items.filter { !$0.diagnostics.isEmpty }
-        }
-        guard !searchText.isEmpty else { return filteredByMode }
-        let needle = searchText.lowercased()
-        return filteredByMode.filter { $0.searchBlob.contains(needle) }
+        selectedItemsFacade.filteredDetails
     }
 
     var selectedItemDetail: ItemDetailViewState? {
-        guard let catalog = selectedItemCatalogView else { return nil }
-        if let selected = filteredItemDetails.first(where: { $0.itemID == selectedItemID }) {
-            return selected
+        selectedItemsFacade.selectedDetail
+    }
+
+    var itemSourceInspectorContext: SourceInspectorContext {
+        guard let catalog = selectedItemCatalogView else {
+            return SourceInspectorContext(
+                title: WorkbenchModule.items.title,
+                subtitle: itemCatalogLoadStatus.label,
+                systemImage: WorkbenchModule.items.systemImage,
+                status: itemCatalogLoadStatus.validationState,
+                facts: [],
+                sources: [],
+                diagnostics: []
+            )
         }
-        return filteredItemDetails.first ?? catalog.items.first
+
+        guard let item = selectedItemDetail else {
+            return SourceInspectorContext(
+                title: WorkbenchModule.items.title,
+                subtitle: "\(catalog.itemCount) items",
+                systemImage: WorkbenchModule.items.systemImage,
+                status: moduleStatus(for: .items),
+                facts: [
+                    SourceInspectorFact(label: "Items", value: "\(catalog.itemCount)"),
+                    SourceInspectorFact(label: "Editable", value: "\(catalog.editableCount)")
+                ],
+                sources: [],
+                diagnostics: catalog.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
+            )
+        }
+
+        return SourceInspectorContext(
+            title: item.displayName,
+            subtitle: item.itemID,
+            systemImage: WorkbenchModule.items.systemImage,
+            status: item.status,
+            facts: [
+                SourceInspectorFact(label: "Editable", value: item.isEditable ? "Yes" : "No"),
+                SourceInspectorFact(label: "Description", value: item.isDescriptionEditable ? "Editable" : "Read-only"),
+                SourceInspectorFact(label: "Diagnostics", value: "\(item.diagnostics.count)")
+            ] + item.facts.prefix(4).map { SourceInspectorFact(label: $0.label, value: $0.value) },
+            sources: [
+                SourceInspectorSource(title: "Item Definition", source: item.source, status: item.status)
+            ],
+            diagnostics: item.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
+        )
     }
 
     var selectedCoreItemDetail: PokemonHackCore.ItemDetail? {
-        guard let catalog = selectedItemCatalog else { return nil }
-        if let selected = catalog.items.first(where: { $0.itemID == selectedItemID }) {
-            return selected
-        }
-        return catalog.items.first { $0.isEditable } ?? catalog.items.first
+        selectedItemsFacade.selectedCoreDetail
     }
 
     var selectedItemDraft: PokemonHackCore.ItemEditDraft? {
@@ -934,8 +940,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var dirtyMoveDraftCount: Int {
-        guard let selectedIndexedProject, let catalog = selectedCoreMoveCatalog else { return 0 }
-        return catalog.moves.filter { isMoveDirty($0.moveID, projectID: selectedIndexedProject.id) }.count
+        selectedMovesFacade.dirtyDraftCount
     }
 
     var canPreviewSelectedSpeciesMutationPlan: Bool {
@@ -1296,13 +1301,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var hasStagedEdits: Bool {
-        hasStagedMapEdits
-            || selectedSpeciesIsDirty
-            || selectedTrainerIsDirty
-            || selectedMoveIsDirty
-            || selectedItemIsDirty
-            || selectedGraphicsIsDirty
-            || selectedNDSDataIsDirty
+        currentDraftCount > 0
     }
 
     var currentDraftCounts: PokemonHackCore.SavedDraftCounts {
@@ -2079,7 +2078,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func moveDraftKey(projectID: String, moveID: String) -> String {
-        "\(projectID)::move::\(moveID)"
+        WorkbenchMovesFacade.draftKey(projectID: projectID, moveID: moveID)
     }
 
     func isSpeciesDirty(_ speciesID: String) -> Bool {
@@ -2106,16 +2105,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func isMoveDirty(_ moveID: String, projectID: String) -> Bool {
-        guard
-            let catalog = coreMoveCatalogsByID[projectID],
-            let detail = catalog.moves.first(where: { $0.moveID == moveID })
-        else {
-            return false
-        }
-        let baseDraft = PokemonHackCore.MoveEditDraft(detail: detail)
-        let key = moveDraftKey(projectID: projectID, moveID: moveID)
-        guard let draft = moveDraftsByKey[key] else { return false }
-        return draft != baseDraft
+        selectedMovesFacade.isDirty(moveID, projectID: projectID)
     }
 
     private func itemDraftKey(projectID: String, itemID: String) -> String {
@@ -2759,6 +2749,7 @@ final class WorkbenchStore: ObservableObject {
         pendingRelatedMapTargetID = nil
         pendingResourceAssetFocus = nil
         resourceAssetRowsCache = nil
+        preloadSelectedProjectReports()
         refreshSelectedSpeciesSelection()
         refreshSelectedTrainerSelection()
         refreshSelectedMoveSelection()
@@ -2774,6 +2765,12 @@ final class WorkbenchStore: ObservableObject {
         latestItemApplyResult = nil
         updateAssetCatalogLoadStatusForSelection()
         loadSelectedModuleDataIfNeeded()
+    }
+
+    private func preloadSelectedProjectReports() {
+        loadSelectedBuildReportIfNeeded()
+        loadSelectedGraphicsReportIfNeeded()
+        loadSelectedROMInspectorSynchronouslyIfNeeded()
     }
 
     @discardableResult
@@ -3484,6 +3481,48 @@ final class WorkbenchStore: ObservableObject {
         scheduleDraftAutosaveIfNeeded()
     }
 
+    private func discardAllDrafts(forProjectID projectID: String) {
+        let speciesPrefix = draftKeyPrefix(projectID: projectID, kind: "species")
+        let trainerPrefix = draftKeyPrefix(projectID: projectID, kind: "trainer")
+        let movePrefix = draftKeyPrefix(projectID: projectID, kind: "move")
+        let itemPrefix = draftKeyPrefix(projectID: projectID, kind: "item")
+        let graphicsPrefix = draftKeyPrefix(projectID: projectID, kind: "graphics")
+        let ndsDataPrefix = draftKeyPrefix(projectID: projectID, kind: "nds-data")
+
+        removeDrafts(from: &speciesDraftsByKey, withPrefix: speciesPrefix)
+        removeDrafts(from: &trainerDraftsByKey, withPrefix: trainerPrefix)
+        removeDrafts(from: &moveDraftsByKey, withPrefix: movePrefix)
+        removeDrafts(from: &itemDraftsByKey, withPrefix: itemPrefix)
+        removeDrafts(from: &graphicsDraftsByKey, withPrefix: graphicsPrefix)
+        removeDrafts(from: &ndsDataDraftsByKey, withPrefix: ndsDataPrefix)
+        savedMapDraftsByProjectID.removeValue(forKey: projectID)
+        if selectedProjectID == projectID {
+            mapEditorSession.discardChanges()
+        }
+
+        latestSpeciesEditPlan = nil
+        latestSpeciesApplyResult = nil
+        latestSpeciesBatchEditPlans = []
+        latestSpeciesBatchApplyResult = nil
+        latestTrainerEditPlan = nil
+        latestTrainerApplyResult = nil
+        latestMoveEditPlan = nil
+        latestMoveApplyResult = nil
+        latestItemEditPlan = nil
+        latestItemApplyResult = nil
+        latestGraphicsEditPlan = nil
+        latestGraphicsApplyResult = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+        scheduleDraftAutosaveIfNeeded()
+    }
+
+    private func removeDrafts<Value>(from drafts: inout [String: Value], withPrefix prefix: String) {
+        for key in drafts.keys.filter({ $0.hasPrefix(prefix) }) {
+            drafts.removeValue(forKey: key)
+        }
+    }
+
     func discardMapEditsAndContinueNavigation() {
         guard let pendingMapNavigation else { return }
         let pendingSearchBehavior = pendingMapNavigationSearchBehavior
@@ -3491,7 +3530,9 @@ final class WorkbenchStore: ObservableObject {
         let pendingSource = pendingMapNavigationSource
         let shouldRefreshScriptReadiness = pendingMapNavigationShouldRefreshScriptReadiness
         if case .project = pendingMapNavigation {
-            discardToolbarMutationTarget()
+            if !selectedProjectID.isEmpty {
+                discardAllDrafts(forProjectID: selectedProjectID)
+            }
         } else {
             discardMapEdits()
         }
@@ -3606,7 +3647,9 @@ final class WorkbenchStore: ObservableObject {
             loadSelectedBuildReportIfNeeded()
         case .graphics:
             loadSelectedGraphicsReportIfNeeded()
-        case .dashboard, .encounters:
+        case .encounters:
+            loadSelectedSourceGraphIfNeeded()
+        case .dashboard:
             break
         }
     }
@@ -4007,11 +4050,7 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
-        if !catalog.moves.contains(where: { $0.moveID == selectedMoveID }) {
-            selectedMoveID = catalog.moves.first { $0.isEditable }?.moveID
-                ?? catalog.moves.first?.moveID
-                ?? ""
-        }
+        selectedMoveID = WorkbenchMovesFacade.refreshedSelection(currentID: selectedMoveID, catalog: catalog)
         moveCatalogLoadStatus = .loaded(catalog.moveCount)
     }
 
@@ -4029,15 +4068,13 @@ final class WorkbenchStore: ObservableObject {
 
         itemCatalogTask?.cancel()
         itemCatalogLoadStatus = .loading
-        let projectID = selectedIndexedProject.id
-        let rootPath = selectedIndexedProject.rootPath
-        let retainedSourceIndexData = sourceIndexesByID[projectID].flatMap { try? JSONEncoder().encode($0) }
-        let generation = projectLoadGeneration
+        let loadToken = WorkbenchAsyncLoadToken(project: selectedIndexedProject, generation: projectLoadGeneration)
+        let retainedSourceIndexData = sourceIndexesByID[loadToken.projectID].flatMap { try? JSONEncoder().encode($0) }
 
         itemCatalogTask = Task { @MainActor [weak self] in
             do {
                 let payloadData = try await Task.detached(priority: .userInitiated) { () throws -> Data in
-                    let index = try GameAdapterRegistry.index(path: rootPath, fileManager: .default)
+                    let index = try GameAdapterRegistry.index(path: loadToken.rootPath, fileManager: .default)
                     let sourceIndex: ProjectSourceIndex?
                     if let retainedSourceIndexData {
                         sourceIndex = try JSONDecoder().decode(ProjectSourceIndex.self, from: retainedSourceIndexData)
@@ -4050,22 +4087,20 @@ final class WorkbenchStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let payload = try JSONDecoder().decode(ItemCatalogLoadPayload.self, from: payloadData)
                 guard let self,
-                      self.projectLoadGeneration == generation,
-                      self.selectedIndexedProject?.id == projectID
+                      loadToken.accepts(currentProjectID: self.selectedIndexedProject?.id, currentGeneration: self.projectLoadGeneration)
                 else { return }
 
-                projectIndexesByID[projectID] = payload.index
+                projectIndexesByID[loadToken.projectID] = payload.index
                 if let sourceIndex = payload.sourceIndex {
-                    sourceIndexesByID[projectID] = sourceIndex
+                    sourceIndexesByID[loadToken.projectID] = sourceIndex
                     updateSourceGraphLoadStatusForSelection()
                 }
-                itemCatalogsByID[projectID] = payload.catalog
+                itemCatalogsByID[loadToken.projectID] = payload.catalog
                 itemCatalogLoadStatus = .loaded(payload.catalog.itemCount)
                 refreshSelectedItemSelection()
             } catch {
                 guard let self,
-                      self.projectLoadGeneration == generation,
-                      self.selectedIndexedProject?.id == projectID
+                      loadToken.accepts(currentProjectID: self.selectedIndexedProject?.id, currentGeneration: self.projectLoadGeneration)
                 else { return }
                 itemCatalogLoadStatus = .failed(error.localizedDescription)
             }
@@ -4085,11 +4120,7 @@ final class WorkbenchStore: ObservableObject {
             return
         }
 
-        if !catalog.items.contains(where: { $0.itemID == selectedItemID }) {
-            selectedItemID = catalog.items.first { $0.isEditable }?.itemID
-                ?? catalog.items.first?.itemID
-                ?? ""
-        }
+        selectedItemID = WorkbenchItemsFacade.refreshedSelection(currentID: selectedItemID, catalog: catalog)
         itemCatalogLoadStatus = .loaded(catalog.itemCount)
     }
 
@@ -5173,6 +5204,7 @@ final class WorkbenchStore: ObservableObject {
         let projectID = project.id
         let path = project.rootPath
         let generation = projectLoadGeneration
+        let resolver = toolResolver
 
         romInspectorTask?.cancel()
         romInspectorTask = Task { @MainActor [weak self] in
@@ -5181,7 +5213,7 @@ final class WorkbenchStore: ObservableObject {
                     let report = try PokemonHackCore.BinaryROMInspectorReportBuilder.build(
                         path: path,
                         fileManager: .default,
-                        toolResolver: PokemonHackCore.ToolAvailabilityResolverFactory.pathEnvironment()
+                        toolResolver: resolver
                     )
                     return try JSONEncoder().encode(report)
                 }.value
@@ -5197,6 +5229,26 @@ final class WorkbenchStore: ObservableObject {
                 guard let self, self.projectLoadGeneration == generation else { return }
                 romInspectorTask = nil
             }
+        }
+    }
+
+    private func loadSelectedROMInspectorSynchronouslyIfNeeded(force: Bool = false) {
+        guard let project = selectedIndexedProject,
+              let index = projectIndexesByID[project.id],
+              index.profile == .binaryROM
+        else { return }
+        if !force, romInspectorReportsByID[project.id] != nil {
+            return
+        }
+
+        do {
+            romInspectorReportsByID[project.id] = try PokemonHackCore.BinaryROMInspectorReportBuilder.build(
+                path: project.rootPath,
+                fileManager: fileManager,
+                toolResolver: toolResolver
+            )
+        } catch {
+            romInspectorReportsByID.removeValue(forKey: project.id)
         }
     }
 
@@ -7893,6 +7945,8 @@ final class WorkbenchStore: ObservableObject {
             let facts = moveFacts(
                 ordinal: move.ordinal,
                 flags: move.flags,
+                descriptionSymbol: move.descriptionSymbol,
+                descriptionText: move.descriptionText,
                 sourceSpan: move.sourceSpan,
                 battleFacts: battleFacts
             )
@@ -7911,7 +7965,9 @@ final class WorkbenchStore: ObservableObject {
                     move.moveID,
                     move.displayName,
                     move.sourceSpan.relativePath,
-                    move.sourcePreview ?? ""
+                    move.sourcePreview ?? "",
+                    move.descriptionSymbol ?? "",
+                    move.descriptionText ?? ""
                 ]
                 + move.flags
                 + facts.flatMap { [$0.label, $0.value] }
@@ -7933,6 +7989,8 @@ final class WorkbenchStore: ObservableObject {
                 source: source,
                 sourcePreview: move.sourcePreview,
                 isEditable: move.isEditable,
+                isDescriptionEditable: move.isDescriptionEditable,
+                descriptionText: move.descriptionText,
                 tmhmLearners: tmhmLearners,
                 tutorLearners: tutorLearners,
                 learnedBy: learnedBy,
@@ -8088,6 +8146,8 @@ final class WorkbenchStore: ObservableObject {
     private static func moveFacts(
         ordinal: Int?,
         flags: [String],
+        descriptionSymbol: String?,
+        descriptionText: String?,
         sourceSpan: PokemonHackCore.SourceSpan,
         battleFacts: [Fact]
     ) -> [Fact] {
@@ -8097,6 +8157,12 @@ final class WorkbenchStore: ObservableObject {
         }
         if !flags.isEmpty {
             facts.append(Fact(label: "Flags", value: flags.joined(separator: ", ")))
+        }
+        if let descriptionSymbol {
+            facts.append(Fact(label: "Description", value: descriptionSymbol))
+        }
+        if let descriptionText {
+            facts.append(Fact(label: "Description Text", value: descriptionText))
         }
         facts.append(Fact(label: "Lines", value: "\(sourceSpan.startLine)-\(sourceSpan.endLine)"))
         return facts

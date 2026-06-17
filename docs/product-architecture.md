@@ -47,6 +47,22 @@ Default behavior should preserve a clear edit path back to decompilation files:
 
 The app should make the source location visible for each editable object. For example, a Pokemon species editor should show the backing constants/data files; a map editor should expose map data paths and related scripts.
 
+## Binary ROM Mutation Safety
+
+Direct ROM mutation is policy/proof-first until a later row explicitly adds writers. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract; it does not add direct byte writes, repoint apply, allocation apply, checksum repair, export, emulator launch, or binary mutation artifacts.
+
+Future binary-only writers must:
+
+- Refuse when a source-tree edit path is available; only user-supplied local `.gba` `binaryROM` inputs may proceed.
+- Produce a dry-run mutation plan before apply with byte ranges, expected original bytes or hashes, replacement size/hash, diagnostics, base ROM identity, and explicit binary-only rationale.
+- Recheck SHA1, CRC32, file size, and header facts immediately before apply and refuse base-hash drift or stale original bytes.
+- Keep direct byte edits bounds-checked, non-overlapping, previewed, and blocked for header/checksum regions unless a later row explicitly opens that policy.
+- Derive pointer repoints from accepted ROM graph candidates, recording old/new targets and pointer offsets, and refuse ambiguous, unresolved, or stale pointer bytes.
+- Allocate only from detected free-space ranges, recording alignment, fill, padding, reserved ranges, and overlap checks; ROM expansion stays blocked unless a later row opens it.
+- Write backups under ignored `.pokemonhackstudio/backups/` and future mutation artifacts/manifests under an ignored `.pokemonhackstudio/rom-mutations/` subroot.
+- Record manifests with base/post hashes, operation summaries, allocated ranges, backup/output paths, tool version, timestamp, and confirmation metadata without committing proprietary ROM bytes.
+- Require a separate explicit app or CLI confirmation after plan review; no background apply, auto-export, emulator launch, or implicit overwrite is allowed.
+
 ## Generated Artifacts
 
 Generated outputs should be reproducible, clearly labeled, and kept out of hand-authored source areas.

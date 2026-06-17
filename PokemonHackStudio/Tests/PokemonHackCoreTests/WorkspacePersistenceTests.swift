@@ -105,6 +105,30 @@ final class WorkspacePersistenceTests: XCTestCase {
         XCTAssertNil(try ProjectWorkspacePersistence.loadAutosave(root: temp.url))
     }
 
+    func testWorkspacePersistenceBlocksSymlinkEscapedWorkspaceDirectory() throws {
+        let temp = try WorkspacePersistenceTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let outsideTemp = try WorkspacePersistenceTemporaryDirectory()
+        temporaryDirectories.append(outsideTemp)
+        let outside = outsideTemp.url
+        try FileManager.default.createSymbolicLink(
+            at: temp.url.appendingPathComponent(".pokemonhackstudio"),
+            withDestinationURL: outside
+        )
+        let saved = workspace(root: temp.url, selectedItemID: "ITEM_POTION")
+
+        XCTAssertThrowsError(try ProjectWorkspacePersistence.saveProject(saved, root: temp.url)) { error in
+            guard case ProjectWorkspacePersistenceError.unsafeWorkspacePath(let code, _) = error else {
+                return XCTFail("Expected unsafe workspace path, got \(error)")
+            }
+            XCTAssertEqual(code, "WORKSPACE_PATH_SYMLINK_OUTSIDE_ROOT")
+        }
+        XCTAssertThrowsError(try ProjectWorkspacePersistence.saveAutosave(saved, root: temp.url))
+        XCTAssertThrowsError(try ProjectWorkspacePersistence.discardAutosave(root: temp.url))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("project.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("drafts/autosave.json").path))
+    }
+
     func testUnsupportedSchemaVersionThrows() throws {
         let temp = try WorkspacePersistenceTemporaryDirectory()
         temporaryDirectories.append(temp)

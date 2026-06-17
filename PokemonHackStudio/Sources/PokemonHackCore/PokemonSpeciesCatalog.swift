@@ -397,6 +397,8 @@ public enum SpeciesAssetKind: String, Codable, Equatable, CaseIterable {
 
     public var expectedPNGDimensions: (width: Int, height: Int)? {
         switch self {
+        case .front, .back:
+            return (64, 64)
         case .icon:
             return (32, 64)
         case .footprint:
@@ -1904,15 +1906,18 @@ public enum SpeciesMutationPlanner {
             }
             if levelUpChanged(species: species, draft: draft) {
                 if let span = species.learnsets.levelUpSourceSpan,
-                   let symbol = species.learnsets.levelUpSymbol,
-                   let path = descriptor.levelUpPaths.first(where: { $0 == span.relativePath }) ?? species.learnsets.levelUpSourceSpan?.relativePath,
-                   let levelUpChange = rewriteChange(
-                    root: root,
-                    path: path,
-                    span: span,
-                    replacement: renderLevelUpLearnset(symbol: symbol, moves: draft.levelUpMoves)
-                   ) {
-                    changes.append(levelUpChange)
+                   let symbol = species.learnsets.levelUpSymbol {
+                    let path = descriptor.levelUpPaths.first(where: { $0 == span.relativePath }) ?? span.relativePath
+                    if descriptor.speciesInfoStyle == .expansionSpeciesScalars && !isExpansionLevelUpLearnsetPath(path) {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_LEVEL_UP_PATH_UNSUPPORTED", message: "\(draft.speciesID) level-up rewrites are limited to local Expansion level-up learnset source files.", span: span))
+                    } else if let levelUpChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderLevelUpLearnset(symbol: symbol, moves: draft.levelUpMoves)
+                    ) {
+                        changes.append(levelUpChange)
+                    }
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_LEVEL_UP_SPAN_MISSING", message: "\(draft.speciesID) has no editable level-up learnset source span.", span: species.sourceSpan))
                 }
@@ -2098,6 +2103,11 @@ public enum SpeciesMutationPlanner {
         Diagnostic(severity: .error, code: code, message: message, span: span)
     }
 
+    private static func isExpansionLevelUpLearnsetPath(_ path: String) -> Bool {
+        path == "src/data/pokemon/level_up_learnsets.h"
+            || path.hasPrefix("src/data/pokemon/level_up_learnsets/")
+    }
+
     private static func appendStructuralDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
         let stats = [
             ("HP", draft.baseStats.hp),
@@ -2187,6 +2197,9 @@ public enum SpeciesMutationPlanner {
                 draft.itemRare != original.itemRare ? draft.itemRare : nil
             ]
             appendUnknown(changedItems.compactMap { $0 }.filter { $0 != "ITEM_NONE" }, group: .items, constants: constants, species: species, diagnostics: &diagnostics)
+            if descriptor.editCapabilities.levelUp || levelUpChanged(species: species, draft: draft) {
+                appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+            }
             return
         }
         appendUnknown(draft.types, group: .types, constants: constants, species: species, diagnostics: &diagnostics)
@@ -3410,7 +3423,7 @@ private struct SpeciesEditCapabilities {
 
     static let expansionSpeciesScalars = SpeciesEditCapabilities(
         speciesInfo: true,
-        levelUp: false,
+        levelUp: true,
         tmhm: false,
         eggMoves: false,
         evolutions: false,

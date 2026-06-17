@@ -215,6 +215,9 @@ struct ModuleDetailView: View {
             )
         case .encounters:
             EncounterEditorView(records: store.records(for: .encounters))
+                .onAppear {
+                    store.loadSelectedSourceGraphIfNeeded()
+                }
         case .scripts:
             ScriptEditorView(
                 store: store,
@@ -285,6 +288,8 @@ struct ModuleDetailView: View {
             trainerInspectorContext
         case .moves:
             moveInspectorContext
+        case .items:
+            itemInspectorContext
         default:
             recordsInspectorContext(module: store.selection)
         }
@@ -844,6 +849,10 @@ struct ModuleDetailView: View {
         )
     }
 
+    private var itemInspectorContext: SourceInspectorContext {
+        store.itemSourceInspectorContext
+    }
+
     private func recordsInspectorContext(module: WorkbenchModule) -> SourceInspectorContext {
         let records = store.records(for: module)
         return SourceInspectorContext(
@@ -984,17 +993,5 @@ struct ModuleDetailView: View {
         }
 
         return .valid
-    }
-}
-
-private extension SourceInspectorDiagnostic {
-    init(diagnostic: IndexedDiagnosticRow) {
-        self.init(
-            id: diagnostic.id,
-            title: diagnostic.title,
-            message: diagnostic.message,
-            status: diagnostic.severity,
-            source: diagnostic.source
-        )
     }
 }

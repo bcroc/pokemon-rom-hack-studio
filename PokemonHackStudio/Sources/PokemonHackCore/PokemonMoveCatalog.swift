@@ -69,6 +69,9 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
     public let sourcePreview: String?
     public let facts: [SourceIndexFact]
     public let flags: [String]
+    public let descriptionSymbol: String?
+    public let descriptionText: String?
+    public let isDescriptionEditable: Bool
     public let isEditable: Bool
     public let machineMemberships: [MoveMachineMembership]
     public let tutorMemberships: [MoveTutorMembership]
@@ -83,6 +86,9 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
         sourcePreview: String? = nil,
         facts: [SourceIndexFact] = [],
         flags: [String] = [],
+        descriptionSymbol: String? = nil,
+        descriptionText: String? = nil,
+        isDescriptionEditable: Bool = false,
         isEditable: Bool = false,
         machineMemberships: [MoveMachineMembership] = [],
         tutorMemberships: [MoveTutorMembership] = [],
@@ -96,6 +102,9 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
         self.sourcePreview = sourcePreview
         self.facts = facts
         self.flags = flags
+        self.descriptionSymbol = descriptionSymbol
+        self.descriptionText = descriptionText
+        self.isDescriptionEditable = isDescriptionEditable
         self.isEditable = isEditable
         self.machineMemberships = machineMemberships
         self.tutorMemberships = tutorMemberships
@@ -198,6 +207,7 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
     public var target: String
     public var priority: Int
     public var flags: [String]
+    public var descriptionText: String?
 
     public init(
         moveID: String,
@@ -209,7 +219,8 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
         secondaryEffectChance: Int,
         target: String,
         priority: Int,
-        flags: [String]
+        flags: [String],
+        descriptionText: String? = nil
     ) {
         self.moveID = moveID
         self.effect = effect
@@ -221,6 +232,7 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
         self.target = target
         self.priority = priority
         self.flags = normalizedFlags(flags)
+        self.descriptionText = descriptionText
     }
 
     public init?(detail: MoveDetail) {
@@ -260,7 +272,8 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
             secondaryEffectChance: resolvedSecondaryEffectChance,
             target: compactMoveValue(target),
             priority: priority,
-            flags: flags
+            flags: flags,
+            descriptionText: detail.isDescriptionEditable ? detail.descriptionText : nil
         )
     }
 }
@@ -443,11 +456,15 @@ public enum ProjectMoveCatalogBuilder {
         let machineByMove = Dictionary(grouping: machineMemberships, by: \.moveID)
         let tutorByMove = Dictionary(grouping: tutorScan.memberships, by: \.moveID)
         let learnedByMove = Dictionary(grouping: learnsetMemberships, by: \.moveID)
+        let descriptionTexts = moveDescriptionTexts(root: root, profile: index.profile, fileManager: fileManager)
 
         let moves = moveRecords.compactMap { record -> MoveDetail? in
             let moveID = normalizedMoveID(record.title)
             guard moveID != "MOVE_NONE" else { return nil }
             let fullPreview = sourceEntryPreview(root: root, record: record, fileManager: fileManager) ?? record.preview
+            let previewFields = fullPreview.map { MoveTopLevelFieldScanner.fields(in: $0) } ?? [:]
+            let descriptionSymbol = expansionMoveDescriptionSymbol(profile: index.profile, fields: previewFields)
+            let descriptionText = descriptionSymbol.flatMap { descriptionTexts[$0]?.text }
             let editDiagnostics = editabilityDiagnostics(record: record, profile: index.profile, preview: fullPreview)
             let moveDiagnostics = record.diagnostics + editDiagnostics + diagnostics.filter { $0.span == record.sourceSpan }
             return MoveDetail(
@@ -458,6 +475,11 @@ public enum ProjectMoveCatalogBuilder {
                 sourcePreview: fullPreview,
                 facts: record.facts,
                 flags: flags(in: record.facts, preview: fullPreview),
+                descriptionSymbol: descriptionSymbol,
+                descriptionText: descriptionText,
+                isDescriptionEditable: descriptionSymbol.flatMap { descriptionTexts[$0] } != nil
+                    && index.profile == .pokeemeraldExpansion
+                    && record.sourceSpan.relativePath == editableMoveSourcePath(for: index.profile),
                 isEditable: moveDiagnostics.allSatisfy { $0.severity != .error },
                 machineMemberships: machineByMove[moveID] ?? [],
                 tutorMemberships: tutorByMove[moveID] ?? [],
@@ -739,7 +761,7 @@ public enum ProjectMoveCatalogBuilder {
                 Diagnostic(
                     severity: .error,
                     code: "MOVE_CATALOG_READ_ONLY_PROFILE",
-                    message: "Move editing is currently available for classic Emerald/FireRed battle_moves.h rows and local Expansion gMovesInfo rows.",
+                    message: "Move editing is currently available for classic Emerald/FireRed battle_moves.h rows, Ruby/Sapphire battle_moves.c rows, and local Expansion gMovesInfo rows.",
                     span: record.sourceSpan
                 )
             ]
@@ -777,6 +799,20 @@ public enum ProjectMoveCatalogBuilder {
             ]
         }
         return []
+    }
+
+    private static func moveDescriptionTexts(
+        root: URL,
+        profile: GameProfile,
+        fileManager: FileManager
+    ) -> [String: MoveDescriptionText] {
+        guard profile == .pokeemeraldExpansion else { return [:] }
+        let path = expansionMoveDescriptionSourcePath
+        let url = root.appendingPathComponent(path)
+        guard fileManager.fileExists(atPath: url.path), let text = try? moveReadText(at: url) else {
+            return [:]
+        }
+        return MoveDescriptionScanner.descriptions(in: text, relativePath: path)
     }
 
     private static func sourceEntryPreview(root: URL, record: SourceIndexRecord, fileManager: FileManager) -> String? {
@@ -862,6 +898,12 @@ public enum ProjectMoveCatalogBuilder {
         return value
     }
 
+    private static func expansionMoveDescriptionSymbol(profile: GameProfile, fields: [String: MoveFieldSlice]) -> String? {
+        guard profile == .pokeemeraldExpansion, let value = fields["description"]?.value else { return nil }
+        let compacted = compactMoveValue(value)
+        return isMoveDescriptionSymbol(compacted) ? compacted : nil
+    }
+
     private static func firstRegexMatch(_ pattern: String, in text: String) -> String? {
         regexMatches(pattern, in: text).first?.dropFirst().first
     }
@@ -891,7 +933,7 @@ public enum MoveMutationPlanner {
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "MOVE_PLAN_UNSUPPORTED_PROFILE", message: "Move apply is available for classic Emerald/FireRed battle_moves.h source trees and local Expansion gMovesInfo rows.")
+                    Diagnostic(severity: .error, code: "MOVE_PLAN_UNSUPPORTED_PROFILE", message: "Move apply is available for classic Emerald/FireRed battle_moves.h source trees, Ruby/Sapphire battle_moves.c source trees, and local Expansion gMovesInfo rows.")
                 ]
             )
         }
@@ -922,6 +964,13 @@ public enum MoveMutationPlanner {
             diagnostics.append(contentsOf: rewrite.diagnostics)
             if let change = rewrite.change {
                 changes.append(change)
+            }
+            if diagnostics.allSatisfy({ $0.severity != .error }) {
+                let descriptionRewrite = rewriteDescriptionChange(root: root, profile: catalog.profile, move: move, draft: draft)
+                diagnostics.append(contentsOf: descriptionRewrite.diagnostics)
+                if let change = descriptionRewrite.change {
+                    changes.append(change)
+                }
             }
         }
         if changes.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -984,6 +1033,12 @@ public enum MoveMutationPlanner {
         }
         appendRangeDiagnostics(move: move, draft: draft, diagnostics: &diagnostics)
         appendSymbolDiagnostics(move: move, draft: draft, diagnostics: &diagnostics)
+        if let draftDescription = draft.descriptionText,
+           draftDescription != move.descriptionText,
+           !move.isDescriptionEditable
+        {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_NOT_EDITABLE", message: "\(move.moveID) does not have a source-backed Expansion move description declaration that can be rewritten.", span: move.sourceSpan))
+        }
         return diagnostics
     }
 
@@ -1069,6 +1124,53 @@ public enum MoveMutationPlanner {
                 newByteCount: newData.count,
                 newData: newData,
                 textPreview: replacementEntry
+            ),
+            []
+        )
+    }
+
+    private static func rewriteDescriptionChange(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (change: MoveEditFileChange?, diagnostics: [Diagnostic]) {
+        guard profile == .pokeemeraldExpansion else { return (nil, []) }
+        guard let draftText = draft.descriptionText, draftText != move.descriptionText else { return (nil, []) }
+        guard let symbol = move.descriptionSymbol else {
+            return (
+                nil,
+                [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SOURCE_MISSING", message: "\(move.moveID) does not have a description symbol that can be rewritten.", span: move.sourceSpan)]
+            )
+        }
+
+        let path = expansionMoveDescriptionSourcePath
+        let url = root.appendingPathComponent(path)
+        guard let originalText = try? moveReadText(at: url), let originalData = originalText.data(using: .utf8) else {
+            return (
+                nil,
+                [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SOURCE_UNREADABLE", message: "Move description source file could not be read before planning: \(path).", span: SourceSpan(relativePath: path, startLine: 1))]
+            )
+        }
+        guard let description = MoveDescriptionScanner.descriptions(in: originalText, relativePath: path)[symbol] else {
+            return (
+                nil,
+                [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SYMBOL_MISSING", message: "Description symbol \(symbol) was not found in \(path).", span: SourceSpan(relativePath: path, startLine: 1))]
+            )
+        }
+
+        let replacement = renderMoveDescriptionDeclaration(symbol: symbol, text: draftText, usesStatic: description.usesStatic)
+        let mutableText = NSMutableString(string: originalText)
+        mutableText.replaceCharacters(
+            in: NSRange(location: description.startOffset, length: description.endOffset - description.startOffset),
+            with: replacement
+        )
+        let newText = mutableText as String
+        guard newText != originalText, let newData = newText.data(using: .utf8) else { return (nil, []) }
+        return (
+            MoveEditFileChange(
+                path: path,
+                summary: "Update move description text",
+                originalByteCount: originalData.count,
+                originalSHA1: pokemonHackSHA1Hex(originalData),
+                newByteCount: newData.count,
+                newData: newData,
+                textPreview: replacement
             ),
             []
         )
@@ -1226,6 +1328,8 @@ private func editableMoveSourcePath(for profile: GameProfile) -> String? {
     switch profile {
     case .pokeemerald, .pokefirered:
         return "src/data/battle_moves.h"
+    case .pokeruby:
+        return "src/data/battle_moves.c"
     case .pokeemeraldExpansion:
         return "src/data/moves_info.h"
     default:
@@ -1277,6 +1381,8 @@ private let expansionKnownMoveFields = editableMoveFields + [
     "weatherType", "windMove", "wrapped", "zMove", "zMoveEffect",
     "zMovePower"
 ]
+
+private let expansionMoveDescriptionSourcePath = "src/data/text/move_descriptions.h"
 
 private struct MoveFieldSlice {
     let name: String
@@ -1507,6 +1613,80 @@ private enum MoveScannerState {
     case character
 }
 
+private struct MoveDescriptionText {
+    let symbol: String
+    let text: String
+    let span: SourceSpan
+    let startOffset: Int
+    let endOffset: Int
+    let usesStatic: Bool
+}
+
+private enum MoveDescriptionScanner {
+    static func descriptions(in text: String, relativePath: String) -> [String: MoveDescriptionText] {
+        let pattern = #"(static\s+)?const\s+u8\s+([A-Za-z_][A-Za-z0-9_]*)\[\]\s*=\s*_\(\s*((?:"(?:\\.|[^"])*"\s*)+)\);"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return [:]
+        }
+        let nsText = text as NSString
+        var result: [String: MoveDescriptionText] = [:]
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            guard match.numberOfRanges >= 4 else { continue }
+            let symbol = nsText.substring(with: match.range(at: 2))
+            let literalBlock = nsText.substring(with: match.range(at: 3))
+            let description = quotedStrings(in: literalBlock)
+                .map(unescapeMoveCString)
+                .joined(separator: "\n")
+            let fullRange = match.range(at: 0)
+            result[symbol] = MoveDescriptionText(
+                symbol: symbol,
+                text: description,
+                span: SourceSpan(
+                    relativePath: relativePath,
+                    startLine: moveLineNumber(forUTF16Offset: fullRange.location, in: text),
+                    endLine: moveLineNumber(forUTF16Offset: fullRange.location + fullRange.length, in: text)
+                ),
+                startOffset: fullRange.location,
+                endOffset: fullRange.location + fullRange.length,
+                usesStatic: match.range(at: 1).location != NSNotFound
+            )
+        }
+        return result
+    }
+
+    private static func quotedStrings(in text: String) -> [String] {
+        let characters = Array(text)
+        var strings: [String] = []
+        var index = 0
+        while index < characters.count {
+            guard characters[index] == "\"" else {
+                index += 1
+                continue
+            }
+            index += 1
+            var value = ""
+            while index < characters.count {
+                let character = characters[index]
+                if character == "\\" {
+                    value.append(character)
+                    index += 1
+                    if index < characters.count {
+                        value.append(characters[index])
+                    }
+                } else if character == "\"" {
+                    break
+                } else {
+                    value.append(character)
+                }
+                index += 1
+            }
+            strings.append(value.trimmingCharacters(in: .whitespacesAndNewlines))
+            index += 1
+        }
+        return strings
+    }
+}
+
 private func simpleFlags(in value: String) -> [String]? {
     let compact = compactMoveValue(value)
     guard !compact.isEmpty else { return [] }
@@ -1535,6 +1715,10 @@ private func isFlagToken(_ value: String) -> Bool {
 
 private func isSimpleSymbol(_ value: String) -> Bool {
     value.range(of: #"^[A-Z_][A-Z0-9_]*$"#, options: .regularExpression) != nil
+}
+
+private func isMoveDescriptionSymbol(_ value: String) -> Bool {
+    value.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
 }
 
 private func compactMoveValue(_ value: String) -> String {
@@ -1572,4 +1756,51 @@ private func moveReplaceLines(in text: String, span: SourceSpan, replacement: St
         joined.append("\n")
     }
     return joined
+}
+
+private func renderMoveDescriptionDeclaration(symbol: String, text: String, usesStatic: Bool) -> String {
+    let prefix = usesStatic ? "static const u8" : "const u8"
+    let lines = text.components(separatedBy: "\n")
+    if lines.count <= 1 {
+        return "\(prefix) \(symbol)[] = _(\"" + escapeMoveCString(text) + "\");"
+    }
+    let body = lines
+        .map { "    \"\(escapeMoveCString($0))\"" }
+        .joined(separator: "\n")
+    return "\(prefix) \(symbol)[] = _(\n\(body));"
+}
+
+private func escapeMoveCString(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\n", with: "\\n")
+}
+
+private func unescapeMoveCString(_ value: String) -> String {
+    var result = ""
+    var iterator = value.makeIterator()
+    while let character = iterator.next() {
+        if character == "\\", let escaped = iterator.next() {
+            switch escaped {
+            case "n": result.append("\n")
+            case "t": result.append("\t")
+            case "\"": result.append("\"")
+            case "\\": result.append("\\")
+            default:
+                result.append(escaped)
+            }
+        } else {
+            result.append(character)
+        }
+    }
+    return result
+}
+
+private func moveLineNumber(forUTF16Offset offset: Int, in text: String) -> Int {
+    let clamped = max(0, min(offset, (text as NSString).length))
+    let prefix = (text as NSString).substring(to: clamped)
+    return prefix.reduce(1) { count, character in
+        character == "\n" ? count + 1 : count
+    }
 }

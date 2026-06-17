@@ -179,6 +179,127 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertEqual(reloadedDraft.priority, 1)
     }
 
+    func testRubySapphireMoveRowsPlanApplyBackupReloadAndKeepAdjacentScopesBlocked() throws {
+        let root = try temporaryRoot()
+        try makeRubyBattleMovesProject(at: root)
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+
+        XCTAssertEqual(tackle.sourceSpan.relativePath, "src/data/battle_moves.c")
+        XCTAssertTrue(tackle.isEditable)
+        XCTAssertTrue(tackle.diagnostics.allSatisfy { $0.severity != .error })
+
+        var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+        draft.power = 55
+        draft.accuracy = 95
+        draft.pp = 30
+        draft.secondaryEffectChance = 10
+        draft.target = "MOVE_TARGET_BOTH"
+        draft.priority = 1
+        draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
+
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable, "\(plan.applyability.diagnostics)")
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/battle_moves.c"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".power = 55"))
+        XCTAssertTrue(preview.contains(".accuracy = 95"))
+        XCTAssertTrue(preview.contains(".flags = FLAG_MAGIC_COAT_AFFECTED | FLAG_PROTECT_AFFECTED"))
+        XCTAssertTrue(preview.contains(".description = gMoveDescription_Tackle"))
+        XCTAssertTrue(preview.contains(".contestEffect = CONTEST_EFFECT_NONE"))
+
+        let applyabilityBeforeDrift = plan.validateApplyability()
+        XCTAssertTrue(applyabilityBeforeDrift.isApplyable)
+        try "changed\n".write(to: root.appendingPathComponent("src/data/battle_moves.c"), atomically: true, encoding: .utf8)
+        let driftApplyability = plan.validateApplyability()
+        XCTAssertFalse(driftApplyability.isApplyable)
+        XCTAssertTrue(driftApplyability.diagnostics.contains { $0.code == "MOVE_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "MOVE_APPLY_ORIGINAL_HASH_MISMATCH" })
+
+        try makeRubyBattleMovesProject(at: root)
+        let freshCatalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let freshTackle = try XCTUnwrap(freshCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        var freshDraft = try XCTUnwrap(MoveEditDraft(detail: freshTackle))
+        freshDraft.power = 60
+        let freshPlan = MoveMutationPlanner.plan(catalog: freshCatalog, draft: freshDraft)
+        let result = try MoveMutationApplier.apply(plan: freshPlan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/battle_moves.c"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+
+        let reloaded = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertEqual(MoveEditDraft(detail: edited)?.power, 60)
+        XCTAssertTrue(edited.sourcePreview?.contains(".description = gMoveDescription_Tackle") == true)
+        XCTAssertTrue(edited.sourcePreview?.contains(".contestEffect = CONTEST_EFFECT_NONE") == true)
+
+        let sentinelDraft = MoveEditDraft(
+            moveID: "MOVE_NONE",
+            effect: "EFFECT_NONE",
+            power: 0,
+            type: "TYPE_NORMAL",
+            accuracy: 0,
+            pp: 0,
+            secondaryEffectChance: 0,
+            target: "MOVE_TARGET_SELECTED",
+            priority: 0,
+            flags: []
+        )
+        let sentinelPlan = MoveMutationPlanner.plan(catalog: freshCatalog, draft: sentinelDraft)
+        XCTAssertTrue(sentinelPlan.changes.isEmpty)
+        XCTAssertTrue(sentinelPlan.diagnostics.contains { $0.code == "MOVE_PLAN_SENTINEL_UNSUPPORTED" })
+
+        try makeRubyBattleMovesProject(at: root, omitPP: true)
+        let missingCatalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let missingTackle = try XCTUnwrap(missingCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertFalse(missingTackle.isEditable)
+        XCTAssertTrue(missingTackle.diagnostics.contains { $0.code == "MOVE_CATALOG_EDIT_FIELDS_MISSING" })
+
+        try makeRubyBattleMovesProject(at: root, flagsExpression: "FLAG_MAKES_CONTACT | MOVE_FLAG_ALIAS(FLAG_PROTECT_AFFECTED)")
+        let nonSimpleCatalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let nonSimpleTackle = try XCTUnwrap(nonSimpleCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertFalse(nonSimpleTackle.isEditable)
+        XCTAssertTrue(nonSimpleTackle.diagnostics.contains { $0.code == "MOVE_CATALOG_FLAGS_UNSUPPORTED_EXPRESSION" })
+        let nonSimpleDraft = try XCTUnwrap(MoveEditDraft(detail: nonSimpleTackle))
+        let nonSimplePlan = MoveMutationPlanner.plan(catalog: nonSimpleCatalog, draft: nonSimpleDraft)
+        XCTAssertTrue(nonSimplePlan.changes.isEmpty)
+        XCTAssertTrue(nonSimplePlan.diagnostics.contains { $0.code == "MOVE_FLAGS_UNSUPPORTED_EXPRESSION" })
+
+        let wrongSourceCatalog = ProjectMoveCatalog(
+            root: catalog.root,
+            profile: .pokeruby,
+            adapterID: catalog.adapterID,
+            adapterName: catalog.adapterName,
+            summary: catalog.summary,
+            moves: catalog.moves.map { move in
+                guard move.moveID == "MOVE_TACKLE" else { return move }
+                return MoveDetail(
+                    moveID: move.moveID,
+                    displayName: move.displayName,
+                    ordinal: move.ordinal,
+                    sourceSpan: SourceSpan(relativePath: "src/data/battle_moves.h", startLine: move.sourceSpan.startLine),
+                    sourcePreview: move.sourcePreview,
+                    facts: move.facts,
+                    flags: move.flags,
+                    isEditable: true,
+                    machineMemberships: move.machineMemberships,
+                    tutorMemberships: move.tutorMemberships,
+                    learnedBy: move.learnedBy,
+                    diagnostics: []
+                )
+            }
+        )
+        let wrongSourcePlan = MoveMutationPlanner.plan(catalog: wrongSourceCatalog, draft: draft)
+        XCTAssertTrue(wrongSourcePlan.changes.isEmpty)
+        XCTAssertTrue(wrongSourcePlan.diagnostics.contains { $0.code == "MOVE_SOURCE_UNSUPPORTED" })
+
+        var constantDraft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+        constantDraft.effect = "EFFECT_HIT + EFFECT_ALIAS"
+        let constantPlan = MoveMutationPlanner.plan(catalog: catalog, draft: constantDraft)
+        XCTAssertTrue(constantPlan.changes.isEmpty)
+        XCTAssertTrue(constantPlan.diagnostics.contains { $0.code == "MOVE_SYMBOL_INVALID" })
+    }
+
     func testMoveMutationPlannerRendersZeroFlagsAndBlocksNoOp() throws {
         let root = try temporaryRoot()
         try makeBattleMovesProject(at: root)
@@ -247,7 +368,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
 
         let unsupportedCatalog = ProjectMoveCatalog(
             root: catalog.root,
-            profile: .pokeruby,
+            profile: .binaryROM,
             adapterID: catalog.adapterID,
             adapterName: catalog.adapterName,
             summary: catalog.summary,
@@ -312,6 +433,9 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
         XCTAssertEqual(pound.sourceSpan.relativePath, "src/data/moves_info.h")
         XCTAssertTrue(pound.isEditable)
+        XCTAssertTrue(pound.isDescriptionEditable)
+        XCTAssertEqual(pound.descriptionSymbol, "sPoundDescription")
+        XCTAssertEqual(pound.descriptionText, "Pounds with forelegs.")
         XCTAssertTrue(pound.diagnostics.allSatisfy { $0.severity != .error })
         XCTAssertTrue(pound.sourcePreview?.contains(".description = sPoundDescription") == true)
         XCTAssertTrue(pound.sourcePreview?.contains(".contestCategory = CONTEST_CATEGORY_TOUGH") == true)
@@ -412,6 +536,53 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertFalse(preview.contains(".flags"))
     }
 
+    func testExpansionMoveDescriptionTextPlansAppliesAndReloadsThroughDraft() throws {
+        let root = try temporaryRoot()
+        try makeExpansionMovesInfoProject(at: root)
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
+        var draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        draft.descriptionText = "A clean jab.\nIt lands fast."
+
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/text/move_descriptions.h"])
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("static const u8 sPoundDescription[] = _("))
+        XCTAssertTrue(preview.contains(#""A clean jab.""#))
+        XCTAssertTrue(preview.contains(#""It lands fast.""#))
+
+        let result = try MoveMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/text/move_descriptions.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        let editedText = try String(contentsOf: root.appendingPathComponent("src/data/text/move_descriptions.h"), encoding: .utf8)
+        XCTAssertTrue(editedText.contains("A clean jab."))
+        XCTAssertTrue(editedText.contains("It lands fast."))
+
+        let reloaded = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertEqual(edited.descriptionText, "A clean jab.\nIt lands fast.")
+        XCTAssertEqual(MoveEditDraft(detail: edited)?.descriptionText, "A clean jab.\nIt lands fast.")
+    }
+
+    func testExpansionMoveDescriptionTextBlocksMissingSourceDeclaration() throws {
+        let root = try temporaryRoot()
+        try makeExpansionMovesInfoProject(at: root)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("src/data/text/move_descriptions.h"))
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+        let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
+        XCTAssertFalse(pound.isDescriptionEditable)
+
+        var draft = try XCTUnwrap(MoveEditDraft(detail: pound))
+        draft.descriptionText = "This must stay blocked."
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "MOVE_DESCRIPTION_NOT_EDITABLE" })
+        XCTAssertFalse(plan.isApplyable)
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PokemonMoveCatalogTests-\(UUID().uuidString)", isDirectory: true)
@@ -480,6 +651,58 @@ final class PokemonMoveCatalogTests: XCTestCase {
         )
     }
 
+    private func makeRubyBattleMovesProject(
+        at root: URL,
+        flagsExpression: String = "FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED",
+        omitPP: Bool = false
+    ) throws {
+        try write(
+            """
+            #define MOVE_NONE 0
+            #define MOVE_TACKLE 1
+            #define MOVE_GROWL 2
+
+            """,
+            to: root.appendingPathComponent("include/constants/moves.h")
+        )
+        let ppLine = omitPP ? "" : "        .pp = 35,\n"
+        try write(
+            """
+            const struct BattleMove gBattleMoves[] =
+            {
+                [MOVE_NONE] =
+                {
+                    .effect = EFFECT_NONE,
+                    .power = 0,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 0,
+            \(ppLine)        .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = 0,
+                    .description = gMoveDescription_None,
+                    .contestEffect = CONTEST_EFFECT_NONE,
+                },
+                [MOVE_TACKLE] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+            \(ppLine)        .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = \(flagsExpression),
+                    .description = gMoveDescription_Tackle,
+                    .contestEffect = CONTEST_EFFECT_NONE,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/battle_moves.c")
+        )
+    }
+
     private func makeExpansionMovesInfoProject(at root: URL, flagsExpression: String = "FLAG_MAKES_CONTACT") throws {
         try write(
             """
@@ -517,6 +740,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/moves_info.h")
         )
+        try writeExpansionMoveDescriptions(at: root)
     }
 
     private func makeExpansionMovesInfoProjectWithoutLegacyFields(at root: URL) throws {
@@ -550,6 +774,17 @@ final class PokemonMoveCatalogTests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("src/data/moves_info.h")
+        )
+        try writeExpansionMoveDescriptions(at: root)
+    }
+
+    private func writeExpansionMoveDescriptions(at root: URL) throws {
+        try write(
+            """
+            static const u8 sPoundDescription[] = _("Pounds with forelegs.");
+
+            """,
+            to: root.appendingPathComponent("src/data/text/move_descriptions.h")
         )
     }
 

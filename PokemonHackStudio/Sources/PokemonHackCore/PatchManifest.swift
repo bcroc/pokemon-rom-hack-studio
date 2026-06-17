@@ -819,15 +819,42 @@ public enum PatchManifestBuilder {
             )
         }
 
+        var backupPath: String?
+        let artifactRoot = patchArtifactRoot(projectRoot: report.projectRoot, patchPath: patchPath)
+        let manifestRelativePath = report.artifactPlan.outputPath.appending(".manifest.json")
+        let backupRelativePath = fileManager.fileExists(atPath: outputURL.path)
+            ? uniqueBackupRelativePathForExistingOutput(outputFileName: outputURL.lastPathComponent, root: artifactRoot, fileManager: fileManager)
+            : nil
+        let safetyDiagnostics = patchApplyExportSafetyDiagnostics(
+            root: artifactRoot,
+            outputRelativePath: report.artifactPlan.outputPath,
+            manifestRelativePath: manifestRelativePath,
+            backupRelativePath: backupRelativePath,
+            fileManager: fileManager
+        )
+        if !safetyDiagnostics.isEmpty {
+            diagnostics.append(contentsOf: safetyDiagnostics)
+            return PatchApplyExportResult(
+                status: .blocked,
+                outputPath: outputURL.path,
+                manifestPath: report.artifactPlan.binaryDiffPreview?.backupExportManifest.manifestPath,
+                backupPath: nil,
+                outputROMSHA1: nil,
+                diagnostics: diagnostics,
+                manifest: nil
+            )
+        }
+
         try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        var backupPath: String?
         if fileManager.fileExists(atPath: outputURL.path) {
-            let backupURL = backupURLForExistingOutput(outputURL: outputURL, projectRoot: report.projectRoot, fileManager: fileManager)
+            let backupRelativePath = backupRelativePath ?? uniqueBackupRelativePathForExistingOutput(
+                outputFileName: outputURL.lastPathComponent,
+                root: artifactRoot,
+                fileManager: fileManager
+            )
+            let backupURL = artifactRoot.appendingPathComponent(backupRelativePath).standardizedFileURL
             try fileManager.createDirectory(at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fileManager.fileExists(atPath: backupURL.path) {
-                try fileManager.removeItem(at: backupURL)
-            }
             try fileManager.copyItem(at: outputURL, to: backupURL)
             backupPath = backupURL.path
             try fileManager.removeItem(at: outputURL)
@@ -864,7 +891,7 @@ public enum PatchManifestBuilder {
         try patchedData.write(to: outputURL, options: .atomic)
         let outputSHA1 = pokemonHackSHA1Hex(patchedData)
         let outputCRC = crc32Hex(patchedData)
-        let manifestURL = URL(fileURLWithPath: report.artifactPlan.binaryDiffPreview?.backupExportManifest.manifestPath ?? outputURL.path.appending(".manifest.json"))
+        let manifestURL = artifactRoot.appendingPathComponent(manifestRelativePath).standardizedFileURL
         let manifest = PatchApplyExportManifest(
             schemaVersion: 1,
             action: "patch-apply-export",
@@ -1296,12 +1323,59 @@ public enum PatchManifestBuilder {
         return value & 1 == 0 ? magnitude : -magnitude
     }
 
-    private static func backupURLForExistingOutput(outputURL: URL, projectRoot: String?, fileManager: FileManager) -> URL {
-        let root = projectRoot.map { URL(fileURLWithPath: $0) } ?? outputURL.deletingLastPathComponent().deletingLastPathComponent()
-        return root
-            .appendingPathComponent(".pokemonhackstudio/backups/\(backupTimestamp())/patches")
-            .appendingPathComponent(outputURL.lastPathComponent)
-            .standardizedFileURL
+    private static func patchArtifactRoot(projectRoot: String?, patchPath: String) -> URL {
+        if let projectRoot {
+            return URL(fileURLWithPath: projectRoot).standardizedFileURL
+        }
+        return URL(fileURLWithPath: patchPath).standardizedFileURL.deletingLastPathComponent()
+    }
+
+    private static func patchApplyExportSafetyDiagnostics(
+        root: URL,
+        outputRelativePath: String,
+        manifestRelativePath: String,
+        backupRelativePath: String?,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        var diagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            outputRelativePath,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "PATCH_EXPORT_OUTPUT",
+            subject: "Patch export output path"
+        )
+        diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            manifestRelativePath,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "PATCH_EXPORT_MANIFEST",
+            subject: "Patch export manifest path"
+        ))
+        if let backupRelativePath {
+            diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+                backupRelativePath,
+                root: root,
+                fileManager: fileManager,
+                codePrefix: "PATCH_EXPORT_BACKUP",
+                subject: "Patch export backup path"
+            ))
+        }
+        return diagnostics
+    }
+
+    private static func uniqueBackupRelativePathForExistingOutput(
+        outputFileName: String,
+        root: URL,
+        fileManager: FileManager
+    ) -> String {
+        for _ in 0..<10 {
+            let relativePath = ".pokemonhackstudio/backups/\(backupTimestamp())/patches/\(outputFileName)"
+            let url = root.appendingPathComponent(relativePath).standardizedFileURL
+            if !fileManager.fileExists(atPath: url.path) {
+                return relativePath
+            }
+        }
+        return ".pokemonhackstudio/backups/\(backupTimestamp())/patches/\(UUID().uuidString)-\(outputFileName)"
     }
 
     private static func backupTimestamp() -> String {
@@ -1309,8 +1383,8 @@ public enum PatchManifestBuilder {
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return formatter.string(from: Date())
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
     }
 
     private static func checksumPolicy(for format: PatchFormatID) -> String {

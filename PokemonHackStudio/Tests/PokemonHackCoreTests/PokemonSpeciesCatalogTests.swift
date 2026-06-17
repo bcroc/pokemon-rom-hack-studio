@@ -279,6 +279,104 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(edited.noFlip, "TRUE")
     }
 
+    func testExpansionLevelUpLearnsetPlanPreviewApplyBackupReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeLevelUpLearnsets: true)
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let allLearnablesPath = root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalAllLearnablesText = try String(contentsOf: allLearnablesPath, encoding: .utf8)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_LEER", "MOVE_ABSORB"])
+        XCTAssertEqual(treecko.learnsets.levelUpSourceSpan?.relativePath, "src/data/pokemon/level_up_learnsets/treecko.h")
+        XCTAssertEqual(treecko.learnsets.levelUpSymbol, "sTreeckoLevelUpLearnset")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves[0].move = "MOVE_TACKLE"
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/level_up_learnsets/treecko.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("static const u16 sTreeckoLevelUpLearnset[] = {"))
+        XCTAssertTrue(preview.contains("LEVEL_UP_MOVE( 1, MOVE_TACKLE),"))
+        XCTAssertTrue(preview.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/level_up_learnsets/treecko.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: allLearnablesPath, encoding: .utf8), originalAllLearnablesText)
+
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 1, MOVE_TACKLE),"))
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.learnsets.levelUp.map(\.move), ["MOVE_TACKLE", "MOVE_LEER", "MOVE_ABSORB", "MOVE_FLASH"])
+        XCTAssertEqual(edited.learnsets.levelUp.map(\.level), [1, 1, 6, 9])
+    }
+
+    func testExpansionLevelUpLearnsetPlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeLevelUpLearnsets: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+            .replacingOccurrences(of: "LEVEL_UP_MOVE( 6, MOVE_ABSORB),", with: "LEVEL_UP_MOVE( 7, MOVE_ABSORB),")
+        try write(source, to: levelUpPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testExpansionLevelUpLearnsetPlanRejectsUnknownMoveConstants() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeLevelUpLearnsets: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_NOT_REAL"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("MOVE_NOT_REAL") })
+    }
+
+    func testExpansionLevelUpLearnsetEditsRequireParsedSourceBlock() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 7, move: "MOVE_ABSORB"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_SPAN_MISSING" })
+    }
+
     func testExpansionSpeciesInfoPlannerBlocksCompositeAndAdjacentScopes() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url
@@ -303,7 +401,6 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: speciesPath, encoding: .utf8), originalText)
 
         var adjacentDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
-        adjacentDraft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 7, move: "MOVE_ABSORB"))
         adjacentDraft.tmhmMoves.append("MOVE_CUT")
         adjacentDraft.eggMoves.append("MOVE_LEECH_SEED")
         adjacentDraft.tutorMoves.append("MOVE_SWORD_DANCE")
@@ -317,7 +414,6 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
 
         XCTAssertEqual(adjacentPlan.changes.count, 0)
         XCTAssertFalse(adjacentPlan.isApplyable)
-        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
@@ -661,6 +757,125 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(missingSourcePlan.isApplyable)
     }
 
+    func testSpeciesProfileSpriteImportStagesFrontBackSourcePNGsWithProvenanceAndBackups() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        let frontData = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+        let backData = testPNGData(width: 64, height: 64, paletteColorCount: 15)
+        let frontProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/front.png").path,
+            expectedKind: .front,
+            data: frontData
+        )
+        let backProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/back.png").path,
+            expectedKind: .back,
+            data: backData
+        )
+        draft.assetData[.front] = frontData
+        draft.assetData[.back] = backData
+        draft.assetImports[.front] = frontProvenance
+        draft.assetImports[.back] = backProvenance
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertEqual(frontProvenance.status, .ready)
+        XCTAssertEqual(backProvenance.status, .ready)
+        XCTAssertEqual(frontProvenance.pngMetadata?.width, 64)
+        XCTAssertEqual(frontProvenance.pngMetadata?.height, 64)
+        XCTAssertEqual(backProvenance.pngMetadata?.width, 64)
+        XCTAssertEqual(backProvenance.pngMetadata?.height, 64)
+        XCTAssertEqual(plan.draft.assetImports[.front]?.sha1, frontProvenance.sha1)
+        XCTAssertEqual(plan.draft.assetImports[.back]?.sha1, backProvenance.sha1)
+        XCTAssertEqual(
+            plan.changes.map(\.path),
+            [
+                "graphics/pokemon/treecko/front.png",
+                "graphics/pokemon/treecko/back.png"
+            ]
+        )
+        XCTAssertFalse(plan.changes.contains { change in
+            change.path.contains(".4bpp")
+                || change.path.hasSuffix(".gbapal")
+                || change.path.hasSuffix(".gba")
+                || change.path.contains("/build/")
+        })
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(
+            result.appliedChanges.map(\.path),
+            [
+                "graphics/pokemon/treecko/front.png",
+                "graphics/pokemon/treecko/back.png"
+            ]
+        )
+        for appliedChange in result.appliedChanges {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: appliedChange.backupPath))
+            let backupData = try Data(contentsOf: URL(fileURLWithPath: appliedChange.backupPath))
+            XCTAssertEqual(backupData, Data([0x89, 0x50, 0x4E, 0x47]))
+        }
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/front.png")), frontData)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("graphics/pokemon/treecko/back.png")), backData)
+    }
+
+    func testSpeciesProfileSpriteImportBlocksUnsupportedDimensionsPaletteAndMissingSource() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeEmeraldProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        var wrongSizeDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let wrongSize = testPNGData(width: 32, height: 64, paletteColorCount: 16)
+        let wrongSizeProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/front-small.png").path,
+            expectedKind: .front,
+            data: wrongSize
+        )
+        wrongSizeDraft.assetData[.front] = wrongSize
+        wrongSizeDraft.assetImports[.front] = wrongSizeProvenance
+
+        let wrongSizePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: wrongSizeDraft)
+        XCTAssertEqual(wrongSizeProvenance.status, .blocked)
+        XCTAssertTrue(wrongSizeProvenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_PNG_DIMENSIONS_UNSUPPORTED" })
+        XCTAssertFalse(wrongSizePlan.changes.contains { $0.path == "graphics/pokemon/treecko/front.png" })
+        XCTAssertTrue(wrongSizePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_DIMENSIONS_UNSUPPORTED" })
+        XCTAssertFalse(wrongSizePlan.isApplyable)
+
+        var paletteDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let tooManyColors = testPNGData(width: 64, height: 64, paletteColorCount: 17)
+        let paletteProvenance = SpeciesAssetImportValidator.provenance(
+            sourcePath: root.appendingPathComponent("incoming/back-colors.png").path,
+            expectedKind: .back,
+            data: tooManyColors
+        )
+        paletteDraft.assetData[.back] = tooManyColors
+        paletteDraft.assetImports[.back] = paletteProvenance
+
+        let palettePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: paletteDraft)
+        XCTAssertEqual(paletteProvenance.status, .blocked)
+        XCTAssertTrue(paletteProvenance.diagnostics.contains { $0.code == "SPECIES_ASSET_IMPORT_PNG_PALETTE_OVER_LIMIT" })
+        XCTAssertFalse(palettePlan.changes.contains { $0.path == "graphics/pokemon/treecko/back.png" })
+        XCTAssertTrue(palettePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_PNG_PALETTE_OVER_LIMIT" })
+        XCTAssertFalse(palettePlan.isApplyable)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent("graphics/pokemon/treecko/back.png"))
+        var missingSourceDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        missingSourceDraft.assetData[.back] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+
+        let missingSourcePlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: missingSourceDraft)
+        XCTAssertTrue(missingSourcePlan.diagnostics.contains { $0.code == "SPECIES_ASSET_SOURCE_MISSING" })
+        XCTAssertFalse(missingSourcePlan.changes.contains { $0.path == "graphics/pokemon/treecko/back.png" })
+        XCTAssertFalse(missingSourcePlan.isApplyable)
+    }
+
     func testSpeciesMutationPlannerStagesFireRedAssetChanges() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url
@@ -669,7 +884,7 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
         var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
 
-        let pngData = testPNGData(width: 32, height: 64, paletteColorCount: 16)
+        let pngData = testPNGData(width: 64, height: 64, paletteColorCount: 16)
         draft.assetData[.back] = pngData
 
         let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
@@ -1004,7 +1219,7 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         )
     }
 
-    private func makeExpansionSpeciesProject(at root: URL, scalarAliases: Bool = true) throws {
+    private func makeExpansionSpeciesProject(at root: URL, scalarAliases: Bool = true, includeLevelUpLearnsets: Bool = false) throws {
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
         try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
         try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
@@ -1107,6 +1322,31 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
         )
         try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h"))
+        if includeLevelUpLearnsets {
+            try write(
+                """
+                static const u16 sTreeckoLevelUpLearnset[] = {
+                    LEVEL_UP_MOVE( 1, MOVE_POUND),
+                    LEVEL_UP_MOVE( 1, MOVE_LEER),
+                    LEVEL_UP_MOVE( 6, MOVE_ABSORB),
+                    LEVEL_UP_END
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+            )
+            try write(
+                """
+                {
+                  "SPECIES_TREECKO": [
+                    "MOVE_POUND",
+                    "MOVE_LEER",
+                    "MOVE_ABSORB"
+                  ]
+                }
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+            )
+        }
     }
 
     private func makeRubyProject(at root: URL) throws {

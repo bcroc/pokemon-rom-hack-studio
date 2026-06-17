@@ -153,11 +153,14 @@ public struct SavedHackWorkspace: Codable, Equatable {
 
 public enum ProjectWorkspacePersistenceError: Error, Equatable, LocalizedError {
     case unsupportedSchemaVersion(Int)
+    case unsafeWorkspacePath(code: String, message: String)
 
     public var errorDescription: String? {
         switch self {
         case .unsupportedSchemaVersion(let version):
             "Unsupported PokemonHackStudio workspace schema version: \(version)."
+        case .unsafeWorkspacePath(_, let message):
+            message
         }
     }
 }
@@ -180,14 +183,16 @@ public enum ProjectWorkspacePersistence {
         root: URL,
         fileManager: FileManager = .default
     ) throws {
-        try save(workspace, to: projectFileURL(root: root), fileManager: fileManager)
+        let url = try validatedWorkspaceFileURL(relativePath: projectRelativePath, root: root, fileManager: fileManager)
+        try save(workspace, to: url, fileManager: fileManager)
     }
 
     public static func loadProject(
         root: URL,
         fileManager: FileManager = .default
     ) throws -> SavedHackWorkspace? {
-        try load(from: projectFileURL(root: root), fileManager: fileManager)
+        let url = try validatedWorkspaceFileURL(relativePath: projectRelativePath, root: root, fileManager: fileManager)
+        return try load(from: url, fileManager: fileManager)
     }
 
     public static func saveAutosave(
@@ -195,20 +200,44 @@ public enum ProjectWorkspacePersistence {
         root: URL,
         fileManager: FileManager = .default
     ) throws {
-        try save(workspace, to: autosaveFileURL(root: root), fileManager: fileManager)
+        let url = try validatedWorkspaceFileURL(relativePath: autosaveRelativePath, root: root, fileManager: fileManager)
+        try save(workspace, to: url, fileManager: fileManager)
     }
 
     public static func loadAutosave(
         root: URL,
         fileManager: FileManager = .default
     ) throws -> SavedHackWorkspace? {
-        try load(from: autosaveFileURL(root: root), fileManager: fileManager)
+        let url = try validatedWorkspaceFileURL(relativePath: autosaveRelativePath, root: root, fileManager: fileManager)
+        return try load(from: url, fileManager: fileManager)
     }
 
     public static func discardAutosave(root: URL, fileManager: FileManager = .default) throws {
-        let url = autosaveFileURL(root: root)
+        let url = try validatedWorkspaceFileURL(relativePath: autosaveRelativePath, root: root, fileManager: fileManager)
         guard fileManager.fileExists(atPath: url.path) else { return }
         try fileManager.removeItem(at: url)
+    }
+
+    private static func validatedWorkspaceFileURL(
+        relativePath: String,
+        root: URL,
+        fileManager: FileManager
+    ) throws -> URL {
+        let standardizedRoot = root.standardizedFileURL
+        let diagnostics = SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            relativePath,
+            root: standardizedRoot,
+            fileManager: fileManager,
+            codePrefix: "WORKSPACE",
+            subject: "PokemonHackStudio workspace path"
+        )
+        if let diagnostic = diagnostics.first(where: { $0.severity == .error }) {
+            throw ProjectWorkspacePersistenceError.unsafeWorkspacePath(
+                code: diagnostic.code,
+                message: diagnostic.message
+            )
+        }
+        return standardizedRoot.appendingPathComponent(relativePath).standardizedFileURL
     }
 
     private static func save(
