@@ -2178,6 +2178,97 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
+    func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlTrainerClassGenderCScalars() throws {
+        let root = try makeTestDiamondDecompRoot()
+        try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/trainer/trainer_0000.bin"))
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "trainers:arm9/src/trainer_data.c",
+                "--set",
+                "trainerClassGenderCounts.0.genderCount=1",
+                "--set",
+                "trainerClassGenderCounts.2.genderCount=0",
+                "--json"
+            ])
+        )
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(
+            requestedFieldKeys,
+            [
+                "trainerClassGenderCounts.0.genderCount",
+                "trainerClassGenderCounts.2.genderCount"
+            ]
+        )
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, "arm9/src/trainer_data.c")
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-semantic-plan",
+            root.path,
+            "trainers:arm9/src/trainer_data.c",
+            "--set",
+            "trainerClassGenderCounts.0.genderCount=1",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains("/*TRAINER_CLASS_PKMN_TRAINER_M*/ 1"))
+        XCTAssertFalse(redactedPlan.contains("sTrainerClassGenderCountTbl"))
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "trainers:arm9/src/trainer_data.c",
+                "--set",
+                "trainerClassGenderCounts.0.genderCount=1",
+                "--set",
+                "trainerClassGenderCounts.2.genderCount=0",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/trainer_data.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_PKMN_TRAINER_M*/ 1"))
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_TWINS*/ 0"))
+        XCTAssertTrue(updated.contains("TRAINER_CLASS_GENDER_COUNT_SENTINEL"))
+
+        let invalidApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "trainers:arm9/src/trainer_data.c",
+                "--set",
+                "trainerClassGenderCounts.1.genderCount=TRAINER_CLASS_GENDER_COUNT_FEMALE",
+                "--json"
+            ])
+        )
+        let invalidChanges = try XCTUnwrap(invalidApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(invalidChanges.count, 0)
+        let invalidDiagnostics = try XCTUnwrap(invalidApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(invalidDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_VALUE_INVALID" })
+
+        let blockedBinaryApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "trainers:files/poketool/trainer/trainer_0000.bin",
+                "--set",
+                "trainerClassGenderCounts.0.genderCount=2",
+                "--json"
+            ])
+        )
+        let blockedBinaryChanges = try XCTUnwrap(blockedBinaryApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedBinaryChanges.count, 0)
+        let blockedBinaryDiagnostics = try XCTUnwrap(blockedBinaryApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(blockedBinaryDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
     func testToolchainHealthCommandSurfacesNDSPreviewRows() throws {
         let root = try makeTestNDSDecompRoot()
 
@@ -2551,7 +2642,22 @@ final class PokemonHackCLITests: XCTestCase {
             """,
             to: root.appendingPathComponent("arm9/src/itemtool.c")
         )
-        try write("void Trainer_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/trainer_data.c"))
+        try write(
+            """
+            #include "trainer_data.h"
+
+            const u8 sTrainerClassGenderCountTbl[] = {
+                /*TRAINER_CLASS_PKMN_TRAINER_M*/ 0,
+                /*TRAINER_CLASS_LASS*/ 1,
+                /*TRAINER_CLASS_TWINS*/ 2,
+                TRAINER_CLASS_GENDER_COUNT_SENTINEL,
+            };
+
+            void Trainer_Load(void) {}
+
+            """,
+            to: root.appendingPathComponent("arm9/src/trainer_data.c")
+        )
         try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/encounter.c"))
         try write("void MapHeader_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/map_header.c"))
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))

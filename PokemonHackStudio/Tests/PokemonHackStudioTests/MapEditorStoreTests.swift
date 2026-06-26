@@ -1162,6 +1162,52 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDiamondPearlTrainerClassGenderSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/trainer/trainer_0000.bin"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let trainerCRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "arm9/src/trainer_data.c" })
+        store.requestResourceAssetSelection(trainerCRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "trainers:arm9/src/trainer_data.c")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "trainerClassGenderCounts.0.genderCount" && $0.value == "0" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "trainerClassGenderCounts.1.genderCount" && $0.value == "1" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "trainerClassGenderCounts.2.genderCount" && $0.value == "2" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "trainerClassGenderCounts.3.genderCount" })
+
+        store.updateSelectedNDSDataSemanticField(key: "trainerClassGenderCounts.0.genderCount", value: "1")
+        store.updateSelectedNDSDataSemanticField(key: "trainerClassGenderCounts.2.genderCount", value: "0")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/trainer_data.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_PKMN_TRAINER_M*/ 1"))
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_TWINS*/ 0"))
+        XCTAssertTrue(updated.contains("TRAINER_CLASS_GENDER_COUNT_SENTINEL"))
+
+        let binaryTrainerRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/poketool/trainer/trainer_0000.bin" })
+        store.requestResourceAssetSelection(binaryTrainerRow.id)
+        let binaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(binaryEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "trainerClassGenderCounts.0.genderCount", value: "2")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+    }
+
+    @MainActor
     func testDiamondPearlItemJSONSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSSourceProject()
         let itemPath = "files/itemtool/itemdata/potion.json"
@@ -2552,6 +2598,53 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.selectedSpeciesAssetImportBlockedReason(kind: .front)?.contains("base_stats.h") == true)
         XCTAssertNil(store.importSelectedSpeciesAsset(kind: .front, from: importURL))
         XCTAssertNil(store.selectedSpeciesDraft?.assetData[.front])
+    }
+
+    @MainActor
+    func testRubySapphireEvolutionDraftPreviewApplyAndReloadsThroughStore() async throws {
+        let root = try makeRubyPokemonProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        XCTAssertEqual(draft.evolutions.first?.targetSpecies, "SPECIES_GROVYLE")
+        draft.evolutions[0].parameter = "18"
+        draft.evolutions[0].targetSpecies = "SPECIES_TREECKO"
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.selectedSpeciesIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/evolution.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("EVO_LEVEL, 18, SPECIES_TREECKO") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/evolution.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.evolutions.count, 1)
+        XCTAssertEqual(reloaded.evolutions.first?.method, "EVO_LEVEL")
+        XCTAssertEqual(reloaded.evolutions.first?.parameter, "18")
+        XCTAssertEqual(reloaded.evolutions.first?.targetSpecies, "SPECIES_TREECKO")
     }
 
     @MainActor
@@ -4024,7 +4117,22 @@ final class MapEditorStoreTests: XCTestCase {
             """,
             to: root.appendingPathComponent("arm9/src/itemtool.c")
         )
-        try write("void Trainer_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/trainer_data.c"))
+        try write(
+            """
+            #include "trainer_data.h"
+
+            const u8 sTrainerClassGenderCountTbl[] = {
+                /*TRAINER_CLASS_PKMN_TRAINER_M*/ 0,
+                /*TRAINER_CLASS_LASS*/ 1,
+                /*TRAINER_CLASS_TWINS*/ 2,
+                TRAINER_CLASS_GENDER_COUNT_SENTINEL,
+            };
+
+            void Trainer_Load(void) {}
+
+            """,
+            to: root.appendingPathComponent("arm9/src/trainer_data.c")
+        )
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))
         try write("arm7 source\n", to: root.appendingPathComponent("arm7/main.s"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
@@ -4621,9 +4729,50 @@ final class MapEditorStoreTests: XCTestCase {
                     .bodyColor = BODY_COLOR_GREEN,
                     .noFlip = FALSE,
                 },
+                [SPECIES_GROVYLE] =
+                {
+                    .baseHP = 50,
+                    .baseAttack = 65,
+                    .baseDefense = 45,
+                    .baseSpeed = 95,
+                    .baseSpAttack = 85,
+                    .baseSpDefense = 65,
+                    .type1 = TYPE_GRASS,
+                    .type2 = TYPE_GRASS,
+                    .catchRate = 45,
+                    .expYield = 141,
+                    .evYield_HP = 0,
+                    .evYield_Attack = 0,
+                    .evYield_Defense = 0,
+                    .evYield_Speed = 2,
+                    .evYield_SpAttack = 0,
+                    .evYield_SpDefense = 0,
+                    .item1 = ITEM_NONE,
+                    .item2 = ITEM_NONE,
+                    .genderRatio = PERCENT_FEMALE(12.5),
+                    .eggCycles = 20,
+                    .friendship = STANDARD_FRIENDSHIP,
+                    .growthRate = GROWTH_MEDIUM_SLOW,
+                    .eggGroup1 = EGG_GROUP_MONSTER,
+                    .eggGroup2 = EGG_GROUP_DRAGON,
+                    .ability1 = ABILITY_OVERGROW,
+                    .ability2 = ABILITY_NONE,
+                    .safariZoneFleeRate = 0,
+                    .bodyColor = BODY_COLOR_GREEN,
+                    .noFlip = FALSE,
+                },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/base_stats.h")
+        )
+        try write(
+            """
+            const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
+            {
+                [SPECIES_TREECKO] = {{EVO_LEVEL, 16, SPECIES_GROVYLE}},
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/evolution.h")
         )
 
         return root
@@ -4696,6 +4845,8 @@ final class MapEditorStoreTests: XCTestCase {
             #define GROWTH_FAST 2
             #define BODY_COLOR_RED 1
             #define BODY_COLOR_GREEN 2
+            #define EVO_LEVEL 4
+            #define EVO_ITEM 7
             """,
             to: root.appendingPathComponent("include/constants/pokemon.h")
         )

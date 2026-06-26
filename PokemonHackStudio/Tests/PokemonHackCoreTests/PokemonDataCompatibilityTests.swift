@@ -107,14 +107,30 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(rubySpecies.editableCount, 1)
         XCTAssertNil(rubySpecies.blockedReason)
         XCTAssertFalse(rubySpecies.unsupportedFields.contains("Ruby/Sapphire base_stats positional apply"))
-        XCTAssertTrue(rubySpecies.unsupportedFields.contains("Pokedex rewrites"))
+        XCTAssertFalse(rubySpecies.unsupportedFields.contains("Pokedex rewrites"))
+        XCTAssertFalse(rubySpecies.unsupportedFields.contains("evolution rewrites"))
         XCTAssertNil(rubySpecies.recommendedFutureRow)
+        let rubyEvolutions = entry(.evolutions, in: ruby)
+        XCTAssertEqual(rubyEvolutions.status, .editable)
+        XCTAssertEqual(rubyEvolutions.sourcePath, "src/data/pokemon/evolution.h")
+        XCTAssertEqual(rubyEvolutions.tableSymbol, "gEvolutionTable")
+        XCTAssertEqual(rubyEvolutions.indexedCount, 1)
+        XCTAssertEqual(rubyEvolutions.editableCount, 1)
+        XCTAssertEqual(rubyEvolutions.readOnlyCount, 0)
+        XCTAssertNil(rubyEvolutions.blockedReason)
+        XCTAssertNil(rubyEvolutions.recommendedFutureRow)
+        XCTAssertEqual(rubyEvolutions.unsupportedFields, ["missing evolution row insertion"])
         let rubyPokedex = entry(.pokedex, in: ruby)
-        XCTAssertEqual(rubyPokedex.status, .readOnly)
+        XCTAssertEqual(rubyPokedex.status, .editable)
         XCTAssertEqual(rubyPokedex.sourcePath, "src/data/pokedex_entries_en.h")
         XCTAssertEqual(rubyPokedex.tableSymbol, "gPokedexEntries")
-        XCTAssertEqual(rubyPokedex.editableCount, 0)
-        XCTAssertTrue(rubyPokedex.unsupportedFields.contains("description text rewrites"))
+        XCTAssertEqual(rubyPokedex.indexedCount, 1)
+        XCTAssertEqual(rubyPokedex.editableCount, 1)
+        XCTAssertEqual(rubyPokedex.readOnlyCount, 0)
+        XCTAssertNil(rubyPokedex.blockedReason)
+        XCTAssertNil(rubyPokedex.recommendedFutureRow)
+        XCTAssertFalse(rubyPokedex.unsupportedFields.contains("description text rewrites"))
+        XCTAssertTrue(rubyPokedex.unsupportedFields.contains("national dex identity changes"))
         let rubyAssets = entry(.assets, in: ruby)
         XCTAssertEqual(rubyAssets.status, .readOnly)
         XCTAssertEqual(rubyAssets.editableCount, 0)
@@ -665,6 +681,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/base_stats.h")
+        )
+        try write(
+            """
+            const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
+            {
+                [SPECIES_TREECKO] = {{EVO_LEVEL, 16, SPECIES_TREECKO}},
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/evolution.h")
         )
         try write(
             """

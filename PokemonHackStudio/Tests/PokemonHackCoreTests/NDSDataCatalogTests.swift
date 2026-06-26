@@ -1471,9 +1471,8 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
 
         let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:arm9/src/trainer_data.c")
-        XCTAssertFalse(cAnchorSnapshot.canEdit)
-        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
-        XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorSnapshot.canEdit, cAnchorSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(cAnchorSnapshot.fields.contains { $0.key == "trainerClassGenderCounts.0.genderCount" })
     }
 
     func testNDSDataSemanticEditorPlansDiamondPearlItemJSONScalars() throws {
@@ -1808,6 +1807,67 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
     }
 
+    func testNDSDataSemanticEditorPlansDiamondPearlTrainerClassGenderCScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/trainer/trainer_0000.bin"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:arm9/src/trainer_data.c")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        let fields = Dictionary(uniqueKeysWithValues: snapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(fields["trainerClassGenderCounts.0.genderCount"]?.value, "0")
+        XCTAssertEqual(fields["trainerClassGenderCounts.1.genderCount"]?.value, "1")
+        XCTAssertEqual(fields["trainerClassGenderCounts.2.genderCount"]?.value, "2")
+        XCTAssertEqual(fields["trainerClassGenderCounts.1.genderCount"]?.valueKind, .number)
+        XCTAssertNil(fields["trainerClassGenderCounts.3.genderCount"])
+        XCTAssertTrue(snapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED" })
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:arm9/src/trainer_data.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "trainerClassGenderCounts.0.genderCount", value: "1"),
+                    NDSDataSemanticFieldEdit(key: "trainerClassGenderCounts.2.genderCount", value: "0")
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains("/*TRAINER_CLASS_PKMN_TRAINER_M*/ 1"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("/*TRAINER_CLASS_TWINS*/ 0"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("TRAINER_CLASS_GENDER_COUNT_SENTINEL"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/trainer_data.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_PKMN_TRAINER_M*/ 1"))
+        XCTAssertTrue(updated.contains("/*TRAINER_CLASS_TWINS*/ 0"))
+        XCTAssertTrue(updated.contains("void Trainer_Load(void) {}"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let invalidPlan = NDSDataSemanticEditor.plan(
+            catalog: try NDSDataCatalogBuilder.build(path: root.path),
+            draft: NDSDataSemanticEditDraft(
+                recordID: "trainers:arm9/src/trainer_data.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "trainerClassGenderCounts.1.genderCount", value: "TRAINER_CLASS_GENDER_COUNT_FEMALE")
+                ]
+            )
+        )
+        XCTAssertTrue(invalidPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_VALUE_INVALID" })
+        XCTAssertTrue(invalidPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(invalidPlan.editPlan.validateApplyability().isApplyable)
+
+        let binarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "trainers:files/poketool/trainer/trainer_0000.bin")
+        XCTAssertFalse(binarySnapshot.canEdit)
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(binarySnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+    }
+
     func testNDSDataSemanticEditorKeepsNonPlatinumAndContainerRowsBlocked() throws {
         let platinum = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
         let platinumCatalog = try NDSDataCatalogBuilder.build(path: platinum.path)
@@ -2093,7 +2153,27 @@ final class NDSDataCatalogTests: XCTestCase {
             """,
             to: root.appendingPathComponent("arm9/src/itemtool.c")
         )
-        try write("void Trainer_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/trainer_data.c"))
+        try write(
+            """
+            #include "trainer_data.h"
+
+            /* static const u8 sTrainerClassGenderCountTbl[] = {
+                9,
+            }; */
+            static const char *sTrainerClassGenderCountTblDebug = "sTrainerClassGenderCountTbl { 8 }";
+
+            const u8 sTrainerClassGenderCountTbl[] = {
+                /*TRAINER_CLASS_PKMN_TRAINER_M*/ 0,
+                /*TRAINER_CLASS_LASS*/ 1,
+                /*TRAINER_CLASS_TWINS*/ 2,
+                TRAINER_CLASS_GENDER_COUNT_SENTINEL,
+            };
+
+            void Trainer_Load(void) {}
+
+            """,
+            to: root.appendingPathComponent("arm9/src/trainer_data.c")
+        )
         try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/encounter.c"))
         try write("void MapHeader_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/map_header.c"))
         try write("void Script_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/script.c"))

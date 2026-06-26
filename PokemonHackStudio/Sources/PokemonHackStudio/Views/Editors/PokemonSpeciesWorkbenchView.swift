@@ -82,8 +82,10 @@ struct PokemonSpeciesWorkbenchView: View {
                         if supportsLevelUpEditing(for: selectedSpecies) {
                             levelUpSection(draft: draft)
                         }
-                        if supportsClassicSpeciesMutationEditing {
+                        if supportsEvolutionEditing(for: selectedSpecies) {
                             evolutionSection(draft: draft)
+                        }
+                        if supportsClassicSpeciesMutationEditing {
                             tmhmSection(draft: draft)
                             tutorSection(draft: draft)
                             eggMovesSection(draft: draft)
@@ -424,7 +426,7 @@ struct PokemonSpeciesWorkbenchView: View {
     @ViewBuilder
     private func pokedexSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         EditorSection(title: "Pokedex") {
-            if supportsClassicSpeciesMutationEditing, let draft = draft, draft.pokedex != nil {
+            if supportsPokedexEditing, let draft = draft, draft.pokedex != nil {
                 VStack(alignment: .leading, spacing: 12) {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                         GridRow {
@@ -606,6 +608,26 @@ struct PokemonSpeciesWorkbenchView: View {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered:
             return true
+        default:
+            return false
+        }
+    }
+
+    private var supportsPokedexEditing: Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered, .pokeruby:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func supportsEvolutionEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered:
+            return true
+        case .pokeruby:
+            return species.evolutions.contains { $0.sourceSpan.relativePath == "src/data/pokemon/evolution.h" }
         default:
             return false
         }
