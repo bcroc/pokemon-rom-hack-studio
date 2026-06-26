@@ -175,23 +175,122 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
         var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
 
-        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_TACKLE"))
         draft.tmhmMoves.append("MOVE_CUT")
         draft.eggMoves.append("MOVE_LEECH_SEED")
-        draft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "16", targetSpecies: "SPECIES_TREECKO"))
+        draft.tutorMoves.append("MOVE_SWORD_DANCE")
         draft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
 
         let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
 
         XCTAssertEqual(plan.changes.count, 0)
         XCTAssertFalse(plan.isApplyable)
-        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+    }
+
+    func testRubySapphireLevelUpLearnsetPlanApplyBackUpAndReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_LEER", "MOVE_ABSORB"])
+        XCTAssertEqual(treecko.learnsets.levelUp.map(\.level), [1, 1, 6])
+        XCTAssertEqual(treecko.learnsets.levelUpSymbol, "gTreeckoLevelUpLearnset")
+        XCTAssertEqual(treecko.learnsets.levelUpSourceSpan?.relativePath, "src/data/pokemon/level_up_learnsets.h")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves[0].move = "MOVE_TACKLE"
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/level_up_learnsets.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("const u16 gTreeckoLevelUpLearnset[] = {"))
+        XCTAssertFalse(preview.contains("static const u16 gTreeckoLevelUpLearnset[] = {"))
+        XCTAssertTrue(preview.contains("LEVEL_UP_MOVE( 1, MOVE_TACKLE),"))
+        XCTAssertTrue(preview.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/level_up_learnsets.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("const u16 gTreeckoLevelUpLearnset[] = {"))
+        XCTAssertFalse(source.contains("static const u16 gTreeckoLevelUpLearnset[] = {"))
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 1, MOVE_TACKLE),"))
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.learnsets.levelUp.map(\.move), ["MOVE_TACKLE", "MOVE_LEER", "MOVE_ABSORB", "MOVE_FLASH"])
+        XCTAssertEqual(edited.learnsets.levelUp.map(\.level), [1, 1, 6, 9])
+        XCTAssertEqual(edited.baseStats.hp, 40)
+    }
+
+    func testRubySapphireLevelUpLearnsetPlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.isApplyable)
+
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+            .replacingOccurrences(of: "LEVEL_UP_MOVE( 6, MOVE_ABSORB),", with: "LEVEL_UP_MOVE( 7, MOVE_ABSORB),")
+        try write(source, to: levelUpPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testRubySapphireLevelUpLearnsetPlanRejectsUnknownMoveConstants() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_NOT_REAL"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("MOVE_NOT_REAL") })
+    }
+
+    func testRubySapphireLevelUpLearnsetEditsRequireParsedSourceBlock() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let grovyle = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_GROVYLE" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: grovyle))
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 1, move: "MOVE_POUND"))
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_SPAN_MISSING" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
     }
 
     func testRubySapphirePokedexPlanApplyBackUpAndReload() throws {
@@ -234,7 +333,7 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(edited.pokedex?.categoryName, #"FOREST "LIZARD""#)
         XCTAssertEqual(edited.pokedex?.description, #"Ruby "description"\\path"# + "\nwith two lines.")
         XCTAssertEqual(edited.baseStats.hp, 40)
-        XCTAssertEqual(edited.learnsets.levelUp, [])
+        XCTAssertEqual(edited.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_LEER", "MOVE_ABSORB"])
     }
 
     func testRubySapphireEvolutionPlanApplyBackUpAndReload() throws {
@@ -1542,6 +1641,26 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/evolution.h")
+        )
+        try write(
+            """
+            const u16 *gLevelUpLearnsets[] =
+            {
+                gTreeckoLevelUpLearnset,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h")
+        )
+        try write(
+            """
+            const u16 gTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE( 1, MOVE_POUND),
+                LEVEL_UP_MOVE( 1, MOVE_LEER),
+                LEVEL_UP_MOVE( 6, MOVE_ABSORB),
+                LEVEL_UP_END
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
         )
         try write(
             """

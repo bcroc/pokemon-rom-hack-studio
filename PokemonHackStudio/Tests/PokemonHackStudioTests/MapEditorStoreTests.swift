@@ -2648,6 +2648,59 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRubySapphireLevelUpLearnsetDraftPreviewApplyAndReloadsThroughStore() async throws {
+        let root = try makeRubyPokemonProject()
+        let levelUpPath = root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let selected = try XCTUnwrap(store.selectedSpeciesDetail)
+        XCTAssertEqual(selected.learnsets.levelUpSourceSpan?.relativePath, "src/data/pokemon/level_up_learnsets.h")
+        XCTAssertEqual(selected.learnsets.levelUpSymbol, "gTreeckoLevelUpLearnset")
+        XCTAssertEqual(selected.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_ABSORB"])
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.levelUpMoves.append(SpeciesLevelUpMoveDraft(level: 9, move: "MOVE_FLASH"))
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.selectedSpeciesIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/level_up_learnsets.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("const u16 gTreeckoLevelUpLearnset[] = {") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/level_up_learnsets.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+
+        let source = try String(contentsOf: levelUpPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("const u16 gTreeckoLevelUpLearnset[] = {"))
+        XCTAssertTrue(source.contains("LEVEL_UP_MOVE( 9, MOVE_FLASH),"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_ABSORB", "MOVE_FLASH"])
+        XCTAssertEqual(reloaded.learnsets.levelUp.map(\.level), [1, 6, 9])
+    }
+
+    @MainActor
     func testExpansionSpeciesInfoScalarEditsFlowThroughPokemonEditor() async throws {
         let root = try makeExpansionPokemonProject()
         let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
@@ -4773,6 +4826,25 @@ final class MapEditorStoreTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/evolution.h")
+        )
+        try write(
+            """
+            const u16 *gLevelUpLearnsets[] =
+            {
+                gTreeckoLevelUpLearnset,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h")
+        )
+        try write(
+            """
+            const u16 gTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE( 1, MOVE_POUND),
+                LEVEL_UP_MOVE( 6, MOVE_ABSORB),
+                LEVEL_UP_END
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
         )
 
         return root

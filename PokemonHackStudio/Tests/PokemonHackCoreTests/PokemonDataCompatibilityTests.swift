@@ -131,6 +131,37 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertNil(rubyPokedex.recommendedFutureRow)
         XCTAssertFalse(rubyPokedex.unsupportedFields.contains("description text rewrites"))
         XCTAssertTrue(rubyPokedex.unsupportedFields.contains("national dex identity changes"))
+        let rubyLevelUp = entry(.levelUpLearnsets, in: ruby)
+        XCTAssertEqual(rubyLevelUp.status, .editable)
+        XCTAssertEqual(rubyLevelUp.sourcePath, "src/data/pokemon/level_up_learnsets.h")
+        XCTAssertEqual(rubyLevelUp.tableSymbol, "gLevelUpLearnsets")
+        XCTAssertEqual(rubyLevelUp.indexedCount, 1)
+        XCTAssertEqual(rubyLevelUp.editableCount, 1)
+        XCTAssertEqual(rubyLevelUp.readOnlyCount, 0)
+        XCTAssertNil(rubyLevelUp.blockedReason)
+        XCTAssertNil(rubyLevelUp.recommendedFutureRow)
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("learnset symbol renames"))
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("shared learnset extraction"))
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("missing learnset block insertion"))
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("generated learnset output writes"))
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("reference-only learnset source writes"))
+        XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("binary ROM learnset writes"))
+        let rubyLevelUpSources = try XCTUnwrap(rubyLevelUp.sourceTables)
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/level_up_learnsets.h" && $0.tableSymbol == "gLevelUpLearnsets" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/egg_moves.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "references/pokeruby/src/data/pokemon/level_up_learnsets.h" && $0.status == .blocked })
+        let rubyTMHM = entry(.tmhmLearnsets, in: ruby)
+        XCTAssertEqual(rubyTMHM.status, .blocked)
+        XCTAssertEqual(rubyTMHM.editableCount, 0)
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("compatibility matrix bulk edits"))
+        let rubyEgg = entry(.eggMoves, in: ruby)
+        XCTAssertEqual(rubyEgg.status, .blocked)
+        XCTAssertEqual(rubyEgg.editableCount, 0)
+        let rubyTutor = entry(.tutorLearnsets, in: ruby)
+        XCTAssertEqual(rubyTutor.status, .blocked)
+        XCTAssertEqual(rubyTutor.editableCount, 0)
         let rubyAssets = entry(.assets, in: ruby)
         XCTAssertEqual(rubyAssets.status, .readOnly)
         XCTAssertEqual(rubyAssets.editableCount, 0)
@@ -167,6 +198,9 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("reference-only move source writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("binary ROM move writes"))
         XCTAssertNil(rubyMoves.recommendedFutureRow)
+        let rubyJSON = String(data: try JSONEncoder().encode(ruby), encoding: .utf8) ?? ""
+        XCTAssertTrue(rubyJSON.contains(#""gLevelUpLearnsets""#))
+        XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
 
         let expansionItems = entry(.items, in: expansion)
         XCTAssertEqual(expansionItems.status, .editable)
@@ -693,6 +727,24 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         try write(
             """
+            const u16 *gLevelUpLearnsets[] =
+            {
+                gTreeckoLevelUpLearnset,
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnset_pointers.h")
+        )
+        try write(
+            """
+            const u16 gTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE( 1, MOVE_POUND),
+                LEVEL_UP_END
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        )
+        try write(
+            """
             const struct PokedexEntry gPokedexEntries[] =
             {
                 [NATIONAL_DEX_TREECKO] = { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50, .description = gTreeckoPokedexText },
@@ -714,6 +766,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         try write("#define ABILITY_NONE 0\n#define ABILITY_OVERGROW 65\n", to: root.appendingPathComponent("include/constants/abilities.h"))
         try write("#define ITEM_NONE 0\n", to: root.appendingPathComponent("include/constants/items.h"))
+        try write("#define MOVE_POUND 1\n", to: root.appendingPathComponent("include/constants/moves.h"))
     }
 
     private func writeRubyMoves(at root: URL) throws {

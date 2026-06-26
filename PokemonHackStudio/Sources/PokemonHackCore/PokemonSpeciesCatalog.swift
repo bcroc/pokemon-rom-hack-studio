@@ -1443,7 +1443,7 @@ public enum ProjectSpeciesCatalogBuilder {
         guard fileManager.fileExists(atPath: url.path) else { return [:] }
         let text = try readText(at: url)
         var result: [String: String] = [:]
-        for match in regexMatches(#"\[(SPECIES_[A-Z0-9_]+)\]\s*=\s*(s[A-Za-z0-9_]+LevelUpLearnset)"#, in: text) {
+        for match in regexMatches(#"\[(SPECIES_[A-Z0-9_]+)\]\s*=\s*([sg][A-Za-z0-9_]+LevelUpLearnset)"#, in: text) {
             guard match.count >= 3 else { continue }
             result[match[2]] = match[1]
         }
@@ -1475,7 +1475,7 @@ public enum ProjectSpeciesCatalogBuilder {
         var blocks: [(symbol: String, span: SourceSpan, moves: [SpeciesLevelUpMove])] = []
         var index = 0
         while index < lines.count {
-            guard let symbol = firstRegexMatch(#"(s[A-Za-z0-9_]+LevelUpLearnset)"#, in: lines[index]) else {
+            guard let symbol = firstRegexMatch(#"([sg][A-Za-z0-9_]+LevelUpLearnset)"#, in: lines[index]) else {
                 index += 1
                 continue
             }
@@ -1914,7 +1914,7 @@ public enum SpeciesMutationPlanner {
                         root: root,
                         path: path,
                         span: span,
-                        replacement: renderLevelUpLearnset(symbol: symbol, moves: draft.levelUpMoves)
+                        replacement: renderLevelUpLearnset(symbol: symbol, moves: draft.levelUpMoves, profile: catalog.profile)
                     ) {
                         changes.append(levelUpChange)
                     }
@@ -2744,12 +2744,13 @@ public enum SpeciesMutationPlanner {
         values.indices.contains(index) ? values[index] : fallback
     }
 
-    private static func renderLevelUpLearnset(symbol: String, moves: [SpeciesLevelUpMoveDraft]) -> String {
+    private static func renderLevelUpLearnset(symbol: String, moves: [SpeciesLevelUpMoveDraft], profile: GameProfile) -> String {
         let rows = moves.map { move in
             "    LEVEL_UP_MOVE(\(String(format: "%2d", move.level)), \(move.move)),"
         }.joined(separator: "\n")
+        let declaration = profile == .pokeruby ? "const u16" : "static const u16"
         return """
-        static const u16 \(symbol)[] = {
+        \(declaration) \(symbol)[] = {
         \(rows)
             LEVEL_UP_END
         };
@@ -3052,7 +3053,7 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokedex_text_en.h",
                 tutorPath: nil,
                 tutorTableSymbols: [],
-                editCapabilities: .rubyBaseStatsPokedexAndEvolutions,
+                editCapabilities: .rubyBaseStatsPokedexEvolutionsAndLevelUp,
                 constants: classicConstants
             )
         case .pokeemeraldExpansion:
@@ -3409,9 +3410,9 @@ private struct SpeciesEditCapabilities {
         assets: true
     )
 
-    static let rubyBaseStatsPokedexAndEvolutions = SpeciesEditCapabilities(
+    static let rubyBaseStatsPokedexEvolutionsAndLevelUp = SpeciesEditCapabilities(
         speciesInfo: true,
-        levelUp: false,
+        levelUp: true,
         tmhm: false,
         eggMoves: false,
         evolutions: true,
@@ -3535,7 +3536,7 @@ private func displayName(for speciesID: String) -> String {
 
 private func speciesConstant(fromLearnsetSymbol symbol: String) -> String {
     var name = symbol
-    if name.hasPrefix("s") {
+    if name.hasPrefix("s") || name.hasPrefix("g") {
         name.removeFirst()
     }
     if name.hasSuffix("LevelUpLearnset") {

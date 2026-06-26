@@ -637,6 +637,8 @@ struct PokemonSpeciesWorkbenchView: View {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered:
             return true
+        case .pokeruby:
+            return species.learnsets.levelUpSourceSpan?.relativePath == "src/data/pokemon/level_up_learnsets.h"
         case .pokeemeraldExpansion:
             guard let path = species.learnsets.levelUpSourceSpan?.relativePath else { return false }
             return path == "src/data/pokemon/level_up_learnsets.h"
