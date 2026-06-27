@@ -349,7 +349,9 @@ public enum PokemonDataCompatibilityReportBuilder {
                 profile: index.profile,
                 sourceIndex: sourceIndex,
                 indexedCount: indexed,
-                editableCount: editable
+                editableCount: editable,
+                rubyTMHMIndexedCount: rubyTMHMIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                rubyTMHMEditableCount: rubyTMHMEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex)
             ) : nil
         )
     }
@@ -706,7 +708,9 @@ public enum PokemonDataCompatibilityReportBuilder {
         profile: GameProfile,
         sourceIndex: ProjectSourceIndex,
         indexedCount: Int,
-        editableCount: Int
+        editableCount: Int,
+        rubyTMHMIndexedCount: Int = 0,
+        rubyTMHMEditableCount: Int = 0
     ) -> [PokemonDataCompatibilitySourceTable]? {
         if profile == .pokeruby {
             let sourceStatus: PokemonDataCompatibilityStatus
@@ -716,6 +720,14 @@ public enum PokemonDataCompatibilityReportBuilder {
                 sourceStatus = .readOnly
             } else {
                 sourceStatus = .blocked
+            }
+            let tmhmStatus: PokemonDataCompatibilityStatus
+            if rubyTMHMEditableCount > 0 {
+                tmhmStatus = .editable
+            } else if rubyTMHMIndexedCount > 0 {
+                tmhmStatus = .readOnly
+            } else {
+                tmhmStatus = .blocked
             }
             return [
                 PokemonDataCompatibilitySourceTable(
@@ -728,9 +740,9 @@ public enum PokemonDataCompatibilityReportBuilder {
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/pokemon/tmhm_learnsets.h",
                     tableSymbol: "gTMHMLearnsets",
-                    indexedCount: 0,
-                    status: .blocked,
-                    note: "Ruby/Sapphire TM/HM learnset apply remains blocked."
+                    indexedCount: rubyTMHMIndexedCount,
+                    status: tmhmStatus,
+                    note: "Ruby/Sapphire TM/HM writes are limited to existing local gTMHMLearnsets rows parsed from source."
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/pokemon/egg_moves.h",
@@ -842,6 +854,25 @@ public enum PokemonDataCompatibilityReportBuilder {
                 || tag == "form-change-table"
                 || tag == "form-supplement"
         }
+    }
+
+    private static func rubyTMHMIndexedCount(
+        profile: GameProfile,
+        speciesCatalog: ProjectSpeciesCatalog?,
+        sourceIndex: ProjectSourceIndex
+    ) -> Int {
+        guard profile == .pokeruby else { return 0 }
+        return speciesCatalog?.species.filter { !$0.learnsets.tmhm.isEmpty }.count
+            ?? learnsetRecordCount(in: sourceIndex, matching: ["tmhm"])
+    }
+
+    private static func rubyTMHMEditableCount(
+        profile: GameProfile,
+        speciesCatalog: ProjectSpeciesCatalog?,
+        sourceIndex: ProjectSourceIndex
+    ) -> Int {
+        let indexed = rubyTMHMIndexedCount(profile: profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex)
+        return supportsLearnsetMutationEditing(surface: .tmhmLearnsets, profile: profile) && indexed > 0 ? indexed : 0
     }
 
     private static func formDiagnostics(records: [SourceIndexRecord]) -> [Diagnostic] {
@@ -1141,7 +1172,7 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
             return nil
         }
     case .tmhmLearnsets:
-        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsClassicSpeciesMutationEditing(profile))
+        return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsLearnsetMutationEditing(surface: .tmhmLearnsets, profile: profile))
     case .eggMoves:
         return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsClassicSpeciesMutationEditing(profile))
     case .evolutions:
@@ -1228,7 +1259,9 @@ private func supportsLearnsetMutationEditing(surface: PokemonDataCompatibilitySu
     case .levelUpLearnsets:
         return supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby || profile == .pokeemeraldExpansion
     case .tmhmLearnsets, .eggMoves, .tutorLearnsets:
-        return supportsClassicSpeciesMutationEditing(profile)
+        return surface == .tmhmLearnsets
+            ? supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby
+            : supportsClassicSpeciesMutationEditing(profile)
     default:
         return false
     }
@@ -1246,7 +1279,6 @@ private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
     }
     if profile == .pokeruby {
         fields.append(contentsOf: [
-            "TM/HM learnset rewrites",
             "egg move rewrites",
             "tutor learnset rewrites"
         ])
@@ -1334,7 +1366,7 @@ private func learnsetUnsupportedFields(surface: PokemonDataCompatibilitySurface,
         fields = ["learnset symbol renames", "shared learnset extraction", "missing learnset block insertion"]
     case .tmhmLearnsets:
         fields = ["TM/HM item mapping edits", "machine constant creation"]
-        if !supportsClassicSpeciesMutationEditing(profile) {
+        if !supportsLearnsetMutationEditing(surface: surface, profile: profile) {
             fields.append("compatibility matrix bulk edits")
         }
     case .eggMoves:
@@ -1355,12 +1387,24 @@ private func learnsetUnsupportedFields(surface: PokemonDataCompatibilitySurface,
             fields.append("Expansion generated learnable JSON apply")
         }
     }
-    if profile == .pokeruby, surface == .levelUpLearnsets {
-        fields.append(contentsOf: [
-            "generated learnset output writes",
-            "reference-only learnset source writes",
-            "binary ROM learnset writes"
-        ])
+    if profile == .pokeruby {
+        switch surface {
+        case .levelUpLearnsets:
+            fields.append(contentsOf: [
+                "generated learnset output writes",
+                "reference-only learnset source writes",
+                "binary ROM learnset writes"
+            ])
+        case .tmhmLearnsets:
+            fields.append(contentsOf: [
+                "missing TM/HM row insertion",
+                "generated learnset output writes",
+                "reference-only learnset source writes",
+                "binary ROM learnset writes"
+            ])
+        default:
+            break
+        }
     }
     return fields
 }

@@ -3053,7 +3053,7 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokedex_text_en.h",
                 tutorPath: nil,
                 tutorTableSymbols: [],
-                editCapabilities: .rubyBaseStatsPokedexEvolutionsAndLevelUp,
+                editCapabilities: .rubyBaseStatsPokedexEvolutionsLevelUpAndTMHM,
                 constants: classicConstants
             )
         case .pokeemeraldExpansion:
@@ -3410,10 +3410,10 @@ private struct SpeciesEditCapabilities {
         assets: true
     )
 
-    static let rubyBaseStatsPokedexEvolutionsAndLevelUp = SpeciesEditCapabilities(
+    static let rubyBaseStatsPokedexEvolutionsLevelUpAndTMHM = SpeciesEditCapabilities(
         speciesInfo: true,
         levelUp: true,
-        tmhm: false,
+        tmhm: true,
         eggMoves: false,
         evolutions: true,
         pokedex: true,

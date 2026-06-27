@@ -707,7 +707,8 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.resources, "asm", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "include", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.encounters, "data/encounters", required: false),
-                CatalogPathDescriptor(.resources, "data", required: false),
+                CatalogPathDescriptor(.resources, "data", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "files/a", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files"),
                 CatalogPathDescriptor(.audio, "files/wb_sound_data.sdat", required: false),
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
@@ -1421,6 +1422,9 @@ public enum NDSDataCatalogBuilder {
         if lower.hasPrefix("data/encounters/") {
             return "encounterPreview"
         }
+        if lower == "data" {
+            return "dataInventory"
+        }
         if record.domain == .audio {
             return "audioMetadata"
         }
@@ -1444,6 +1448,9 @@ public enum NDSDataCatalogBuilder {
         }
         if genVTitleCoverageSpecs.contains(where: { $0.id == lower }) {
             return "variantSourceInventory"
+        }
+        if lower == "files/a" {
+            return "nitroArchiveGroupInventory"
         }
         if lower.hasPrefix("files/a/") {
             return "nitroArchiveGroup"
@@ -1473,6 +1480,8 @@ public enum NDSDataCatalogBuilder {
         switch role {
         case "encounterPreview":
             return "Encounter data is indexed for preview context."
+        case "dataInventory":
+            return "The Gen V data root is summarized as manual-only source inventory."
         case "audioMetadata":
             return "SDAT/SSEQ/SBNK/SWAR/STRM candidates retain read-only audio metadata facts."
         case "nitroArchiveRoute":
@@ -1489,6 +1498,8 @@ public enum NDSDataCatalogBuilder {
             return "Header roots are summarized as manual-only source inventory."
         case "variantSourceInventory":
             return "Variant marker folders are summarized for title coverage and manual-only source orientation."
+        case "nitroArchiveGroupInventory":
+            return "The files/a archive-group root is summarized as manual-only NitroFS inventory."
         case "nitroArchiveGroup":
             return "files/a archive-group paths are identified for future Gen V container routing."
         case "nitroFSResource":

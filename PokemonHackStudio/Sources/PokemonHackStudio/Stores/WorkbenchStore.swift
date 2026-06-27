@@ -1797,8 +1797,8 @@ final class WorkbenchStore: ObservableObject {
     private func selectedNDSDataSemanticFields(sourceText: String) -> [NDSDataSemanticFieldViewState] {
         guard let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return [] }
         let snapshot = PokemonHackCore.NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: recordID, fileManager: fileManager)
-        guard snapshot.canEdit else { return [] }
-        return PokemonHackCore.NDSDataSemanticEditor.fields(sourceText: sourceText, recordID: recordID).map {
+        guard snapshot.canEdit, let record = catalog.records.first(where: { $0.id == recordID }) else { return [] }
+        return PokemonHackCore.NDSDataSemanticEditor.fields(sourceText: sourceText, recordID: recordID, record: record).map {
             NDSDataSemanticFieldViewState(
                 id: $0.id,
                 key: $0.key,
@@ -3169,7 +3169,8 @@ final class WorkbenchStore: ObservableObject {
         guard
             let catalog = selectedNDSDataCatalog,
             let sourceText = selectedNDSDataDraft?.editedText ?? selectedNDSDataSourceText,
-            let recordID = selectedNDSDataRecordID
+            let recordID = selectedNDSDataRecordID,
+            let record = catalog.records.first(where: { $0.id == recordID })
         else {
             return
         }
@@ -3178,7 +3179,8 @@ final class WorkbenchStore: ObservableObject {
         let result = PokemonHackCore.NDSDataSemanticEditor.updateSourceText(
             sourceText,
             fieldEdit: PokemonHackCore.NDSDataSemanticFieldEdit(key: fieldKey, value: value),
-            recordID: recordID
+            recordID: recordID,
+            record: record
         )
         guard result.diagnostics.allSatisfy({ $0.severity != .error }) else { return }
         updateSelectedNDSDataDraftText(result.text)

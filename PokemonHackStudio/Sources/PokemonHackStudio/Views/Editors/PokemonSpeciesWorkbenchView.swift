@@ -85,8 +85,10 @@ struct PokemonSpeciesWorkbenchView: View {
                         if supportsEvolutionEditing(for: selectedSpecies) {
                             evolutionSection(draft: draft)
                         }
-                        if supportsClassicSpeciesMutationEditing {
+                        if supportsTMHMEditing(for: selectedSpecies) {
                             tmhmSection(draft: draft)
+                        }
+                        if supportsClassicSpeciesMutationEditing {
                             tutorSection(draft: draft)
                             eggMovesSection(draft: draft)
                         }
@@ -617,6 +619,17 @@ struct PokemonSpeciesWorkbenchView: View {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered, .pokeruby:
             return true
+        default:
+            return false
+        }
+    }
+
+    private func supportsTMHMEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered:
+            return true
+        case .pokeruby:
+            return species.learnsets.tmhmSourceSpan?.relativePath == "src/data/pokemon/tmhm_learnsets.h"
         default:
             return false
         }

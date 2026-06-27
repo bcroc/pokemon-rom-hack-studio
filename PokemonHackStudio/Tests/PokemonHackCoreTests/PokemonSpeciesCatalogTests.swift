@@ -175,7 +175,6 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
         var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
 
-        draft.tmhmMoves.append("MOVE_CUT")
         draft.eggMoves.append("MOVE_LEECH_SEED")
         draft.tutorMoves.append("MOVE_SWORD_DANCE")
         draft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
@@ -185,13 +184,69 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(plan.changes.count, 0)
         XCTAssertFalse(plan.isApplyable)
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_LEVEL_UP_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+    }
+
+    func testRubySapphireTMHMLearnsetPlanApplyBackUpAndReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let tmhmPath = root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.learnsets.tmhm.map(\.move), ["MOVE_BULLET_SEED"])
+        XCTAssertEqual(treecko.learnsets.tmhmSourceSpan?.relativePath, "src/data/pokemon/tmhm_learnsets.h")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.tmhmMoves.append("MOVE_FLASH")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/tmhm_learnsets.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("[SPECIES_TREECKO] = { .learnset = {"))
+        XCTAssertTrue(preview.contains(".BULLET_SEED = TRUE"))
+        XCTAssertTrue(preview.contains(".FLASH = TRUE"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/tmhm_learnsets.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        let source = try String(contentsOf: tmhmPath, encoding: .utf8)
+        XCTAssertTrue(source.contains(".BULLET_SEED = TRUE"))
+        XCTAssertTrue(source.contains(".FLASH = TRUE"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.learnsets.tmhm.map(\.move), ["MOVE_BULLET_SEED", "MOVE_FLASH"])
+        XCTAssertEqual(edited.baseStats.hp, 40)
+        XCTAssertEqual(edited.pokedex?.categoryName, "WOOD GECKO")
+    }
+
+    func testRubySapphireTMHMLearnsetEditsRequireParsedSourceRow() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let grovyle = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_GROVYLE" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: grovyle))
+        draft.tmhmMoves.append("MOVE_CUT")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_SPAN_MISSING" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
     }
 
     func testRubySapphireLevelUpLearnsetPlanApplyBackUpAndReload() throws {
@@ -1661,6 +1716,17 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets.h")
+        )
+        try write(
+            """
+            union TMHMLearnset gTMHMLearnsets[NUM_SPECIES] =
+            {
+                [SPECIES_TREECKO] = { .learnset = {
+                    .BULLET_SEED = TRUE,
+                } },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
         )
         try write(
             """

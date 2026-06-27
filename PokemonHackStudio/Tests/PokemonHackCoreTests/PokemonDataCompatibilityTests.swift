@@ -107,6 +107,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(rubySpecies.editableCount, 1)
         XCTAssertNil(rubySpecies.blockedReason)
         XCTAssertFalse(rubySpecies.unsupportedFields.contains("Ruby/Sapphire base_stats positional apply"))
+        XCTAssertFalse(rubySpecies.unsupportedFields.contains("TM/HM learnset rewrites"))
         XCTAssertFalse(rubySpecies.unsupportedFields.contains("Pokedex rewrites"))
         XCTAssertFalse(rubySpecies.unsupportedFields.contains("evolution rewrites"))
         XCTAssertNil(rubySpecies.recommendedFutureRow)
@@ -148,14 +149,26 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyLevelUp.unsupportedFields.contains("binary ROM learnset writes"))
         let rubyLevelUpSources = try XCTUnwrap(rubyLevelUp.sourceTables)
         XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/level_up_learnsets.h" && $0.tableSymbol == "gLevelUpLearnsets" && $0.status == .editable && $0.indexedCount == 1 })
-        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.tableSymbol == "gTMHMLearnsets" && $0.status == .editable && $0.indexedCount == 1 })
         XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/egg_moves.h" && $0.status == .blocked })
         XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
         XCTAssertTrue(rubyLevelUpSources.contains { $0.path == "references/pokeruby/src/data/pokemon/level_up_learnsets.h" && $0.status == .blocked })
         let rubyTMHM = entry(.tmhmLearnsets, in: ruby)
-        XCTAssertEqual(rubyTMHM.status, .blocked)
-        XCTAssertEqual(rubyTMHM.editableCount, 0)
-        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("compatibility matrix bulk edits"))
+        XCTAssertEqual(rubyTMHM.status, .editable)
+        XCTAssertEqual(rubyTMHM.sourcePath, "src/data/pokemon/tmhm_learnsets.h")
+        XCTAssertEqual(rubyTMHM.tableSymbol, "gTMHMLearnsets")
+        XCTAssertEqual(rubyTMHM.indexedCount, 1)
+        XCTAssertEqual(rubyTMHM.editableCount, 1)
+        XCTAssertEqual(rubyTMHM.readOnlyCount, 0)
+        XCTAssertNil(rubyTMHM.blockedReason)
+        XCTAssertNil(rubyTMHM.recommendedFutureRow)
+        XCTAssertFalse(rubyTMHM.unsupportedFields.contains("compatibility matrix bulk edits"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("TM/HM item mapping edits"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("machine constant creation"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("missing TM/HM row insertion"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("generated learnset output writes"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("reference-only learnset source writes"))
+        XCTAssertTrue(rubyTMHM.unsupportedFields.contains("binary ROM learnset writes"))
         let rubyEgg = entry(.eggMoves, in: ruby)
         XCTAssertEqual(rubyEgg.status, .blocked)
         XCTAssertEqual(rubyEgg.editableCount, 0)
@@ -745,6 +758,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         try write(
             """
+            union TMHMLearnset gTMHMLearnsets[NUM_SPECIES] =
+            {
+                [SPECIES_TREECKO] = { .learnset = { .BULLET_SEED = TRUE } },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        )
+        try write(
+            """
             const struct PokedexEntry gPokedexEntries[] =
             {
                 [NATIONAL_DEX_TREECKO] = { .categoryName = _(\"WOOD GECKO\"), .height = 5, .weight = 50, .description = gTreeckoPokedexText },
@@ -765,8 +787,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             to: root.appendingPathComponent("include/constants/pokemon.h")
         )
         try write("#define ABILITY_NONE 0\n#define ABILITY_OVERGROW 65\n", to: root.appendingPathComponent("include/constants/abilities.h"))
-        try write("#define ITEM_NONE 0\n", to: root.appendingPathComponent("include/constants/items.h"))
-        try write("#define MOVE_POUND 1\n", to: root.appendingPathComponent("include/constants/moves.h"))
+        try write("#define ITEM_NONE 0\n#define ITEM_TM09_BULLET_SEED ITEM_TM09\n", to: root.appendingPathComponent("include/constants/items.h"))
+        try write("#define MOVE_POUND 1\n#define MOVE_BULLET_SEED 4\n", to: root.appendingPathComponent("include/constants/moves.h"))
     }
 
     private func writeRubyMoves(at root: URL) throws {
