@@ -42,6 +42,19 @@ public enum TrainerPartyShape: String, Codable, Equatable, CaseIterable, Identif
         }
     }
 
+    public var rubyUnionFieldName: String {
+        switch self {
+        case .noItemDefaultMoves:
+            "NoItemDefaultMoves"
+        case .noItemCustomMoves:
+            "NoItemCustomMoves"
+        case .itemDefaultMoves:
+            "ItemDefaultMoves"
+        case .itemCustomMoves:
+            "ItemCustomMoves"
+        }
+    }
+
     static func macro(_ value: String) -> TrainerPartyShape? {
         switch value {
         case "NO_ITEM_DEFAULT_MOVES":
@@ -66,6 +79,21 @@ public enum TrainerPartyShape: String, Codable, Equatable, CaseIterable, Identif
         case "TrainerMonItemDefaultMoves":
             .itemDefaultMoves
         case "TrainerMonItemCustomMoves":
+            .itemCustomMoves
+        default:
+            nil
+        }
+    }
+
+    static func rubyUnionField(_ value: String) -> TrainerPartyShape? {
+        switch value {
+        case "NoItemDefaultMoves":
+            .noItemDefaultMoves
+        case "NoItemCustomMoves":
+            .noItemCustomMoves
+        case "ItemDefaultMoves":
+            .itemDefaultMoves
+        case "ItemCustomMoves":
             .itemCustomMoves
         default:
             nil
@@ -219,6 +247,8 @@ public struct TrainerDetail: Codable, Equatable, Identifiable {
     public let doubleBattle: Bool
     public let aiFlags: [String]
     public let aiFlagsExpression: String
+    public let partyFlagsExpression: String?
+    public let partySize: Int?
     public let partyShape: TrainerPartyShape?
     public let partySymbol: String?
     public let sourceSpan: SourceSpan
@@ -240,6 +270,8 @@ public struct TrainerDetail: Codable, Equatable, Identifiable {
         doubleBattle: Bool,
         aiFlags: [String],
         aiFlagsExpression: String,
+        partyFlagsExpression: String? = nil,
+        partySize: Int? = nil,
         partyShape: TrainerPartyShape?,
         partySymbol: String?,
         sourceSpan: SourceSpan,
@@ -260,6 +292,8 @@ public struct TrainerDetail: Codable, Equatable, Identifiable {
         self.doubleBattle = doubleBattle
         self.aiFlags = aiFlags
         self.aiFlagsExpression = aiFlagsExpression
+        self.partyFlagsExpression = partyFlagsExpression
+        self.partySize = partySize
         self.partyShape = partyShape
         self.partySymbol = partySymbol
         self.sourceSpan = sourceSpan
@@ -653,7 +687,7 @@ public enum ProjectTrainerCatalogBuilder {
                     Diagnostic(
                         severity: .warning,
                         code: "TRAINER_CATALOG_UNSUPPORTED_PROFILE",
-                        message: "Trainer editing is currently available for classic Emerald and FireRed source trees. This profile remains read-only.",
+                        message: "Trainer editing is currently available for classic Emerald, FireRed, and Ruby/Sapphire source trees. This profile remains read-only.",
                         span: SourceSpan(relativePath: index.root.path, startLine: 1)
                     )
                 ]
@@ -797,6 +831,8 @@ public enum ProjectTrainerCatalogBuilder {
         let aiFlags = aiExpression == "0" ? [] : symbolTokens(in: aiExpression).filter { $0.hasPrefix("AI_SCRIPT_") }
         let partyReference = partyReference(fields["party"])
         let partyBlock = partyReference.flatMap { partyBySymbol[$0.symbol] }
+        let partyFlagsExpression = compact(fields["partyFlags"])
+        let partySize = intValue(fields["partySize"])
         var diagnostics: [Diagnostic] = []
 
         if let partyReference {
@@ -830,7 +866,16 @@ public enum ProjectTrainerCatalogBuilder {
             )
         }
 
-        diagnostics.append(contentsOf: unsupportedFieldDiagnostics(entry: entry))
+        diagnostics.append(contentsOf: rubyPartyMetadataDiagnostics(
+            entry: entry,
+            descriptor: descriptor,
+            fields: fields,
+            partyReference: partyReference,
+            partyBlock: partyBlock,
+            partyFlagsExpression: partyFlagsExpression,
+            partySize: partySize
+        ))
+        diagnostics.append(contentsOf: unsupportedFieldDiagnostics(entry: entry, descriptor: descriptor))
         diagnostics.append(contentsOf: constantDiagnostics(entry: entry, fields: fields, trainerItems: trainerItems, partyBlock: partyBlock, constants: constants))
 
         let party = (partyBlock?.members ?? []).map { member in
@@ -852,6 +897,8 @@ public enum ProjectTrainerCatalogBuilder {
             doubleBattle: doubleBattle,
             aiFlags: aiFlags,
             aiFlagsExpression: aiExpression,
+            partyFlagsExpression: partyFlagsExpression,
+            partySize: partySize,
             partyShape: partyReference?.shape,
             partySymbol: partyReference?.symbol,
             sourceSpan: entry.span,
@@ -864,8 +911,8 @@ public enum ProjectTrainerCatalogBuilder {
         )
     }
 
-    private static func unsupportedFieldDiagnostics(entry: CInitializerEntry) -> [Diagnostic] {
-        let supported = Set([
+    private static func unsupportedFieldDiagnostics(entry: CInitializerEntry, descriptor: TrainerCatalogDescriptor) -> [Diagnostic] {
+        var supported = Set([
             "trainerClass",
             "encounterMusic_gender",
             "trainerPic",
@@ -875,6 +922,10 @@ public enum ProjectTrainerCatalogBuilder {
             "aiFlags",
             "party"
         ])
+        if descriptor.layout == .rubySapphire {
+            supported.insert("partyFlags")
+            supported.insert("partySize")
+        }
         let unsupported = Set(entry.fields.keys).subtracting(supported)
         guard !unsupported.isEmpty else { return [] }
         return [
@@ -885,6 +936,74 @@ public enum ProjectTrainerCatalogBuilder {
                 span: entry.span
             )
         ]
+    }
+
+    private static func rubyPartyMetadataDiagnostics(
+        entry: CInitializerEntry,
+        descriptor: TrainerCatalogDescriptor,
+        fields: [String: String],
+        partyReference: TrainerPartyReference?,
+        partyBlock: TrainerPartyBlock?,
+        partyFlagsExpression: String?,
+        partySize: Int?
+    ) -> [Diagnostic] {
+        guard descriptor.layout == .rubySapphire else { return [] }
+        var diagnostics: [Diagnostic] = []
+
+        if fields["partyFlags"] == nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_PARTY_FLAGS_MISSING",
+                    message: "\(entry.symbol) is missing Ruby/Sapphire partyFlags metadata.",
+                    span: entry.span
+                )
+            )
+        }
+
+        if fields["partySize"] == nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_PARTY_SIZE_MISSING",
+                    message: "\(entry.symbol) is missing Ruby/Sapphire partySize metadata.",
+                    span: entry.span
+                )
+            )
+        }
+
+        if
+            let partyFlagsExpression,
+            let partyReference,
+            let flagsShape = rubyPartyShape(fromPartyFlags: partyFlagsExpression),
+            flagsShape != partyReference.shape
+        {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "TRAINER_PARTY_FLAGS_MISMATCH",
+                    message: "\(entry.symbol) partyFlags describe \(flagsShape.rubyUnionFieldName), but the party union references \(partyReference.shape.rubyUnionFieldName).",
+                    span: entry.span
+                )
+            )
+        }
+
+        if
+            let partySize,
+            let partyBlock,
+            partySize != partyBlock.members.count
+        {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "TRAINER_PARTY_SIZE_MISMATCH",
+                    message: "\(entry.symbol) declares partySize \(partySize), but \(partyBlock.symbol) contains \(partyBlock.members.count) member(s). Planning an edit will rewrite partySize from the editable party block.",
+                    span: entry.span
+                )
+            )
+        }
+
+        return diagnostics
     }
 
     private static func constantDiagnostics(
@@ -918,6 +1037,9 @@ public enum ProjectTrainerCatalogBuilder {
         entry: CInitializerEntry,
         diagnostics: inout [Diagnostic]
     ) {
+        if group == .aiFlags, constants[group] == nil {
+            return
+        }
         let known = constants[group] ?? []
         for symbol in Set(symbols) where !known.contains(symbol) {
             diagnostics.append(
@@ -951,17 +1073,46 @@ public enum ProjectTrainerCatalogBuilder {
 
     private static func constants(in text: String, descriptor: TrainerConstantDescriptor) -> [TrainerConstant] {
         let lines = text.components(separatedBy: .newlines)
+        var seen: Set<String> = []
         return lines.enumerated().compactMap { index, line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("#define ") else { return nil }
-            let parts = trimmed.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).map(String.init)
-            guard parts.count >= 3 else { return nil }
-            let symbol = parts[1]
-            guard descriptor.prefixes.contains(where: { symbol.hasPrefix($0) }) || descriptor.exactSymbols.contains(symbol) else {
+            let parsed: (symbol: String, value: String)?
+            if trimmed.hasPrefix("#define ") {
+                let parts = trimmed.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).map(String.init)
+                guard parts.count >= 3 else { return nil }
+                parsed = (parts[1], parts[2])
+            } else {
+                parsed = enumConstant(in: trimmed)
+            }
+            guard
+                let parsed,
+                descriptor.prefixes.contains(where: { parsed.symbol.hasPrefix($0) }) || descriptor.exactSymbols.contains(parsed.symbol),
+                !seen.contains(parsed.symbol)
+            else {
                 return nil
             }
-            return TrainerConstant(symbol: symbol, value: parts[2], sourceSpan: SourceSpan(relativePath: descriptor.path, startLine: index + 1))
+            seen.insert(parsed.symbol)
+            return TrainerConstant(symbol: parsed.symbol, value: parsed.value, sourceSpan: SourceSpan(relativePath: descriptor.path, startLine: index + 1))
         }
+    }
+
+    private static func enumConstant(in line: String) -> (symbol: String, value: String)? {
+        let withoutLineComment = line.components(separatedBy: "//").first ?? line
+        let withoutBlockComment = withoutLineComment.components(separatedBy: "/*").first ?? withoutLineComment
+        let trimmed = withoutBlockComment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            !trimmed.isEmpty,
+            !trimmed.hasPrefix("#"),
+            !trimmed.hasPrefix("enum"),
+            !trimmed.hasPrefix("{"),
+            !trimmed.hasPrefix("}"),
+            let match = regexMatches(#"^([A-Z][A-Z0-9_]+)\s*(?:=\s*([^,]+))?,?\s*$"#, in: trimmed).first,
+            match.count >= 2
+        else {
+            return nil
+        }
+        let value = match.count >= 3 && !match[2].isEmpty ? match[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        return (match[1], value)
     }
 
     private static func missingDiagnostic(_ code: String, path: String) -> Diagnostic {
@@ -1282,7 +1433,7 @@ public enum TrainerMutationPlanner {
                 root: root,
                 path: descriptor.trainerPath,
                 span: trainer.sourceSpan,
-                replacement: renderTrainerEntry(draft)
+                replacement: renderTrainerEntry(draft, originalTrainer: trainer, descriptor: descriptor)
             ) {
                 changes.append(trainerChange)
             }
@@ -1291,7 +1442,7 @@ public enum TrainerMutationPlanner {
                 root: root,
                 path: descriptor.partyPath,
                 span: partySpan,
-                replacement: renderPartyBlock(draft, originalTrainer: trainer)
+                replacement: renderPartyBlock(draft, originalTrainer: trainer, descriptor: descriptor)
                ) {
                 changes.append(partyChange)
             } else {
@@ -1353,6 +1504,12 @@ public enum TrainerMutationPlanner {
         if draft.partySymbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_SYMBOL_MISSING", message: "Trainer party symbol is required.", span: trainer.sourceSpan))
         }
+        if draft.partySymbol != trainer.partySymbol {
+            diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_SYMBOL_CHANGE_UNSUPPORTED", message: "Trainer party symbols are source identity and cannot be changed in this editor.", span: trainer.sourceSpan))
+        }
+        if let partyShape = trainer.partyShape, draft.partyShape != partyShape {
+            diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_SHAPE_CHANGE_UNSUPPORTED", message: "Trainer party source shape changes are blocked; edit only the existing party row shape.", span: trainer.sourceSpan))
+        }
         let constants = catalog.constants.mapValues { Set($0.map(\.symbol)) }
         appendDraftConstantDiagnostics(draft: draft, constants: constants, trainer: trainer, diagnostics: &diagnostics)
         return diagnostics
@@ -1409,6 +1566,9 @@ public enum TrainerMutationPlanner {
         trainer: TrainerDetail,
         diagnostics: inout [Diagnostic]
     ) {
+        if group == .aiFlags, constants[group] == nil {
+            return
+        }
         let known = constants[group] ?? []
         for symbol in Set(symbols) where !symbol.isEmpty && !known.contains(symbol) {
             diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_DRAFT_CONSTANT_UNRESOLVED", message: "\(symbol) is not defined in the current project constants.", span: trainer.sourceSpan))
@@ -1582,10 +1742,32 @@ public enum TrainerMutationPlanner {
         )
     }
 
-    private static func renderTrainerEntry(_ draft: TrainerEditDraft) -> String {
+    private static func renderTrainerEntry(
+        _ draft: TrainerEditDraft,
+        originalTrainer: TrainerDetail,
+        descriptor: TrainerCatalogDescriptor
+    ) -> String {
         let items = normalizedTrainerItems(draft.trainerItems)
         let itemsText = items.allSatisfy { $0 == "ITEM_NONE" } ? "{}" : "{\(items.joined(separator: ", "))}"
-        let aiText = draft.aiFlags.isEmpty ? "0" : draft.aiFlags.joined(separator: " | ")
+        let aiText = renderedAIFlags(draft: draft, originalTrainer: originalTrainer)
+        if descriptor.layout == .rubySapphire {
+            let partyFlags = renderedRubyPartyFlags(draft: draft, originalTrainer: originalTrainer)
+            return """
+                [\(draft.trainerID)] =
+                {
+                    .partyFlags = \(partyFlags),
+                    .trainerClass = \(draft.trainerClass),
+                    .encounterMusic_gender = \(draft.encounterMusicGender),
+                    .trainerPic = \(draft.trainerPic),
+                    .trainerName = _("\(escapeCString(draft.trainerName))"),
+                    .items = \(itemsText),
+                    .doubleBattle = \(draft.doubleBattle ? "TRUE" : "FALSE"),
+                    .aiFlags = \(aiText),
+                    .partySize = \(draft.party.count),
+                    .party = {.\(draft.partyShape.rubyUnionFieldName) = \(draft.partySymbol) }
+                },
+            """
+        }
         return """
             [\(draft.trainerID)] =
             {
@@ -1601,22 +1783,35 @@ public enum TrainerMutationPlanner {
         """
     }
 
-    private static func renderPartyBlock(_ draft: TrainerEditDraft, originalTrainer: TrainerDetail) -> String {
+    private static func renderPartyBlock(
+        _ draft: TrainerEditDraft,
+        originalTrainer: TrainerDetail,
+        descriptor: TrainerCatalogDescriptor
+    ) -> String {
         let originalMembersBySlot = Dictionary(uniqueKeysWithValues: originalTrainer.party.map { ($0.slot, $0) })
-        let members = draft.party.sorted { $0.slot < $1.slot }.map { renderPartyMember($0, shape: draft.partyShape, originalMember: originalMembersBySlot[$0.slot]) }
+        let members = draft.party.sorted { $0.slot < $1.slot }.map {
+            renderPartyMember($0, shape: draft.partyShape, originalMember: originalMembersBySlot[$0.slot], descriptor: descriptor)
+        }
             .joined(separator: "\n")
+        let declarationPrefix = descriptor.layout == .rubySapphire ? "const" : "static const"
         return """
-        static const struct \(draft.partyShape.structName) \(draft.partySymbol)[] = {
+        \(declarationPrefix) struct \(draft.partyShape.structName) \(draft.partySymbol)[] = {
         \(members)
         };
         """
     }
 
-    private static func renderPartyMember(_ member: TrainerPartyPokemonDraft, shape: TrainerPartyShape, originalMember: TrainerPartyPokemon?) -> String {
+    private static func renderPartyMember(
+        _ member: TrainerPartyPokemonDraft,
+        shape: TrainerPartyShape,
+        originalMember: TrainerPartyPokemon?,
+        descriptor: TrainerCatalogDescriptor
+    ) -> String {
+        let levelField = descriptor.layout == .rubySapphire ? "level" : "lvl"
         var lines = [
             "    {",
             "        .iv = \(sourceIV(for: member, originalMember: originalMember)),",
-            "        .lvl = \(member.level),",
+            "        .\(levelField) = \(member.level),",
             "        .species = \(member.species),"
         ]
         if shape.usesHeldItems {
@@ -1627,10 +1822,41 @@ public enum TrainerMutationPlanner {
         }
         if shape.usesCustomMoves {
             let moves = Array((member.moves + Array(repeating: "MOVE_NONE", count: 4)).prefix(4))
-            lines.append("        .moves = { \(moves.joined(separator: ", ")) },")
+            if descriptor.layout == .rubySapphire {
+                lines.append("        .moves = \(moves.joined(separator: ", "))")
+            } else {
+                lines.append("        .moves = { \(moves.joined(separator: ", ")) },")
+            }
         }
         lines.append("    },")
         return lines.joined(separator: "\n")
+    }
+
+    private static func renderedAIFlags(draft: TrainerEditDraft, originalTrainer: TrainerDetail) -> String {
+        if draft.aiFlags == originalTrainer.aiFlags {
+            return originalTrainer.aiFlagsExpression
+        }
+        return draft.aiFlags.isEmpty ? "0" : draft.aiFlags.joined(separator: " | ")
+    }
+
+    private static func renderedRubyPartyFlags(draft: TrainerEditDraft, originalTrainer: TrainerDetail) -> String {
+        if draft.partyShape == originalTrainer.partyShape, let expression = originalTrainer.partyFlagsExpression {
+            return expression
+        }
+        return rubyPartyFlagsExpression(for: draft.partyShape)
+    }
+
+    private static func rubyPartyFlagsExpression(for shape: TrainerPartyShape) -> String {
+        switch shape {
+        case .noItemDefaultMoves:
+            return "0"
+        case .noItemCustomMoves:
+            return "F_TRAINER_PARTY_CUSTOM_MOVESET"
+        case .itemDefaultMoves:
+            return "F_TRAINER_PARTY_HELD_ITEM"
+        case .itemCustomMoves:
+            return "F_TRAINER_PARTY_CUSTOM_MOVESET | F_TRAINER_PARTY_HELD_ITEM"
+        }
     }
 
     private static func sourceIV(for member: TrainerPartyPokemonDraft, originalMember: TrainerPartyPokemon?) -> Int {
@@ -1698,6 +1924,7 @@ public enum TrainerMutationApplier {
 }
 
 private struct TrainerCatalogDescriptor {
+    let layout: TrainerCatalogLayout
     let trainerPath: String
     let partyPath: String
     let levelUpPointerPath: String?
@@ -1708,6 +1935,7 @@ private struct TrainerCatalogDescriptor {
         switch profile {
         case .pokeemerald, .pokefirered:
             TrainerCatalogDescriptor(
+                layout: .classic,
                 trainerPath: "src/data/trainers.h",
                 partyPath: "src/data/trainer_parties.h",
                 levelUpPointerPath: "src/data/pokemon/level_up_learnset_pointers.h",
@@ -1723,10 +1951,32 @@ private struct TrainerCatalogDescriptor {
                     TrainerConstantDescriptor(path: "include/constants/battle_ai.h", group: .aiFlags, prefixes: ["AI_SCRIPT_"])
                 ]
             )
+        case .pokeruby:
+            TrainerCatalogDescriptor(
+                layout: .rubySapphire,
+                trainerPath: "src/data/trainers_en.h",
+                partyPath: "src/data/trainer_parties.h",
+                levelUpPointerPath: "src/data/pokemon/level_up_learnset_pointers.h",
+                levelUpPaths: ["src/data/pokemon/level_up_learnsets.h"],
+                constants: [
+                    TrainerConstantDescriptor(path: "include/constants/species.h", group: .species, prefixes: ["SPECIES_"]),
+                    TrainerConstantDescriptor(path: "include/constants/moves.h", group: .moves, prefixes: ["MOVE_"]),
+                    TrainerConstantDescriptor(path: "include/constants/items.h", group: .items, prefixes: ["ITEM_"]),
+                    TrainerConstantDescriptor(path: "include/constants/pokemon.h", group: .natures, prefixes: ["NATURE_"]),
+                    TrainerConstantDescriptor(path: "include/constants/trainers.h", group: .trainerClasses, prefixes: ["TRAINER_CLASS_"]),
+                    TrainerConstantDescriptor(path: "include/constants/trainers.h", group: .trainerPics, prefixes: ["TRAINER_PIC_"]),
+                    TrainerConstantDescriptor(path: "include/constants/trainers.h", group: .encounterMusic, prefixes: ["TRAINER_ENCOUNTER_MUSIC_"], exactSymbols: ["F_TRAINER_FEMALE"])
+                ]
+            )
         default:
             nil
         }
     }
+}
+
+private enum TrainerCatalogLayout {
+    case classic
+    case rubySapphire
 }
 
 private struct TrainerConstantDescriptor {
@@ -1758,7 +2008,7 @@ private struct TrainerPartyBlock {
 
 private enum TrainerPartyBlockScanner {
     static func blocks(in text: String, relativePath: String) -> [TrainerPartyBlock] {
-        let pattern = #"(?m)^\s*static\s+const\s+struct\s+(TrainerMon(?:NoItem|Item)(?:DefaultMoves|CustomMoves))\s+(sParty_[A-Za-z0-9_]+)\[\]\s*="#
+        let pattern = #"(?m)^\s*(?:static\s+)?const\s+struct\s+(TrainerMon(?:NoItem|Item)(?:DefaultMoves|CustomMoves))\s+([A-Za-z_][A-Za-z0-9_]*)\[\]\s*="#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let characters = Array(text)
         let lineNumbers = LineNumberIndex(text: text)
@@ -1820,16 +2070,16 @@ private enum TrainerPartyBlockScanner {
             diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_MEMBER_UNSUPPORTED", message: "Party slot \(slot + 1) uses a macro or unsupported initializer shape.", span: entry.span))
         }
         let species = compact(fields["species"]) ?? "SPECIES_NONE"
-        let level = intValue(fields["lvl"])
+        let level = intValue(fields["lvl"] ?? fields["level"])
         let iv = intValue(fields["iv"])
         let nature = compact(fields["nature"])
         if level == nil {
-            diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_LEVEL_MISSING", message: "Party slot \(slot + 1) is missing lvl.", span: entry.span))
+            diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_LEVEL_MISSING", message: "Party slot \(slot + 1) is missing level.", span: entry.span))
         }
         if iv == nil {
             diagnostics.append(Diagnostic(severity: .error, code: "TRAINER_PARTY_IV_MISSING", message: "Party slot \(slot + 1) is missing iv.", span: entry.span))
         }
-        let moves = shape.usesCustomMoves ? symbolTokens(in: fields["moves"] ?? "").filter { $0.hasPrefix("MOVE_") } : []
+        let moves = shape.usesCustomMoves ? partyMoveTokens(from: entry).filter { $0.hasPrefix("MOVE_") } : []
         return TrainerPartyPokemon(
             slot: slot,
             species: species,
@@ -1845,6 +2095,15 @@ private enum TrainerPartyBlockScanner {
             diagnostics: diagnostics,
             sourcePreview: preview(entry.body, limit: 12)
         )
+    }
+
+    private static func partyMoveTokens(from entry: CInitializerEntry) -> [String] {
+        let fieldTokens = symbolTokens(in: entry.fields["moves"] ?? "").filter { $0.hasPrefix("MOVE_") }
+        guard let match = regexMatches(#"(?m)\.moves\s*=\s*([^\n\r}]+)"#, in: entry.body).first, match.count >= 2 else {
+            return fieldTokens
+        }
+        let lineTokens = symbolTokens(in: match[1]).filter { $0.hasPrefix("MOVE_") }
+        return lineTokens.count > fieldTokens.count ? lineTokens : fieldTokens
     }
 }
 
@@ -1905,10 +2164,54 @@ private enum TrainerEditApplySafety {
 private func partyReference(_ value: String?) -> TrainerPartyReference? {
     guard let value else { return nil }
     let pattern = #"(NO_ITEM_DEFAULT_MOVES|NO_ITEM_CUSTOM_MOVES|ITEM_DEFAULT_MOVES|ITEM_CUSTOM_MOVES)\s*\(\s*([A-Za-z0-9_]+)\s*\)"#
-    guard let match = regexMatches(pattern, in: value).first, match.count >= 3, let shape = TrainerPartyShape.macro(match[1]) else {
+    if let match = regexMatches(pattern, in: value).first, match.count >= 3, let shape = TrainerPartyShape.macro(match[1]) {
+        return TrainerPartyReference(shape: shape, symbol: match[2])
+    }
+
+    let rubyPattern = #"\.\s*(NoItemDefaultMoves|NoItemCustomMoves|ItemDefaultMoves|ItemCustomMoves)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)"#
+    if let match = regexMatches(rubyPattern, in: value).first, match.count >= 3, let shape = TrainerPartyShape.rubyUnionField(match[1]) {
+        return TrainerPartyReference(shape: shape, symbol: match[2])
+    }
+    return nil
+}
+
+private func rubyPartyShape(fromPartyFlags value: String) -> TrainerPartyShape? {
+    if let flags = intValue(value) {
+        return rubyPartyShape(usesHeldItems: flags & 0x2 != 0, usesCustomMoves: flags & 0x1 != 0)
+    }
+    let tokens = Set(symbolTokens(in: value))
+    let usesHeldItems = tokens.contains("F_TRAINER_PARTY_HELD_ITEM")
+    let usesCustomMoves = tokens.contains("F_TRAINER_PARTY_CUSTOM_MOVESET")
+    guard usesHeldItems || usesCustomMoves || compact(value) == "0" else {
         return nil
     }
-    return TrainerPartyReference(shape: shape, symbol: match[2])
+    return rubyPartyShape(usesHeldItems: usesHeldItems, usesCustomMoves: usesCustomMoves)
+}
+
+private func rubyPartyShape(usesHeldItems: Bool, usesCustomMoves: Bool) -> TrainerPartyShape {
+    switch (usesHeldItems, usesCustomMoves) {
+    case (false, false):
+        return .noItemDefaultMoves
+    case (false, true):
+        return .noItemCustomMoves
+    case (true, false):
+        return .itemDefaultMoves
+    case (true, true):
+        return .itemCustomMoves
+    }
+}
+
+private func rubyPartyFlagsExpression(for shape: TrainerPartyShape) -> String {
+    switch shape {
+    case .noItemDefaultMoves:
+        return "0"
+    case .noItemCustomMoves:
+        return "F_TRAINER_PARTY_CUSTOM_MOVESET"
+    case .itemDefaultMoves:
+        return "F_TRAINER_PARTY_HELD_ITEM"
+    case .itemCustomMoves:
+        return "F_TRAINER_PARTY_HELD_ITEM | F_TRAINER_PARTY_CUSTOM_MOVESET"
+    }
 }
 
 private func defaultMoves(for species: String, level: Int?, learnsets: [TrainerLevelUpMove]) -> [String] {
@@ -1953,7 +2256,7 @@ private func trainerLevelUpLearnsetBlocks(in text: String, relativePath: String)
 
 private func speciesConstant(fromLearnsetSymbol symbol: String) -> String {
     var name = symbol
-    if name.hasPrefix("s") {
+    if name.hasPrefix("s") || name.hasPrefix("g") {
         name.removeFirst()
     }
     if name.hasSuffix("LevelUpLearnset") {

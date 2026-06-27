@@ -51,6 +51,140 @@ final class TrainerCatalogTests: XCTestCase {
         XCTAssertTrue(trainer.isEditable)
     }
 
+    func testRubyTrainerCatalogLoadsUnionPartiesAndNumericAI() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeRubyFixture(at: temp.url)
+
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+
+        XCTAssertEqual(catalog.profile, .pokeruby)
+        XCTAssertEqual(catalog.trainers.count, 4)
+
+        let archie = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ARCHIE_1" })
+        XCTAssertTrue(archie.isEditable)
+        XCTAssertEqual(archie.aiFlags, [])
+        XCTAssertEqual(archie.aiFlagsExpression, "0x7")
+        XCTAssertEqual(archie.partyFlagsExpression, "0")
+        XCTAssertEqual(archie.partySize, 1)
+        XCTAssertEqual(archie.partyShape, .noItemDefaultMoves)
+        XCTAssertEqual(archie.partySymbol, "gTrainerParty_Archie1")
+        XCTAssertEqual(archie.party.first?.level, 17)
+        XCTAssertEqual(archie.party.first?.species, "SPECIES_HUNTAIL")
+
+        let cindy = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_CINDY_1" })
+        XCTAssertTrue(cindy.isEditable)
+        XCTAssertEqual(cindy.partyShape, .itemCustomMoves)
+        XCTAssertEqual(cindy.party.first?.heldItem, "ITEM_NUGGET")
+        XCTAssertEqual(cindy.party.first?.moves, ["MOVE_FURY_SWIPES", "MOVE_MUD_SPORT", "MOVE_ODOR_SLEUTH", "MOVE_SAND_ATTACK"])
+        XCTAssertFalse(catalog.diagnostics.contains { $0.code == "TRAINER_CONSTANT_UNRESOLVED" && $0.severity == .error })
+    }
+
+    func testRubyTrainerMutationPlannerAppliesWithBackupReloadAndPartySizeUpdate() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeRubyFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_CINDY_1" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.trainerName = "CINDY"
+        draft.trainerItems = ["ITEM_HYPER_POTION", "ITEM_NONE", "ITEM_NONE", "ITEM_NONE"]
+        draft.doubleBattle = true
+        draft.party[0].species = "SPECIES_ZIGZAGOON"
+        draft.party[0].level = 37
+        draft.party[0].heldItem = "ITEM_ORAN_BERRY"
+        draft.party[0].moves = ["MOVE_TACKLE", "MOVE_TAIL_WHIP", "MOVE_NONE", "MOVE_NONE"]
+        draft.party.append(TrainerPartyPokemonDraft(
+            slot: 1,
+            species: "SPECIES_POOCHYENA",
+            level: 12,
+            iv: 10,
+            ivs: .uniform(1),
+            heldItem: "ITEM_NUGGET",
+            moves: ["MOVE_BITE", "MOVE_NONE", "MOVE_NONE", "MOVE_NONE"]
+        ))
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), ["src/data/trainer_parties.h", "src/data/trainers_en.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let trainerPreview = plan.changes.first { $0.path == "src/data/trainers_en.h" }?.textPreview ?? ""
+        XCTAssertTrue(trainerPreview.contains(".partySize = 2"))
+        XCTAssertTrue(trainerPreview.contains(".party = {.ItemCustomMoves = gTrainerParty_Cindy1 }"))
+        XCTAssertTrue(trainerPreview.contains(".aiFlags = 0x7"))
+        let partyPreview = plan.changes.first { $0.path == "src/data/trainer_parties.h" }?.textPreview ?? ""
+        XCTAssertTrue(partyPreview.contains("const struct TrainerMonItemCustomMoves gTrainerParty_Cindy1[]"))
+        XCTAssertTrue(partyPreview.contains(".level = 37"))
+        XCTAssertTrue(partyPreview.contains(".moves = MOVE_TACKLE, MOVE_TAIL_WHIP, MOVE_NONE, MOVE_NONE"))
+
+        let result = try TrainerMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.count, 2)
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+
+        let trainerText = try String(contentsOf: temp.url.appendingPathComponent("src/data/trainers_en.h"), encoding: .utf8)
+        XCTAssertTrue(trainerText.contains(".partySize = 2"))
+        XCTAssertTrue(trainerText.contains(".aiFlags = 0x7"))
+        let reloaded = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let edited = try XCTUnwrap(reloaded.trainers.first { $0.trainerID == "TRAINER_CINDY_1" })
+        XCTAssertEqual(edited.trainerName, "CINDY")
+        XCTAssertEqual(edited.partySize, 2)
+        XCTAssertEqual(edited.party.map(\.species), ["SPECIES_ZIGZAGOON", "SPECIES_POOCHYENA"])
+        XCTAssertEqual(edited.party.first?.heldItem, "ITEM_ORAN_BERRY")
+        XCTAssertEqual(edited.party.first.map { Array($0.moves.prefix(2)) }, ["MOVE_TACKLE", "MOVE_TAIL_WHIP"])
+    }
+
+    func testRubyTrainerPlannerPreservesNumericAIFlags() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeRubyFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ARCHIE_1" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.trainerName = "ARCHIE_EDIT"
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+        let preview = plan.changes.first { $0.path == "src/data/trainers_en.h" }?.textPreview ?? ""
+
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(preview.contains(".aiFlags = 0x7"))
+        XCTAssertFalse(preview.contains(".aiFlags = 0,"))
+    }
+
+    func testRubyTrainerApplyBlocksAfterSourceHashChanges() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeRubyFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+        let trainer = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_ARCHIE_1" })
+        var draft = try XCTUnwrap(TrainerEditDraft(detail: trainer))
+        draft.trainerName = "ARCHIE_EDIT"
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        try write(rubyTrainers.replacingOccurrences(of: #"ARCHIE"#, with: #"AQUA"#), to: temp.url.appendingPathComponent("src/data/trainers_en.h"))
+
+        let applyability = plan.validateApplyability()
+
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "TRAINER_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "TRAINER_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testRubyTrainerPlannerBlocksUnsupportedAndMissingParties() throws {
+        let temp = try TrainerCatalogTemporaryDirectory()
+        try writeRubyFixture(at: temp.url)
+        let catalog = try ProjectTrainerCatalogBuilder.build(path: temp.url.path)
+
+        let unsupported = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_UNSUPPORTED" })
+        XCTAssertFalse(unsupported.isEditable)
+        XCTAssertTrue(unsupported.diagnostics.contains { $0.code == "TRAINER_PARTY_UNSUPPORTED" })
+        XCTAssertNil(TrainerEditDraft(detail: unsupported))
+
+        let missing = try XCTUnwrap(catalog.trainers.first { $0.trainerID == "TRAINER_MISSING" })
+        let draft = try XCTUnwrap(TrainerEditDraft(detail: missing))
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(missing.isEditable)
+        XCTAssertTrue(missing.diagnostics.contains { $0.code == "TRAINER_PARTY_UNRESOLVED" })
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "TRAINER_NOT_EDITABLE" })
+    }
+
     func testTrainerMutationPlannerRewritesOnlyTrainerAndPartyBlocksThenAppliesWithBackup() throws {
         let temp = try TrainerCatalogTemporaryDirectory()
         try writeEmeraldFixture(at: temp.url)
@@ -343,6 +477,77 @@ final class TrainerCatalogTests: XCTestCase {
         )
     }
 
+    private func writeRubyFixture(at root: URL) throws {
+        try writeProjectSkeleton(at: root, makefile: "GAME_VERSION=RUBY\npokeruby.gba\n")
+        try writeRubyConstants(at: root)
+        try write(rubyTrainers, to: root.appendingPathComponent("src/data/trainers_en.h"))
+        try write(rubyTrainerParties, to: root.appendingPathComponent("src/data/trainer_parties.h"))
+    }
+
+    private func writeRubyConstants(at root: URL) throws {
+        try write(
+            """
+            #define SPECIES_NONE 0
+            #define SPECIES_HUNTAIL 1
+            #define SPECIES_SHARPEDO 2
+            #define SPECIES_LINOONE 3
+            #define SPECIES_ZIGZAGOON 4
+            #define SPECIES_POOCHYENA 5
+            """,
+            to: root.appendingPathComponent("include/constants/species.h")
+        )
+        try write(
+            """
+            #define MOVE_NONE 0
+            #define MOVE_FURY_SWIPES 1
+            #define MOVE_MUD_SPORT 2
+            #define MOVE_ODOR_SLEUTH 3
+            #define MOVE_SAND_ATTACK 4
+            #define MOVE_TACKLE 5
+            #define MOVE_TAIL_WHIP 6
+            #define MOVE_BITE 7
+            """,
+            to: root.appendingPathComponent("include/constants/moves.h")
+        )
+        try write(
+            """
+            #define ITEM_NONE 0
+            #define ITEM_NUGGET 1
+            #define ITEM_SUPER_POTION 2
+            #define ITEM_HYPER_POTION 3
+            #define ITEM_ORAN_BERRY 4
+            """,
+            to: root.appendingPathComponent("include/constants/items.h")
+        )
+        try write(
+            """
+            #define TRAINER_ENCOUNTER_MUSIC_MALE 0
+            #define TRAINER_ENCOUNTER_MUSIC_AQUA 1
+            #define F_TRAINER_PARTY_CUSTOM_MOVESET 1 << 0
+            #define F_TRAINER_PARTY_HELD_ITEM 1 << 1
+
+            enum {
+                TRAINER_PIC_BRENDAN,
+                TRAINER_PIC_ARCHIE,
+                TRAINER_PIC_HIKER,
+            };
+
+            enum {
+                TRAINER_CLASS_POKEMON_TRAINER_1,
+                TRAINER_CLASS_AQUA_LEADER,
+                TRAINER_CLASS_LADY,
+            };
+            """,
+            to: root.appendingPathComponent("include/constants/trainers.h")
+        )
+        try write(
+            """
+            #define NATURE_HARDY 0
+            """,
+            to: root.appendingPathComponent("include/constants/pokemon.h")
+        )
+    }
+
     private func writeTrainerGraphicsReferences(at root: URL, frontReference: String, paletteReference: String) throws {
         try write(
             """
@@ -530,6 +735,68 @@ final class TrainerCatalogTests: XCTestCase {
         """
     }
 
+    private var rubyTrainers: String {
+        """
+        const struct Trainer gTrainers[] = {
+            [TRAINER_ARCHIE_1] =
+            {
+                .partyFlags = 0,
+                .trainerClass = TRAINER_CLASS_AQUA_LEADER,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_AQUA,
+                .trainerPic = TRAINER_PIC_ARCHIE,
+                .trainerName = _("ARCHIE"),
+                .items = {ITEM_SUPER_POTION, ITEM_SUPER_POTION, ITEM_NONE, ITEM_NONE},
+                .doubleBattle = FALSE,
+                .aiFlags = 0x7,
+                .partySize = 1,
+                .party = {.NoItemDefaultMoves = gTrainerParty_Archie1 }
+            },
+
+            [TRAINER_CINDY_1] =
+            {
+                .partyFlags = F_TRAINER_PARTY_HELD_ITEM | F_TRAINER_PARTY_CUSTOM_MOVESET,
+                .trainerClass = TRAINER_CLASS_LADY,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_HIKER,
+                .trainerName = _("CINDY1"),
+                .items = {ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                .doubleBattle = FALSE,
+                .aiFlags = 0x7,
+                .partySize = 1,
+                .party = {.ItemCustomMoves = gTrainerParty_Cindy1 }
+            },
+
+            [TRAINER_UNSUPPORTED] =
+            {
+                .partyFlags = 0,
+                .trainerClass = TRAINER_CLASS_POKEMON_TRAINER_1,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_BRENDAN,
+                .trainerName = _("BAD"),
+                .items = {ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                .doubleBattle = FALSE,
+                .aiFlags = 0x0,
+                .partySize = 1,
+                .party = {.UnsupportedMoves = gTrainerParty_Archie1 }
+            },
+
+            [TRAINER_MISSING] =
+            {
+                .partyFlags = 0,
+                .trainerClass = TRAINER_CLASS_POKEMON_TRAINER_1,
+                .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                .trainerPic = TRAINER_PIC_BRENDAN,
+                .trainerName = _("MISS"),
+                .items = {ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                .doubleBattle = FALSE,
+                .aiFlags = 0x0,
+                .partySize = 1,
+                .party = {.NoItemDefaultMoves = gTrainerParty_Missing }
+            },
+        };
+        """
+    }
+
     private var classicTrainerParties: String {
         """
         #define DUMMY_TRAINER_MON {0}
@@ -571,6 +838,28 @@ final class TrainerCatalogTests: XCTestCase {
         };
 
         static const struct TrainerMonNoItemDefaultMoves sParty_Dummy[] = {DUMMY_TRAINER_MON};
+        """
+    }
+
+    private var rubyTrainerParties: String {
+        """
+        const struct TrainerMonNoItemDefaultMoves gTrainerParty_Archie1[] = {
+            {
+                .iv = 0,
+                .level = 17,
+                .species = SPECIES_HUNTAIL
+            }
+        };
+
+        const struct TrainerMonItemCustomMoves gTrainerParty_Cindy1[] = {
+            {
+                .iv = 40,
+                .level = 36,
+                .species = SPECIES_LINOONE,
+                .heldItem = ITEM_NUGGET,
+                .moves = MOVE_FURY_SWIPES, MOVE_MUD_SPORT, MOVE_ODOR_SLEUTH, MOVE_SAND_ATTACK
+            }
+        };
         """
     }
 
