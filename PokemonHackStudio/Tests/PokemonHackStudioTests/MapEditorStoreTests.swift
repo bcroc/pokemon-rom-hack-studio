@@ -2186,6 +2186,59 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRubySapphireTrainerDraftPreviewApplyAndReloadsThroughStore() async throws {
+        let root = try makeRubyPokemonProject()
+        try writeRubyTrainerSources(to: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.trainers, search: .replace("ruby"))
+        let catalog = try await waitForSelectedTrainerCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+        store.requestTrainerSelection("TRAINER_RUBY")
+        XCTAssertEqual(store.selectedTrainerID, "TRAINER_RUBY")
+        XCTAssertEqual(store.selectedTrainerDetail?.sourceSpan.relativePath, "src/data/trainers_en.h")
+
+        var draft = try XCTUnwrap(store.selectedTrainerDraft)
+        draft.trainerName = "RUBY2"
+        draft.trainerItems = ["ITEM_POTION", "ITEM_NONE", "ITEM_NONE", "ITEM_NONE"]
+        draft.doubleBattle = true
+        draft.party[0].level = 9
+        draft.party[0].heldItem = "ITEM_POTION"
+        draft.party[0].moves = ["MOVE_ABSORB", "MOVE_POUND", "MOVE_NONE", "MOVE_NONE"]
+        store.updateSelectedTrainerDraft(draft)
+
+        XCTAssertTrue(store.selectedTrainerIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedTrainerMutationPlan)
+        store.previewSelectedTrainerMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestTrainerEditPlan)
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), ["src/data/trainer_parties.h", "src/data/trainers_en.h"])
+        XCTAssertTrue(store.canApplySelectedTrainerMutationPlan)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainers_en.h" }?.textPreview?.contains(".trainerName = _(\"RUBY2\")") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainers_en.h" }?.textPreview?.contains(".partySize = 1") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainers_en.h" }?.textPreview?.contains(".party = {.ItemCustomMoves = gTrainerParty_Ruby }") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/trainer_parties.h" }?.textPreview?.contains(".level = 9") == true)
+
+        store.applySelectedTrainerMutationPlan()
+
+        XCTAssertEqual(store.latestTrainerApplyResult?.appliedChanges.map(\.path).sorted(), ["src/data/trainer_parties.h", "src/data/trainers_en.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.latestTrainerApplyResult?.backupRootPath ?? ""))
+        XCTAssertFalse(store.selectedTrainerIsDirty)
+        XCTAssertEqual(store.selectedTrainerID, "TRAINER_RUBY")
+        let editedDraft = try XCTUnwrap(store.selectedTrainerDraft)
+        XCTAssertEqual(editedDraft.trainerName, "RUBY2")
+        XCTAssertEqual(editedDraft.trainerItems, ["ITEM_POTION", "ITEM_NONE", "ITEM_NONE", "ITEM_NONE"])
+        XCTAssertTrue(editedDraft.doubleBattle)
+        XCTAssertEqual(editedDraft.party.first?.level, 9)
+        XCTAssertEqual(editedDraft.party.first?.heldItem, "ITEM_POTION")
+        XCTAssertEqual(editedDraft.party.first?.moves, ["MOVE_ABSORB", "MOVE_POUND", "MOVE_NONE", "MOVE_NONE"])
+    }
+
+    @MainActor
     func testSidebarSearchFallbacksAndGenericRecordSelection() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -5323,6 +5376,64 @@ final class MapEditorStoreTests: XCTestCase {
             };
             """,
             to: root.appendingPathComponent("src/data/battle_moves.c")
+        )
+    }
+
+    private func writeRubyTrainerSources(to root: URL) throws {
+        try write(
+            """
+            #define TRAINER_ENCOUNTER_MUSIC_MALE 1
+            #define F_TRAINER_PARTY_CUSTOM_MOVESET 1 << 0
+            #define F_TRAINER_PARTY_HELD_ITEM 1 << 1
+
+            enum {
+                TRAINER_PIC_HIKER,
+                TRAINER_PIC_RIVAL,
+            };
+
+            enum {
+                TRAINER_CLASS_PKMN_TRAINER_1,
+                TRAINER_CLASS_RIVAL,
+            };
+
+            """,
+            to: root.appendingPathComponent("include/constants/trainers.h")
+        )
+        try write(
+            """
+            const struct Trainer gTrainers[] = {
+                [TRAINER_RUBY] =
+                {
+                    .partyFlags = F_TRAINER_PARTY_HELD_ITEM | F_TRAINER_PARTY_CUSTOM_MOVESET,
+                    .trainerClass = TRAINER_CLASS_RIVAL,
+                    .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                    .trainerPic = TRAINER_PIC_HIKER,
+                    .trainerName = _("RUBY"),
+                    .items = {ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                    .doubleBattle = FALSE,
+                    .aiFlags = 0x7,
+                    .partySize = 1,
+                    .party = {.ItemCustomMoves = gTrainerParty_Ruby }
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/trainers_en.h")
+        )
+        try write(
+            """
+            const struct TrainerMonItemCustomMoves gTrainerParty_Ruby[] = {
+                {
+                    .iv = 40,
+                    .level = 6,
+                    .species = SPECIES_TREECKO,
+                    .heldItem = ITEM_NONE,
+                    .moves = MOVE_POUND, MOVE_ABSORB, MOVE_NONE, MOVE_NONE
+                }
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/trainer_parties.h")
         )
     }
 

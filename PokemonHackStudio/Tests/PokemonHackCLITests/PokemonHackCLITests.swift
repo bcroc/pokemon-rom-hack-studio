@@ -2689,6 +2689,25 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(sourceSpan["relativePath"] as? String, "src/data/battle_moves.c")
     }
 
+    func testTrainerCatalogCommandEmitsRubySapphireEditableJSON() throws {
+        let root = try makeRubyTrainerCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["trainer-catalog", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeruby")
+        let trainers = try XCTUnwrap(result["trainers"] as? [[String: Any]])
+        let ruby = try XCTUnwrap(trainers.first { $0["trainerID"] as? String == "TRAINER_RUBY" })
+        XCTAssertEqual(ruby["isEditable"] as? Bool, true)
+        XCTAssertEqual(ruby["partySize"] as? Int, 1)
+        XCTAssertEqual(ruby["partyShape"] as? String, "itemCustomMoves")
+        let sourceSpan = try XCTUnwrap(ruby["sourceSpan"] as? [String: Any])
+        XCTAssertEqual(sourceSpan["relativePath"] as? String, "src/data/trainers_en.h")
+        let partySourceSpan = try XCTUnwrap(ruby["partySourceSpan"] as? [String: Any])
+        XCTAssertEqual(partySourceSpan["relativePath"] as? String, "src/data/trainer_parties.h")
+    }
+
     func testItemCatalogCommandEmitsEditableJSON() throws {
         let root = try makeItemCatalogProject()
 
@@ -3236,6 +3255,102 @@ final class PokemonHackCLITests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("src/data/battle_moves.c")
+        )
+        return root
+    }
+
+    private func makeRubyTrainerCatalogProject() throws -> URL {
+        let root = try makeTemporaryDirectory()
+        try write("GAME_VERSION ?= RUBY\n", to: root.appendingPathComponent("config.mk"))
+        try write("placeholder\n", to: root.appendingPathComponent("ruby.sha1"))
+        try write("all:\n\t@true\n", to: root.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        try write(
+            """
+            #define SPECIES_NONE 0
+            #define SPECIES_TREECKO 1
+
+            """,
+            to: root.appendingPathComponent("include/constants/species.h")
+        )
+        try write(
+            """
+            #define MOVE_NONE 0
+            #define MOVE_POUND 1
+            #define MOVE_ABSORB 2
+
+            """,
+            to: root.appendingPathComponent("include/constants/moves.h")
+        )
+        try write(
+            """
+            #define ITEM_NONE 0
+            #define ITEM_POTION 1
+
+            """,
+            to: root.appendingPathComponent("include/constants/items.h")
+        )
+        try write(
+            """
+            #define TRAINER_ENCOUNTER_MUSIC_MALE 1
+            #define F_TRAINER_PARTY_CUSTOM_MOVESET 1 << 0
+            #define F_TRAINER_PARTY_HELD_ITEM 1 << 1
+
+            enum {
+                TRAINER_PIC_HIKER,
+            };
+
+            enum {
+                TRAINER_CLASS_RIVAL,
+            };
+
+            """,
+            to: root.appendingPathComponent("include/constants/trainers.h")
+        )
+        try write(
+            """
+            #define NATURE_HARDY 0
+
+            """,
+            to: root.appendingPathComponent("include/constants/pokemon.h")
+        )
+        try write(
+            """
+            const struct Trainer gTrainers[] = {
+                [TRAINER_RUBY] =
+                {
+                    .partyFlags = F_TRAINER_PARTY_HELD_ITEM | F_TRAINER_PARTY_CUSTOM_MOVESET,
+                    .trainerClass = TRAINER_CLASS_RIVAL,
+                    .encounterMusic_gender = TRAINER_ENCOUNTER_MUSIC_MALE,
+                    .trainerPic = TRAINER_PIC_HIKER,
+                    .trainerName = _("RUBY"),
+                    .items = {ITEM_NONE, ITEM_NONE, ITEM_NONE, ITEM_NONE},
+                    .doubleBattle = FALSE,
+                    .aiFlags = 0x7,
+                    .partySize = 1,
+                    .party = {.ItemCustomMoves = gTrainerParty_Ruby }
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/trainers_en.h")
+        )
+        try write(
+            """
+            const struct TrainerMonItemCustomMoves gTrainerParty_Ruby[] = {
+                {
+                    .iv = 40,
+                    .level = 6,
+                    .species = SPECIES_TREECKO,
+                    .heldItem = ITEM_NONE,
+                    .moves = MOVE_POUND, MOVE_ABSORB, MOVE_NONE, MOVE_NONE
+                }
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/trainer_parties.h")
         )
         return root
     }

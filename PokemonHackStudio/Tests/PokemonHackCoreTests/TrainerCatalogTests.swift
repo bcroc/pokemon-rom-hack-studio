@@ -132,6 +132,43 @@ final class TrainerCatalogTests: XCTestCase {
         XCTAssertEqual(edited.party.first.map { Array($0.moves.prefix(2)) }, ["MOVE_TACKLE", "MOVE_TAIL_WHIP"])
     }
 
+    func testTrainerMutationPlannerUnsupportedProfileMessageIncludesRubySapphireSupport() throws {
+        let catalog = ProjectTrainerCatalog(
+            root: SourceLocation(path: "/tmp/unsupported", exists: false),
+            profile: .unknown,
+            adapterID: "test.unknown",
+            adapterName: "Unknown",
+            trainers: []
+        )
+        let draft = TrainerEditDraft(
+            trainerID: "TRAINER_TEST",
+            trainerName: "TEST",
+            trainerClass: "TRAINER_CLASS_PKMN_TRAINER_1",
+            encounterMusicGender: "TRAINER_ENCOUNTER_MUSIC_MALE",
+            trainerPic: "TRAINER_PIC_HIKER",
+            trainerItems: ["ITEM_NONE", "ITEM_NONE", "ITEM_NONE", "ITEM_NONE"],
+            doubleBattle: false,
+            aiFlags: [],
+            partyShape: .noItemDefaultMoves,
+            partySymbol: "sParty_Test",
+            party: [
+                TrainerPartyPokemonDraft(
+                    slot: 0,
+                    species: "SPECIES_TREECKO",
+                    level: 5,
+                    iv: 0
+                )
+            ]
+        )
+
+        let plan = TrainerMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertFalse(plan.isApplyable)
+        let diagnostic = try XCTUnwrap(plan.diagnostics.first { $0.code == "TRAINER_PLAN_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(diagnostic.message.contains("Ruby/Sapphire"))
+        XCTAssertFalse(diagnostic.message.contains("only available for classic Emerald and FireRed"))
+    }
+
     func testRubyTrainerPlannerPreservesNumericAIFlags() throws {
         let temp = try TrainerCatalogTemporaryDirectory()
         try writeRubyFixture(at: temp.url)

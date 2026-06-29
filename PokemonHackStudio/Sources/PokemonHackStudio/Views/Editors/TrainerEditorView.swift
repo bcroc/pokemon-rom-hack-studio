@@ -133,7 +133,10 @@ struct TrainerEditorView: View {
             } else {
                 List(selection: $selectedTrainerID) {
                     ForEach(trainers) { trainer in
-                        TrainerBrowserRow(trainer: trainer)
+                        TrainerBrowserRow(
+                            trainer: trainer,
+                            partyShapeLabel: partyShapeLabel(trainer.partyShape, profile: catalog.profile)
+                        )
                             .tag(trainer.trainerID)
                     }
                 }
@@ -207,7 +210,7 @@ struct TrainerEditorView: View {
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 8)], alignment: .leading, spacing: 8) {
-                TrainerTag(text: draft.partyShape.macroName)
+                TrainerTag(text: partyShapeLabel(draft.partyShape, profile: catalog?.profile))
                 TrainerTag(text: "\(draft.party.count) Pokemon")
                 TrainerTag(text: draft.doubleBattle ? "Double battle" : "Single battle")
                 TrainerTag(text: draft.aiFlags.isEmpty ? "No AI flags" : "\(draft.aiFlags.count) AI flags")
@@ -996,10 +999,22 @@ struct TrainerEditorView: View {
             .itemCustomMoves
         }
     }
+
+    private func partyShapeLabel(
+        _ shape: PokemonHackCore.TrainerPartyShape?,
+        profile: PokemonHackCore.GameProfile?
+    ) -> String {
+        guard let shape else { return "Read-only" }
+        if profile == .pokeruby {
+            return ".\(shape.rubyUnionFieldName)"
+        }
+        return shape.macroName
+    }
 }
 
 private struct TrainerBrowserRow: View {
     let trainer: PokemonHackCore.TrainerDetail
+    let partyShapeLabel: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1017,7 +1032,7 @@ private struct TrainerBrowserRow: View {
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    Text(trainer.partyShape?.macroName ?? "Read-only")
+                    Text(partyShapeLabel)
                     if trainer.doubleBattle {
                         Text("Double")
                     }

@@ -1410,7 +1410,7 @@ public enum TrainerMutationPlanner {
                 catalog: catalog,
                 draft: draft,
                 diagnostics: [
-                    Diagnostic(severity: .error, code: "TRAINER_PLAN_UNSUPPORTED_PROFILE", message: "Trainer apply is only available for classic Emerald and FireRed source trees.")
+                    Diagnostic(severity: .error, code: "TRAINER_PLAN_UNSUPPORTED_PROFILE", message: "Trainer apply is only available for classic Emerald, FireRed, and Ruby/Sapphire source trees.")
                 ]
             )
         }
