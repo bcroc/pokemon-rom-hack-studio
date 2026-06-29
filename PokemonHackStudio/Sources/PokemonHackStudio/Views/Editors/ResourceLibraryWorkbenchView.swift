@@ -807,6 +807,41 @@ private struct NDSDataRecordEditor: View {
                         }
                     }
 
+                    VStack(alignment: .leading, spacing: 10) {
+                        FactGrid(facts: editor.readiness.facts)
+
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], alignment: .leading, spacing: 8) {
+                            readinessFacet(editor.readiness.rawSource)
+                            readinessFacet(editor.readiness.semanticSource)
+                            readinessFacet(editor.readiness.draft)
+                            readinessFacet(editor.readiness.mutationPlan)
+                        }
+
+                        if !editor.readiness.blockers.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Blockers")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ForEach(editor.readiness.blockers) { blocker in
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        HStack(spacing: 6) {
+                                            StatusPill(state: blocker.status)
+                                            Text(blocker.title)
+                                                .font(.caption.weight(.semibold))
+                                            ResourceTag(text: blocker.code)
+                                        }
+                                        Text(blocker.message)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .padding(8)
+                                    .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+                                }
+                            }
+                        }
+                    }
+
                     if !editor.semanticFields.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Semantic Fields")
@@ -854,6 +889,27 @@ private struct NDSDataRecordEditor: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func readinessFacet(_ facet: NDSDataResourceReadinessFacetViewState) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                StatusPill(state: facet.status)
+                Text(facet.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            Text(facet.value)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(facet.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

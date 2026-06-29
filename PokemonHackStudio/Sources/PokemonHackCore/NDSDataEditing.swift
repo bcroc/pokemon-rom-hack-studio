@@ -250,6 +250,7 @@ public enum NDSDataSemanticEditor {
         case cScalar
         case csvCell
         case textLine
+        case textJSONString
     }
 
     public static func snapshot(
@@ -415,10 +416,10 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix JSON records and existing text lines under res/text/**/*.txt, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text-line records in this slice.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
         }
         if catalog.profile == .pokeheartgold, !isHeartGoldSoulSilverSemanticDataPath(record) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, and direct zone-event JSON rows under files/fielddata/eventdata/zone_event; NARC, generated, script binary, map matrix, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
@@ -445,7 +446,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .text, !isSemanticTextDataPath(catalog.profile, record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TEXT_PATH_BLOCKED", message: "Semantic text editing is limited to existing line contents in Platinum source-tree .txt rows under res/text/**/*.txt; BMG/message-bank rows, JSON message banks, containers, generated/reference rows, ROM-backed rows, multiline edits, insert/delete/reorder edits, extraction/rebuild/export paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TEXT_PATH_BLOCKED", message: "Semantic text editing is limited to existing line contents in Platinum source-tree .txt rows under res/text/**/*.txt and existing string leaves in Platinum source-tree JSON rows under res/text/**/*.json; BMG/message-bank binary rows, JSON message-bank writers, containers, generated/reference rows, ROM-backed rows, multiline edits, insert/delete/reorder edits, extraction/rebuild/export paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if !isSemanticFormatSupported(catalog.profile, record) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON, an eligible Platinum source text .txt row, an eligible HeartGold/SoulSilver item CSV row, or an explicitly supported Diamond/Pearl C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
@@ -599,10 +600,24 @@ public enum NDSDataSemanticEditor {
             && isPlatinumSourceTextLineDataPath(record.relativePath)
     }
 
+    private static func isPlatinumSourceTextJSONDataPath(_ relativePath: String) -> Bool {
+        let prefix = "res/text/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        return !lower.dropFirst(prefix.count).isEmpty
+    }
+
+    private static func isPlatinumSourceTextJSONRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .text
+            && record.role == .sourceTree
+            && record.format == .json
+            && isPlatinumSourceTextJSONDataPath(record.relativePath)
+    }
+
     private static func isSemanticTextDataPath(_ profile: GameProfile, _ record: NDSDataCatalogRecord) -> Bool {
         switch profile {
         case .pokeplatinum:
-            return isPlatinumSourceTextLineRecord(record)
+            return isPlatinumSourceTextLineRecord(record) || isPlatinumSourceTextJSONRecord(record)
         default:
             return false
         }
@@ -786,6 +801,9 @@ public enum NDSDataSemanticEditor {
         if let record, isPlatinumSourceTextLineRecord(record) {
             return parsePlatinumSourceTextLineFields(sourceText: sourceText, record: record)
         }
+        if let record, isPlatinumSourceTextJSONRecord(record) {
+            return parsePlatinumTextJSONStringLeafFields(sourceText: sourceText, record: record)
+        }
         return parseTopLevelScalarJSONFields(sourceText: sourceText, record: record)
     }
 
@@ -815,6 +833,184 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_TEXT_LINES", message: "No existing text lines were found for Platinum source text semantic editing.", span: record.sourceSpan))
         }
         return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parsePlatinumTextJSONStringLeafFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        guard let data = sourceText.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) != nil
+        else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_MALFORMED", message: "Platinum text JSON semantic editing requires parseable JSON before string leaves are planned.", span: record.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var index = sourceText.startIndex
+        parseTextJSONStringLeaves(
+            sourceText,
+            index: &index,
+            pathComponents: [],
+            record: record,
+            fields: &fields,
+            diagnostics: &diagnostics
+        )
+
+        let duplicateKeys = duplicateSemanticFieldKeys(fields)
+        for key in duplicateKeys {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
+                    message: "Platinum text JSON string leaf \(key) appears more than once; ambiguous source keys must be resolved before field-level edits are planned.",
+                    span: record.sourceSpan
+                )
+            )
+        }
+
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_TEXT_JSON_STRINGS", message: "No existing string leaves were found for Platinum text JSON semantic editing.", span: record.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parseTextJSONStringLeaves(
+        _ text: String,
+        index: inout String.Index,
+        pathComponents: [String],
+        record: NDSDataCatalogRecord,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        skipWhitespace(text, index: &index)
+        guard index < text.endIndex else { return }
+        switch text[index] {
+        case "{":
+            parseTextJSONObjectStringLeaves(text, index: &index, pathComponents: pathComponents, record: record, fields: &fields, diagnostics: &diagnostics)
+        case "[":
+            parseTextJSONArrayStringLeaves(text, index: &index, pathComponents: pathComponents, record: record, fields: &fields, diagnostics: &diagnostics)
+        case "\"":
+            let valueStart = index
+            guard let token = parseJSONStringToken(text, start: index) else {
+                skipJSONValueOrToken(text, index: &index)
+                return
+            }
+            let key = pathComponents.isEmpty ? "value" : pathComponents.joined(separator: ".")
+            fields.append(
+                ParsedSemanticField(
+                    semanticField: NDSDataSemanticField(
+                        key: key,
+                        label: semanticTextJSONLabel(for: pathComponents),
+                        value: token.value,
+                        valueKind: .string,
+                        sourceSpan: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: text, before: valueStart))
+                    ),
+                    valueRange: valueStart..<token.end,
+                    syntax: .textJSONString
+                )
+            )
+            index = token.end
+        default:
+            skipJSONValueOrToken(text, index: &index)
+        }
+    }
+
+    private static func parseTextJSONObjectStringLeaves(
+        _ text: String,
+        index: inout String.Index,
+        pathComponents: [String],
+        record: NDSDataCatalogRecord,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard index < text.endIndex, text[index] == "{" else { return }
+        index = text.index(after: index)
+        var seenKeys = Set<String>()
+        var duplicateKeys = Set<String>()
+        while index < text.endIndex {
+            skipWhitespaceAndCommas(text, index: &index)
+            guard index < text.endIndex else { return }
+            if text[index] == "}" {
+                index = text.index(after: index)
+                break
+            }
+            guard text[index] == "\"", let keyToken = parseJSONStringToken(text, start: index) else {
+                skipJSONValueOrToken(text, index: &index)
+                continue
+            }
+            index = keyToken.end
+            if !seenKeys.insert(keyToken.value).inserted {
+                duplicateKeys.insert((pathComponents + [keyToken.value]).joined(separator: "."))
+            }
+            skipWhitespace(text, index: &index)
+            guard index < text.endIndex, text[index] == ":" else { continue }
+            index = text.index(after: index)
+            parseTextJSONStringLeaves(
+                text,
+                index: &index,
+                pathComponents: pathComponents + [keyToken.value],
+                record: record,
+                fields: &fields,
+                diagnostics: &diagnostics
+            )
+        }
+        for key in duplicateKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
+                    message: "Platinum text JSON object key \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    span: record.sourceSpan
+                )
+            )
+        }
+    }
+
+    private static func parseTextJSONArrayStringLeaves(
+        _ text: String,
+        index: inout String.Index,
+        pathComponents: [String],
+        record: NDSDataCatalogRecord,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard index < text.endIndex, text[index] == "[" else { return }
+        index = text.index(after: index)
+        var elementIndex = 0
+        while index < text.endIndex {
+            skipWhitespace(text, index: &index)
+            guard index < text.endIndex else { return }
+            if text[index] == "]" {
+                index = text.index(after: index)
+                break
+            }
+            parseTextJSONStringLeaves(
+                text,
+                index: &index,
+                pathComponents: pathComponents + ["\(elementIndex)"],
+                record: record,
+                fields: &fields,
+                diagnostics: &diagnostics
+            )
+            skipWhitespace(text, index: &index)
+            if index < text.endIndex, text[index] == "," {
+                index = text.index(after: index)
+                elementIndex += 1
+            }
+        }
+    }
+
+    private static func duplicateSemanticFieldKeys(_ fields: [ParsedSemanticField]) -> [String] {
+        var seen = Set<String>()
+        var duplicates = Set<String>()
+        for field in fields {
+            if !seen.insert(field.semanticField.key).inserted {
+                duplicates.insert(field.semanticField.key)
+            }
+        }
+        return duplicates.sorted()
     }
 
     private static func parseHeartGoldSoulSilverItemCSVFields(
@@ -1638,6 +1834,11 @@ public enum NDSDataSemanticEditor {
         value.contains(where: { $0 == "\n" || $0 == "\r" }) ? nil : value
     }
 
+    private static func renderedTextJSONStringValue(_ value: String) -> String? {
+        guard !value.contains(where: { $0 == "\n" || $0 == "\r" }) else { return nil }
+        return jsonStringLiteral(value)
+    }
+
     private static func renderedValue(_ value: String, for field: ParsedSemanticField) -> String? {
         switch field.syntax {
         case .json:
@@ -1648,6 +1849,8 @@ public enum NDSDataSemanticEditor {
             return renderedCSVCellValue(value)
         case .textLine:
             return renderedTextLineValue(value)
+        case .textJSONString:
+            return renderedTextJSONStringValue(value)
         }
     }
 
@@ -1678,6 +1881,17 @@ public enum NDSDataSemanticEditor {
             .split(separator: "_")
             .map { word in word.prefix(1).uppercased() + String(word.dropFirst()) }
             .joined(separator: " ")
+    }
+
+    private static func semanticTextJSONLabel(for components: [String]) -> String {
+        guard !components.isEmpty else { return "Value" }
+        return components.map { component in
+            if let index = Int(component) {
+                return "#\(index + 1)"
+            }
+            return semanticLabel(for: component)
+        }
+        .joined(separator: " ")
     }
 
     private static func blockedEditPlan(

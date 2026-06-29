@@ -222,6 +222,7 @@ extension WorkbenchStore {
 
     private var resourcesGuidedFlow: WorkbenchGuidedFlow {
         let firstResourcePath = selectedAssetCatalog?.rows.first?.path ?? resourceLibrary?.entries.first?.path
+        let ndsReadiness = selectedNDSDataEditor?.readiness
         let secondaryAction: WorkbenchGuidedAction
         if let firstResourcePath {
             secondaryAction = WorkbenchGuidedAction(
@@ -259,7 +260,7 @@ extension WorkbenchStore {
             facts: [
                 Fact(label: "Resources", value: "\(resourceLibrary?.entryCount ?? 0)"),
                 Fact(label: "Assets", value: "\(selectedAssetCatalog?.assetCount ?? 0)")
-            ],
+            ] + (ndsReadiness?.guidedFacts ?? []),
             primaryAction: WorkbenchGuidedAction(
                 id: "open-resources",
                 title: "Open Resources",
@@ -430,6 +431,15 @@ extension WorkbenchStore {
 
     private func mutationGateLabel(for module: WorkbenchModule, identity: ProjectIdentity) -> String {
         let mutationModules: Set<WorkbenchModule> = [.maps, .pokemon, .trainers, .moves, .items, .graphics]
+        if module == .resources, let readiness = selectedNDSDataEditor?.readiness {
+            if let blocker = readiness.firstBlocker {
+                return "NDS Data: \(blocker.title)"
+            }
+            if selectedNDSDataEditor?.canEdit == true {
+                return "NDS Data: Preview -> Apply -> Backup"
+            }
+            return "NDS Data: \(readiness.mutationPlan.value)"
+        }
         guard mutationModules.contains(module) else {
             return identity.writePolicy.title
         }

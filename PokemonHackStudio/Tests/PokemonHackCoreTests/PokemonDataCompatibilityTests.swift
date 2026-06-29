@@ -457,6 +457,80 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(json.contains(#""Modern Emerald species surfaces""#))
     }
 
+    func testExpansionLearnsetCompatibilityWarnsWhenAllLearnablesIsStale() throws {
+        let root = try temporaryRoot()
+        try writeExpansionSpecies(at: root)
+        let generatedDate = Date(timeIntervalSince1970: 1_000)
+        let sourceDate = Date(timeIntervalSince1970: 2_000)
+        try setModificationDate(generatedDate, for: "src/data/pokemon/all_learnables.json", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/level_up_learnsets/treecko.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/tmhm_learnsets.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/tutor_learnsets.h", under: root)
+        let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
+
+        let report = try PokemonDataCompatibilityReportBuilder.build(index: index, sourceIndex: sourceIndex)
+
+        assertNoCompletedRowRecommendations(in: report)
+        let levelUp = entry(.levelUpLearnsets, in: report)
+        let tmhm = entry(.tmhmLearnsets, in: report)
+        let tutor = entry(.tutorLearnsets, in: report)
+        XCTAssertEqual(levelUp.status, .editable)
+        XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertEqual(tutor.status, .editable)
+        XCTAssertEqual(levelUp.editableCount, 1)
+        XCTAssertEqual(tmhm.editableCount, 1)
+        XCTAssertEqual(tutor.editableCount, 1)
+        assertStaleLearnablesDiagnostic(
+            in: levelUp,
+            sourcePath: "src/data/pokemon/level_up_learnsets/treecko.h",
+            surfaceName: "level-up"
+        )
+        assertStaleLearnablesDiagnostic(
+            in: tmhm,
+            sourcePath: "src/data/pokemon/tmhm_learnsets.h",
+            surfaceName: "TM/HM"
+        )
+        assertStaleLearnablesDiagnostic(
+            in: tutor,
+            sourcePath: "src/data/pokemon/tutor_learnsets.h",
+            surfaceName: "tutor"
+        )
+        XCTAssertEqual(report.diagnostics.filter { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" }.count, 3)
+        assertBlockedGeneratedLearnsetRows(in: levelUp)
+        assertBlockedGeneratedLearnsetRows(in: tmhm)
+        assertBlockedGeneratedLearnsetRows(in: tutor)
+    }
+
+    func testExpansionLearnsetCompatibilityDoesNotWarnWhenAllLearnablesIsFresh() throws {
+        let root = try temporaryRoot()
+        try writeExpansionSpecies(at: root)
+        let sourceDate = Date(timeIntervalSince1970: 1_000)
+        let generatedDate = Date(timeIntervalSince1970: 2_000)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/level_up_learnsets/treecko.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/tmhm_learnsets.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/tutor_learnsets.h", under: root)
+        try setModificationDate(generatedDate, for: "src/data/pokemon/all_learnables.json", under: root)
+        let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
+
+        let report = try PokemonDataCompatibilityReportBuilder.build(index: index, sourceIndex: sourceIndex)
+
+        let levelUp = entry(.levelUpLearnsets, in: report)
+        let tmhm = entry(.tmhmLearnsets, in: report)
+        let tutor = entry(.tutorLearnsets, in: report)
+        XCTAssertEqual(levelUp.status, .editable)
+        XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertEqual(tutor.status, .editable)
+        XCTAssertEqual(levelUp.editableCount, 1)
+        XCTAssertEqual(tmhm.editableCount, 1)
+        XCTAssertEqual(tutor.editableCount, 1)
+        XCTAssertFalse(levelUp.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
+        XCTAssertFalse(tmhm.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
+        XCTAssertFalse(tutor.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
+        XCTAssertFalse(report.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
+    }
+
     func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
         let report = try PokemonDataCompatibilityReportBuilder.build(
             index: projectIndex(profile: .pokeemerald),
@@ -469,8 +543,26 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         let cries = entry(.cries, in: report)
         XCTAssertNil(cries.recommendedFutureRow)
         XCTAssertEqual(cries.status, .blocked)
-        XCTAssertEqual(cries.cryAudioPlan?.status, .blocked)
-        XCTAssertTrue(cries.cryAudioPlan?.blockedActions.contains("Generated audio output writes") == true)
+        XCTAssertEqual(cries.blockedReason, "No existing local files matched sound/direct_sound_samples/cries/*. No existing local files matched sound/songs/mus_cry*.s or sound/songs/mus_cry*.inc.")
+        let plan = try XCTUnwrap(cries.cryAudioPlan)
+        XCTAssertEqual(plan.status, .blocked)
+        XCTAssertEqual(plan.candidateSourcePaths, [
+            "sound/direct_sound_samples/cries/*",
+            "sound/songs/mus_cry*.s",
+            "sound/songs/mus_cry*.inc"
+        ])
+        XCTAssertEqual(plan.blockedReasons, [
+            "No existing local files matched sound/direct_sound_samples/cries/*.",
+            "No existing local files matched sound/songs/mus_cry*.s or sound/songs/mus_cry*.inc."
+        ])
+        XCTAssertTrue(plan.replacementConstraints.contains("Replacement must be one-for-one with the same project-relative path and source kind."))
+        XCTAssertTrue(plan.replacementConstraints.contains("Missing cry source insertion and directory creation are disabled."))
+        XCTAssertTrue(plan.blockedActions.contains("Audio conversion"))
+        XCTAssertTrue(plan.blockedActions.contains("Generated audio output writes"))
+        XCTAssertTrue(plan.blockedActions.contains("Playback"))
+        XCTAssertTrue(plan.blockedActions.contains("ROM export"))
+        XCTAssertTrue(plan.blockedActions.contains("Binary mutation"))
+        XCTAssertTrue(plan.blockedActions.contains("Source mutation apply"))
     }
 
     func testCryAudioCompatibilityReportsSourceBackedPreviewOnlyPlan() throws {
@@ -495,10 +587,29 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "sound/direct_sound_samples/cries/treecko.aif",
             "sound/songs/mus_cry_treecko.s"
         ])
-        XCTAssertTrue(plan.sourceFiles.allSatisfy { !$0.sha1.isEmpty && $0.sizeBytes > 0 })
+        XCTAssertEqual(plan.sourceFiles.map(\.kind), [
+            "directSoundCrySample",
+            "crySongAssembly"
+        ])
+        XCTAssertEqual(plan.sourceFiles.map(\.sizeBytes), [4, 9])
+        XCTAssertEqual(plan.sourceFiles[0].sha1, pokemonHackSHA1Hex(Data([0x01, 0x02, 0x03, 0x04])))
+        XCTAssertEqual(plan.sourceFiles[1].sha1, pokemonHackSHA1Hex(Data("cry song\n".utf8)))
+        XCTAssertEqual(plan.candidateSourcePaths, [
+            "sound/direct_sound_samples/cries/*",
+            "sound/songs/mus_cry*.s",
+            "sound/songs/mus_cry*.inc"
+        ])
+        XCTAssertTrue(plan.replacementConstraints.contains("Replacement is future-only and must target an existing local source file reported in sourceFiles."))
+        XCTAssertTrue(plan.replacementConstraints.contains("Replacement must be one-for-one with the same project-relative path and source kind."))
+        XCTAssertTrue(plan.replacementConstraints.contains("Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, and source mutation apply are disabled."))
+        XCTAssertEqual(plan.blockedReasons, [])
         XCTAssertTrue(plan.plannedChanges.contains("Keep generated audio artifacts and ROM output unchanged."))
         XCTAssertTrue(plan.blockedActions.contains("Audio conversion"))
-        XCTAssertTrue(plan.blockedActions.contains("Mutation apply"))
+        XCTAssertTrue(plan.blockedActions.contains("Generated audio output writes"))
+        XCTAssertTrue(plan.blockedActions.contains("Playback"))
+        XCTAssertTrue(plan.blockedActions.contains("ROM export"))
+        XCTAssertTrue(plan.blockedActions.contains("Binary mutation"))
+        XCTAssertTrue(plan.blockedActions.contains("Source mutation apply"))
         XCTAssertTrue(cries.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY" })
     }
 
@@ -557,6 +668,38 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             return PokemonDataCompatibilityEntry(surface: surface, status: .blocked, adapterID: "", adapterName: "", profile: .unknown)
         }
         return entry
+    }
+
+    private func assertStaleLearnablesDiagnostic(
+        in entry: PokemonDataCompatibilityEntry,
+        sourcePath: String,
+        surfaceName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let diagnostic = entry.diagnostics.first { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" }
+        XCTAssertEqual(diagnostic?.severity, .warning, file: file, line: line)
+        XCTAssertEqual(diagnostic?.span?.relativePath, sourcePath, file: file, line: line)
+        XCTAssertTrue(diagnostic?.message.contains(surfaceName) == true, file: file, line: line)
+        XCTAssertTrue(diagnostic?.message.contains(sourcePath) == true, file: file, line: line)
+        XCTAssertTrue(diagnostic?.message.contains("src/data/pokemon/all_learnables.json") == true, file: file, line: line)
+    }
+
+    private func assertBlockedGeneratedLearnsetRows(
+        in entry: PokemonDataCompatibilityEntry,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let sourceTables = entry.sourceTables ?? []
+        XCTAssertTrue(sourceTables.contains { table in
+            table.path == "src/data/pokemon/all_learnables.json"
+                && table.status == .blocked
+                && table.note?.contains("context and freshness reporting only") == true
+                && table.note?.contains("refresh must happen outside PokemonHackStudio") == true
+        }, file: file, line: line)
+        XCTAssertTrue(sourceTables.contains { $0.path == "generated" && $0.status == .blocked }, file: file, line: line)
+        XCTAssertTrue(sourceTables.contains { $0.path.hasPrefix("references/pokeemerald-expansion/") && $0.status == .blocked }, file: file, line: line)
+        XCTAssertTrue(sourceTables.contains { $0.path == "ROM output" && $0.status == .blocked }, file: file, line: line)
     }
 
     private func makeClassicProject(at root: URL, profile: GameProfile) throws {
@@ -1218,5 +1361,12 @@ final class PokemonDataCompatibilityTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func setModificationDate(_ date: Date, for relativePath: String, under root: URL) throws {
+        try FileManager.default.setAttributes(
+            [.modificationDate: date],
+            ofItemAtPath: root.appendingPathComponent(relativePath).path
+        )
     }
 }

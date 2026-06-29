@@ -648,6 +648,20 @@ enum ValidationTier: String, CaseIterable, Identifiable {
     }
 }
 
+struct ValidationTierCommandRow: Identifiable, Equatable {
+    let tier: ValidationTier
+
+    var id: String { tier.id }
+    var title: String { tier.title }
+    var command: String { tier.command }
+    var runStateTitle: String { "Run manually" }
+    var canRunInApp: Bool { false }
+    var canCopyCommand: Bool { true }
+    var disabledReason: String {
+        "Validation commands are copy-only in PokemonHackStudio; run this command from the repository root in Terminal."
+    }
+}
+
 enum ScriptReadinessTargetMode: String, CaseIterable, Identifiable {
     case map = "Map"
     case script = "Script"
@@ -2223,6 +2237,7 @@ struct NDSDataResourceEditorViewState {
     let recordID: String
     let text: String
     let semanticFields: [NDSDataSemanticFieldViewState]
+    let readiness: NDSDataResourceReadinessViewState
     let canEdit: Bool
     let isDirty: Bool
     let isHiddenByFilters: Bool
@@ -2235,6 +2250,63 @@ struct NDSDataResourceEditorViewState {
     let canDiscard: Bool
     let blockedReason: String?
     let applyBlockedReason: String?
+}
+
+struct NDSDataResourceReadinessViewState {
+    let rawSource: NDSDataResourceReadinessFacetViewState
+    let semanticSource: NDSDataResourceReadinessFacetViewState
+    let draft: NDSDataResourceReadinessFacetViewState
+    let mutationPlan: NDSDataResourceReadinessFacetViewState
+    let blockers: [NDSDataResourceBlockerViewState]
+
+    var facts: [Fact] {
+        var values = [
+            Fact(label: rawSource.title, value: rawSource.value),
+            Fact(label: semanticSource.title, value: semanticSource.value),
+            Fact(label: draft.title, value: draft.value),
+            Fact(label: mutationPlan.title, value: mutationPlan.value),
+        ]
+        if let firstBlocker {
+            values.append(Fact(label: "Blocker", value: firstBlocker.title))
+        }
+        return values
+    }
+
+    var guidedFacts: [Fact] {
+        var values = [
+            Fact(label: "NDS Draft", value: draft.value),
+            Fact(label: "NDS Semantic", value: semanticSource.value),
+            Fact(label: "NDS Plan", value: mutationPlan.value),
+        ]
+        if let firstBlocker {
+            values.append(Fact(label: "NDS Blocker", value: firstBlocker.title))
+        }
+        return values
+    }
+
+    var firstBlocker: NDSDataResourceBlockerViewState? {
+        blockers.first
+    }
+
+    var hasBlockingReasons: Bool {
+        !blockers.isEmpty
+    }
+}
+
+struct NDSDataResourceReadinessFacetViewState: Identifiable {
+    let id: String
+    let title: String
+    let value: String
+    let detail: String
+    let status: ValidationState
+}
+
+struct NDSDataResourceBlockerViewState: Identifiable {
+    let id: String
+    let code: String
+    let title: String
+    let message: String
+    let status: ValidationState
 }
 
 struct NDSDataSemanticFieldViewState: Identifiable {

@@ -87,7 +87,10 @@ public struct GBACryAudioSourceFile: Codable, Equatable {
 public struct GBACryAudioMutationPlan: Codable, Equatable {
     public let status: GBACryAudioMutationPlanStatus
     public let summary: String
+    public let candidateSourcePaths: [String]
     public let sourceFiles: [GBACryAudioSourceFile]
+    public let replacementConstraints: [String]
+    public let blockedReasons: [String]
     public let plannedChanges: [String]
     public let blockedActions: [String]
     public let diagnostics: [Diagnostic]
@@ -95,14 +98,20 @@ public struct GBACryAudioMutationPlan: Codable, Equatable {
     public init(
         status: GBACryAudioMutationPlanStatus,
         summary: String,
+        candidateSourcePaths: [String],
         sourceFiles: [GBACryAudioSourceFile],
+        replacementConstraints: [String],
+        blockedReasons: [String],
         plannedChanges: [String],
         blockedActions: [String],
         diagnostics: [Diagnostic]
     ) {
         self.status = status
         self.summary = summary
+        self.candidateSourcePaths = candidateSourcePaths
         self.sourceFiles = sourceFiles
+        self.replacementConstraints = replacementConstraints
+        self.blockedReasons = blockedReasons
         self.plannedChanges = plannedChanges
         self.blockedActions = blockedActions
         self.diagnostics = diagnostics
@@ -208,10 +217,10 @@ public enum PokemonDataCompatibilityReportBuilder {
         entries.append(speciesEntry(index: index, catalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(movesEntry(index: index, catalog: moveCatalog, sourceIndex: sourceIndex))
         entries.append(itemsEntry(index: index, catalog: itemCatalog, sourceIndex: sourceIndex))
-        entries.append(learnsetEntry(surface: .levelUpLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
-        entries.append(learnsetEntry(surface: .tmhmLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
-        entries.append(learnsetEntry(surface: .eggMoves, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
-        entries.append(learnsetEntry(surface: .tutorLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
+        entries.append(learnsetEntry(surface: .levelUpLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
+        entries.append(learnsetEntry(surface: .tmhmLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
+        entries.append(learnsetEntry(surface: .eggMoves, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
+        entries.append(learnsetEntry(surface: .tutorLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
         entries.append(evolutionsEntry(index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(pokedexEntry(index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex))
         entries.append(assetsEntry(index: index, assetCatalog: assetCatalog))
@@ -316,7 +325,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         surface: PokemonDataCompatibilitySurface,
         index: ProjectIndex,
         speciesCatalog: ProjectSpeciesCatalog?,
-        sourceIndex: ProjectSourceIndex
+        sourceIndex: ProjectSourceIndex,
+        fileManager: FileManager
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: surface, profile: index.profile)
         let indexed: Int
@@ -389,6 +399,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             editableCount: editable,
             unsupportedFields: learnsetUnsupportedFields(surface: surface, profile: index.profile),
             recommendedFutureRow: editable > 0 ? nil : descriptor?.recommendedFutureRow,
+            diagnostics: expansionLearnsetGeneratedStalenessDiagnostics(surface: surface, index: index, fileManager: fileManager),
             sourceTables: sourceTables
         )
     }
@@ -458,8 +469,8 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptor: descriptor,
             indexedCount: count,
             editableCount: 0,
-            unsupportedFields: ["audio conversion", "generated audio output writes", "ROM cry table rewrites", "playback", "mutation apply"],
-            blockedReason: count == 0 ? "No explicit local GBA cry source files were detected for this fixture/profile." : nil,
+            unsupportedFields: ["audio conversion", "generated audio output writes", "ROM cry table rewrites", "playback", "binary mutation", "source mutation apply"],
+            blockedReason: count == 0 ? plan.blockedReasons.joined(separator: " ") : nil,
             recommendedFutureRow: nil,
             diagnostics: plan.diagnostics,
             cryAudioPlan: plan
@@ -906,7 +917,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: nil,
                 indexedCount: allLearnablesCount,
                 status: .blocked,
-                note: "Generated/all-learnables JSON remains indexed for context only; apply is blocked."
+                note: "Generated/all-learnables JSON remains indexed for context and freshness reporting only; apply is blocked and refresh must happen outside PokemonHackStudio."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
@@ -977,7 +988,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: nil,
                 indexedCount: allLearnablesCount,
                 status: .blocked,
-                note: "Generated/all-learnables JSON remains indexed for context only; apply is blocked."
+                note: "Generated/all-learnables JSON remains indexed for context and freshness reporting only; apply is blocked and refresh must happen outside PokemonHackStudio."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
@@ -1037,7 +1048,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: nil,
                 indexedCount: 0,
                 status: .blocked,
-                note: "Generated/all-learnables JSON remains indexed for context only; apply is blocked."
+                note: "Generated/all-learnables JSON remains indexed for context and freshness reporting only; apply is blocked and refresh must happen outside PokemonHackStudio."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
@@ -1229,6 +1240,107 @@ public enum PokemonDataCompatibilityReportBuilder {
         }.count
     }
 
+    private static func expansionLearnsetGeneratedStalenessDiagnostics(
+        surface: PokemonDataCompatibilitySurface,
+        index: ProjectIndex,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        guard index.profile == .pokeemeraldExpansion,
+              [.levelUpLearnsets, .tmhmLearnsets, .tutorLearnsets].contains(surface)
+        else {
+            return []
+        }
+
+        let generatedPath = "src/data/pokemon/all_learnables.json"
+        let root = URL(fileURLWithPath: index.root.path)
+        guard let generatedModifiedAt = modificationDate(for: generatedPath, root: root, fileManager: fileManager) else {
+            return []
+        }
+
+        let staleSources = learnsetSourcePaths(for: surface, root: root, fileManager: fileManager)
+            .compactMap { path -> (path: String, modifiedAt: Date)? in
+                guard let modifiedAt = modificationDate(for: path, root: root, fileManager: fileManager),
+                      modifiedAt > generatedModifiedAt
+                else {
+                    return nil
+                }
+                return (path, modifiedAt)
+            }
+            .sorted { lhs, rhs in
+                if lhs.modifiedAt == rhs.modifiedAt {
+                    return lhs.path < rhs.path
+                }
+                return lhs.modifiedAt > rhs.modifiedAt
+            }
+
+        guard let newest = staleSources.first else { return [] }
+        let surfaceLabel: String
+        switch surface {
+        case .levelUpLearnsets:
+            surfaceLabel = "Expansion level-up learnset"
+        case .tmhmLearnsets:
+            surfaceLabel = "Expansion TM/HM learnset"
+        case .tutorLearnsets:
+            surfaceLabel = "Expansion tutor learnset"
+        default:
+            surfaceLabel = "Expansion learnset"
+        }
+        let suffix = staleSources.count == 1 ? "" : " and \(staleSources.count - 1) other source file(s)"
+        return [
+            Diagnostic(
+                severity: .warning,
+                code: "GBA_EXPANSION_LEARNSET_GENERATED_STALE",
+                message: "\(surfaceLabel) source \(newest.path)\(suffix) is newer than \(generatedPath); refresh generated learnset artifacts outside PokemonHackStudio before relying on generated learnables.",
+                span: SourceSpan(relativePath: newest.path, startLine: 1)
+            )
+        ]
+    }
+
+    private static func learnsetSourcePaths(
+        for surface: PokemonDataCompatibilitySurface,
+        root: URL,
+        fileManager: FileManager
+    ) -> [String] {
+        switch surface {
+        case .levelUpLearnsets:
+            var paths = ["src/data/pokemon/level_up_learnsets.h"].filter {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+            let directoryPath = "src/data/pokemon/level_up_learnsets"
+            let directory = root.appendingPathComponent(directoryPath)
+            if let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let url as URL in enumerator {
+                    guard url.pathExtension.lowercased() == "h",
+                          (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true
+                    else {
+                        continue
+                    }
+                    paths.append(relativePath(for: url, root: root))
+                }
+            }
+            return Array(Set(paths)).sorted()
+        case .tmhmLearnsets:
+            return ["src/data/pokemon/tmhm_learnsets.h"].filter {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+        case .tutorLearnsets:
+            return ["src/data/pokemon/tutor_learnsets.h"].filter {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+        default:
+            return []
+        }
+    }
+
+    private static func modificationDate(for relativePath: String, root: URL, fileManager: FileManager) -> Date? {
+        let path = root.appendingPathComponent(relativePath).path
+        return (try? fileManager.attributesOfItem(atPath: path)[.modificationDate]) as? Date
+    }
+
     private static func existingPaths(_ paths: [String], root: String, fileManager: FileManager) -> [String] {
         let rootURL = URL(fileURLWithPath: root)
         return paths.filter { fileManager.fileExists(atPath: rootURL.appendingPathComponent($0).path) }
@@ -1237,19 +1349,37 @@ public enum PokemonDataCompatibilityReportBuilder {
     private static func cryAudioPlan(index: ProjectIndex, fileManager: FileManager) -> GBACryAudioMutationPlan {
         let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
         let sourceFiles = cryAudioSourceFiles(root: root, fileManager: fileManager)
+        let candidateSourcePaths = [
+            "sound/direct_sound_samples/cries/*",
+            "sound/songs/mus_cry*.s",
+            "sound/songs/mus_cry*.inc"
+        ]
+        let replacementConstraints = [
+            "Replacement is future-only and must target an existing local source file reported in sourceFiles.",
+            "Replacement must be one-for-one with the same project-relative path and source kind.",
+            "Missing cry source insertion and directory creation are disabled.",
+            "Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, and source mutation apply are disabled."
+        ]
         let blockedActions = [
             "Audio conversion",
             "Generated audio output writes",
-            "Build artifact writes",
             "Playback",
             "ROM export",
-            "Mutation apply"
+            "Binary mutation",
+            "Source mutation apply"
         ]
         if sourceFiles.isEmpty {
+            let blockedReasons = [
+                "No existing local files matched sound/direct_sound_samples/cries/*.",
+                "No existing local files matched sound/songs/mus_cry*.s or sound/songs/mus_cry*.inc."
+            ]
             return GBACryAudioMutationPlan(
                 status: .blocked,
                 summary: "No mutation plan is available because no explicit local GBA cry source files were found.",
+                candidateSourcePaths: candidateSourcePaths,
                 sourceFiles: [],
+                replacementConstraints: replacementConstraints,
+                blockedReasons: blockedReasons,
                 plannedChanges: [],
                 blockedActions: blockedActions,
                 diagnostics: [
@@ -1266,8 +1396,11 @@ public enum PokemonDataCompatibilityReportBuilder {
         let previewCount = sourceFiles.count == 1 ? "1 source file" : "\(sourceFiles.count) source files"
         return GBACryAudioMutationPlan(
             status: .previewOnly,
-            summary: "Detected \(previewCount) for source-backed GBA cry/audio review. Replacement, conversion, generated outputs, playback, ROM export, and mutation apply remain disabled.",
+            summary: "Detected \(previewCount) for source-backed GBA cry/audio review. Replacement, conversion, generated outputs, playback, ROM export, binary mutation, and source mutation apply remain disabled.",
+            candidateSourcePaths: candidateSourcePaths,
             sourceFiles: sourceFiles,
+            replacementConstraints: replacementConstraints,
+            blockedReasons: [],
             plannedChanges: [
                 "Review existing cry source provenance, size, and SHA1 before any future edit.",
                 "Stage only one-for-one source-file replacement after a dedicated cry import row defines validation.",

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 
@@ -33,6 +34,33 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
                 "make validate-release-candidate"
             ]
         )
+    }
+
+    @MainActor
+    func testValidationTierCommandRowsStayCopyOnlyAndManual() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        let rows = store.validationTierCommandRows
+
+        XCTAssertEqual(rows.map(\.command), ValidationTier.allCases.map(\.command))
+        XCTAssertEqual(rows.map(\.title), ValidationTier.allCases.map(\.title))
+        XCTAssertTrue(rows.allSatisfy(\.canCopyCommand))
+        XCTAssertTrue(rows.allSatisfy { !$0.canRunInApp })
+        XCTAssertTrue(rows.allSatisfy { $0.runStateTitle == "Run manually" })
+        XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("copy-only") })
+        XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("repository root") })
+    }
+
+    @MainActor
+    func testValidationTierCommandCopyWritesExactCommand() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        let synthetic = try XCTUnwrap(store.validationTierCommandRows.first { $0.tier == .synthetic })
+
+        NSPasteboard.general.clearContents()
+        store.copyValidationTierCommandToPasteboard(synthetic)
+
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "make validate-synthetic")
     }
 
     @MainActor

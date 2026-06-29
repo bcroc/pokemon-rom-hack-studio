@@ -1276,6 +1276,10 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    var validationTierCommandRows: [ValidationTierCommandRow] {
+        ValidationTier.allCases.map(ValidationTierCommandRow.init(tier:))
+    }
+
     var fixtureBuildWorkflowActions: [BuildWorkflowActionViewState] {
         Self.buildWorkflowActions(canRunBuild: false, isBuildRunning: false, canLaunchPlaytest: false, canApplyExportPatch: false, includePatchActions: false)
             .map { action in
@@ -1409,8 +1413,11 @@ final class WorkbenchStore: ObservableObject {
     var currentModuleEditorSession: ModuleEditorSession {
         let state = toolbarMutationState
         let object = currentEditorObject
+        let ndsReadiness = selection == .resources ? selectedNDSDataEditor?.readiness : nil
         let stage: ModuleEditorMutationStage
-        if state.canApply {
+        if ndsReadiness?.hasBlockingReasons == true {
+            stage = .blocked
+        } else if state.canApply {
             stage = .previewReady
         } else if state.canPreview || state.canDiscard {
             stage = .draftReady
@@ -1425,6 +1432,8 @@ final class WorkbenchStore: ObservableObject {
             nextAction = "Preview \(state.title)"
         } else if state.canDiscard {
             nextAction = "Discard \(state.title)"
+        } else if let blocker = ndsReadiness?.firstBlocker {
+            nextAction = "Review \(blocker.title)"
         } else {
             nextAction = state.previewBlockedReason ?? "Select an editable object"
         }
@@ -1439,7 +1448,7 @@ final class WorkbenchStore: ObservableObject {
             canDiscard: state.canDiscard,
             stage: stage,
             nextActionTitle: nextAction,
-            blockedReason: state.previewBlockedReason ?? state.applyBlockedReason,
+            blockedReason: ndsReadiness?.firstBlocker?.message ?? state.previewBlockedReason ?? state.applyBlockedReason,
             diagnosticsCount: currentModuleDiagnosticCount
         )
     }
@@ -1875,15 +1884,44 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var selectedNDSDataEditor: NDSDataResourceEditorViewState? {
-        guard let asset = selectedResourceAsset, let recordID = ndsDataRecordID(fromAssetID: asset.id) else {
+        guard
+            let asset = selectedResourceAsset,
+            let recordID = ndsDataRecordID(fromAssetID: asset.id),
+            let catalog = selectedNDSDataCatalog,
+            let record = catalog.records.first(where: { $0.id == recordID })
+        else {
             return nil
         }
-        let canEdit = selectedNDSDataCanEditSourceText
-        let sourceText = selectedNDSDataSourceText ?? ""
+        let editabilityDiagnostics = PokemonHackCore.NDSDataMutationPlanner.editabilityDiagnostics(
+            catalog: catalog,
+            recordID: recordID,
+            fileManager: fileManager
+        )
+        let canEdit = editabilityDiagnostics.allSatisfy { $0.severity != .error }
+        let sourceText = PokemonHackCore.NDSDataMutationPlanner.sourceText(
+            catalog: catalog,
+            recordID: recordID,
+            fileManager: fileManager
+        ) ?? ""
         let draftText = selectedNDSDataDraft?.editedText ?? sourceText
         let isDirty = selectedNDSDataIsDirty
         let isHiddenByFilters = isDirty && !filteredResourceAssetRows.contains { $0.id == asset.id }
-        let semanticFields = selectedNDSDataSemanticFields(sourceText: draftText)
+        let semanticSnapshot = PokemonHackCore.NDSDataSemanticEditor.snapshot(
+            catalog: catalog,
+            recordID: recordID,
+            fileManager: fileManager
+        )
+        let semanticFields = semanticSnapshot.canEdit
+            ? PokemonHackCore.NDSDataSemanticEditor.fields(sourceText: draftText, recordID: recordID, record: record).map {
+                NDSDataSemanticFieldViewState(
+                    id: $0.id,
+                    key: $0.key,
+                    label: $0.label,
+                    value: $0.value,
+                    valueKind: $0.valueKind.rawValue
+                )
+            }
+            : []
         let lensSummary: String
         if !semanticFields.isEmpty {
             lensSummary = "\(semanticFields.count) semantic field(s) available; raw UTF-8 source remains the apply target."
@@ -1892,11 +1930,24 @@ final class WorkbenchStore: ObservableObject {
         } else {
             lensSummary = "This NDS data row stays read-only in the current Resources editing slice."
         }
+        let readiness = ndsDataReadinessViewState(
+            editabilityDiagnostics: editabilityDiagnostics,
+            semanticSnapshot: semanticSnapshot,
+            semanticFieldCount: semanticFields.count,
+            canEdit: canEdit,
+            isDirty: isDirty,
+            isHiddenByFilters: isHiddenByFilters,
+            canPreview: canPreviewSelectedNDSDataMutationPlan,
+            canApply: canApplySelectedNDSDataMutationPlan,
+            sourceByteCount: sourceText.data(using: .utf8)?.count ?? 0,
+            draftByteCount: draftText.data(using: .utf8)?.count ?? 0
+        )
         return NDSDataResourceEditorViewState(
             assetID: asset.id,
             recordID: recordID,
             text: draftText,
             semanticFields: semanticFields,
+            readiness: readiness,
             canEdit: canEdit,
             isDirty: isDirty,
             isHiddenByFilters: isHiddenByFilters,
@@ -1909,6 +1960,189 @@ final class WorkbenchStore: ObservableObject {
             canDiscard: canDiscardNDSDataEdits,
             blockedReason: ndsDataPreviewBlockedReason,
             applyBlockedReason: ndsDataApplyBlockedReason
+        )
+    }
+
+    private func ndsDataReadinessViewState(
+        editabilityDiagnostics: [PokemonHackCore.Diagnostic],
+        semanticSnapshot: PokemonHackCore.NDSDataSemanticSnapshot,
+        semanticFieldCount: Int,
+        canEdit: Bool,
+        isDirty: Bool,
+        isHiddenByFilters: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        sourceByteCount: Int,
+        draftByteCount: Int
+    ) -> NDSDataResourceReadinessViewState {
+        let blockers = editabilityDiagnostics
+            .filter { $0.severity == .error }
+            .map(ndsDataResourceBlocker(from:))
+        let firstEditabilityError = editabilityDiagnostics.first { $0.severity == .error }
+
+        let rawSource = NDSDataResourceReadinessFacetViewState(
+            id: "raw-source",
+            title: "Raw Source",
+            value: canEdit ? "Editable UTF-8" : "Blocked",
+            detail: canEdit
+                ? "Source text is readable and eligible for the existing NDS mutation-plan gate."
+                : (firstEditabilityError?.message ?? "Raw source editing is blocked for this NDS row."),
+            status: canEdit ? .valid : .error
+        )
+
+        let semanticError = semanticSnapshot.diagnostics.first { $0.severity == .error }
+        let semanticSource: NDSDataResourceReadinessFacetViewState
+        if semanticSnapshot.canEdit {
+            semanticSource = NDSDataResourceReadinessFacetViewState(
+                id: "semantic-source",
+                title: "Semantic Source",
+                value: "\(semanticFieldCount) field(s)",
+                detail: "Semantic controls lower into the same raw NDS source mutation-plan gate.",
+                status: .valid
+            )
+        } else if !canEdit {
+            semanticSource = NDSDataResourceReadinessFacetViewState(
+                id: "semantic-source",
+                title: "Semantic Source",
+                value: "Blocked",
+                detail: semanticError?.message ?? firstEditabilityError?.message ?? "Semantic editing is blocked for this row.",
+                status: .error
+            )
+        } else {
+            semanticSource = NDSDataResourceReadinessFacetViewState(
+                id: "semantic-source",
+                title: "Semantic Source",
+                value: "Unavailable",
+                detail: semanticError?.message ?? "No semantic fields are available for this row; raw source editing remains available.",
+                status: .warning
+            )
+        }
+
+        let draft: NDSDataResourceReadinessFacetViewState
+        if let result = latestNDSDataApplyResult, !result.appliedChanges.isEmpty {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: "Applied",
+                detail: "Latest NDS mutation plan applied \(result.appliedChanges.count) source file change(s).",
+                status: .valid
+            )
+        } else if latestNDSDataEditPlan != nil {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: canApply ? "Previewed" : "Preview blocked",
+                detail: ndsDataApplyBlockedReason ?? "A previewed NDS mutation plan is available for review.",
+                status: canApply ? .valid : .error
+            )
+        } else if isHiddenByFilters {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: "Hidden draft",
+                detail: "A dirty NDS draft exists outside the current Resources filter or search.",
+                status: .warning
+            )
+        } else if isDirty {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: "Dirty draft",
+                detail: "Draft text differs from the current source text.",
+                status: .warning
+            )
+        } else if canEdit {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: "Clean",
+                detail: "No NDS data draft is staged.",
+                status: .valid
+            )
+        } else {
+            draft = NDSDataResourceReadinessFacetViewState(
+                id: "draft",
+                title: "Draft",
+                value: "No draft",
+                detail: "Blocked NDS rows cannot retain source drafts.",
+                status: .error
+            )
+        }
+
+        let mutationPlan: NDSDataResourceReadinessFacetViewState
+        if canApply {
+            mutationPlan = NDSDataResourceReadinessFacetViewState(
+                id: "mutation-plan",
+                title: "Mutation Plan",
+                value: "Apply ready",
+                detail: "The previewed NDS mutation plan is applyable through the existing gate.",
+                status: .valid
+            )
+        } else if canPreview {
+            mutationPlan = NDSDataResourceReadinessFacetViewState(
+                id: "mutation-plan",
+                title: "Mutation Plan",
+                value: "Preview ready",
+                detail: "A dirty draft can be previewed as an NDS mutation plan.",
+                status: .warning
+            )
+        } else if let blocker = blockers.first {
+            mutationPlan = NDSDataResourceReadinessFacetViewState(
+                id: "mutation-plan",
+                title: "Mutation Plan",
+                value: "Blocked",
+                detail: blocker.message,
+                status: .error
+            )
+        } else {
+            mutationPlan = NDSDataResourceReadinessFacetViewState(
+                id: "mutation-plan",
+                title: "Mutation Plan",
+                value: "Waiting",
+                detail: ndsDataPreviewBlockedReason ?? "Change NDS data text before previewing a mutation plan.",
+                status: .valid
+            )
+        }
+
+        return NDSDataResourceReadinessViewState(
+            rawSource: rawSource,
+            semanticSource: semanticSource,
+            draft: draft,
+            mutationPlan: mutationPlan,
+            blockers: blockers
+        )
+    }
+
+    private func ndsDataResourceBlocker(from diagnostic: PokemonHackCore.Diagnostic) -> NDSDataResourceBlockerViewState {
+        let title: String
+        if diagnostic.code == "NDS_GEN_V_WRITE_BLOCKED" {
+            title = "Gen V preview-only"
+        } else if diagnostic.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" {
+            title = "Reference root"
+        } else if diagnostic.code == "NDS_DATA_EDIT_CONTAINER_BLOCKED" || diagnostic.code.contains("NARC") {
+            title = "Container row"
+        } else if diagnostic.code == "NDS_DATA_EDIT_FORMAT_BLOCKED" {
+            title = "Unsafe format"
+        } else if diagnostic.code == "NDS_DATA_EDIT_ROLE_BLOCKED" {
+            title = diagnostic.message.contains("generatedReference") ? "Generated/reference path" : "Read-only source role"
+        } else if diagnostic.code.contains("_PATH_") {
+            title = "Path safety"
+        } else if diagnostic.code.hasPrefix("NDS_DATA_EDIT_SOURCE_") {
+            title = "Source file"
+        } else if diagnostic.code == "NDS_DATA_EDIT_BINARY_ROM_BLOCKED" {
+            title = "Binary ROM"
+        } else if diagnostic.code == "NDS_DATA_EDIT_SPINOFF_BLOCKED" {
+            title = "Spin-off inventory"
+        } else {
+            title = "NDS write gate"
+        }
+
+        return NDSDataResourceBlockerViewState(
+            id: diagnostic.code,
+            code: diagnostic.code,
+            title: title,
+            message: diagnostic.message,
+            status: Self.validationState(for: diagnostic.severity)
         )
     }
 
@@ -5615,6 +5849,11 @@ final class WorkbenchStore: ObservableObject {
         guard let value = action.copyValue else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    func copyValidationTierCommandToPasteboard(_ row: ValidationTierCommandRow) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(row.command, forType: .string)
     }
 
     func copyGraphicsImportPackagePlanJSONToPasteboard() {

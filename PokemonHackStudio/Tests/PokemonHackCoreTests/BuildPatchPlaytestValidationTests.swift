@@ -337,6 +337,75 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: report.artifactPlan.absoluteOutputPath))
     }
 
+    func testPatchCreationPreviewComparesBaseROMAndBuiltOutputWithoutWritingPatch() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abcd".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let report = try PatchCreationPreviewBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertTrue(report.isPreviewOnly)
+        XCTAssertTrue(report.isReady)
+        XCTAssertEqual(report.candidateFormat, .bps)
+        XCTAssertEqual(report.baseROM.sha1, pokemonHackSHA1Hex(baseData))
+        XCTAssertEqual(report.builtOutput?.sha1, pokemonHackSHA1Hex(builtData))
+        XCTAssertEqual(report.builtOutput?.relativePath, "pokeemerald.gba")
+        XCTAssertEqual(report.sizeDeltaBytes, 1)
+        XCTAssertEqual(report.hashesMatch, false)
+        XCTAssertEqual(report.plannedPatchPath, ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        XCTAssertEqual(report.absolutePlannedPatchPath, root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps").path)
+        XCTAssertFalse(report.headerPolicy.shouldRewriteHeader)
+        XCTAssertTrue(report.blockedActions.contains("BPS/IPS patch file writes"))
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_CREATION_PREVIEW_ONLY" })
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_CREATION_BUILD_OUTPUT_CHECKSUM_FACT" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: report.absolutePlannedPatchPath))
+    }
+
+    func testPatchCreationPreviewBlocksMissingBuiltOutputWithoutWritingPatch() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        let baseData = Data("abc".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let report = try PatchCreationPreviewBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertTrue(report.isPreviewOnly)
+        XCTAssertFalse(report.isReady)
+        XCTAssertEqual(report.candidateFormat, .bps)
+        XCTAssertEqual(report.builtOutput?.relativePath, "pokeemerald.gba")
+        XCTAssertEqual(report.builtOutput?.exists, false)
+        XCTAssertNil(report.builtOutput?.sha1)
+        XCTAssertNil(report.sizeDeltaBytes)
+        XCTAssertNil(report.hashesMatch)
+        XCTAssertEqual(report.plannedPatchPath, ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_CREATION_BUILD_OUTPUT_MISSING" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: report.absolutePlannedPatchPath))
+    }
+
     func testPatchManifestBuildsReadonlyBinaryDiffFreeSpaceAndRepointPreview() throws {
         let root = try makeTemporaryRoot()
         var bytes = [UInt8](repeating: 0xFF, count: 0x240)

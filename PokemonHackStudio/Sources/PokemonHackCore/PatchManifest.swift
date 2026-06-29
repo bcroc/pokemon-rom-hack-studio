@@ -74,6 +74,105 @@ public struct PatchSelectedBaseROM: Codable, Equatable {
     }
 }
 
+public struct PatchCreationROMMetadata: Codable, Equatable {
+    public let path: String
+    public let absolutePath: String
+    public let exists: Bool
+    public let sizeBytes: UInt64?
+    public let sha1: String?
+
+    public init(
+        path: String,
+        absolutePath: String,
+        exists: Bool,
+        sizeBytes: UInt64? = nil,
+        sha1: String? = nil
+    ) {
+        self.path = path
+        self.absolutePath = absolutePath
+        self.exists = exists
+        self.sizeBytes = sizeBytes
+        self.sha1 = sha1
+    }
+}
+
+public struct PatchCreationBuiltOutputMetadata: Codable, Equatable {
+    public let targetID: String
+    public let targetName: String
+    public let relativePath: String
+    public let absolutePath: String
+    public let exists: Bool
+    public let sizeBytes: UInt64?
+    public let sha1: String?
+    public let checksumStatus: BuildOutputChecksumStatus
+    public let freshnessStatus: BuildOutputFreshnessStatus
+
+    public init(
+        targetID: String,
+        targetName: String,
+        relativePath: String,
+        absolutePath: String,
+        exists: Bool,
+        sizeBytes: UInt64? = nil,
+        sha1: String? = nil,
+        checksumStatus: BuildOutputChecksumStatus,
+        freshnessStatus: BuildOutputFreshnessStatus
+    ) {
+        self.targetID = targetID
+        self.targetName = targetName
+        self.relativePath = relativePath
+        self.absolutePath = absolutePath
+        self.exists = exists
+        self.sizeBytes = sizeBytes
+        self.sha1 = sha1
+        self.checksumStatus = checksumStatus
+        self.freshnessStatus = freshnessStatus
+    }
+}
+
+public struct PatchCreationPreviewReport: Codable, Equatable {
+    public let isPreviewOnly: Bool
+    public let isReady: Bool
+    public let candidateFormat: PatchFormatID
+    public let baseROM: PatchCreationROMMetadata
+    public let builtOutput: PatchCreationBuiltOutputMetadata?
+    public let sizeDeltaBytes: Int64?
+    public let hashesMatch: Bool?
+    public let plannedPatchPath: String
+    public let absolutePlannedPatchPath: String
+    public let headerPolicy: PatchArtifactHeaderPolicy
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        isPreviewOnly: Bool,
+        isReady: Bool,
+        candidateFormat: PatchFormatID,
+        baseROM: PatchCreationROMMetadata,
+        builtOutput: PatchCreationBuiltOutputMetadata?,
+        sizeDeltaBytes: Int64?,
+        hashesMatch: Bool?,
+        plannedPatchPath: String,
+        absolutePlannedPatchPath: String,
+        headerPolicy: PatchArtifactHeaderPolicy,
+        blockedActions: [String],
+        diagnostics: [Diagnostic]
+    ) {
+        self.isPreviewOnly = isPreviewOnly
+        self.isReady = isReady
+        self.candidateFormat = candidateFormat
+        self.baseROM = baseROM
+        self.builtOutput = builtOutput
+        self.sizeDeltaBytes = sizeDeltaBytes
+        self.hashesMatch = hashesMatch
+        self.plannedPatchPath = plannedPatchPath
+        self.absolutePlannedPatchPath = absolutePlannedPatchPath
+        self.headerPolicy = headerPolicy
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
 public struct PatchArtifactChecksumExpectations: Codable, Equatable {
     public let baseROMSHA1: String?
     public let expectedBaseROMSHA1: String?
@@ -471,6 +570,286 @@ public struct PatchManifestReport: Codable, Equatable {
         self.artifactPlan = artifactPlan
         self.dryRunPlans = dryRunPlans
         self.diagnostics = diagnostics
+    }
+}
+
+public enum PatchCreationPreviewBuilder {
+    public static func build(
+        projectPath: String,
+        baseROMPath: String,
+        targetID: String? = nil,
+        fileManager: FileManager = .default
+    ) throws -> PatchCreationPreviewReport {
+        let index = try GameAdapterRegistry.index(path: projectPath)
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let buildReport = BuildValidationReportBuilder.build(
+            index: index,
+            fileManager: fileManager,
+            toolResolver: { ToolAvailability(name: $0, isAvailable: true) }
+        )
+        let target = selectedTarget(from: buildReport.targets, targetID: targetID)
+        let baseROM = romMetadata(path: baseROMPath, root: root, fileManager: fileManager)
+        let builtOutput = target.flatMap(builtOutputMetadata)
+        let plannedPatchPath = plannedPatchRelativePath(baseROM: baseROM, builtOutput: builtOutput, targetID: targetID)
+        let absolutePlannedPatchPath = root.appendingPathComponent(plannedPatchPath).standardizedFileURL.path
+        var diagnostics = diagnosticsForTargetSelection(
+            targets: buildReport.targets,
+            selectedTarget: target,
+            requestedTargetID: targetID
+        )
+        diagnostics.append(contentsOf: diagnosticsForBaseROM(baseROM))
+        diagnostics.append(contentsOf: diagnosticsForBuiltOutput(builtOutput))
+        if let builtOutput, builtOutput.checksumStatus == .mismatched {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .info,
+                    code: "PATCH_CREATION_BUILD_OUTPUT_CHECKSUM_FACT",
+                    message: "Built output SHA1 differs from its declared expectation; patch creation preview reports this as target metadata and does not block comparison."
+                )
+            )
+        }
+        if fileManager.fileExists(atPath: absolutePlannedPatchPath) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .warning,
+                    code: "PATCH_CREATION_PLANNED_PATCH_EXISTS",
+                    message: "A file already exists at the planned patch path \(absolutePlannedPatchPath); this preview will not overwrite it."
+                )
+            )
+        }
+        diagnostics.append(
+            Diagnostic(
+                severity: .info,
+                code: "PATCH_CREATION_PREVIEW_ONLY",
+                message: "Patch creation is a metadata preview only; no .ips/.bps files, ROMs, manifests, builds, playtests, header rewrites, source mutations, or binary writes are performed."
+            )
+        )
+
+        let sizeDelta = signedDelta(from: baseROM.sizeBytes, to: builtOutput?.sizeBytes)
+        let hashesMatch = hashesMatch(baseROM.sha1, builtOutput?.sha1)
+        if hashesMatch == true {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .info,
+                    code: "PATCH_CREATION_HASHES_MATCH",
+                    message: "Selected base ROM and built output have the same SHA1; a future patch writer would have no changed output bytes to encode."
+                )
+            )
+        }
+
+        let isReady = baseROM.exists
+            && baseROM.sha1 != nil
+            && builtOutput?.exists == true
+            && builtOutput?.sha1 != nil
+        let headerPolicy = PatchArtifactHeaderPolicy(
+            mode: "no-header-rewrite",
+            detail: "Patch creation preview compares the selected base ROM and built output as-is and will not rewrite title, game code, maker code, or header checksum.",
+            shouldRewriteHeader: false
+        )
+        return PatchCreationPreviewReport(
+            isPreviewOnly: true,
+            isReady: isReady,
+            candidateFormat: .bps,
+            baseROM: baseROM,
+            builtOutput: builtOutput,
+            sizeDeltaBytes: sizeDelta,
+            hashesMatch: hashesMatch,
+            plannedPatchPath: plannedPatchPath,
+            absolutePlannedPatchPath: absolutePlannedPatchPath,
+            headerPolicy: headerPolicy,
+            blockedActions: [
+                "BPS/IPS patch file writes",
+                "source mutation",
+                "build execution",
+                "playtest launch",
+                "header rewrite",
+                "ROM export",
+                "binary writes"
+            ],
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func selectedTarget(
+        from targets: [BuildTargetValidation],
+        targetID: String?
+    ) -> BuildTargetValidation? {
+        if let targetID {
+            return targets.first { $0.target.id == targetID }
+        }
+        return targets.first { $0.target.outputPath != nil }
+    }
+
+    private static func romMetadata(path: String, root: URL, fileManager: FileManager) -> PatchCreationROMMetadata {
+        let absoluteURL = resolvedURL(path: path, root: root, fileManager: fileManager)
+        let exists = fileManager.fileExists(atPath: absoluteURL.path)
+        let attributes = try? fileManager.attributesOfItem(atPath: absoluteURL.path)
+        let size = (attributes?[.size] as? NSNumber)?.uint64Value
+        let sha1 = exists ? (try? Data(contentsOf: absoluteURL)).map(pokemonHackSHA1Hex) : nil
+        return PatchCreationROMMetadata(
+            path: path,
+            absolutePath: absoluteURL.path,
+            exists: exists,
+            sizeBytes: size,
+            sha1: sha1
+        )
+    }
+
+    private static func builtOutputMetadata(
+        from target: BuildTargetValidation
+    ) -> PatchCreationBuiltOutputMetadata? {
+        guard let output = target.output else {
+            return nil
+        }
+        return PatchCreationBuiltOutputMetadata(
+            targetID: target.target.id,
+            targetName: target.target.name,
+            relativePath: output.relativePath,
+            absolutePath: output.absolutePath,
+            exists: output.exists,
+            sizeBytes: output.sizeBytes,
+            sha1: output.sha1,
+            checksumStatus: output.checksumStatus,
+            freshnessStatus: output.freshnessStatus
+        )
+    }
+
+    private static func diagnosticsForTargetSelection(
+        targets: [BuildTargetValidation],
+        selectedTarget: BuildTargetValidation?,
+        requestedTargetID: String?
+    ) -> [Diagnostic] {
+        if let requestedTargetID, selectedTarget == nil {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BUILD_TARGET_NOT_FOUND",
+                    message: "Build target \(requestedTargetID) was not found for patch creation preview."
+                )
+            ]
+        }
+        guard !targets.isEmpty else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BUILD_TARGET_MISSING",
+                    message: "No build targets are declared for patch creation preview."
+                )
+            ]
+        }
+        if selectedTarget?.target.outputPath == nil {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BUILD_OUTPUT_NOT_DECLARED",
+                    message: "Selected build target does not declare an output path for patch creation preview."
+                )
+            ]
+        }
+        return []
+    }
+
+    private static func diagnosticsForBaseROM(_ baseROM: PatchCreationROMMetadata) -> [Diagnostic] {
+        guard baseROM.exists else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BASE_ROM_MISSING",
+                    message: "Selected base ROM does not exist at \(baseROM.absolutePath)."
+                )
+            ]
+        }
+        guard baseROM.sha1 != nil else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BASE_ROM_UNREADABLE",
+                    message: "Selected base ROM exists but could not be read for SHA1 at \(baseROM.absolutePath)."
+                )
+            ]
+        }
+        return []
+    }
+
+    private static func diagnosticsForBuiltOutput(_ builtOutput: PatchCreationBuiltOutputMetadata?) -> [Diagnostic] {
+        guard let builtOutput else {
+            return []
+        }
+        guard builtOutput.exists else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BUILD_OUTPUT_MISSING",
+                    message: "Built output does not exist at \(builtOutput.absolutePath)."
+                )
+            ]
+        }
+        guard builtOutput.sha1 != nil else {
+            return [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_CREATION_BUILD_OUTPUT_UNREADABLE",
+                    message: "Built output exists but could not be read for SHA1 at \(builtOutput.absolutePath)."
+                )
+            ]
+        }
+        return []
+    }
+
+    private static func plannedPatchRelativePath(
+        baseROM: PatchCreationROMMetadata,
+        builtOutput: PatchCreationBuiltOutputMetadata?,
+        targetID: String?
+    ) -> String {
+        let baseStem = sanitizedArtifactComponent(
+            URL(fileURLWithPath: baseROM.absolutePath).deletingPathExtension().lastPathComponent,
+            fallback: "base"
+        )
+        let outputSource = builtOutput?.relativePath
+            ?? targetID
+            ?? "built-output"
+        let outputStem = sanitizedArtifactComponent(
+            URL(fileURLWithPath: outputSource).deletingPathExtension().lastPathComponent,
+            fallback: "built-output"
+        )
+        return ".pokemonhackstudio/patches/\(baseStem)-to-\(outputStem).bps"
+    }
+
+    private static func signedDelta(from baseSize: UInt64?, to outputSize: UInt64?) -> Int64? {
+        guard let baseSize, let outputSize,
+              baseSize <= UInt64(Int64.max),
+              outputSize <= UInt64(Int64.max)
+        else {
+            return nil
+        }
+        return Int64(outputSize) - Int64(baseSize)
+    }
+
+    private static func hashesMatch(_ lhs: String?, _ rhs: String?) -> Bool? {
+        guard let lhs, let rhs else {
+            return nil
+        }
+        return lhs.lowercased() == rhs.lowercased()
+    }
+
+    private static func resolvedURL(path: String, root: URL, fileManager: FileManager) -> URL {
+        if path.hasPrefix("/") {
+            return URL(fileURLWithPath: path).standardizedFileURL
+        }
+        let direct = URL(fileURLWithPath: path).standardizedFileURL
+        if fileManager.fileExists(atPath: direct.path) {
+            return direct
+        }
+        return root.appendingPathComponent(path).standardizedFileURL
+    }
+
+    private static func sanitizedArtifactComponent(_ value: String, fallback: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = value.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "-"
+        }
+        let sanitized = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+        return sanitized.isEmpty ? fallback : sanitized
     }
 }
 
@@ -1399,19 +1778,11 @@ public enum PatchManifestBuilder {
     }
 
     private static func crc32Hex(_ data: Data) -> String {
-        String(format: "%08x", crc32(data))
+        pokemonHackCRC32Hex(data)
     }
 
     private static func crc32(_ data: Data) -> UInt32 {
-        var crc: UInt32 = 0xFFFF_FFFF
-        for byte in data {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                let mask = 0 &- (crc & 1)
-                crc = (crc >> 1) ^ (0xEDB8_8320 & mask)
-            }
-        }
-        return ~crc
+        pokemonHackCRC32(data)
     }
 
     private static func readUInt32LE(_ bytes: [UInt8], offset: Int) -> UInt32 {

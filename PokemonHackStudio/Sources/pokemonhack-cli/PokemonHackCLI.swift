@@ -198,10 +198,14 @@ struct PokemonHackCLI {
             return try patchManifest(arguments: Array(arguments.dropFirst()))
         case "patch-artifact-plan":
             return try patchArtifactPlan(arguments: Array(arguments.dropFirst()))
+        case "patch-create-preview":
+            return try patchCreatePreview(arguments: Array(arguments.dropFirst()))
         case "patch-apply-export":
             return try patchApplyExport(arguments: Array(arguments.dropFirst()))
         case "rom-diff-preview":
             return try romDiffPreview(arguments: Array(arguments.dropFirst()))
+        case "rom-mutation-manifest":
+            return try romMutationManifest(arguments: Array(arguments.dropFirst()))
         case "build":
             return try build(arguments: Array(arguments.dropFirst()))
         case "playtest":
@@ -723,6 +727,172 @@ struct PokemonHackCLI {
         )
     }
 
+    private static func romMutationManifest(arguments: [String]) throws -> String {
+        guard arguments.count >= 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        let request = try parseROMMutationManifestArguments(Array(arguments.dropFirst().dropLast()))
+        return try encode(BinaryROMMutationDryRunManifestBuilder.build(path: path, request: request))
+    }
+
+    private static func parseROMMutationManifestArguments(_ arguments: [String]) throws -> BinaryROMMutationDryRunRequest {
+        var expectedSHA1: String?
+        var workspaceRoot: String?
+        var replacements: [BinaryROMMutationReplacementRequest] = []
+        var repoints: [BinaryROMMutationRepointRequest] = []
+        var allocations: [BinaryROMMutationAllocationRequest] = []
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--workspace-root":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                workspaceRoot = arguments[index + 1]
+                index += 2
+            case "--expect-sha1":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                expectedSHA1 = arguments[index + 1]
+                index += 2
+            case "--replace":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                replacements.append(try parseReplacement(arguments[index + 1]))
+                index += 2
+            case "--repoint":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                repoints.append(try parseRepoint(arguments[index + 1]))
+                index += 2
+            case "--allocate":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                allocations.append(try parseAllocation(arguments[index + 1]))
+                index += 2
+            default:
+                throw CLIError.usage
+            }
+        }
+
+        return BinaryROMMutationDryRunRequest(
+            expectedSHA1: expectedSHA1,
+            workspaceRoot: workspaceRoot,
+            replacements: replacements,
+            repoints: repoints,
+            allocations: allocations
+        )
+    }
+
+    private static func parseReplacement(_ text: String) throws -> BinaryROMMutationReplacementRequest {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3,
+              let offset = parseUInt32(parts[0]),
+              let length = parseUInt32(parts[1])
+        else {
+            throw CLIError.usage
+        }
+        return BinaryROMMutationReplacementRequest(
+            offset: offset,
+            length: length,
+            replacementBytes: try parseHexBytes(parts[2])
+        )
+    }
+
+    private static func parseRepoint(_ text: String) throws -> BinaryROMMutationRepointRequest {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2,
+              let pointerOffset = parseUInt32(parts[0]),
+              let newTargetOffset = parseUInt32(parts[1])
+        else {
+            throw CLIError.usage
+        }
+        return BinaryROMMutationRepointRequest(pointerOffset: pointerOffset, newTargetOffset: newTargetOffset)
+    }
+
+    private static func parseAllocation(_ text: String) throws -> BinaryROMMutationAllocationRequest {
+        let parts = text.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 1 || parts.count == 2, let byteCount = parseUInt32(parts[0]) else {
+            throw CLIError.usage
+        }
+        let alignment = parts.count == 2 ? parseUInt32(parts[1]) : 1
+        guard let alignment else {
+            throw CLIError.usage
+        }
+        return BinaryROMMutationAllocationRequest(byteCount: byteCount, alignment: alignment)
+    }
+
+    private static func parseUInt32(_ text: String) -> UInt32? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("0x") {
+            return UInt32(trimmed.dropFirst(2), radix: 16)
+        }
+        return UInt32(trimmed, radix: 10)
+    }
+
+    private static func parseHexBytes(_ text: String) throws -> [UInt8] {
+        let compact = text
+            .filter { !$0.isWhitespace && $0 != "_" }
+            .map(String.init)
+            .joined()
+        guard !compact.isEmpty, compact.count.isMultiple(of: 2) else {
+            throw CLIError.usage
+        }
+
+        var bytes: [UInt8] = []
+        var index = compact.startIndex
+        while index < compact.endIndex {
+            let next = compact.index(index, offsetBy: 2)
+            guard let byte = UInt8(compact[index..<next], radix: 16) else {
+                throw CLIError.usage
+            }
+            bytes.append(byte)
+            index = next
+        }
+        return bytes
+    }
+
+    private static func patchCreatePreview(arguments: [String]) throws -> String {
+        guard arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var targetID: String?
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else if argument == "--target" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                targetID = payload[nextIndex]
+                index += 2
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard positionals.count == 1, let project = positionals.first, let baseROMPath else {
+            throw CLIError.usage
+        }
+        return try encode(
+            PatchCreationPreviewBuilder.build(
+                projectPath: project,
+                baseROMPath: baseROMPath,
+                targetID: targetID
+            )
+        )
+    }
+
     private static func patchApplyExport(arguments: [String]) throws -> String {
         guard arguments.last == "--json" else {
             throw CLIError.usage
@@ -924,8 +1094,10 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
         CLICommandMetadata(name: "patch-manifest", usage: "patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json", summary: "Emit patch manifest compatibility data."),
         CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
+        CLICommandMetadata(name: "patch-create-preview", usage: "patch-create-preview <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Preview BPS patch creation metadata from a selected base ROM to an existing built output without writing patch files."),
         CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
         CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
+        CLICommandMetadata(name: "rom-mutation-manifest", usage: "rom-mutation-manifest <rom-or-source-path> [--workspace-root <path>] [--expect-sha1 <sha1>] [--replace <offset:length:hex>] [--repoint <pointer-offset:new-target-offset>] [--allocate <byte-count[:alignment]>] --json", summary: "Emit a dry-run-only future binary ROM mutation manifest with canApply=false."),
         CLICommandMetadata(name: "build", usage: "build <path> --json", summary: "Emit build validation data without building."),
         CLICommandMetadata(name: "playtest", usage: "playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json", summary: "Preview or run supported mGBA handoff actions."),
         CLICommandMetadata(name: "playtest-debug-plan", usage: "playtest-debug-plan <path> --json", summary: "Preview emulator debugging plans."),

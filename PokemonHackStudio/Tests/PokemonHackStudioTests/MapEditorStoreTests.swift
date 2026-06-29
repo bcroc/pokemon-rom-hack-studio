@@ -686,6 +686,56 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGenVMessageBankInventoryStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let messageBankChild = root.appendingPathComponent("files/msgdata/story/message_bank.txt")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let messageBankRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "files/msgdata"
+                && row.category == "text"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "messageBankInventory" }
+        })
+        XCTAssertEqual(messageBankRootRow.kind, "directory")
+        XCTAssertTrue(messageBankRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertTrue(messageBankRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
+        XCTAssertFalse(messageBankRootRow.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(messageBankRootRow.facts.contains { $0.label == "Text Bank Preview" })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/msgdata/story/message_bank.txt"
+                && row.category == "source"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "messageBankMetadata" }
+                && !row.facts.contains { $0.label == "Text Bank Preview" }
+        })
+
+        store.requestResourceAssetSelection(messageBankRootRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "text:files/msgdata")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(
+            try String(contentsOf: messageBankChild, encoding: .utf8),
+            "Route 1 hello\n"
+        )
+    }
+
+    @MainActor
     func testGenVOverlayAndDisassemblyConfigInventoryStayPreviewOnlyInResourcesSelection() async throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -1047,6 +1097,210 @@ final class MapEditorStoreTests: XCTestCase {
 
         store.discardNDSDataEdits()
         XCTAssertFalse(store.selectedNDSDataIsDirty)
+    }
+
+    @MainActor
+    func testNDSResourceEditorSurfacesRawSemanticDraftAndPlanReadiness() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let speciesRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/pokemon/abra/data.json" })
+
+        store.requestResourceAssetSelection(speciesRow.id)
+
+        var editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "species:res/pokemon/abra/data.json")
+        XCTAssertTrue(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.readiness.rawSource.value, "Editable UTF-8")
+        XCTAssertEqual(editor.readiness.semanticSource.value, "4 field(s)")
+        XCTAssertEqual(editor.readiness.draft.value, "Clean")
+        XCTAssertEqual(editor.readiness.mutationPlan.value, "Waiting")
+        XCTAssertTrue(editor.readiness.blockers.isEmpty)
+
+        store.updateSelectedNDSDataSemanticField(key: "base_hp", value: "26")
+
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(editor.isDirty)
+        XCTAssertTrue(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.readiness.rawSource.value, "Editable UTF-8")
+        XCTAssertEqual(editor.readiness.semanticSource.value, "4 field(s)")
+        XCTAssertEqual(editor.readiness.draft.value, "Dirty draft")
+        XCTAssertEqual(editor.readiness.mutationPlan.value, "Preview ready")
+        XCTAssertTrue(editor.readiness.blockers.isEmpty)
+
+        store.previewSelectedNDSDataMutationPlan()
+
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertNotNil(store.latestNDSDataEditPlan)
+        XCTAssertTrue(editor.canApply)
+        XCTAssertEqual(editor.readiness.draft.value, "Previewed")
+        XCTAssertEqual(editor.readiness.mutationPlan.value, "Apply ready")
+        XCTAssertTrue(editor.readiness.blockers.isEmpty)
+    }
+
+    @MainActor
+    func testNDSResourceEditorExplainsBlockedResourceRows() async throws {
+        func makeStore(root: URL) -> WorkbenchStore {
+            let defaults = UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)")!
+            let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+            store.openProject(path: root.path)
+            store.selectWorkbenchModule(.resources)
+            return store
+        }
+
+        func selectBlockedRow(
+            in store: WorkbenchStore,
+            path: String,
+            expectedTitle: String
+        ) async throws -> NDSDataResourceEditorViewState {
+            store.loadSelectedAssetCatalogIfNeeded()
+            let assetCatalog = try await waitForSelectedAssetCatalog(store)
+            let row = try XCTUnwrap(assetCatalog.rows.first { $0.path == path }, path)
+            store.requestResourceAssetSelection(row.id)
+
+            let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+            XCTAssertFalse(editor.canEdit, path)
+            XCTAssertFalse(editor.canPreview, path)
+            XCTAssertFalse(editor.canApply, path)
+            XCTAssertEqual(editor.readiness.rawSource.value, "Blocked", path)
+            XCTAssertEqual(editor.readiness.mutationPlan.value, "Blocked", path)
+            XCTAssertTrue(editor.readiness.blockers.contains { $0.title == expectedTitle }, "\(path): \(editor.readiness.blockers.map(\.title))")
+
+            store.updateSelectedNDSDataDraftText("changed\n")
+            XCTAssertNil(store.selectedNDSDataDraft, path)
+            XCTAssertNil(store.latestNDSDataEditPlan, path)
+            XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan, path)
+
+            return editor
+        }
+
+        let genVTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(genVTemp)
+        let genVRoot = genVTemp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: genVRoot)
+        let genVStore = makeStore(root: genVRoot)
+        _ = try await selectBlockedRow(
+            in: genVStore,
+            path: "data/encounters/route_1.txt",
+            expectedTitle: "Gen V preview-only"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: genVRoot.appendingPathComponent("data/encounters/route_1.txt"), encoding: .utf8),
+            "encounter\n"
+        )
+
+        let referenceTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(referenceTemp)
+        let referenceRoot = referenceTemp.url.appendingPathComponent("references/pokeplatinum")
+        try makeNDSPlatinumSourceProject(at: referenceRoot)
+        let referenceStore = makeStore(root: referenceRoot)
+        _ = try await selectBlockedRow(
+            in: referenceStore,
+            path: "res/pokemon/abra/data.json",
+            expectedTitle: "Reference root"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: referenceRoot.appendingPathComponent("res/pokemon/abra/data.json"), encoding: .utf8),
+            "{\"base_hp\":25,\"evolutions\":[[\"EVO_LEVEL\",16,\"SPECIES_KADABRA\"]]}\n"
+        )
+
+        let platinumRoot = try makeNDSPlatinumSourceProject()
+        try write("generated\n", to: platinumRoot.appendingPathComponent("generated/species.txt"))
+        let platinumStore = makeStore(root: platinumRoot)
+
+        let containerEditor = try await selectBlockedRow(
+            in: platinumStore,
+            path: "res/prebuilt/poketool/personal/personal.narc",
+            expectedTitle: "Container row"
+        )
+        XCTAssertTrue(containerEditor.readiness.blockers.contains { $0.title == "Unsafe format" })
+
+        _ = try await selectBlockedRow(
+            in: platinumStore,
+            path: "res/field/maps/route201/map.bin",
+            expectedTitle: "Unsafe format"
+        )
+
+        _ = try await selectBlockedRow(
+            in: platinumStore,
+            path: "generated/species.txt",
+            expectedTitle: "Generated/reference path"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: platinumRoot.appendingPathComponent("generated/species.txt"), encoding: .utf8),
+            "generated\n"
+        )
+    }
+
+    @MainActor
+    func testResourcesGuidedFlowSurfacesNDSDraftReadinessAndBlockers() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let speciesRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "res/pokemon/abra/data.json" })
+        store.requestResourceAssetSelection(speciesRow.id)
+        store.updateSelectedNDSDataSemanticField(key: "base_hp", value: "26")
+
+        var session = store.currentModuleEditorSession
+        XCTAssertEqual(session.stage, .draftReady)
+        XCTAssertTrue(session.canPreview)
+        XCTAssertEqual(session.nextActionTitle, "Preview NDS Data Changes")
+
+        var resourcesFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "resources-assets" })
+        XCTAssertEqual(resourcesFlow.run.state, .needsPreview)
+        XCTAssertEqual(resourcesFlow.run.mutationGate, "NDS Data: Preview -> Apply -> Backup")
+        XCTAssertEqual(resourcesFlow.facts.first { $0.label == "NDS Draft" }?.value, "Dirty draft")
+        XCTAssertEqual(resourcesFlow.facts.first { $0.label == "NDS Semantic" }?.value, "4 field(s)")
+        XCTAssertEqual(resourcesFlow.facts.first { $0.label == "NDS Plan" }?.value, "Preview ready")
+
+        store.previewSelectedNDSDataMutationPlan()
+
+        session = store.currentModuleEditorSession
+        XCTAssertEqual(session.stage, .previewReady)
+        XCTAssertTrue(session.canApply)
+        XCTAssertEqual(session.nextActionTitle, "Apply NDS Data Changes")
+
+        resourcesFlow = try XCTUnwrap(store.guidedFlows.first { $0.id == "resources-assets" })
+        XCTAssertEqual(resourcesFlow.run.state, .previewReady)
+        XCTAssertEqual(resourcesFlow.facts.first { $0.label == "NDS Draft" }?.value, "Previewed")
+        XCTAssertEqual(resourcesFlow.facts.first { $0.label == "NDS Plan" }?.value, "Apply ready")
+
+        let genVTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(genVTemp)
+        let genVRoot = genVTemp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: genVRoot)
+        let genVDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let genVStore = WorkbenchStore(userDefaults: genVDefaults, autoLoadProjects: false)
+        genVStore.openProject(path: genVRoot.path)
+        genVStore.selectWorkbenchModule(.resources)
+        genVStore.loadSelectedAssetCatalogIfNeeded()
+        let genVAssetCatalog = try await waitForSelectedAssetCatalog(genVStore)
+        let encounterRow = try XCTUnwrap(genVAssetCatalog.rows.first { $0.path == "data/encounters/route_1.txt" })
+        genVStore.requestResourceAssetSelection(encounterRow.id)
+
+        let blockedSession = genVStore.currentModuleEditorSession
+        XCTAssertEqual(blockedSession.stage, .blocked)
+        XCTAssertEqual(blockedSession.nextActionTitle, "Review Gen V preview-only")
+        XCTAssertTrue(blockedSession.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        let blockedFlow = try XCTUnwrap(genVStore.guidedFlows.first { $0.id == "resources-assets" })
+        XCTAssertEqual(blockedFlow.run.state, .blocked)
+        XCTAssertEqual(blockedFlow.run.mutationGate, "NDS Data: Gen V preview-only")
+        XCTAssertEqual(blockedFlow.facts.first { $0.label == "NDS Blocker" }?.value, "Gen V preview-only")
+        XCTAssertEqual(blockedFlow.facts.first { $0.label == "NDS Plan" }?.value, "Blocked")
     }
 
     @MainActor
@@ -5242,6 +5496,11 @@ final class MapEditorStoreTests: XCTestCase {
         temporaryDirectories.append(temp)
         let root = temp.url
 
+        try makeNDSPlatinumSourceProject(at: root)
+        return root
+    }
+
+    private func makeNDSPlatinumSourceProject(at root: URL) throws {
         try write("rom: build/pokeplatinum.us.nds\n", to: root.appendingPathComponent("Makefile"))
         try write("project('pokeplatinum')\n", to: root.appendingPathComponent("meson.build"))
         try write("path,sha1\n", to: root.appendingPathComponent("platinum.us/filesys.csv"))
@@ -5274,8 +5533,6 @@ final class MapEditorStoreTests: XCTestCase {
         try write(Data([0x01, 0x02]), to: root.appendingPathComponent("res/field/maps/route201/map.bin"))
         try write("{\"matrix\":1}\n", to: root.appendingPathComponent("res/field/matrices/route201.json"))
         try write(makeTestNARC(), to: root.appendingPathComponent("res/prebuilt/poketool/personal/personal.narc"))
-
-        return root
     }
 
     private func makeNDSHeartGoldSourceProject() throws -> URL {
@@ -5317,6 +5574,7 @@ final class MapEditorStoreTests: XCTestCase {
         try write("encounter\n", to: root.appendingPathComponent("data/encounters/route_1.txt"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
         try write(Data("SDAT".utf8), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
+        try write("Route 1 hello\n", to: root.appendingPathComponent("files/msgdata/story/message_bank.txt"))
         try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
         try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
     }

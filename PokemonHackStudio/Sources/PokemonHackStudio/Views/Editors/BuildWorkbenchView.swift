@@ -38,6 +38,8 @@ struct BuildWorkbenchView: View {
                 .help("Copy the current build, patch, and playtest preview report as JSON")
             }
 
+            validationCommandsSection
+
             switch store.selectedBuildWorkbenchTab {
             case .build:
                 buildSections(report: report, rows: store.filteredBuildReportRows)
@@ -656,9 +658,23 @@ struct BuildWorkbenchView: View {
                 }
             }
 
+            validationCommandsSection
             fixtureActions
         }
         .padding(24)
+    }
+
+    private var validationCommandsSection: some View {
+        EditorSection(title: "Validation Commands") {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 10)], spacing: 10) {
+                ForEach(store.validationTierCommandRows) { row in
+                    ValidationTierCommandRowView(
+                        row: row,
+                        copy: { store.copyValidationTierCommandToPasteboard(row) }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -981,6 +997,46 @@ private struct BuildReportActionRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct ValidationTierCommandRowView: View {
+    let row: ValidationTierCommandRow
+    let copy: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(row.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button(row.runStateTitle, systemImage: "terminal") {}
+                    .disabled(!row.canRunInApp)
+                    .help(row.disabledReason)
+            }
+
+            HStack(spacing: 8) {
+                Text(row.command)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+
+                Spacer(minLength: 8)
+
+                Button("Copy", systemImage: "doc.on.doc") {
+                    copy()
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .disabled(!row.canCopyCommand)
+                .help("Copy validation command")
+            }
+        }
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

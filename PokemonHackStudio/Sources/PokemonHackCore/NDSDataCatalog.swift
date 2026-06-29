@@ -569,15 +569,18 @@ public enum NDSDataCatalogBuilder {
         }
 
         let records = enrichGenVReadiness(
-            records: enrichRelationships(
-                records: uniqueRecords(
-                    descriptors.flatMap { descriptor in
-                        catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                    }
-                    + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                    + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                    + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                ).sorted(by: recordSort),
+            records: enrichHeartGoldSoulSilverMapInventory(
+                records: enrichRelationships(
+                    records: uniqueRecords(
+                        descriptors.flatMap { descriptor in
+                            catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                        }
+                        + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                        + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                        + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                    ).sorted(by: recordSort),
+                    profile: index.profile
+                ),
                 profile: index.profile
             ),
             profile: index.profile
@@ -662,7 +665,9 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.text, "files/msgdata"),
                 CatalogPathDescriptor(.text, "files/msgdata/scenario", required: false),
                 CatalogPathDescriptor(.scripts, "files/fielddata/script/scr_seq"),
+                CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix", summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix"),
+                CatalogPathDescriptor(.maps, "files/fielddata/maptable", summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/maptable"),
                 CatalogPathDescriptor(.maps, "files/fielddata/graphic", required: false),
                 CatalogPathDescriptor(.maps, "src/data/map_headers.h", format: .cHeader),
@@ -710,6 +715,7 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.encounters, "data/encounters", required: false),
                 CatalogPathDescriptor(.resources, "data", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files/a", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.text, "files/msgdata", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files"),
                 CatalogPathDescriptor(.audio, "files/wb_sound_data.sdat", required: false),
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
@@ -1325,14 +1331,107 @@ public enum NDSDataCatalogBuilder {
         profile: GameProfile
     ) -> [NDSDataCatalogRecord] {
         guard profile == .pokeblack else { return records }
+        let existingRelativePaths = Set(records.map { $0.relativePath.lowercased() })
         return records.map { record in
             let readiness = genVReadinessSummary(for: record)
             return record.copy(
-                facts: record.facts + genVReadinessFacts(for: record),
+                facts: record.facts + genVReadinessFacts(for: record, existingRelativePaths: existingRelativePaths),
                 readiness: .some(readiness),
                 diagnostics: record.diagnostics + genVReadinessDiagnostics(for: record, readiness: readiness)
             )
         }
+    }
+
+    private static let heartGoldSoulSilverMapBlockedActions = [
+        "semantic editing",
+        "map editor",
+        "nested map directory editing",
+        "script editing",
+        "generated output write",
+        "reference write",
+        "NARC rebuild",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let heartGoldSoulSilverMapActionState = "HeartGold/SoulSilver map matrix, map table, and map header rows are inventory-only HGSS map metadata; no semantic editor, compiler, container rebuild, generated output, reference, or ROM write path is enabled."
+
+    private static func enrichHeartGoldSoulSilverMapInventory(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeheartgold else { return records }
+        return records.map { record in
+            guard let sourceRole = heartGoldSoulSilverMapSourceRole(for: record),
+                  let provenance = heartGoldSoulSilverMapSourceProvenance(for: record)
+            else {
+                return record
+            }
+
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: provenance),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: heartGoldSoulSilverMapBlockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: heartGoldSoulSilverMapActionState)
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                diagnostics: record.diagnostics + heartGoldSoulSilverMapDiagnostics(for: record)
+            )
+        }
+    }
+
+    private static func heartGoldSoulSilverMapSourceRole(for record: NDSDataCatalogRecord) -> String? {
+        guard record.domain == .maps else { return nil }
+        let lower = record.relativePath.lowercased()
+        if lower == "files/fielddata/mapmatrix" {
+            return "hgssMapMatrixInventory"
+        }
+        if lower.hasPrefix("files/fielddata/mapmatrix/") {
+            return "hgssMapMatrixMember"
+        }
+        if lower == "files/fielddata/maptable" {
+            return "hgssMapTableInventory"
+        }
+        if lower.hasPrefix("files/fielddata/maptable/") {
+            return "hgssMapTableMember"
+        }
+        if lower == "src/data/map_headers.h" {
+            return "hgssMapHeaderInventory"
+        }
+        return nil
+    }
+
+    private static func heartGoldSoulSilverMapSourceProvenance(for record: NDSDataCatalogRecord) -> String? {
+        let lower = record.relativePath.lowercased()
+        if lower == "files/fielddata/mapmatrix" || lower.hasPrefix("files/fielddata/mapmatrix/") {
+            return "heartGoldSoulSilver:files/fielddata/mapmatrix"
+        }
+        if lower == "files/fielddata/maptable" || lower.hasPrefix("files/fielddata/maptable/") {
+            return "heartGoldSoulSilver:files/fielddata/maptable"
+        }
+        if lower == "src/data/map_headers.h" {
+            return "heartGoldSoulSilver:src/data/map_headers.h"
+        }
+        return nil
+    }
+
+    private static func heartGoldSoulSilverMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
+        [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_DATA_HGSS_MAP_INVENTORY_PREVIEW_ONLY",
+                message: "HeartGold/SoulSilver map inventory for \(record.relativePath) is source provenance and blocker metadata only.",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_DATA_HGSS_MAP_WRITE_BLOCKED",
+                message: "HeartGold/SoulSilver map matrix, map table, and map header writes remain blocked; blocked actions: \(heartGoldSoulSilverMapBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
     }
 
     private static func genVReadinessSummary(for record: NDSDataCatalogRecord) -> NDSDataReadinessSummary {
@@ -1356,7 +1455,10 @@ public enum NDSDataCatalogBuilder {
         )
     }
 
-    private static func genVReadinessFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
+    private static func genVReadinessFacts(
+        for record: NDSDataCatalogRecord,
+        existingRelativePaths: Set<String>
+    ) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Gen V Readiness", value: isGenVUnavailableTitle(record) ? "unavailable" : "previewOnly"),
             SourceIndexFact(label: "Gen V Source Role", value: genVSourceRole(for: record)),
@@ -1364,8 +1466,37 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Action State", value: Self.genVActionStateSummary),
             SourceIndexFact(label: "Gen V Reference Posture", value: "cleanRoomReferenceOnly")
         ]
+        facts.append(contentsOf: genVBuildMetadataFacts(for: record, existingRelativePaths: existingRelativePaths))
         facts.append(contentsOf: genVVariantFacts(for: record))
         return facts
+    }
+
+    private static func genVBuildMetadataFacts(
+        for record: NDSDataCatalogRecord,
+        existingRelativePaths: Set<String>
+    ) -> [SourceIndexFact] {
+        guard record.relativePath.lowercased() == "makefile" else { return [] }
+
+        func presence(_ path: String) -> String {
+            existingRelativePaths.contains(path.lowercased()) ? "present" : "missing"
+        }
+
+        let linkerPresence = ["arm9.ld", "arm7.ld"]
+            .map { "\($0)=\(presence($0))" }
+            .joined(separator: ", ")
+        let variantHashPresence = ["black.us/rom.sha1", "white.us/rom.sha1", "black2.us/rom.sha1", "white2.us/rom.sha1"]
+            .map { "\($0)=\(presence($0))" }
+            .joined(separator: ", ")
+
+        return [
+            SourceIndexFact(label: "Gen V Build Metadata", value: "previewOnly"),
+            SourceIndexFact(label: "Gen V Makefile Presence", value: presence("Makefile")),
+            SourceIndexFact(label: "Gen V Config Presence", value: presence("config.mk")),
+            SourceIndexFact(label: "Gen V Linker Presence", value: linkerPresence),
+            SourceIndexFact(label: "Gen V Variant Hash Presence", value: variantHashPresence),
+            SourceIndexFact(label: "Gen V main.rsf Presence", value: presence("main.rsf")),
+            SourceIndexFact(label: "Gen V main.lsf Presence", value: presence("main.lsf"))
+        ]
     }
 
     private static func genVVariantFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
@@ -1473,6 +1604,9 @@ public enum NDSDataCatalogBuilder {
         if lower.hasPrefix("files/a/") {
             return "nitroArchiveGroup"
         }
+        if lower == "files/msgdata" {
+            return "messageBankInventory"
+        }
         if lower.hasPrefix("files/"), lower.hasSuffix(".sdat") {
             return "soundArchiveMetadata"
         }
@@ -1484,6 +1618,9 @@ public enum NDSDataCatalogBuilder {
         }
         if record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc {
             return "boundedContainerSummary"
+        }
+        if lower.hasPrefix("files/msgdata/") {
+            return "messageBankMetadata"
         }
         if lower.hasPrefix("files/") {
             return "nitroFSResource"
@@ -1561,6 +1698,10 @@ public enum NDSDataCatalogBuilder {
             return "The files/a archive-group root is summarized as manual-only NitroFS inventory."
         case "nitroArchiveGroup":
             return "files/a archive-group paths are identified for future Gen V container routing."
+        case "messageBankInventory":
+            return "The files/msgdata root is summarized as manual-only Gen V message-bank inventory."
+        case "messageBankMetadata":
+            return "Gen V message-bank source paths are indexed as manual-only routing metadata."
         case "nitroFSResource":
             return "NitroFS resource files are indexed as source-tree inventory."
         case "overlayInventory":
