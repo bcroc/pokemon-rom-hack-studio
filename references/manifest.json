@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-12T07:06:39.007Z",
+  "generatedAt": "2026-06-26T22:31:47.556Z",
   "policy": {
     "scope": "Read-only broad reference repositories cloned under references/ for Pokemon GBA hacking tools, assets, emulation, patching, toolchain, and decompilation workflows.",
     "tracking": "references/* is ignored; references/manifest.json is the tracked catalog.",
@@ -45,7 +45,7 @@
       "repoUrl": "https://github.com/huderlem/poryscript.git",
       "folder": "references/poryscript",
       "branch": "master",
-      "head": "fc66d839d9f043cfa6e272e1daac0ecdbbb541bd",
+      "head": "d9bc56bc84db479dc14c872a5b65e1e773fce69b",
       "cloneDepth": 1,
       "license": {
         "spdx": "MIT",
@@ -57,13 +57,13 @@
       },
       "usage": "Scripting language/compiler reference for Pokemon disassembly projects.",
       "risk": "Compiler semantics may be project-specific; prefer conceptual reference and verify compatibility before adopting syntax or generated output assumptions.",
-      "pinnedAt": "2026-05-05T04:25:44Z",
+      "pinnedAt": "2026-05-31T14:37:54-05:00",
       "centralReference": {
         "id": "huderlem__poryscript",
         "folder": "/Users/bryan/projects/reference-repos/repos/huderlem__poryscript",
         "doc": "/Users/bryan/projects/reference-repos/docs/huderlem__poryscript.md",
         "branch": "master",
-        "head": "fc66d839d9f043cfa6e272e1daac0ecdbbb541bd",
+        "head": "d9bc56bc84db479dc14c872a5b65e1e773fce69b",
         "license": "MIT",
         "reuseClass": "adapt_with_attribution",
         "licenseRisk": "low"
@@ -75,7 +75,7 @@
       "repoUrl": "https://github.com/grunt-lucas/porytiles.git",
       "folder": "references/porytiles",
       "branch": "develop",
-      "head": "ee4cec38ff0842728780d5b33407486411332331",
+      "head": "1c3807bad5c1fc216242abfbd941917d0cd82a3f",
       "cloneDepth": 1,
       "license": {
         "spdx": "MIT",
@@ -87,13 +87,13 @@
       },
       "usage": "Tileset compiler and asset-pipeline reference for metatile workflows.",
       "risk": "Default branch is develop, so APIs and file formats may be less stable than a release branch; keep the commit pin when comparing behavior.",
-      "pinnedAt": "2026-05-05T04:25:44Z",
+      "pinnedAt": "2026-06-25T07:45:27-07:00",
       "centralReference": {
         "id": "grunt-lucas__porytiles",
         "folder": "/Users/bryan/projects/reference-repos/repos/grunt-lucas__porytiles",
         "doc": "/Users/bryan/projects/reference-repos/docs/grunt-lucas__porytiles.md",
         "branch": "develop",
-        "head": "ee4cec38ff0842728780d5b33407486411332331",
+        "head": "1c3807bad5c1fc216242abfbd941917d0cd82a3f",
         "license": "MIT",
         "reuseClass": "adapt_with_attribution",
         "licenseRisk": "low"
@@ -105,7 +105,7 @@
       "repoUrl": "https://github.com/pret/pokeemerald.git",
       "folder": "references/pokeemerald",
       "branch": "master",
-      "head": "a3c551fe21a6a4d4beb89a82404cf776a6dae635",
+      "head": "9b94f654cf56f0530469ecb2613e3e88c3c3788b",
       "cloneDepth": 1,
       "modules": [
         "pokemon",
@@ -128,13 +128,13 @@
       },
       "usage": "Canonical Pokemon Emerald decompilation reference for source layout, build outputs, generated map data, script/data tables, and project detection.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-05T10:19:02Z",
+      "pinnedAt": "2026-06-26T07:19:11+01:00",
       "centralReference": {
         "id": "pret__pokeemerald",
         "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokeemerald",
         "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokeemerald.md",
         "branch": "master",
-        "head": "a3c551fe21a6a4d4beb89a82404cf776a6dae635",
+        "head": "9b94f654cf56f0530469ecb2613e3e88c3c3788b",
         "license": "NOASSERTION",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -146,7 +146,7 @@
       "repoUrl": "https://github.com/pret/pokefirered.git",
       "folder": "references/pokefirered",
       "branch": "master",
-      "head": "e060ab955b5dc9ac1c4904c2cd141683615cf477",
+      "head": "df4449a27cd78dd747ce269e47d3ab4a0149d8f4",
       "cloneDepth": 1,
       "modules": [
         "pokemon",
@@ -169,13 +169,13 @@
       },
       "usage": "Canonical Pokemon FireRed/LeafGreen decompilation reference for source layout, build target variants, positional item data, generated map data, and adapter compatibility.",
       "risk": "No detected repository license and likely copyrighted game-derived material; use only as read-only interoperability/reference material.",
-      "pinnedAt": "2026-05-05T10:19:02Z",
+      "pinnedAt": "2026-06-23T23:46:57-04:00",
       "centralReference": {
         "id": "pret__pokefirered",
         "folder": "/Users/bryan/projects/reference-repos/repos/pret__pokefirered",
         "doc": "/Users/bryan/projects/reference-repos/docs/pret__pokefirered.md",
         "branch": "master",
-        "head": "e060ab955b5dc9ac1c4904c2cd141683615cf477",
+        "head": "df4449a27cd78dd747ce269e47d3ab4a0149d8f4",
         "license": "NOASSERTION",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -225,7 +225,7 @@
       "repoUrl": "https://github.com/rh-hideout/pokeemerald-expansion.git",
       "folder": "references/pokeemerald-expansion",
       "branch": "master",
-      "head": "7377e8839681e75d083cffd9e8a6f74737f7528b",
+      "head": "fce6ae04b50ecf2aa1f2a7b9df00e33da728d6f8",
       "cloneDepth": 1,
       "license": {
         "spdx": "NOASSERTION",
@@ -237,13 +237,13 @@
       },
       "usage": "Large feature-expansion reference for modernized pokeemerald mechanics, data structures, and content organization.",
       "risk": "No detected repository license; treat as read-only reference only. Large upstream surface may include generated or third-party assets.",
-      "pinnedAt": "2026-05-05T04:25:44Z",
+      "pinnedAt": "2026-06-26T22:21:34+02:00",
       "centralReference": {
         "id": "rh-hideout__pokeemerald-expansion",
         "folder": "/Users/bryan/projects/reference-repos/repos/rh-hideout__pokeemerald-expansion",
         "doc": "/Users/bryan/projects/reference-repos/docs/rh-hideout__pokeemerald-expansion.md",
         "branch": "master",
-        "head": "7377e8839681e75d083cffd9e8a6f74737f7528b",
+        "head": "fce6ae04b50ecf2aa1f2a7b9df00e33da728d6f8",
         "license": "NOASSERTION",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -314,7 +314,7 @@
       "repoUrl": "https://github.com/mgba-emu/mgba.git",
       "folder": "references/mgba",
       "branch": "master",
-      "head": "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe",
+      "head": "cd3c21052e5f6f1a8126f18b47eacb0a783aa6ba",
       "cloneDepth": 1,
       "license": {
         "spdx": "MPL-2.0",
@@ -326,13 +326,13 @@
       },
       "usage": "Emulator architecture, debugging, and test-runner reference for GBA behavior.",
       "risk": "MPL file-level copyleft obligations apply to copied source; repository includes substantial emulator code and bundled license notices.",
-      "pinnedAt": "2026-05-05T04:25:44Z",
+      "pinnedAt": "2026-06-23T19:41:46-07:00",
       "centralReference": {
         "id": "mgba-emu__mgba",
         "folder": "/Users/bryan/projects/reference-repos/repos/mgba-emu__mgba",
         "doc": "/Users/bryan/projects/reference-repos/docs/mgba-emu__mgba.md",
         "branch": "master",
-        "head": "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe",
+        "head": "cd3c21052e5f6f1a8126f18b47eacb0a783aa6ba",
         "license": "MPL-2.0",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -465,7 +465,7 @@
       "repoUrl": "https://github.com/Loxed/porypal.git",
       "folder": "references/porypal",
       "branch": "main",
-      "head": "3a05eb3a9e5ef69a96ae386c3f8e06b93beaf726",
+      "head": "04b1e7c8da792cecb72295057ab7b3355afb1439",
       "cloneDepth": 1,
       "cloneFilter": "blob:none",
       "license": {
@@ -478,13 +478,13 @@
       },
       "usage": "Palette editing and GBA color-conversion workflow reference.",
       "risk": "GPL copyleft obligations apply to copied or linked code; keep as clean-room behavior and diagnostics reference only.",
-      "pinnedAt": "2026-05-06T07:11:18Z",
+      "pinnedAt": "2026-06-22T14:38:01Z",
       "centralReference": {
         "id": "loxed__porypal",
         "folder": "/Users/bryan/projects/reference-repos/repos/loxed__porypal",
         "doc": "/Users/bryan/projects/reference-repos/docs/loxed__porypal.md",
         "branch": "main",
-        "head": "3a05eb3a9e5ef69a96ae386c3f8e06b93beaf726",
+        "head": "04b1e7c8da792cecb72295057ab7b3355afb1439",
         "license": "GPL-3.0",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -527,7 +527,7 @@
       "repoUrl": "https://github.com/TeamAquasHideout/Team-Aquas-Asset-Repo.git",
       "folder": "references/team-aquas-asset-repo",
       "branch": "main",
-      "head": "e861188c2a34cad3aa25f640702f7d63cc30888c",
+      "head": "ed6d702b9f88c107d3ebbadc5bba80eda822ddb7",
       "cloneDepth": 1,
       "cloneFilter": "blob:none",
       "license": {
@@ -540,13 +540,13 @@
       },
       "usage": "Community asset organization, credits, and import-metadata reference for Gen III art workflows.",
       "risk": "Treat assets as local reference only; do not copy, redistribute, or bundle without explicit asset-by-asset license and credit review.",
-      "pinnedAt": "2026-05-06T07:11:18Z",
+      "pinnedAt": "2026-06-13T12:52:31+05:30",
       "centralReference": {
         "id": "teamaquashideout__team-aquas-asset-repo",
         "folder": "/Users/bryan/projects/reference-repos/repos/teamaquashideout__team-aquas-asset-repo",
         "doc": "/Users/bryan/projects/reference-repos/docs/teamaquashideout__team-aquas-asset-repo.md",
         "branch": "main",
-        "head": "e861188c2a34cad3aa25f640702f7d63cc30888c",
+        "head": "ed6d702b9f88c107d3ebbadc5bba80eda822ddb7",
         "license": "NOASSERTION",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -714,7 +714,7 @@
       "repoUrl": "https://github.com/resetes12/pokeemerald.git",
       "folder": "references/modern-emerald",
       "branch": "master",
-      "head": "7ca11b375bc68caee94791d294af75ee71d1ddba",
+      "head": "d298b7ec42dc00e77fd7c6fe7bb3b4043b696803",
       "cloneDepth": 1,
       "cloneFilter": "blob:none",
       "license": {
@@ -727,13 +727,13 @@
       },
       "usage": "Modern Emerald feature fork reference for expanded source shapes and compatibility pressure.",
       "risk": "No detected repository license and likely game-derived material; use only for schema flexibility and compatibility observations.",
-      "pinnedAt": "2026-05-06T07:11:18Z",
+      "pinnedAt": "2026-06-20T08:53:37+02:00",
       "centralReference": {
         "id": "resetes12__pokeemerald",
         "folder": "/Users/bryan/projects/reference-repos/repos/resetes12__pokeemerald",
         "doc": "/Users/bryan/projects/reference-repos/docs/resetes12__pokeemerald.md",
         "branch": "master",
-        "head": "7ca11b375bc68caee94791d294af75ee71d1ddba",
+        "head": "d298b7ec42dc00e77fd7c6fe7bb3b4043b696803",
         "license": "NOASSERTION",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
@@ -807,7 +807,7 @@
       "repoUrl": "https://github.com/SirSnorealot/PokeMapExport.git",
       "folder": "references/pokemapexport",
       "branch": "main",
-      "head": "50377461b7fcb4ff16df1ad3b9ec959750cb8799",
+      "head": "4025093bd18b27be6ac2744a0229a3b5585b12e0",
       "cloneDepth": 1,
       "cloneFilter": "blob:none",
       "license": {
@@ -820,13 +820,13 @@
       },
       "usage": "Map export workflow reference for visual map outputs and asset boundaries.",
       "risk": "GPL code remains reference-only; exported asset behavior must be designed independently.",
-      "pinnedAt": "2026-05-06T07:11:18Z",
+      "pinnedAt": "2026-05-17T18:13:29-04:00",
       "centralReference": {
         "id": "sirsnorealot__pokemapexport",
         "folder": "/Users/bryan/projects/reference-repos/repos/sirsnorealot__pokemapexport",
         "doc": "/Users/bryan/projects/reference-repos/docs/sirsnorealot__pokemapexport.md",
         "branch": "main",
-        "head": "50377461b7fcb4ff16df1ad3b9ec959750cb8799",
+        "head": "4025093bd18b27be6ac2744a0229a3b5585b12e0",
         "license": "GPL-3.0",
         "reuseClass": "reference_only",
         "licenseRisk": "high"
