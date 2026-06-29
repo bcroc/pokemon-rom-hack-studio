@@ -1,5 +1,5 @@
-import Foundation
 import CoreGraphics
+import Foundation
 import PokemonHackCore
 
 struct MapCanvasViewportRequest: Equatable, Identifiable {
@@ -20,7 +20,9 @@ enum WorkbenchModuleGroup: String, CaseIterable, Identifiable, Hashable {
     case dataAssets = "Data & Assets"
     case ship = "Ship"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var modules: [WorkbenchModule] {
         switch self {
@@ -51,9 +53,13 @@ enum WorkbenchModule: String, CaseIterable, Identifiable, Hashable {
     case build = "Build/Patch/Playtest"
     case issues = "Diagnostics"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
-    var title: String { rawValue }
+    var title: String {
+        rawValue
+    }
 
     var group: WorkbenchModuleGroup {
         switch self {
@@ -114,7 +120,9 @@ enum MapWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
     case mapData
     case workflow
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -146,7 +154,9 @@ enum BuildWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
     case patch
     case playtest
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -169,7 +179,9 @@ enum ResourceLibraryMode: String, CaseIterable, Identifiable, Hashable {
     case assets
     case entries
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -190,6 +202,27 @@ enum ResourceLibraryMode: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum WorkbenchSidebarMode: String, CaseIterable, Identifiable, Hashable {
+    case browse = "Browse"
+    case tools = "Tools"
+    case properties = "Properties"
+
+    var id: String {
+        rawValue
+    }
+
+    var systemImage: String {
+        switch self {
+        case .browse:
+            "list.bullet"
+        case .tools:
+            "wrench.and.screwdriver"
+        case .properties:
+            "info.circle"
+        }
+    }
+}
+
 enum WorkbenchSidebarSelection: Hashable {
     case resourceAsset(ResourceAssetRowViewState.ID)
     case resourceEntry(ResourceLibraryEntryViewState.ID)
@@ -205,6 +238,54 @@ enum WorkbenchSidebarSelection: Hashable {
     case diagnostic(String)
     case diagnosticBucket(DiagnosticSummaryBucket)
     case guidedFlow(String)
+}
+
+struct DirtyDraftSummary: Equatable {
+    struct Row: Identifiable, Equatable {
+        let id: String
+        let singularTitle: String
+        let title: String
+        let count: Int
+    }
+
+    let rows: [Row]
+
+    init(rows: [Row]) {
+        self.rows = rows.filter { $0.count > 0 }
+    }
+
+    init(counts: PokemonHackCore.SavedDraftCounts) {
+        self.init(rows: [
+            Row(id: "maps", singularTitle: "Map", title: "Maps", count: counts.maps),
+            Row(id: "pokemon", singularTitle: "Pokemon", title: "Pokemon", count: counts.species),
+            Row(id: "trainers", singularTitle: "Trainer", title: "Trainers", count: counts.trainers),
+            Row(id: "moves", singularTitle: "Move", title: "Moves", count: counts.moves),
+            Row(id: "items", singularTitle: "Item", title: "Items", count: counts.items),
+            Row(id: "graphics", singularTitle: "Graphics draft", title: "Graphics", count: counts.graphics),
+            Row(id: "nds-data", singularTitle: "NDS data draft", title: "NDS data", count: counts.ndsData),
+        ])
+    }
+
+    var total: Int {
+        rows.reduce(0) { $0 + $1.count }
+    }
+
+    var isEmpty: Bool {
+        rows.isEmpty
+    }
+
+    var compactLabel: String {
+        total == 1 ? "1 draft" : "\(total) drafts"
+    }
+
+    var dialogDetail: String {
+        guard !rows.isEmpty else {
+            return "No unsaved drafts are staged."
+        }
+        return rows.map { row in
+            row.count == 1 ? "1 \(row.singularTitle)" : "\(row.count) \(row.title)"
+        }.joined(separator: ", ")
+    }
 }
 
 enum WorkbenchSearchBehavior: Equatable {
@@ -256,16 +337,16 @@ enum WorkbenchFocusTarget: Hashable, Identifiable {
 
     var rawIdentifier: String {
         switch self {
-        case .map(let id),
-             .species(let id),
-             .trainer(let id),
-             .move(let id),
-             .item(let id),
-             .resourceAsset(let id),
-             .resourceEntry(let id),
-             .scriptLabel(let id),
-             .buildRow(let id),
-             .diagnostic(let id):
+        case let .map(id),
+             let .species(id),
+             let .trainer(id),
+             let .move(id),
+             let .item(id),
+             let .resourceAsset(id),
+             let .resourceEntry(id),
+             let .scriptLabel(id),
+             let .buildRow(id),
+             let .diagnostic(id):
             id
         }
     }
@@ -288,7 +369,9 @@ enum ValidationState: String, Identifiable {
     case warning = "Warning"
     case error = "Error"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 }
 
 enum ProjectIdentityKind: String, Identifiable {
@@ -569,7 +652,9 @@ enum ScriptReadinessTargetMode: String, CaseIterable, Identifiable {
     case map = "Map"
     case script = "Script"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 }
 
 struct SourceLocation: Identifiable {
@@ -731,7 +816,9 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
     case playtest = "Playtest Handoff"
     case diagnostics = "Diagnostics"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var systemImage: String {
         switch self {
@@ -792,9 +879,9 @@ enum PatchManifestLoadStatus: Equatable {
             "No patch manifest loaded"
         case .loading:
             "Loading patch manifest"
-        case .loaded(let status):
+        case let .loaded(status):
             "Patch manifest loaded: \(status)"
-        case .failed(let message):
+        case let .failed(message):
             "Patch manifest failed: \(message)"
         }
     }
@@ -1212,7 +1299,9 @@ enum ScriptReadinessReportSection: String, CaseIterable, Identifiable {
     case playtest = "Playtest"
     case workflow = "Workflow"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var systemImage: String {
         switch self {
@@ -1281,7 +1370,9 @@ enum GraphicsReportSection: String, CaseIterable, Identifiable {
     case conversionPlans = "Conversion Plans"
     case diagnostics = "Diagnostics"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var systemImage: String {
         switch self {
@@ -1340,9 +1431,9 @@ enum GraphicsImportPackagePlanLoadStatus: Equatable {
             "No graphics import package loaded"
         case .loading:
             "Loading graphics import package"
-        case .loaded(let readiness):
+        case let .loaded(readiness):
             "Graphics import plan loaded: \(readiness)"
-        case .failed(let message):
+        case let .failed(message):
             "Graphics import plan failed: \(message)"
         }
     }
@@ -1429,9 +1520,9 @@ enum ProjectIndexLoadStatus: Equatable {
             "No project index loaded"
         case .loading:
             "Loading project indexes"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 project indexed" : "\(count) projects indexed"
-        case .failed(let message):
+        case let .failed(message):
             "Index failed: \(message)"
         }
     }
@@ -1517,11 +1608,25 @@ struct ResourceLibraryViewState: Identifiable {
     let entries: [ResourceLibraryEntryViewState]
     let diagnostics: [IndexedDiagnosticRow]
 
-    var entryCount: Int { entries.count }
-    var parsedCount: Int { entries.filter { $0.status == .valid }.count }
-    var missingCount: Int { entries.filter { $0.parseStatus == "missing" }.count }
-    var itemCount: Int { entries.reduce(0) { $0 + $1.items.count } }
-    var allDiagnostics: [IndexedDiagnosticRow] { diagnostics + entries.flatMap(\.diagnostics) }
+    var entryCount: Int {
+        entries.count
+    }
+
+    var parsedCount: Int {
+        entries.filter { $0.status == .valid }.count
+    }
+
+    var missingCount: Int {
+        entries.filter { $0.parseStatus == "missing" }.count
+    }
+
+    var itemCount: Int {
+        entries.reduce(0) { $0 + $1.items.count }
+    }
+
+    var allDiagnostics: [IndexedDiagnosticRow] {
+        diagnostics + entries.flatMap(\.diagnostics)
+    }
 }
 
 struct ResourceAssetCatalogViewState: Identifiable {
@@ -1636,7 +1741,7 @@ struct ResourceAssetCatalogIndex {
         self.availabilityCountsByValue = availabilityCountsByValue
         self.availabilityStatusCounts = availabilityStatusCounts
         self.availabilityProblemStatusCounts = availabilityProblemStatusCounts
-        self.availabilityProblemCount = availabilityProblemStatusCounts.values.reduce(0, +)
+        availabilityProblemCount = availabilityProblemStatusCounts.values.reduce(0, +)
     }
 
     func exactMatch(identifier: String) -> ResourceAssetRowViewState? {
@@ -1701,14 +1806,18 @@ struct ResourceAssetCatalogIndex {
 }
 
 struct ResourceAssetCategoryCount: Identifiable {
-    var id: String { category }
+    var id: String {
+        category
+    }
 
     let category: String
     let count: Int
 }
 
 struct ResourceAssetAvailabilityCount: Identifiable {
-    var id: String { availability }
+    var id: String {
+        availability
+    }
 
     let availability: String
     let count: Int
@@ -1726,9 +1835,9 @@ enum ResourceAssetCatalogLoadStatus: Equatable {
             "Asset catalog not loaded"
         case .loading:
             "Loading assets"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 asset loaded" : "\(count) assets loaded"
-        case .failed(let message):
+        case let .failed(message):
             "Asset catalog failed: \(message)"
         }
     }
@@ -1752,9 +1861,9 @@ enum GameCubeResourceLoadStatus: Equatable {
         switch self {
         case .idle:
             "No GameCube media loaded"
-        case .loaded(let itemCount):
+        case let .loaded(itemCount):
             itemCount == 1 ? "1 GameCube resource indexed" : "\(itemCount) GameCube resources indexed"
-        case .failed(let message):
+        case let .failed(message):
             "GameCube resource failed: \(message)"
         }
     }
@@ -1781,9 +1890,9 @@ enum SourceGraphLoadStatus: Equatable {
             "Source graph not loaded"
         case .loading:
             "Loading source graph"
-        case .loaded(let recordCount, let labelCount):
+        case let .loaded(recordCount, labelCount):
             "\(recordCount) source records, \(labelCount) script labels"
-        case .failed(let message):
+        case let .failed(message):
             "Source graph failed: \(message)"
         }
     }
@@ -1810,9 +1919,9 @@ enum SpeciesCatalogLoadStatus: Equatable {
             "Pokemon catalog not loaded"
         case .loading:
             "Loading Pokemon catalog"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 species loaded" : "\(count) species loaded"
-        case .failed(let message):
+        case let .failed(message):
             "Pokemon catalog failed: \(message)"
         }
     }
@@ -1839,9 +1948,9 @@ enum TrainerCatalogLoadStatus: Equatable {
             "Trainer catalog not loaded"
         case .loading:
             "Loading trainer catalog"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 trainer loaded" : "\(count) trainers loaded"
-        case .failed(let message):
+        case let .failed(message):
             "Trainer catalog failed: \(message)"
         }
     }
@@ -1863,7 +1972,9 @@ enum ResourceAssetSortMode: String, CaseIterable, Identifiable {
     case status
     case availability
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -1893,9 +2004,9 @@ enum MoveCatalogLoadStatus: Equatable {
             "Move catalog not loaded"
         case .loading:
             "Loading move catalog"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 move loaded" : "\(count) moves loaded"
-        case .failed(let message):
+        case let .failed(message):
             "Move catalog failed: \(message)"
         }
     }
@@ -1922,9 +2033,9 @@ enum ItemCatalogLoadStatus: Equatable {
             "Item catalog not loaded"
         case .loading:
             "Loading item catalog"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 item loaded" : "\(count) items loaded"
-        case .failed(let message):
+        case let .failed(message):
             "Item catalog failed: \(message)"
         }
     }
@@ -1946,7 +2057,9 @@ enum MoveWorkbenchFilter: String, CaseIterable, Identifiable, Hashable {
     case learnedBy = "Learned By"
     case diagnostics = "Diagnostics"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 }
 
 struct MoveCatalogViewState: Identifiable {
@@ -1991,7 +2104,9 @@ enum ItemWorkbenchFilter: String, CaseIterable, Identifiable, Hashable {
     case editable = "Editable"
     case diagnostics = "Diagnostics"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 }
 
 struct ItemCatalogViewState: Identifiable {
@@ -2142,9 +2257,9 @@ enum MapCatalogLoadStatus: Equatable {
             "No map catalog loaded"
         case .loading:
             "Loading map catalog"
-        case .loaded(let count):
+        case let .loaded(count):
             count == 1 ? "1 map indexed" : "\(count) maps indexed"
-        case .failed(let message):
+        case let .failed(message):
             "Map catalog failed: \(message)"
         }
     }
@@ -2237,9 +2352,9 @@ enum MapVisualLoadStatus: Equatable {
             "No visual map loaded"
         case .loading:
             "Loading visual map"
-        case .loaded(let mapName):
+        case let .loaded(mapName):
             "Loaded \(mapName)"
-        case .failed(let message):
+        case let .failed(message):
             "Visual map failed: \(message)"
         }
     }
@@ -2250,7 +2365,9 @@ enum MapEditorToolGroup: String, CaseIterable, Identifiable {
     case paint
     case events
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -2272,7 +2389,9 @@ enum MapEditorTool: String, CaseIterable, Identifiable {
     case duplicate
     case delete
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
@@ -2365,7 +2484,7 @@ struct MapCellSelection: Equatable {
     let rawValue: UInt16
 
     var metatileID: Int {
-        Int(rawValue & 0x03ff)
+        Int(rawValue & 0x03FF)
     }
 }
 
@@ -2376,9 +2495,9 @@ enum PendingMapNavigation: Identifiable, Equatable {
 
     var id: String {
         switch self {
-        case .project(let id):
+        case let .project(id):
             "project:\(id)"
-        case .map(let id):
+        case let .map(id):
             "map:\(id)"
         case .refreshMaps:
             "refreshMaps"

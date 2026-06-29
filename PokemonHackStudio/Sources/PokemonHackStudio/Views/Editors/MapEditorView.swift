@@ -1,25 +1,6 @@
 import PokemonHackCore
 import SwiftUI
 
-enum MapEditorLayoutMode: Equatable {
-    static let compactBreakpoint: CGFloat = 1180
-
-    case wide
-    case compact
-
-    init(width: CGFloat) {
-        self = width < Self.compactBreakpoint ? .compact : .wide
-    }
-
-    var isCompact: Bool {
-        self == .compact
-    }
-
-    var isWide: Bool {
-        self == .wide
-    }
-}
-
 struct MapEditorView: View {
     @ObservedObject var store: WorkbenchStore
     @ObservedObject private var session: MapEditorSession
@@ -32,6 +13,7 @@ struct MapEditorView: View {
     @State private var canvasViewportSize: CGSize = .zero
     @State private var viewportSnapshot = MapCanvasViewport.zero
     @State private var isMapSwitcherPresented = false
+    @State private var isCompactPalettePresented = false
     @State private var mapSwitcherSearchText = ""
 
     init(store: WorkbenchStore, records: [WorkbenchRecord], catalog: MapCatalogViewState?) {
@@ -197,6 +179,7 @@ struct MapEditorView: View {
                                 height: CGFloat(document.scene.viewport.height) * 16 * zoom
                             )
                             .accessibilityLabel("Map canvas")
+                            .accessibilityHint("Click the canvas before using arrow keys to pan, Delete to remove selected events, or mouse wheel to zoom.")
                         }
                         .background(Color(nsColor: .textBackgroundColor))
                         .overlay(alignment: .bottomLeading) {
@@ -206,7 +189,7 @@ struct MapEditorView: View {
                                 zoom: zoom,
                                 isReadOnlyZoom: isReadOnlyZoom
                             )
-                                .padding(10)
+                            .padding(10)
                         }
                         .onAppear {
                             canvasViewportSize = proxy.size
@@ -276,11 +259,7 @@ struct MapEditorView: View {
 
             Divider()
 
-            Button(store.mapShowsPalette ? "Hide Palette" : "Show Palette", systemImage: "square.grid.3x3") {
-                store.mapShowsPalette.toggle()
-            }
-            .labelStyle(.iconOnly)
-            .help(store.mapShowsPalette ? "Hide metatile palette" : "Show metatile palette")
+            paletteButton(layoutMode: layoutMode)
 
             mapCommandMenu
 
@@ -303,6 +282,50 @@ struct MapEditorView: View {
             }
         }
         .frame(height: 34)
+    }
+
+    private func paletteButton(layoutMode: MapEditorLayoutMode) -> some View {
+        Group {
+            if layoutMode.isCompact {
+                Button("Metatile Palette", systemImage: "square.grid.3x3") {
+                    isCompactPalettePresented.toggle()
+                }
+                .disabled(session.selectedMapVisualDocument == nil)
+                .popover(isPresented: $isCompactPalettePresented, arrowEdge: .bottom) {
+                    compactPalettePopover
+                }
+                .help("Open metatile palette")
+            } else {
+                Button(store.mapShowsPalette ? "Hide Palette" : "Show Palette", systemImage: "square.grid.3x3") {
+                    store.mapShowsPalette.toggle()
+                }
+                .help(store.mapShowsPalette ? "Hide metatile palette" : "Show metatile palette")
+            }
+        }
+        .labelStyle(.iconOnly)
+        .accessibilityLabel("Metatile palette")
+    }
+
+    @ViewBuilder
+    private var compactPalettePopover: some View {
+        if let document = session.selectedMapVisualDocument {
+            MetatilePaletteView(
+                document: document,
+                selectedRawValue: session.selectedBrushRawValue,
+                filterText: $store.mapMetatileFilter,
+                maxVisibleMetatiles: 512
+            ) { rawValue in
+                session.selectBrush(rawValue: rawValue)
+            }
+            .frame(width: 420, height: 340)
+        } else {
+            ContentUnavailableView(
+                "Palette unavailable",
+                systemImage: "square.grid.3x3",
+                description: Text("Select a map before opening metatiles.")
+            )
+            .frame(width: 320, height: 220)
+        }
     }
 
     private func mapTitleSwitcher(_ catalog: MapCatalogViewState) -> some View {
@@ -423,7 +446,7 @@ struct MapEditorView: View {
             .labelStyle(.iconOnly)
             .help("Reset zoom and pan")
 
-            Slider(value: zoomBinding, in: MapViewportGeometry.minimumManualZoom...MapViewportGeometry.maximumZoom) {
+            Slider(value: zoomBinding, in: MapViewportGeometry.minimumManualZoom ... MapViewportGeometry.maximumZoom) {
                 Text("Zoom")
             }
             .frame(width: 112)

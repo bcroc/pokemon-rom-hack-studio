@@ -212,7 +212,7 @@ struct BuildWorkbenchView: View {
     }
 
     private func patchSections(
-        buildReport: BuildPatchPlaytestReportViewState,
+        buildReport _: BuildPatchPlaytestReportViewState,
         report: PatchManifestReportViewState?,
         rows: [BuildReportRow]
     ) -> some View {
@@ -508,7 +508,7 @@ struct BuildWorkbenchView: View {
         if store.selectedBuildReport?.isNDS == true {
             return "NDS actions are manual setup and rerun guidance only. PokemonHackStudio does not install tools, run Docker, build NDS ROMs, launch melonDS/DeSmuME, extract assets, apply mutation plans, export ROMs, or write binary/source outputs from this surface."
         }
-        return "Build runs only the selected declared make target. Open Playtest and capture actions use mGBA handoffs. Patch apply/export writes ignored ROM artifacts only after a compatible patch and manifest-matched base ROM are selected; conversion and source-write actions stay locked."
+        return "Build runs only the selected declared make target. Open Playtest and capture actions use mGBA handoffs. Patched-ROM artifact actions write ignored ROM artifacts only after a compatible patch and manifest-matched base ROM are selected; conversion and source-write actions stay locked."
     }
 
     private var gbaRunnerGuidance: String {
@@ -585,7 +585,7 @@ struct BuildWorkbenchView: View {
                 store.applyExportSelectedPatchROM()
             }
             .disabled(!action.isEnabled)
-            .help(action.disabledReason ?? "Apply the selected patch and export the patched ROM artifact")
+            .help(action.disabledReason ?? "Write the selected patched ROM artifact")
         } else {
             Button(action.title, systemImage: action.isPreviewLocked ? "lock" : action.systemImage) {}
                 .disabled(!action.isEnabled)
@@ -600,12 +600,12 @@ struct BuildWorkbenchView: View {
                     ForEach(store.fixtureBuildWorkflowActions) { action in
                         Button(action.title, systemImage: "lock") {}
                             .disabled(true)
-                            .help(action.disabledReason ?? "Fixture preview only")
+                            .help(action.disabledReason ?? "Read-only fixture preview")
                     }
                     Spacer()
                 }
 
-                Text("Fixture preview only")
+                Text("Read-only fixture preview")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

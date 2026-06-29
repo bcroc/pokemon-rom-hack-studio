@@ -1,5 +1,5 @@
-import PokemonHackCore
 import AppKit
+import PokemonHackCore
 import XCTest
 
 final class MapEditorStoreTests: XCTestCase {
@@ -40,7 +40,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testToolbarMutationStateDefaultsWithoutEditableModule() async throws {
+    func testToolbarMutationStateDefaultsWithoutEditableModule() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
 
@@ -52,6 +52,8 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(state.canApply)
         XCTAssertFalse(state.canDiscard)
         XCTAssertEqual(state.previewBlockedReason, "Select an editable module before previewing mutations.")
+        XCTAssertEqual(store.mutationActionBarState.target, .none)
+        XCTAssertEqual(store.mutationActionBarState.previewHelp, "Select an editable module before previewing mutations.")
     }
 
     @MainActor
@@ -60,6 +62,7 @@ final class MapEditorStoreTests: XCTestCase {
         store.selection = .maps
 
         XCTAssertEqual(store.toolbarMutationState.target, .map)
+        XCTAssertEqual(store.mutationActionBarState.target, .map)
         XCTAssertFalse(store.toolbarMutationState.canPreview)
         XCTAssertEqual(store.toolbarMutationState.previewBlockedReason, "No staged edits to preview.")
 
@@ -67,6 +70,7 @@ final class MapEditorStoreTests: XCTestCase {
         store.paintMapCell(x: 0, y: 0)
 
         XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.mutationActionBarState.canPreview)
         XCTAssertTrue(store.toolbarMutationState.canDiscard)
 
         store.previewToolbarMutationTarget()
@@ -100,7 +104,9 @@ final class MapEditorStoreTests: XCTestCase {
         store.updateSelectedTrainerDraft(draft)
 
         XCTAssertEqual(store.toolbarMutationState.target, .trainer)
+        XCTAssertEqual(store.mutationActionBarState.target, .trainer)
         XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.mutationActionBarState.canPreview)
         XCTAssertTrue(store.toolbarMutationState.canDiscard)
 
         store.previewToolbarMutationTarget()
@@ -217,6 +223,7 @@ final class MapEditorStoreTests: XCTestCase {
         let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
 
         store.openProject(path: root.path)
+        store.selection = .pokemon
         store.loadSelectedSpeciesCatalogIfNeeded()
         try await waitForSelectedSpeciesCatalog(store)
         store.requestSpeciesSelection("SPECIES_TREECKO")
@@ -234,6 +241,8 @@ final class MapEditorStoreTests: XCTestCase {
         store.updateSelectedSpeciesDraft(draft)
 
         XCTAssertTrue(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.mutationActionBarState.target, .pokemon)
+        XCTAssertTrue(store.mutationActionBarState.canPreview)
         XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
 
         store.previewSelectedSpeciesMutationPlan()
@@ -245,7 +254,7 @@ final class MapEditorStoreTests: XCTestCase {
                 "src/data/pokemon/egg_moves.h",
                 "src/data/pokemon/level_up_learnsets.h",
                 "src/data/pokemon/species_info.h",
-                "src/data/pokemon/tmhm_learnsets.h"
+                "src/data/pokemon/tmhm_learnsets.h",
             ]
         )
         XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
@@ -262,6 +271,7 @@ final class MapEditorStoreTests: XCTestCase {
                 applyBlockedReason: store.speciesApplyBlockedReason
             )
         )
+        XCTAssertEqual(context.target, .pokemon)
         XCTAssertEqual(context.changes.count, 4)
         XCTAssertTrue(context.canApply)
 
@@ -301,7 +311,9 @@ final class MapEditorStoreTests: XCTestCase {
 
         XCTAssertEqual(store.dirtySpeciesBatchDrafts.map(\.speciesID), ["SPECIES_GROVYLE", "SPECIES_TREECKO"])
         XCTAssertEqual(store.toolbarMutationState.target, .pokemonBatch)
+        XCTAssertEqual(store.mutationActionBarState.target, .pokemonBatch)
         XCTAssertTrue(store.toolbarMutationState.canPreview)
+        XCTAssertTrue(store.mutationActionBarState.canPreview)
         XCTAssertTrue(store.toolbarMutationState.canDiscard)
 
         store.previewToolbarMutationTarget()
@@ -320,6 +332,7 @@ final class MapEditorStoreTests: XCTestCase {
                 applyBlockedReason: store.speciesBatchApplyBlockedReason
             )
         )
+        XCTAssertEqual(context.target, .pokemonBatch)
         XCTAssertEqual(context.operationCount, 2)
         XCTAssertTrue(context.canApply)
 
@@ -873,7 +886,7 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     func testResourceDetailHydrationIgnoresStaleSelectionResults() async throws {
         let root = try makeNDSSourceProject()
-        for index in 0..<500 {
+        for index in 0 ..< 500 {
             try write(
                 "{\"base_hp\":\(index),\"attack\":\(index + 1)}\n",
                 to: root.appendingPathComponent("files/poketool/personal/personal_\(String(format: "%04d", index)).json")
@@ -899,7 +912,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testNDSToolchainHealthAppSliceGroupsRowsAndKeepsActionsManualOnly() async throws {
+    func testNDSToolchainHealthAppSliceGroupsRowsAndKeepsActionsManualOnly() throws {
         let root = try makeNDSSourceProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
@@ -2902,7 +2915,7 @@ final class MapEditorStoreTests: XCTestCase {
                 message: "Palette asset is missing.",
                 severity: .warning,
                 source: SourceLocation(path: "graphics/pokemon/test/palette.pal", symbol: "palette", line: 1)
-            )
+            ),
         ]
 
         let summary = DiagnosticSummary(diagnostics: rows)
@@ -2923,7 +2936,7 @@ final class MapEditorStoreTests: XCTestCase {
                 message: "Sprite asset is missing.",
                 severity: .warning,
                 source: SourceLocation(path: "graphics/pokemon/test/front.png", symbol: "front", line: 1)
-            )
+            ),
         ])
         XCTAssertTrue(pluralSummary.detail.contains("2 optional assets"))
     }
@@ -3021,8 +3034,8 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testResourceAssetFilteringHandlesLargeSyntheticCatalog() throws {
-        let rows = (0..<50_000).map(Self.syntheticAssetRow)
+    func testResourceAssetFilteringHandlesLargeSyntheticCatalog() {
+        let rows = (0 ..< 50000).map(Self.syntheticAssetRow)
         let index = ResourceAssetCatalogIndex(rows: rows)
 
         let searchResult = index.filteredRows(
@@ -3041,17 +3054,17 @@ final class MapEditorStoreTests: XCTestCase {
             sortMode: .availability
         )
 
-        XCTAssertEqual(mapRows.count, 25_000)
+        XCTAssertEqual(mapRows.count, 25000)
         XCTAssertTrue(mapRows.allSatisfy { $0.category == "maps" })
         XCTAssertTrue(mapRows.prefix(100).allSatisfy { $0.availability == "availableSource" })
-        XCTAssertEqual(index.categoryBuckets["maps"]?.count, 25_000)
+        XCTAssertEqual(index.categoryBuckets["maps"]?.count, 25000)
         XCTAssertEqual(index.sortedRowsByMode[.path]?.count, rows.count)
-        XCTAssertEqual(index.availabilityCountsByValue["availableSource"], 25_000)
+        XCTAssertEqual(index.availabilityCountsByValue["availableSource"], 25000)
         XCTAssertEqual(index.availabilityProblemCount, 0)
     }
 
     @MainActor
-    func testResourceAssetIndexExactLookupPrecedence() throws {
+    func testResourceAssetIndexExactLookupPrecedence() {
         let rows = [
             Self.makeAssetRow(
                 id: "source-match",
@@ -3094,7 +3107,7 @@ final class MapEditorStoreTests: XCTestCase {
                 status: .warning,
                 availability: "requiredSourceMissing",
                 affectsResourceAvailability: true
-            )
+            ),
         ]
         let index = ResourceAssetCatalogIndex(rows: rows)
 
@@ -3935,11 +3948,11 @@ final class MapEditorStoreTests: XCTestCase {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
         let rom = temp.url.appendingPathComponent("standalone.gba")
-        var bytes = [UInt8](repeating: 0xff, count: 0x200)
-        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
-        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
-        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
-        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        var bytes = [UInt8](repeating: 0xFF, count: 0x200)
+        bytes.replaceSubrange(0x04 ..< 0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0 ..< 0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC ..< 0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0 ..< 0xB2, with: Array("01".utf8))
         bytes[0x100] = 0x80
         bytes[0x101] = 0x00
         bytes[0x102] = 0x00
@@ -4050,7 +4063,7 @@ final class MapEditorStoreTests: XCTestCase {
                         absolutePath: (artifactRoot ?? root).appendingPathComponent(".pokemonhackstudio/builds/\(targetID)/stdout.log").path,
                         exists: true,
                         detail: "stdout"
-                    )
+                    ),
                 ],
                 output: BuildOutputValidation(
                     relativePath: "pokeemerald.gba",
@@ -4827,11 +4840,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedMapCatalog(_ store: WorkbenchStore) async throws -> MapCatalogViewState {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedMapCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.mapCatalogStatus {
+            if case let .failed(message) = store.mapCatalogStatus {
                 throw StoreTestError.mapCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4842,11 +4855,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedMapVisual(_ store: WorkbenchStore, mapID: String) async throws -> MapVisualDocument {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let document = store.selectedMapVisualDocument, document.mapID == mapID {
                 return document
             }
-            if case .failed(let message) = store.mapVisualStatus {
+            if case let .failed(message) = store.mapVisualStatus {
                 throw StoreTestError.mapVisualFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4856,11 +4869,11 @@ final class MapEditorStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedAssetCatalog(_ store: WorkbenchStore) async throws -> ResourceAssetCatalogViewState {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedAssetCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.assetCatalogLoadStatus {
+            if case let .failed(message) = store.assetCatalogLoadStatus {
                 throw StoreTestError.assetCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4873,9 +4886,10 @@ final class MapEditorStoreTests: XCTestCase {
         _ store: WorkbenchStore,
         id: ResourceLibraryEntryViewState.ID
     ) async throws -> ResourceLibraryEntryViewState {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let entry = store.resourceLibrary?.entries.first(where: { $0.id == id }),
-               entry.detailMode == "full" {
+               entry.detailMode == "full"
+            {
                 return entry
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4886,11 +4900,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedSourceGraph(_ store: WorkbenchStore) async throws -> ProjectSourceIndex {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let sourceIndex = store.selectedSourceIndex {
                 return sourceIndex
             }
-            if case .failed(let message) = store.sourceGraphLoadStatus {
+            if case let .failed(message) = store.sourceGraphLoadStatus {
                 throw StoreTestError.sourceGraphFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4901,11 +4915,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedSpeciesCatalog(_ store: WorkbenchStore) async throws -> ProjectSpeciesCatalog {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedSpeciesCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.speciesCatalogLoadStatus {
+            if case let .failed(message) = store.speciesCatalogLoadStatus {
                 throw StoreTestError.speciesCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4916,11 +4930,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedTrainerCatalog(_ store: WorkbenchStore) async throws -> ProjectTrainerCatalog {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedTrainerCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.trainerCatalogLoadStatus {
+            if case let .failed(message) = store.trainerCatalogLoadStatus {
                 throw StoreTestError.trainerCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4931,11 +4945,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedMoveCatalog(_ store: WorkbenchStore) async throws -> MoveCatalogViewState {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedMoveCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.moveCatalogLoadStatus {
+            if case let .failed(message) = store.moveCatalogLoadStatus {
                 throw StoreTestError.moveCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -4946,11 +4960,11 @@ final class MapEditorStoreTests: XCTestCase {
     @MainActor
     @discardableResult
     private func waitForSelectedItemCatalog(_ store: WorkbenchStore) async throws -> ProjectItemCatalog {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let catalog = store.selectedItemCatalog {
                 return catalog
             }
-            if case .failed(let message) = store.itemCatalogLoadStatus {
+            if case let .failed(message) = store.itemCatalogLoadStatus {
                 throw StoreTestError.itemCatalogFailed(message)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -5102,11 +5116,11 @@ final class MapEditorStoreTests: XCTestCase {
 
     private func makeStandaloneGBAROM(named name: String, under parent: URL) throws -> URL {
         let rom = parent.appendingPathComponent(name)
-        var bytes = [UInt8](repeating: 0xff, count: 0x200)
-        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
-        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
-        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
-        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        var bytes = [UInt8](repeating: 0xFF, count: 0x200)
+        bytes.replaceSubrange(0x04 ..< 0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0 ..< 0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC ..< 0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0 ..< 0xB2, with: Array("01".utf8))
         bytes[0x100] = 0x80
         bytes[0x101] = 0x00
         bytes[0x102] = 0x00
@@ -5130,7 +5144,7 @@ final class MapEditorStoreTests: XCTestCase {
         let fnt = makeTestFNT()
         writeUInt32LE(0x300, into: &data, at: 0x40)
         writeUInt32LE(UInt32(fnt.count), into: &data, at: 0x44)
-        data.replaceSubrange(0x300..<(0x300 + fnt.count), with: fnt)
+        data.replaceSubrange(0x300 ..< (0x300 + fnt.count), with: fnt)
 
         let narc = makeTestNARC()
         var fat = Data()
@@ -5142,13 +5156,13 @@ final class MapEditorStoreTests: XCTestCase {
         appendUInt32LE(UInt32(0x500 + narc.count), to: &fat)
         writeUInt32LE(0x380, into: &data, at: 0x48)
         writeUInt32LE(UInt32(fat.count), into: &data, at: 0x4C)
-        data.replaceSubrange(0x380..<(0x380 + fat.count), with: fat)
+        data.replaceSubrange(0x380 ..< (0x380 + fat.count), with: fat)
         writeUInt32LE(0x700, into: &data, at: 0x68)
         writeUInt16LE(0x5678, into: &data, at: 0x15E)
 
-        data.replaceSubrange(0x400..<0x404, with: Data("ROOT".utf8))
-        data.replaceSubrange(0x440..<0x450, with: Data("SDAT".utf8) + Data(repeating: 0, count: 12))
-        data.replaceSubrange(0x500..<(0x500 + narc.count), with: narc)
+        data.replaceSubrange(0x400 ..< 0x404, with: Data("ROOT".utf8))
+        data.replaceSubrange(0x440 ..< 0x450, with: Data("SDAT".utf8) + Data(repeating: 0, count: 12))
+        data.replaceSubrange(0x500 ..< (0x500 + narc.count), with: narc)
         try data.write(to: rom)
         return rom
     }
@@ -5381,7 +5395,7 @@ final class MapEditorStoreTests: XCTestCase {
 
     private func writeASCII(_ string: String, into data: inout Data, at offset: Int, length: Int) {
         let bytes = Array(string.utf8.prefix(length))
-        data.replaceSubrange(offset..<(offset + bytes.count), with: bytes)
+        data.replaceSubrange(offset ..< (offset + bytes.count), with: bytes)
     }
 
     private func writeUInt16LE(_ value: UInt16, into data: inout Data, at offset: Int) {
@@ -6252,8 +6266,8 @@ final class MapEditorStoreTests: XCTestCase {
     private func writeWords(_ words: [UInt16], to url: URL) throws {
         var data = Data()
         for word in words {
-            data.append(UInt8(word & 0x00ff))
-            data.append(UInt8((word >> 8) & 0x00ff))
+            data.append(UInt8(word & 0x00FF))
+            data.append(UInt8((word >> 8) & 0x00FF))
         }
         try write(data, to: url)
     }
@@ -6273,7 +6287,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     private func testJASCPalette(colorCount: Int) -> Data {
-        let colors = (0..<colorCount).map { index -> String in
+        let colors = (0 ..< colorCount).map { index -> String in
             let channel = (index * 8) % 256
             return "\(channel) \(channel) \(channel)"
         }
@@ -6297,7 +6311,7 @@ final class MapEditorStoreTests: XCTestCase {
 
     @MainActor
     private func waitForBuildRunResult(_ store: WorkbenchStore) async throws -> BuildRunResultViewState {
-        for _ in 0..<100 {
+        for _ in 0 ..< 100 {
             if let result = store.selectedBuildRunResult {
                 return result
             }
@@ -6317,7 +6331,7 @@ final class MapEditorStoreTests: XCTestCase {
 
         let fsys = syntheticFSYSArchive()
         let fsysOffset = 0x2000
-        bytes.replaceSubrange(fsysOffset..<(fsysOffset + fsys.count), with: fsys)
+        bytes.replaceSubrange(fsysOffset ..< (fsysOffset + fsys.count), with: fsys)
 
         let names = Array("\0files\0common.fsys\0".utf8)
         let entryCount = 3
@@ -6325,17 +6339,17 @@ final class MapEditorStoreTests: XCTestCase {
         writeBE32(UInt32(fstSize), at: 0x428, in: &bytes)
 
         var fst = [UInt8](repeating: 0, count: fstSize)
-        writeBE32(0x01000000, at: 0, in: &fst)
+        writeBE32(0x0100_0000, at: 0, in: &fst)
         writeBE32(0, at: 4, in: &fst)
         writeBE32(UInt32(entryCount), at: 8, in: &fst)
-        writeBE32(0x01000001, at: 12, in: &fst)
+        writeBE32(0x0100_0001, at: 12, in: &fst)
         writeBE32(0, at: 16, in: &fst)
         writeBE32(UInt32(entryCount), at: 20, in: &fst)
-        writeBE32(0x00000007, at: 24, in: &fst)
+        writeBE32(0x0000_0007, at: 24, in: &fst)
         writeBE32(UInt32(fsysOffset), at: 28, in: &fst)
         writeBE32(UInt32(fsys.count), at: 32, in: &fst)
-        fst.replaceSubrange((entryCount * 12)..<fstSize, with: names)
-        bytes.replaceSubrange(0x1800..<(0x1800 + fst.count), with: fst)
+        fst.replaceSubrange((entryCount * 12) ..< fstSize, with: names)
+        bytes.replaceSubrange(0x1800 ..< (0x1800 + fst.count), with: fst)
 
         try write(Data(bytes), to: url)
     }
@@ -6357,7 +6371,7 @@ final class MapEditorStoreTests: XCTestCase {
 
     private func replaceASCII(_ string: String, at offset: Int, in bytes: inout [UInt8]) {
         let replacement = Array(string.utf8)
-        bytes.replaceSubrange(offset..<(offset + replacement.count), with: replacement)
+        bytes.replaceSubrange(offset ..< (offset + replacement.count), with: replacement)
     }
 
     private func writeBE32(_ value: UInt32, at offset: Int, in bytes: inout [UInt8]) {
@@ -6377,7 +6391,8 @@ final class MapEditorStoreTests: XCTestCase {
         let sourceBytes = Array(source)
         let targetBytes = Array(target)
         while prefixLength < min(sourceBytes.count, targetBytes.count),
-              sourceBytes[prefixLength] == targetBytes[prefixLength] {
+              sourceBytes[prefixLength] == targetBytes[prefixLength]
+        {
             prefixLength += 1
         }
         if prefixLength > 0 {
@@ -6415,7 +6430,7 @@ final class MapEditorStoreTests: XCTestCase {
         var crc: UInt32 = 0xFFFF_FFFF
         for byte in data {
             crc ^= UInt32(byte)
-            for _ in 0..<8 {
+            for _ in 0 ..< 8 {
                 let mask = 0 &- (crc & 1)
                 crc = (crc >> 1) ^ (0xEDB8_8320 & mask)
             }
@@ -6486,10 +6501,10 @@ final class MapEditorStoreTests: XCTestCase {
 
 private extension Data {
     mutating func appendUInt32BE(_ value: UInt32) {
-        append(UInt8((value >> 24) & 0xff))
-        append(UInt8((value >> 16) & 0xff))
-        append(UInt8((value >> 8) & 0xff))
-        append(UInt8(value & 0xff))
+        append(UInt8((value >> 24) & 0xFF))
+        append(UInt8((value >> 16) & 0xFF))
+        append(UInt8((value >> 8) & 0xFF))
+        append(UInt8(value & 0xFF))
     }
 
     mutating func appendPNGChunk(type: String, payload: Data) {

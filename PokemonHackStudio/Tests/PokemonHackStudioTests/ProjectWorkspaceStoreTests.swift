@@ -149,6 +149,8 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertTrue(firstStore.selectedGraphicsIsDirty)
         XCTAssertTrue(firstStore.canPreviewSelectedGraphicsMutationPlan)
         XCTAssertEqual(firstStore.toolbarMutationState.target, .graphics)
+        XCTAssertEqual(firstStore.mutationActionBarState.target, .graphics)
+        XCTAssertTrue(firstStore.mutationActionBarState.canPreview)
         XCTAssertTrue(firstStore.saveDraftsNow())
         XCTAssertEqual(firstStore.savedDraftCount, 1)
 
@@ -187,6 +189,8 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
         XCTAssertTrue(firstStore.selectedNDSDataIsDirty)
         XCTAssertEqual(firstStore.currentDraftCounts.ndsData, 1)
+        XCTAssertEqual(firstStore.mutationActionBarState.target, .ndsData)
+        XCTAssertTrue(firstStore.mutationActionBarState.canPreview)
         XCTAssertTrue(firstStore.saveDraftsNow())
         XCTAssertEqual(firstStore.savedDraftCount, 1)
 
@@ -271,6 +275,13 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedProjectID, firstProjectID)
         XCTAssertEqual(store.selectedIndexedProject?.rootPath, firstRoot.path)
         XCTAssertNotNil(store.pendingMapNavigation)
+        XCTAssertEqual(store.currentDraftSummary.dialogDetail, "1 Trainer")
+        XCTAssertTrue(store.pendingMapNavigationTitle.contains("unsaved drafts"))
+        XCTAssertTrue(store.pendingMapNavigationMessage.contains("Unsaved drafts are staged: 1 Trainer."))
+        XCTAssertTrue(store.pendingMapNavigationMessage.contains("Cancel and open the draft module"))
+        XCTAssertEqual(store.pendingMapNavigationPreviewTitle, "Preview Current Selection")
+        XCTAssertEqual(store.pendingMapNavigationDiscardTitle, "Discard Drafts and Continue")
+        XCTAssertFalse(store.canPreviewPendingMapNavigationDraft)
 
         store.discardMapEditsAndContinueNavigation()
 
@@ -371,7 +382,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedSpeciesCatalog(_ store: WorkbenchStore) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedSpeciesCatalog != nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -380,7 +391,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedTrainerCatalog(_ store: WorkbenchStore) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedTrainerCatalog != nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -389,7 +400,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedMoveCatalog(_ store: WorkbenchStore) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedCoreMoveCatalog != nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -398,7 +409,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedItemCatalog(_ store: WorkbenchStore) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedItemCatalog != nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -407,7 +418,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedMapVisual(_ store: WorkbenchStore, mapID: String) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedMapVisualDocument?.mapID == mapID { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -416,7 +427,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedGraphicsReport(_ store: WorkbenchStore) async throws {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if store.selectedGraphicsReport != nil { return }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -425,7 +436,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedSourceGraph(_ store: WorkbenchStore) async throws -> ProjectSourceIndex {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if let sourceIndex = store.selectedSourceIndex {
                 return sourceIndex
             }
@@ -436,7 +447,7 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
 
     @MainActor
     private func waitForSelectedAssetCatalog(_ store: WorkbenchStore) async throws -> ResourceAssetCatalogViewState {
-        for _ in 0..<80 {
+        for _ in 0 ..< 80 {
             if let catalog = store.selectedAssetCatalog { return catalog }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -912,8 +923,8 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     private func writeWords(_ words: [UInt16], to url: URL) throws {
         var data = Data()
         for word in words {
-            data.append(UInt8(word & 0xff))
-            data.append(UInt8((word >> 8) & 0xff))
+            data.append(UInt8(word & 0xFF))
+            data.append(UInt8((word >> 8) & 0xFF))
         }
         try write(data, to: url)
     }

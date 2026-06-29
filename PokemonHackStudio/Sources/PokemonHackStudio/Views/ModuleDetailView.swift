@@ -12,15 +12,9 @@ struct ModuleDetailView: View {
             inspectorContext: shellInspectorContext,
             mutationPlanContext: mutationPlanContext,
             showsSourceInspectorByDefault: store.userSettings.showSourceInspectorByDefault,
-            onPreviewMutationPlan: {
-                previewMutationPlan()
-            },
-            onApplyMutationPlan: {
-                applyMutationPlan()
-            },
-            onDiscardMutationPlan: {
-                discardMutationPlan()
-            }
+            onPreviewMutationPlan: store.previewToolbarMutationTarget,
+            onApplyMutationPlan: store.applyToolbarMutationTarget,
+            onDiscardMutationPlan: store.discardToolbarMutationTarget
         ) {
             selectedModuleContent
         }
@@ -61,6 +55,10 @@ struct ModuleDetailView: View {
                 sortMode: Binding(
                     get: { store.resourceAssetSortMode },
                     set: { store.resourceAssetSortMode = $0 }
+                ),
+                searchText: Binding(
+                    get: { store.searchText },
+                    set: { store.searchText = $0 }
                 ),
                 onChooseGameCubeResource: {
                     store.chooseGameCubeResourceImage()
@@ -340,14 +338,14 @@ struct ModuleDetailView: View {
                 context
             } else {
                 MutationPlanPanelContext.move(
-                plan: store.latestMoveEditPlan,
-                result: store.latestMoveApplyResult,
-                isDirty: store.selectedMoveIsDirty,
-                canPreview: store.canPreviewSelectedMoveMutationPlan,
-                canApply: store.canApplySelectedMoveMutationPlan,
-                canDiscard: store.canDiscardMoveEdits,
-                previewBlockedReason: store.movePreviewBlockedReason,
-                applyBlockedReason: store.moveApplyBlockedReason
+                    plan: store.latestMoveEditPlan,
+                    result: store.latestMoveApplyResult,
+                    isDirty: store.selectedMoveIsDirty,
+                    canPreview: store.canPreviewSelectedMoveMutationPlan,
+                    canApply: store.canApplySelectedMoveMutationPlan,
+                    canDiscard: store.canDiscardMoveEdits,
+                    previewBlockedReason: store.movePreviewBlockedReason,
+                    applyBlockedReason: store.moveApplyBlockedReason
                 )
             }
         case .items:
@@ -384,75 +382,6 @@ struct ModuleDetailView: View {
         }
     }
 
-    private func previewMutationPlan() {
-        switch store.selection {
-        case .pokemon:
-            store.previewSelectedSpeciesMutationPlan()
-        case .trainers:
-            store.previewSelectedTrainerMutationPlan()
-        case .moves:
-            if store.canDiscardSpeciesBatchEdits {
-                store.previewSpeciesBatchMutationPlan()
-            } else {
-                store.previewSelectedMoveMutationPlan()
-            }
-        case .items:
-            store.previewSelectedItemMutationPlan()
-        case .graphics:
-            store.previewSelectedGraphicsMutationPlan()
-        case .resources:
-            store.previewSelectedNDSDataMutationPlan()
-        default:
-            store.previewSelectedMapMutationPlan()
-        }
-    }
-
-    private func applyMutationPlan() {
-        switch store.selection {
-        case .pokemon:
-            store.applySelectedSpeciesMutationPlan()
-        case .trainers:
-            store.applySelectedTrainerMutationPlan()
-        case .moves:
-            if store.canDiscardSpeciesBatchEdits {
-                store.applySpeciesBatchMutationPlan()
-            } else {
-                store.applySelectedMoveMutationPlan()
-            }
-        case .items:
-            store.applySelectedItemMutationPlan()
-        case .graphics:
-            store.applySelectedGraphicsMutationPlan()
-        case .resources:
-            store.applySelectedNDSDataMutationPlan()
-        default:
-            store.applySelectedMapMutationPlan()
-        }
-    }
-
-    private func discardMutationPlan() {
-        switch store.selection {
-        case .pokemon:
-            store.discardSpeciesEdits()
-        case .trainers:
-            store.discardTrainerEdits()
-        case .moves:
-            if store.canDiscardSpeciesBatchEdits {
-                store.discardSpeciesBatchEdits()
-            } else {
-                store.discardMoveEdits()
-            }
-        case .items:
-            store.discardItemEdits()
-        case .graphics:
-            store.discardGraphicsEdits()
-        case .resources:
-            store.discardNDSDataEdits()
-        default:
-            store.discardMapEdits()
-        }
-    }
-
     private var projectInspectorContext: SourceInspectorContext {
         guard let project = store.selectedIndexedProject else {
             return SourceInspectorContext(
@@ -462,7 +391,7 @@ struct ModuleDetailView: View {
                 status: store.projectIndexStatus.validationState,
                 facts: [
                     SourceInspectorFact(label: "Projects", value: "\(store.indexedProjects.count)"),
-                    SourceInspectorFact(label: "Issues", value: "\(store.issueCount)")
+                    SourceInspectorFact(label: "Issues", value: "\(store.issueCount)"),
                 ],
                 sources: [],
                 diagnostics: []
@@ -478,7 +407,7 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "Profile", value: project.profile),
                 SourceInspectorFact(label: "Write Policy", value: project.writePolicy),
                 SourceInspectorFact(label: "Sources", value: "\(project.existingSourceDocumentCount)/\(project.sourceDocumentCount)"),
-                SourceInspectorFact(label: "Build Targets", value: "\(project.buildTargetCount)")
+                SourceInspectorFact(label: "Build Targets", value: "\(project.buildTargetCount)"),
             ],
             sources: project.sourceSurfaces.prefix(8).map {
                 SourceInspectorSource(title: $0.title, source: $0.source, status: $0.validation)
@@ -510,7 +439,7 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "Parsed", value: "\(library.parsedCount)"),
                 SourceInspectorFact(label: "Missing", value: "\(library.missingCount)"),
                 SourceInspectorFact(label: "Items", value: "\(library.itemCount)"),
-                SourceInspectorFact(label: "Assets", value: "\(store.selectedAssetCatalog?.assetCount ?? 0)")
+                SourceInspectorFact(label: "Assets", value: "\(store.selectedAssetCatalog?.assetCount ?? 0)"),
             ],
             sources: resourceInspectorSources(library: library),
             diagnostics: (library.allDiagnostics + (store.selectedAssetCatalog?.diagnostics ?? []))
@@ -544,7 +473,7 @@ struct ModuleDetailView: View {
                 facts: [
                     SourceInspectorFact(label: "Groups", value: "\(catalog.groupCount)"),
                     SourceInspectorFact(label: "Maps", value: "\(catalog.mapCount)"),
-                    SourceInspectorFact(label: "Layouts", value: "\(catalog.layoutCount)")
+                    SourceInspectorFact(label: "Layouts", value: "\(catalog.layoutCount)"),
                 ],
                 sources: [],
                 diagnostics: catalog.diagnostics.prefix(6).map { SourceInspectorDiagnostic(diagnostic: $0) }
@@ -574,7 +503,7 @@ struct ModuleDetailView: View {
                     SourceInspectorFact(label: "Generated", value: "\(project.generatedOutputCount)"),
                     SourceInspectorFact(label: "Artifacts", value: "\(project.artifactCount)"),
                     SourceInspectorFact(label: "Health Rows", value: "\(store.selectedBuildReport?.healthMatrix.rows.count ?? 0)"),
-                    SourceInspectorFact(label: "Report Rows", value: "\(store.filteredBuildReportRows.count)")
+                    SourceInspectorFact(label: "Report Rows", value: "\(store.filteredBuildReportRows.count)"),
                 ],
                 sources: (store.selectedBuildReport?.generatedArtifacts.prefix(8).map {
                     SourceInspectorSource(title: $0.title, source: $0.source, status: $0.status)
@@ -601,7 +530,7 @@ struct ModuleDetailView: View {
                 status: moduleStatus,
                 facts: [
                     SourceInspectorFact(label: "Project", value: project.title),
-                    SourceInspectorFact(label: "Missing Sources", value: "\(project.missingSourceDocumentCount)")
+                    SourceInspectorFact(label: "Missing Sources", value: "\(project.missingSourceDocumentCount)"),
                 ],
                 sources: [],
                 diagnostics: store.selectedDiagnosticRows.prefix(10).map { SourceInspectorDiagnostic(diagnostic: $0) }
@@ -643,7 +572,7 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "Sources", value: "\(outline.sources.count)"),
                 SourceInspectorFact(label: "Labels", value: "\(outline.labels.count)"),
                 SourceInspectorFact(label: "Commands", value: "\(outline.labels.reduce(0) { $0 + $1.commands.count })"),
-                SourceInspectorFact(label: "Text Blocks", value: "\(outline.textBlocks.count)")
+                SourceInspectorFact(label: "Text Blocks", value: "\(outline.textBlocks.count)"),
             ],
             sources: outline.sources.prefix(10).map {
                 SourceInspectorSource(
@@ -689,7 +618,7 @@ struct ModuleDetailView: View {
                     SourceInspectorFact(label: "Tilesets", value: "\(report.tilesetCount)"),
                     SourceInspectorFact(label: "Tile Images", value: "\(report.tileImageCount)"),
                     SourceInspectorFact(label: "Palettes", value: "\(report.paletteFileCount)"),
-                    SourceInspectorFact(label: "Animations", value: "\(report.animationDirectoryCount)")
+                    SourceInspectorFact(label: "Animations", value: "\(report.animationDirectoryCount)"),
                 ],
                 sources: report.rows.prefix(8).map {
                     SourceInspectorSource(title: $0.title, source: $0.source, status: $0.status)
@@ -708,7 +637,7 @@ struct ModuleDetailView: View {
             status: store.moduleStatus(for: .graphics),
             facts: [
                 SourceInspectorFact(label: "Graphics Sources", value: "\(graphicsSurfaces.count)"),
-                SourceInspectorFact(label: "Generated Outputs", value: "\(project.generatedOutputCount)")
+                SourceInspectorFact(label: "Generated Outputs", value: "\(project.generatedOutputCount)"),
             ],
             sources: graphicsSurfaces.prefix(10).map {
                 SourceInspectorSource(title: $0.title, source: $0.source, status: $0.validation)
@@ -752,7 +681,12 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "Level Moves", value: "\(species.learnsets.levelUp.count)"),
                 SourceInspectorFact(label: "TM/HM", value: "\(species.learnsets.tmhm.count)"),
                 SourceInspectorFact(label: "Egg Moves", value: "\(species.learnsets.egg.count)"),
-                SourceInspectorFact(label: "Assets", value: "\(species.assets.filter(\.exists).count)/\(species.assets.count)")
+                SourceInspectorFact(label: "Assets", value: "\(species.assets.filter(\.exists).count)/\(species.assets.count)"),
+                SourceInspectorFact(label: "Write Policy", value: species.isEditable ? (store.selectedIndexedProject?.writePolicy ?? "Editable") : "Read-only"),
+                SourceInspectorFact(label: "Dirty", value: store.selectedSpeciesIsDirty ? "Yes" : "No"),
+                SourceInspectorFact(label: "Mutation Target", value: store.mutationActionBarState.title),
+                SourceInspectorFact(label: "Preview", value: mutationPreviewFact(store.mutationActionBarState)),
+                SourceInspectorFact(label: "Apply", value: mutationApplyFact(store.mutationActionBarState)),
             ],
             sources: speciesSources(species),
             diagnostics: (catalog.diagnostics + species.diagnostics).prefix(10).map(sourceInspectorDiagnostic(from:))
@@ -797,7 +731,7 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "Class", value: trainer.trainerClass),
                 SourceInspectorFact(label: "Party", value: "\(trainer.party.count) Pokemon"),
                 SourceInspectorFact(label: "AI Flags", value: "\(trainer.aiFlags.count)"),
-                SourceInspectorFact(label: "Editable", value: trainer.isEditable ? "Yes" : "No")
+                SourceInspectorFact(label: "Editable", value: trainer.isEditable ? "Yes" : "No"),
             ],
             sources: trainerSources(trainer),
             diagnostics: trainer.diagnostics.prefix(10).map(sourceInspectorDiagnostic(from:))
@@ -825,7 +759,7 @@ struct ModuleDetailView: View {
                 status: store.moduleStatus(for: .moves),
                 facts: [
                     SourceInspectorFact(label: "Moves", value: "\(catalog.moveCount)"),
-                    SourceInspectorFact(label: "Learnsets", value: "\(catalog.learnsetEntryCount)")
+                    SourceInspectorFact(label: "Learnsets", value: "\(catalog.learnsetEntryCount)"),
                 ],
                 sources: [],
                 diagnostics: catalog.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
@@ -841,10 +775,16 @@ struct ModuleDetailView: View {
                 SourceInspectorFact(label: "TM/HM", value: "\(move.tmhmLearners.count)"),
                 SourceInspectorFact(label: "Tutor", value: "\(move.tutorLearners.count)"),
                 SourceInspectorFact(label: "Learned By", value: "\(move.learnedBy.count)"),
-                SourceInspectorFact(label: "Diagnostics", value: "\(move.diagnostics.count)")
+                SourceInspectorFact(label: "Diagnostics", value: "\(move.diagnostics.count)"),
+                SourceInspectorFact(label: "Write Policy", value: move.isEditable ? (store.selectedIndexedProject?.writePolicy ?? "Editable") : "Read-only"),
+                SourceInspectorFact(label: "Dirty", value: store.selectedMoveIsDirty || !store.dirtySpeciesBatchDrafts.isEmpty ? "Yes" : "No"),
+                SourceInspectorFact(label: "Compatibility Drafts", value: "\(store.dirtySpeciesBatchDrafts.count)"),
+                SourceInspectorFact(label: "Mutation Target", value: store.mutationActionBarState.title),
+                SourceInspectorFact(label: "Preview", value: mutationPreviewFact(store.mutationActionBarState)),
+                SourceInspectorFact(label: "Apply", value: mutationApplyFact(store.mutationActionBarState)),
             ],
             sources: [
-                SourceInspectorSource(title: "Move Definition", source: move.source, status: move.status)
+                SourceInspectorSource(title: "Move Definition", source: move.source, status: move.status),
             ],
             diagnostics: move.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
         )
@@ -852,6 +792,14 @@ struct ModuleDetailView: View {
 
     private var itemInspectorContext: SourceInspectorContext {
         store.itemSourceInspectorContext
+    }
+
+    private func mutationPreviewFact(_ state: MutationActionBarState) -> String {
+        state.canPreview ? "Ready" : state.previewHelp
+    }
+
+    private func mutationApplyFact(_ state: MutationActionBarState) -> String {
+        state.canApply ? "Ready" : state.applyHelp
     }
 
     private func recordsInspectorContext(module: WorkbenchModule) -> SourceInspectorContext {
@@ -863,7 +811,7 @@ struct ModuleDetailView: View {
             status: status(for: records.map(\.validation)),
             facts: [
                 SourceInspectorFact(label: "Records", value: "\(records.count)"),
-                SourceInspectorFact(label: "Dirty", value: "\(records.filter(\.isDirty).count)")
+                SourceInspectorFact(label: "Dirty", value: "\(records.filter(\.isDirty).count)"),
             ],
             sources: records.prefix(8).map {
                 SourceInspectorSource(title: $0.title, source: $0.source, status: $0.validation)
@@ -882,7 +830,7 @@ struct ModuleDetailView: View {
                     line: species.sourceSpan.startLine
                 ),
                 status: .valid
-            )
+            ),
         ]
         if let pokedex = species.pokedex {
             sources.append(
@@ -913,7 +861,7 @@ struct ModuleDetailView: View {
                     line: trainer.sourceSpan.startLine
                 ),
                 status: trainer.isEditable ? .valid : .warning
-            )
+            ),
         ]
         if let partySpan = trainer.partySourceSpan, let partySymbol = trainer.partySymbol {
             sources.append(
@@ -943,7 +891,7 @@ struct ModuleDetailView: View {
         var facts = [
             SourceInspectorFact(label: "Group", value: map.groupName),
             SourceInspectorFact(label: "Events", value: "\(map.eventCounts.total)"),
-            SourceInspectorFact(label: "Connections", value: "\(map.connections.count)")
+            SourceInspectorFact(label: "Connections", value: "\(map.connections.count)"),
         ]
 
         if let layout = map.layout {
@@ -956,7 +904,7 @@ struct ModuleDetailView: View {
 
     private func mapSources(_ map: MapSummaryViewState) -> [SourceInspectorSource] {
         var sources = [
-            SourceInspectorSource(title: "Map JSON", source: map.source, status: .valid)
+            SourceInspectorSource(title: "Map JSON", source: map.source, status: .valid),
         ]
 
         if let layout = map.layout {

@@ -14,6 +14,7 @@ private struct ResourceAssetRowsCache {
 
 private struct WorkbenchWorkflowContextState: Codable {
     let selection: String
+    let sidebarMode: String?
     let selectedResourceAssetID: String?
     let selectedResourceLibraryEntryID: String
     let selectedResourceLibraryMode: String
@@ -207,6 +208,11 @@ final class WorkbenchStore: ObservableObject {
     @Published var selection: WorkbenchModule = .dashboard {
         didSet { persistWorkflowContext() }
     }
+
+    @Published var sidebarMode: WorkbenchSidebarMode = .browse {
+        didSet { persistWorkflowContext() }
+    }
+
     @Published var selectedTargetID: BuildTarget.ID = "emerald-dev"
     @Published var selectedProjectID: IndexedProjectSummary.ID = ""
     @Published var selectedMapID: String = ""
@@ -219,12 +225,15 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedResourceAssetID: ResourceAssetRowViewState.ID? {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedResourceLibraryEntryID: ResourceLibraryEntryViewState.ID = "" {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedResourceLibraryMode: ResourceLibraryMode = .assets {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedGameCubeResourcePath: String = ""
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
@@ -243,17 +252,21 @@ final class WorkbenchStore: ObservableObject {
             persistWorkflowContext()
         }
     }
+
     @Published var selectedBuildReportRowID: String = "" {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedGraphicsReportRowID: String = ""
     @Published var selectedGraphicsImportPackagePath: String = ""
     @Published var selectedDiagnosticBucket: DiagnosticSummaryBucket = .blockingErrors {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedDiagnosticRowID: String = "" {
         didSet { persistWorkflowContext() }
     }
+
     @Published var selectedGuidedFlowID: String = ""
     @Published private(set) var openProjectPanelRequestID: UUID?
     @Published var selectedRecordIDsByModule: [WorkbenchModule: UUID] = [:]
@@ -263,15 +276,18 @@ final class WorkbenchStore: ObservableObject {
     @Published var searchText = "" {
         didSet { persistWorkflowContext() }
     }
+
     @Published var resourceAssetCategory = WorkbenchStore.allResourceAssetCategories
     @Published var resourceAssetSortMode: ResourceAssetSortMode = .category
     @Published var pendingMapNavigation: PendingMapNavigation?
     @Published private(set) var recentModules: [WorkbenchModule] = [] {
         didSet { persistWorkflowContext() }
     }
+
     @Published private(set) var recentWorkbenchTargets: [WorkbenchRecentTarget] = [] {
         didSet { persistWorkflowContext() }
     }
+
     @Published private(set) var indexedProjects: [IndexedProjectSummary] = []
     @Published private(set) var projectIndexStatus: ProjectIndexLoadStatus = .idle
     @Published private(set) var selectedMapCatalog: MapCatalogViewState?
@@ -425,7 +441,7 @@ final class WorkbenchStore: ObservableObject {
             }
         }
 
-        if autoLoadProjects && self.userSettings.autoLoadProjects {
+        if autoLoadProjects, self.userSettings.autoLoadProjects {
             DispatchQueue.main.async { [weak self] in
                 self?.refreshProjectIndexes()
             }
@@ -440,6 +456,9 @@ final class WorkbenchStore: ObservableObject {
 
         if let module = WorkbenchModule(rawValue: state.selection) {
             selection = module
+        }
+        if let sidebarMode = state.sidebarMode.flatMap(WorkbenchSidebarMode.init(rawValue:)) {
+            self.sidebarMode = sidebarMode
         }
         selectedResourceAssetID = state.selectedResourceAssetID
         selectedResourceLibraryEntryID = state.selectedResourceLibraryEntryID
@@ -462,6 +481,7 @@ final class WorkbenchStore: ObservableObject {
     private func persistWorkflowContext() {
         let state = WorkbenchWorkflowContextState(
             selection: selection.rawValue,
+            sidebarMode: sidebarMode.rawValue,
             selectedResourceAssetID: selectedResourceAssetID,
             selectedResourceLibraryEntryID: selectedResourceLibraryEntryID,
             selectedResourceLibraryMode: selectedResourceLibraryMode.rawValue,
@@ -484,34 +504,34 @@ final class WorkbenchStore: ObservableObject {
         let kind: String
         let identifier: String
         switch target.target {
-        case .map(let value):
+        case let .map(value):
             kind = "map"
             identifier = value
-        case .species(let value):
+        case let .species(value):
             kind = "species"
             identifier = value
-        case .trainer(let value):
+        case let .trainer(value):
             kind = "trainer"
             identifier = value
-        case .move(let value):
+        case let .move(value):
             kind = "move"
             identifier = value
-        case .item(let value):
+        case let .item(value):
             kind = "item"
             identifier = value
-        case .resourceAsset(let value):
+        case let .resourceAsset(value):
             kind = "resourceAsset"
             identifier = value
-        case .resourceEntry(let value):
+        case let .resourceEntry(value):
             kind = "resourceEntry"
             identifier = value
-        case .scriptLabel(let value):
+        case let .scriptLabel(value):
             kind = "scriptLabel"
             identifier = value
-        case .buildRow(let value):
+        case let .buildRow(value):
             kind = "buildRow"
             identifier = value
-        case .diagnostic(let value):
+        case let .diagnostic(value):
             kind = "diagnostic"
             identifier = value
         }
@@ -594,31 +614,80 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var pendingMapNavigationTitle: String {
-        guard let pendingMapNavigation else { return "Staged map edits" }
+        guard let pendingMapNavigation else { return "Unsaved drafts" }
         switch pendingMapNavigation {
-        case .project(let projectID):
+        case let .project(projectID):
             let title = indexedProjects.first { $0.id == projectID }?.title ?? "selected project"
-            return "Switch to \(title)?"
-        case .map(let mapID):
+            return "Switch to \(title) with unsaved drafts?"
+        case let .map(mapID):
             let title = selectedMapCatalog?.maps.first { $0.id == mapID }?.name ?? mapID
-            return "Switch to \(title)?"
+            return "Switch to \(title) with unsaved drafts?"
         case .refreshMaps:
-            return "Refresh maps?"
+            return "Refresh maps with unsaved drafts?"
+        }
+    }
+
+    var pendingMapNavigationPreviewTitle: String {
+        switch pendingMapNavigation {
+        case .map, .refreshMaps:
+            "Preview Map Draft"
+        case .project, nil:
+            "Preview Current Selection"
+        }
+    }
+
+    var pendingMapNavigationDiscardTitle: String {
+        switch pendingMapNavigation {
+        case .map, .refreshMaps:
+            "Discard Map Draft and Continue"
+        case .project, nil:
+            "Discard Drafts and Continue"
+        }
+    }
+
+    var canPreviewPendingMapNavigationDraft: Bool {
+        switch pendingMapNavigation {
+        case .map, .refreshMaps:
+            toolbarMutationState.target == .map && mutationActionBarState.canPreview
+        case .project:
+            mutationActionBarState.canPreview
+        case nil:
+            false
         }
     }
 
     var pendingMapNavigationMessage: String {
+        let draftDetail = pendingNavigationDraftSummary.dialogDetail
+        let summary = draftDetail.isEmpty ? "unsaved drafts" : draftDetail
         guard let pendingMapNavigation else {
-            return "This project has staged edits. Preview or discard them before changing selection."
+            return "Unsaved drafts are staged: \(summary). Cancel and open the draft module to preview or apply it before changing selection."
         }
         switch pendingMapNavigation {
         case .project:
-            return "This project has staged edits. Preview or discard them before switching projects."
-        case .map(let mapID):
+            if canPreviewPendingMapNavigationDraft {
+                return "Unsaved drafts are staged: \(summary). Preview the current editable selection, or discard all drafts before switching projects."
+            }
+            return "Unsaved drafts are staged: \(summary). Cancel and open the draft module to preview or apply it, or discard all drafts before switching projects."
+        case let .map(mapID):
             let title = selectedMapCatalog?.maps.first { $0.id == mapID }?.name ?? mapID
-            return "This map has staged edits. Preview or discard them before opening \(title)."
+            if canPreviewPendingMapNavigationDraft {
+                return "Unsaved map drafts are staged: \(summary). Preview the current map draft, or discard the map draft before opening \(title)."
+            }
+            return "Unsaved map drafts are staged: \(summary). Cancel and return to Maps to preview or apply it, or discard the map draft before opening \(title)."
         case .refreshMaps:
-            return "This map has staged edits. Preview or discard them before refreshing the map catalog."
+            if canPreviewPendingMapNavigationDraft {
+                return "Unsaved map drafts are staged: \(summary). Preview the current map draft, or discard the map draft before refreshing the map catalog."
+            }
+            return "Unsaved map drafts are staged: \(summary). Cancel and return to Maps to preview or apply it, or discard the map draft before refreshing the map catalog."
+        }
+    }
+
+    private var pendingNavigationDraftSummary: DirtyDraftSummary {
+        switch pendingMapNavigation {
+        case .map, .refreshMaps:
+            return DirtyDraftSummary(rows: currentDraftSummary.rows.filter { $0.id == "maps" })
+        case .project, nil:
+            return currentDraftSummary
         }
     }
 
@@ -766,7 +835,7 @@ final class WorkbenchStore: ObservableObject {
                 status: moduleStatus(for: .items),
                 facts: [
                     SourceInspectorFact(label: "Items", value: "\(catalog.itemCount)"),
-                    SourceInspectorFact(label: "Editable", value: "\(catalog.editableCount)")
+                    SourceInspectorFact(label: "Editable", value: "\(catalog.editableCount)"),
                 ],
                 sources: [],
                 diagnostics: catalog.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
@@ -781,10 +850,10 @@ final class WorkbenchStore: ObservableObject {
             facts: [
                 SourceInspectorFact(label: "Editable", value: item.isEditable ? "Yes" : "No"),
                 SourceInspectorFact(label: "Description", value: item.isDescriptionEditable ? "Editable" : "Read-only"),
-                SourceInspectorFact(label: "Diagnostics", value: "\(item.diagnostics.count)")
+                SourceInspectorFact(label: "Diagnostics", value: "\(item.diagnostics.count)"),
             ] + item.facts.prefix(4).map { SourceInspectorFact(label: $0.label, value: $0.value) },
             sources: [
-                SourceInspectorSource(title: "Item Definition", source: item.source, status: item.status)
+                SourceInspectorSource(title: "Item Definition", source: item.source, status: item.status),
             ],
             diagnostics: item.diagnostics.prefix(8).map { SourceInspectorDiagnostic(diagnostic: $0) }
         )
@@ -1167,7 +1236,8 @@ final class WorkbenchStore: ObservableObject {
 
     var selectedRunnableBuildTargets: [BuildTargetValidationViewState] {
         if let profile = selectedIndexedProject?.profile,
-           Self.ndsBuildPreviewOnlyProfiles.contains(profile) {
+           Self.ndsBuildPreviewOnlyProfiles.contains(profile)
+        {
             return []
         }
         guard selectedIndexedProject?.buildTargetCount ?? 0 > 0 else {
@@ -1311,6 +1381,10 @@ final class WorkbenchStore: ObservableObject {
 
     var currentDraftCounts: PokemonHackCore.SavedDraftCounts {
         currentDraftSnapshot().counts
+    }
+
+    var currentDraftSummary: DirtyDraftSummary {
+        DirtyDraftSummary(counts: currentDraftCounts)
     }
 
     var currentDraftCount: Int {
@@ -1539,6 +1613,10 @@ final class WorkbenchStore: ObservableObject {
         default:
             return 0
         }
+    }
+
+    var mutationActionBarState: MutationActionBarState {
+        MutationActionBarState(toolbarState: toolbarMutationState)
     }
 
     var selectedMapVisualDocument: PokemonHackCore.MapVisualDocument? {
@@ -1912,7 +1990,8 @@ final class WorkbenchStore: ObservableObject {
     private func ndsDataCatalog(for project: IndexedProjectSummary) -> PokemonHackCore.ProjectNDSDataCatalog? {
         let fingerprint = Self.ndsDataCatalogFingerprint(rootPath: project.rootPath, fileManager: fileManager)
         if ndsDataCatalogFingerprintsByID[project.id] == fingerprint,
-           let cached = ndsDataCatalogsByID[project.id] {
+           let cached = ndsDataCatalogsByID[project.id]
+        {
             return cached
         }
         guard let catalog = try? PokemonHackCore.NDSDataCatalogBuilder.build(path: project.rootPath, fileManager: fileManager) else {
@@ -2122,7 +2201,7 @@ final class WorkbenchStore: ObservableObject {
     ) -> [ResourceAssetRowViewState] {
         ResourceAssetCatalogIndex(rows: assetRows).filteredRows(
             category: category,
-            allCategory: Self.allResourceAssetCategories,
+            allCategory: allResourceAssetCategories,
             searchText: searchText,
             sortMode: sortMode
         )
@@ -2139,16 +2218,16 @@ final class WorkbenchStore: ObservableObject {
                 species.training.catchRate ?? "",
                 species.bodyColor ?? "",
                 species.pokedex?.categoryName ?? "",
-                species.pokedex?.description ?? ""
+                species.pokedex?.description ?? "",
             ]
-            + species.types
-            + species.abilities
-            + species.breeding.eggGroups
-            + species.learnsets.levelUp.map(\.move)
-            + species.learnsets.tmhm.map(\.move)
-            + species.learnsets.egg.map(\.move)
-            + species.evolutions.map(\.targetSpecies)
-            + species.assets.map(\.relativePath)
+                + species.types
+                + species.abilities
+                + species.breeding.eggGroups
+                + species.learnsets.levelUp.map(\.move)
+                + species.learnsets.tmhm.map(\.move)
+                + species.learnsets.egg.map(\.move)
+                + species.evolutions.map(\.targetSpecies)
+                + species.assets.map(\.relativePath)
         )
         .joined(separator: " ")
         .lowercased()
@@ -2166,21 +2245,21 @@ final class WorkbenchStore: ObservableObject {
                 trainer.partyShape?.macroName ?? "",
                 trainer.partySymbol ?? "",
                 trainer.sourceSpan.relativePath,
-                trainer.partySourceSpan?.relativePath ?? ""
+                trainer.partySourceSpan?.relativePath ?? "",
             ]
-            + trainer.trainerItems
-            + trainer.aiFlags
-            + trainer.party.flatMap { member in
-                [
-                    member.species,
-                    member.heldItem ?? "",
-                    member.nature ?? "",
-                    "level \(member.level.map(String.init) ?? "")",
-                    "iv \(member.iv.map(String.init) ?? "")",
-                    "ivs \(member.ivs.values.map(String.init).joined(separator: " "))"
-                ] + member.moves + member.defaultMoves
-            }
-            + trainer.diagnostics.map { "\($0.code) \($0.message)" }
+                + trainer.trainerItems
+                + trainer.aiFlags
+                + trainer.party.flatMap { member in
+                    [
+                        member.species,
+                        member.heldItem ?? "",
+                        member.nature ?? "",
+                        "level \(member.level.map(String.init) ?? "")",
+                        "iv \(member.iv.map(String.init) ?? "")",
+                        "ivs \(member.ivs.values.map(String.init).joined(separator: " "))",
+                    ] + member.moves + member.defaultMoves
+                }
+                + trainer.diagnostics.map { "\($0.code) \($0.message)" }
         )
         .joined(separator: " ")
         .lowercased()
@@ -2262,7 +2341,7 @@ final class WorkbenchStore: ObservableObject {
         "pokeplatinum",
         "pokeheartgold",
         "pokeblack",
-        "pmdSky"
+        "pmdSky",
     ]
 
     private func draftKeyPrefix(projectID: String, kind: String) -> String {
@@ -2369,7 +2448,7 @@ final class WorkbenchStore: ObservableObject {
                 for: [
                     selectedBuildReport?.status ?? Self.validationStatus(for: buildSteps.map(\.status)),
                     patchManifestLoadStatus.validationState,
-                    selectedPatchManifestReport?.status ?? .valid
+                    selectedPatchManifestReport?.status ?? .valid,
                 ]
             )
         case .issues:
@@ -2693,7 +2772,8 @@ final class WorkbenchStore: ObservableObject {
         let trimmed = speciesID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if let catalog = selectedSpeciesCatalog,
-           !catalog.species.contains(where: { $0.speciesID == trimmed }) {
+           !catalog.species.contains(where: { $0.speciesID == trimmed })
+        {
             return false
         }
         focusWorkbenchTarget(.species(trimmed), search: search)
@@ -2708,7 +2788,8 @@ final class WorkbenchStore: ObservableObject {
         let trimmed = moveID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if let catalog = selectedMoveCatalog,
-           !catalog.moves.contains(where: { $0.moveID == trimmed }) {
+           !catalog.moves.contains(where: { $0.moveID == trimmed })
+        {
             return false
         }
         focusWorkbenchTarget(.move(trimmed), search: search)
@@ -2725,7 +2806,7 @@ final class WorkbenchStore: ObservableObject {
         if let catalog = selectedAssetCatalog {
             let needle = trimmed.lowercased()
             guard catalog.index.exactMatch(identifier: trimmed) != nil
-                    || catalog.index.substringMatch(needle: needle) != nil
+                || catalog.index.substringMatch(needle: needle) != nil
             else { return false }
         }
         selectWorkbenchModule(.resources, search: search == .replaceTargetIdentifier ? .replace(trimmed) : search)
@@ -2746,7 +2827,8 @@ final class WorkbenchStore: ObservableObject {
         let trimmed = entryID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         if let resourceLibrary,
-           !resourceLibrary.entries.contains(where: { $0.id == trimmed }) {
+           !resourceLibrary.entries.contains(where: { $0.id == trimmed })
+        {
             return false
         }
         selectWorkbenchModule(.resources, search: search == .replaceTargetIdentifier ? .replace(trimmed) : search)
@@ -2760,7 +2842,7 @@ final class WorkbenchStore: ObservableObject {
         _ target: WorkbenchFocusTarget,
         search: WorkbenchSearchBehavior = .replaceTargetIdentifier
     ) {
-        if case .map(let id) = target {
+        if case let .map(id) = target {
             if selection != target.module {
                 selectWorkbenchModule(target.module, search: .restoreModule)
             }
@@ -2780,23 +2862,23 @@ final class WorkbenchStore: ObservableObject {
         switch target {
         case .map:
             break
-        case .species(let id):
+        case let .species(id):
             requestSpeciesSelection(id)
-        case .trainer(let id):
+        case let .trainer(id):
             requestTrainerSelection(id)
-        case .move(let id):
+        case let .move(id):
             requestMoveSelection(id)
-        case .item(let id):
+        case let .item(id):
             requestItemSelection(id)
-        case .resourceAsset(let id):
+        case let .resourceAsset(id):
             requestResourceAssetSelection(id)
-        case .resourceEntry(let id):
+        case let .resourceEntry(id):
             requestResourceLibraryEntrySelection(id)
-        case .scriptLabel(let id):
+        case let .scriptLabel(id):
             requestScriptLabelSelection(id)
-        case .buildRow(let id):
+        case let .buildRow(id):
             requestBuildReportRowSelection(id)
-        case .diagnostic(let id):
+        case let .diagnostic(id):
             requestDiagnosticRowSelection(id)
         }
     }
@@ -2829,7 +2911,7 @@ final class WorkbenchStore: ObservableObject {
             break
         case .restoreModule:
             searchText = moduleSearchTextByModule[module] ?? ""
-        case .replace(let value):
+        case let .replace(value):
             searchText = value
             moduleSearchTextByModule[module] = value
         case .replaceTargetIdentifier:
@@ -3118,7 +3200,8 @@ final class WorkbenchStore: ObservableObject {
 
     func applyExportSelectedPatchROM() {
         guard !selectedPatchPath.isEmpty,
-              !selectedBaseROMPath.isEmpty else {
+              !selectedBaseROMPath.isEmpty
+        else {
             return
         }
 
@@ -3145,7 +3228,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "PATCH_EXPORT_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ],
                 manifest: nil
             )
@@ -3270,7 +3353,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "GRAPHICS_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -3375,7 +3458,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "NDS_DATA_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -3400,7 +3483,6 @@ final class WorkbenchStore: ObservableObject {
             applySearchBehavior(.replace(asset.targetID ?? asset.path), for: targetModule)
         default:
             applySearchBehavior(.replace(asset.targetID ?? asset.path), for: targetModule)
-            break
         }
     }
 
@@ -3507,7 +3589,7 @@ final class WorkbenchStore: ObservableObject {
         let subtitleParts = [
             source,
             map?.groupName,
-            map?.layout?.name
+            map?.layout?.name,
         ].compactMap { value in
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return trimmed.isEmpty ? nil : trimmed
@@ -3673,9 +3755,9 @@ final class WorkbenchStore: ObservableObject {
         clearPendingMapNavigationContext()
 
         switch pendingMapNavigation {
-        case .project(let projectID):
+        case let .project(projectID):
             applyProjectSelection(projectID)
-        case .map(let mapID):
+        case let .map(mapID):
             selectedMapID = mapID
             recordRecentTarget(recentMapTarget(for: mapID, source: pendingSource ?? "Navigation"))
             if let pendingSearchBehavior {
@@ -3945,7 +4027,8 @@ final class WorkbenchStore: ObservableObject {
                 if let scriptOutline = payload.scriptOutline {
                     scriptOutlinesByID[projectID] = scriptOutline
                     if let pendingScriptAssetTargetID,
-                       let label = Self.scriptReadinessLabel(for: pendingScriptAssetTargetID, outline: scriptOutline) {
+                       let label = Self.scriptReadinessLabel(for: pendingScriptAssetTargetID, outline: scriptOutline)
+                    {
                         self.pendingScriptAssetTargetID = nil
                         selectedScriptReadinessLabel = label
                     } else if selectedScriptReadinessLabel.isEmpty {
@@ -4262,7 +4345,7 @@ final class WorkbenchStore: ObservableObject {
         let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: draft.speciesID)
         if let base = selectedSpeciesCatalog?.species.first(where: { $0.speciesID == draft.speciesID })
             .flatMap(PokemonHackCore.SpeciesEditDraft.init(detail:)),
-           base == draft
+            base == draft
         {
             speciesDraftsByKey.removeValue(forKey: key)
         } else {
@@ -4304,10 +4387,10 @@ final class WorkbenchStore: ObservableObject {
         if lowercased.contains(".4bpp") || lowercased.hasSuffix(".gbapal") || lowercased.contains("/build/") {
             return "\(kind.title) imports must target source PNG or .pal files, not generated outputs."
         }
-        if kind.isSpriteAsset && !lowercased.hasSuffix(".png") {
+        if kind.isSpriteAsset, !lowercased.hasSuffix(".png") {
             return "\(kind.title) imports must target a PNG source path."
         }
-        if kind.isPaletteAsset && !lowercased.hasSuffix(".pal") {
+        if kind.isPaletteAsset, !lowercased.hasSuffix(".pal") {
             return "\(kind.title) imports must target a .pal source path."
         }
         return nil
@@ -4374,7 +4457,7 @@ final class WorkbenchStore: ObservableObject {
             let selectedIndexedProject,
             let detail = selectedSpeciesCatalog?.species.first(where: { $0.speciesID == speciesID }),
             var draft = speciesDraftsByKey[speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: speciesID)]
-                ?? PokemonHackCore.SpeciesEditDraft(detail: detail)
+            ?? PokemonHackCore.SpeciesEditDraft(detail: detail)
         else { return }
 
         switch bucket {
@@ -4415,7 +4498,7 @@ final class WorkbenchStore: ObservableObject {
         let key = moveDraftKey(projectID: selectedIndexedProject.id, moveID: draft.moveID)
         if let base = selectedCoreMoveCatalog?.moves.first(where: { $0.moveID == draft.moveID })
             .flatMap(PokemonHackCore.MoveEditDraft.init(detail:)),
-           base == draft
+            base == draft
         {
             moveDraftsByKey.removeValue(forKey: key)
         } else {
@@ -4484,7 +4567,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "MOVE_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -4495,7 +4578,7 @@ final class WorkbenchStore: ObservableObject {
         let key = itemDraftKey(projectID: selectedIndexedProject.id, itemID: draft.itemID)
         if let base = selectedItemCatalog?.items.first(where: { $0.itemID == draft.itemID })
             .flatMap(PokemonHackCore.ItemEditDraft.init(detail:)),
-           base == draft
+            base == draft
         {
             itemDraftsByKey.removeValue(forKey: key)
         } else {
@@ -4564,7 +4647,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "ITEM_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -4628,7 +4711,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "SPECIES_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -4721,7 +4804,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "SPECIES_BATCH_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -4799,7 +4882,7 @@ final class WorkbenchStore: ObservableObject {
         let key = trainerDraftKey(projectID: selectedIndexedProject.id, trainerID: draft.trainerID)
         if let base = selectedTrainerCatalog?.trainers.first(where: { $0.trainerID == draft.trainerID })
             .flatMap(PokemonHackCore.TrainerEditDraft.init(detail:)),
-           base == draft
+            base == draft
         {
             trainerDraftsByKey.removeValue(forKey: key)
         } else {
@@ -4868,7 +4951,7 @@ final class WorkbenchStore: ObservableObject {
                         severity: .error,
                         code: "TRAINER_APPLY_FAILED",
                         message: error.localizedDescription
-                    )
+                    ),
                 ]
             )
         }
@@ -5549,7 +5632,8 @@ final class WorkbenchStore: ObservableObject {
         processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner
     ) {
         guard let selectedIndexedProject,
-              let index = projectIndexesByID[selectedIndexedProject.id] else {
+              let index = projectIndexesByID[selectedIndexedProject.id]
+        else {
             return
         }
 
@@ -5590,7 +5674,8 @@ final class WorkbenchStore: ObservableObject {
     ) {
         guard runningBuildTargetID == nil,
               let selectedIndexedProject,
-              let index = projectIndexesByID[selectedIndexedProject.id] else {
+              let index = projectIndexesByID[selectedIndexedProject.id]
+        else {
             return
         }
         let targetID = selectedEffectiveDecompBuildTargetID
@@ -5649,7 +5734,8 @@ final class WorkbenchStore: ObservableObject {
         processRunner: PlaytestProcessRunner = PlaytestLauncher.defaultProcessRunner
     ) {
         guard let selectedIndexedProject,
-              let index = projectIndexesByID[selectedIndexedProject.id] else {
+              let index = projectIndexesByID[selectedIndexedProject.id]
+        else {
             return
         }
 
@@ -5671,7 +5757,8 @@ final class WorkbenchStore: ObservableObject {
 
     func refreshSelectedPlaytestArtifactAvailability() {
         guard let selectedIndexedProject,
-              let result = playtestCaptureResultsByID[selectedIndexedProject.id] else {
+              let result = playtestCaptureResultsByID[selectedIndexedProject.id]
+        else {
             return
         }
         playtestCaptureResultsByID[selectedIndexedProject.id] = Self.playtestCaptureResultRefreshingArtifacts(
@@ -6011,24 +6098,24 @@ final class WorkbenchStore: ObservableObject {
 
     private func defaultProjectRoots() -> [String] {
         #if DEBUG
-        guard userSettings.includeDefaultDebugProjects else { return [] }
-        return ["pokeemerald", "pokefirered", "pokediamond", "pokeplatinum", "pokeheartgold", "pokesoulsilver", "pokeblack", "pmd-sky"]
-            .map { workspaceRoot.appendingPathComponent($0).path }
-            .filter { fileManager.fileExists(atPath: $0) }
+            guard userSettings.includeDefaultDebugProjects else { return [] }
+            return ["pokeemerald", "pokefirered", "pokediamond", "pokeplatinum", "pokeheartgold", "pokesoulsilver", "pokeblack", "pmd-sky"]
+                .map { workspaceRoot.appendingPathComponent($0).path }
+                .filter { fileManager.fileExists(atPath: $0) }
         #else
-        return []
+            return []
         #endif
     }
 
     private static func inferredWorkspaceRoot() -> URL {
         #if DEBUG
-        var root = URL(fileURLWithPath: #filePath)
-        for _ in 0..<5 {
-            root.deleteLastPathComponent()
-        }
-        return root.standardizedFileURL
+            var root = URL(fileURLWithPath: #filePath)
+            for _ in 0 ..< 5 {
+                root.deleteLastPathComponent()
+            }
+            return root.standardizedFileURL
         #else
-        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL
+            return URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL
         #endif
     }
 
@@ -6102,7 +6189,6 @@ final class WorkbenchStore: ObservableObject {
         fileManager: FileManager,
         detailMode: PokemonHackCore.GenIIIResourceDetailMode = .full
     ) -> PokemonHackCore.GenIIIResourceLibrary {
-
         let bundledLibrary = GenIIIResourceRegistry.load(
             workspaceRoot: bundledProjectsRoot.path,
             recentRoots: [],
@@ -6182,7 +6268,7 @@ final class WorkbenchStore: ObservableObject {
             "songs",
             "src/data",
             "include",
-            "constants"
+            "constants",
         ]
         var parts = [root.path]
         for path in trackedPaths {
@@ -6215,7 +6301,7 @@ final class WorkbenchStore: ObservableObject {
             "graphics",
             "platinum.us",
             "diamond.us",
-            "heartgold.us"
+            "heartgold.us",
         ]
         var parts = ["nds-data", root.path]
         for path in trackedPaths {
@@ -6237,7 +6323,7 @@ final class WorkbenchStore: ObservableObject {
         root: URL,
         prefix: String,
         fileManager: FileManager,
-        maxFiles: Int = 20_000
+        maxFiles: Int = 20000
     ) -> [String] {
         guard let enumerator = fileManager.enumerator(
             at: root,
@@ -6476,11 +6562,13 @@ final class WorkbenchStore: ObservableObject {
         fileManager: FileManager
     ) -> PokemonHackCore.ScriptReadinessTarget? {
         if let catalog = try? ProjectMapCatalogLoader.load(from: index, fileManager: fileManager),
-           let map = catalog.maps.first {
+           let map = catalog.maps.first
+        {
             return ScriptReadinessTarget(kind: .map, identifier: map.id)
         }
         if let outline = try? ProjectScriptOutlineLoader.load(from: index, fileManager: fileManager),
-           let label = outline.labels.first {
+           let label = outline.labels.first
+        {
             return ScriptReadinessTarget(kind: .script, identifier: label.label)
         }
         return nil
@@ -6754,7 +6842,7 @@ final class WorkbenchStore: ObservableObject {
             tags: [
                 copyPlan.sourceRelativePath,
                 copyPlan.destinationRelativePath,
-                overwrite ? "overwrite" : "new"
+                overwrite ? "overwrite" : "new",
             ],
             willOverwriteExistingSource: overwrite
         )
@@ -6806,7 +6894,7 @@ final class WorkbenchStore: ObservableObject {
                 preview.transparencySummary,
                 preview.precisionSummary,
                 preview.nearestPaletteSummary,
-                preview.isReadyFor4bpp ? "ready" : "needs review"
+                preview.isReadyFor4bpp ? "ready" : "needs review",
             ],
             diagnostics: diagnostics
         )
@@ -6909,7 +6997,7 @@ final class WorkbenchStore: ObservableObject {
             asset.status.rawValue,
             sizeSummary,
             checksumSummary,
-            asset.navigationTarget?.identifier ?? ""
+            asset.navigationTarget?.identifier ?? "",
         ] + asset.tags + facts.map { "\($0.label) \($0.value)" } + diagnostics.map { "\($0.title) \($0.message) \($0.source.path)" }
 
         return ResourceAssetRowViewState(
@@ -7001,7 +7089,7 @@ final class WorkbenchStore: ObservableObject {
                 item.path,
                 locationSummary,
                 sizeSummary,
-                checksumSummary
+                checksumSummary,
             ]
         )
     }
@@ -7241,7 +7329,7 @@ final class WorkbenchStore: ObservableObject {
                     row.status.rawValue,
                     row.subject,
                     row.detail,
-                    row.resolvedPath ?? ""
+                    row.resolvedPath ?? "",
                 ],
                 healthCategory: WorkbenchHealthCheckCategory(rawValue: row.category.rawValue),
                 healthStatus: WorkbenchHealthCheckStatus(rawValue: row.status.rawValue),
@@ -7333,7 +7421,7 @@ final class WorkbenchStore: ObservableObject {
                 "Declared Outputs",
                 "Declared NDS generated outputs and checksum artifacts.",
                 { row in row.healthCategory == .generatedArtifacts }
-            )
+            ),
         ]
 
         return groups.compactMap { group in
@@ -7728,7 +7816,7 @@ final class WorkbenchStore: ObservableObject {
                 status: status,
                 source: SourceLocation(path: patchSourcePath, symbol: format, line: 1),
                 tags: [patchSourcePath, format, compatibility]
-            )
+            ),
         ]
         if let selected = selectedBaseROM {
             rows.append(
@@ -7800,7 +7888,7 @@ final class WorkbenchStore: ObservableObject {
         let launchCommand = launch.command.joined(separator: " ")
         let launchDetail = [
             launch.disabledReason ?? "Launch preview is disabled.",
-            "Command preview: \(launchCommand)."
+            "Command preview: \(launchCommand).",
         ].joined(separator: " ")
 
         var rows = [
@@ -7809,7 +7897,7 @@ final class WorkbenchStore: ObservableObject {
                 section: .patchManifest,
                 title: "Output artifact plan",
                 subtitle: "\(plan.expectedPatchedROMName) · \(plan.patchFormat.rawValue.uppercased())",
-                detail: "Output path \(plan.outputPath); a compatible BPS or IPS patch with a manifest-matched base ROM can be written only by the explicit Apply Patch or Export ROM action.",
+                detail: "Output path \(plan.outputPath); a compatible BPS or IPS patch with a manifest-matched base ROM can be written only by the explicit patched-ROM artifact action.",
                 status: .warning,
                 source: SourceLocation(path: plan.absoluteOutputPath, symbol: plan.expectedPatchedROMName, line: 1),
                 tags: [plan.outputPath, plan.absoluteOutputPath, plan.patchFormat.rawValue, patchSourcePath]
@@ -7826,7 +7914,7 @@ final class WorkbenchStore: ObservableObject {
                     checksum.baseROMSHA1 ?? "",
                     checksum.expectedBaseROMSHA1 ?? "",
                     checksum.matchedCandidateRelativePath ?? "",
-                    checksum.policy
+                    checksum.policy,
                 ]
             ),
             BuildReportRow(
@@ -7848,7 +7936,7 @@ final class WorkbenchStore: ObservableObject {
                 status: launch.isLaunchEnabled ? .valid : .warning,
                 source: SourceLocation(path: launch.outputROMPath, symbol: launch.emulatorName, line: 1),
                 tags: [launch.outputROMPath, launch.emulatorPath ?? "", launchCommand]
-            )
+            ),
         ]
         if let diff = plan.binaryDiffPreview {
             let blockedReasons = diff.applyExportState.reasons.joined(separator: " ")
@@ -7912,7 +8000,7 @@ final class WorkbenchStore: ObservableObject {
                     tags: [
                         diff.backupExportManifest.outputPath,
                         diff.backupExportManifest.backupPath ?? "",
-                        diff.backupExportManifest.manifestPath
+                        diff.backupExportManifest.manifestPath,
                     ]
                 )
             )
@@ -7951,7 +8039,7 @@ final class WorkbenchStore: ObservableObject {
 
     private static func patchBaseROMCandidateViewState(
         from candidate: PokemonHackCore.PatchBaseROMCandidate,
-        rootPath: String
+        rootPath _: String
     ) -> PatchBaseROMCandidateViewState {
         let title = URL(fileURLWithPath: candidate.builtOutputPath ?? candidate.relativePath).lastPathComponent
         let sha1 = candidate.builtOutputSHA1 ?? candidate.expectedSHA1
@@ -8113,14 +8201,14 @@ final class WorkbenchStore: ObservableObject {
                     move.sourceSpan.relativePath,
                     move.sourcePreview ?? "",
                     move.descriptionSymbol ?? "",
-                    move.descriptionText ?? ""
+                    move.descriptionText ?? "",
                 ]
-                + move.flags
-                + facts.flatMap { [$0.label, $0.value] }
-                + tmhmLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
-                + tutorLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
-                + learnedBy.flatMap { [$0.speciesID, $0.detail, $0.bucketTitle, $0.source.path] }
-                + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
+                    + move.flags
+                    + facts.flatMap { [$0.label, $0.value] }
+                    + tmhmLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
+                    + tutorLearners.flatMap { [$0.speciesID, $0.detail, $0.source.path] }
+                    + learnedBy.flatMap { [$0.speciesID, $0.detail, $0.bucketTitle, $0.source.path] }
+                    + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
             )
             .joined(separator: " ")
             .lowercased()
@@ -8177,10 +8265,10 @@ final class WorkbenchStore: ObservableObject {
                     item.sourceSpan.relativePath,
                     item.sourcePreview ?? "",
                     item.descriptionSymbol ?? "",
-                    item.descriptionText ?? ""
+                    item.descriptionText ?? "",
                 ]
-                + facts.flatMap { [$0.label, $0.value] }
-                + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
+                    + facts.flatMap { [$0.label, $0.value] }
+                    + diagnostics.flatMap { [$0.title, $0.message, $0.source.path] }
             )
             .joined(separator: " ")
             .lowercased()
@@ -8227,7 +8315,7 @@ final class WorkbenchStore: ObservableObject {
             ("Secondary", item.secondaryId),
             ("Description", item.descriptionSymbol),
             ("Description Text", item.descriptionText),
-            ("Editable", item.isEditable ? "Yes" : "No")
+            ("Editable", item.isEditable ? "Yes" : "No"),
         ].compactMap { label, value in
             value.map { Fact(label: label, value: $0) }
         }
@@ -8332,7 +8420,7 @@ final class WorkbenchStore: ObservableObject {
             ("PP", pp),
             ("Secondary Effect", secondaryEffectChance),
             ("Target", target),
-            ("Priority", priority)
+            ("Priority", priority),
         ].compactMap { label, value in
             value.map { Fact(label: label, value: $0) }
         }
@@ -8710,31 +8798,31 @@ final class WorkbenchStore: ObservableObject {
                 isEnabled: false,
                 isPreviewLocked: true,
                 disabledReason: "Validation is exposed as report guidance here; use the repository validation command from the terminal."
-            )
+            ),
         ]
 
         if includePatchActions {
             actions.append(contentsOf: [
                 BuildWorkflowActionViewState(
                     id: "apply-patch",
-                    title: "Apply Patch",
+                    title: "Create Patched ROM Artifact",
                     systemImage: "wand.and.stars",
                     isEnabled: canApplyExportPatch,
                     isPreviewLocked: false,
                     disabledReason: canApplyExportPatch
                         ? nil
-                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before applying."
+                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before writing an artifact."
                 ),
                 BuildWorkflowActionViewState(
                     id: "export-rom",
-                    title: "Export ROM",
+                    title: "Export Patched ROM Artifact",
                     systemImage: "square.and.arrow.down",
                     isEnabled: canApplyExportPatch,
                     isPreviewLocked: false,
                     disabledReason: canApplyExportPatch
                         ? nil
-                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before exporting."
-                )
+                        : "Load a compatible BPS or IPS patch with a manifest-matched base ROM before exporting an artifact."
+                ),
             ])
         }
 
@@ -8746,7 +8834,7 @@ private enum FixtureData {
     static let targets = [
         BuildTarget(id: "emerald-dev", name: "Emerald Dev", romBase: "Pokemon Emerald"),
         BuildTarget(id: "firered-lab", name: "FireRed Lab", romBase: "Pokemon FireRed"),
-        BuildTarget(id: "emerald-release", name: "Emerald Release", romBase: "Pokemon Emerald")
+        BuildTarget(id: "emerald-release", name: "Emerald Release", romBase: "Pokemon Emerald"),
     ]
 
     static let records = [
@@ -8761,7 +8849,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Layout", value: "LittlerootTown"),
                 Fact(label: "Tileset", value: "General / Petalburg"),
-                Fact(label: "Connections", value: "Route 101 north")
+                Fact(label: "Connections", value: "Route 101 north"),
             ],
             notes: ["Object 5 has a pending script pointer review.", "Preview is fixture-only and does not write map JSON."]
         ),
@@ -8776,7 +8864,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Class", value: "Pokemon Trainer"),
                 Fact(label: "AI", value: "Check bad move / Try status"),
-                Fact(label: "Party", value: "3 mons, starter branch")
+                Fact(label: "Party", value: "3 mons, starter branch"),
             ],
             notes: ["Party preview groups source variants side by side."]
         ),
@@ -8791,7 +8879,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Price", value: "0"),
                 Fact(label: "Pocket", value: "Key Items"),
-                Fact(label: "Use", value: "ItemUseOutOfBattle_MachBike")
+                Fact(label: "Use", value: "ItemUseOutOfBattle_MachBike"),
             ],
             notes: ["Dirty badge represents staged mock edits only."]
         ),
@@ -8806,7 +8894,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "BST", value: "310"),
                 Fact(label: "Abilities", value: "Overgrow / Unburden"),
-                Fact(label: "Growth", value: "Medium Slow")
+                Fact(label: "Growth", value: "Medium Slow"),
             ],
             notes: ["Source links show the table row the editor would jump to."]
         ),
@@ -8821,7 +8909,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Encounter Rate", value: "20%"),
                 Fact(label: "Slots", value: "12"),
-                Fact(label: "Level Range", value: "3-5")
+                Fact(label: "Level Range", value: "3-5"),
             ],
             notes: ["Slot 8 references a species not enabled for this target."]
         ),
@@ -8836,7 +8924,7 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Commands", value: "31"),
                 Fact(label: "Text refs", value: "6"),
-                Fact(label: "Labels", value: "4")
+                Fact(label: "Labels", value: "4"),
             ],
             notes: ["Command list is displayed as a read-only source outline."]
         ),
@@ -8851,10 +8939,10 @@ private enum FixtureData {
             facts: [
                 Fact(label: "Length", value: "82 chars"),
                 Fact(label: "References", value: "2 scripts"),
-                Fact(label: "Control Codes", value: "PLAYER, PAUSE")
+                Fact(label: "Control Codes", value: "PLAYER, PAUSE"),
             ],
             notes: ["Text editor shows control-code awareness without changing source files."]
-        )
+        ),
     ]
 
     static let issues = [
@@ -8875,7 +8963,7 @@ private enum FixtureData {
             severity: .warning,
             source: SourceLocation(path: "src/data/items.h", symbol: "ITEM_MACH_BIKE", line: 746),
             message: "Workbench can display the callback symbol but not its field behavior yet."
-        )
+        ),
     ]
 
     static let buildSteps = [
@@ -8896,6 +8984,6 @@ private enum FixtureData {
             status: .valid,
             detail: "Mock target output: build/emerald-dev/pokeemerald.gba",
             source: SourceLocation(path: "Makefile", symbol: "pokeemerald.gba", line: 191)
-        )
+        ),
     ]
 }

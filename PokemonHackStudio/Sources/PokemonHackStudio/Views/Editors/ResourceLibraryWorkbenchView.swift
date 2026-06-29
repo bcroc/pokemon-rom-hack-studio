@@ -16,6 +16,7 @@ struct ResourceLibraryWorkbenchView: View {
     @Binding var mode: ResourceLibraryMode
     @Binding var selectedCategory: String
     @Binding var sortMode: ResourceAssetSortMode
+    @Binding var searchText: String
     let onChooseGameCubeResource: () -> Void
     let onLoadGameCubeResource: () -> Void
     let onLoadAssetCatalog: () -> Void
@@ -28,7 +29,6 @@ struct ResourceLibraryWorkbenchView: View {
     let onApplyNDSDataMutationPlan: () -> Void
     let onDiscardNDSDataEdits: () -> Void
 
-    @ViewBuilder
     var body: some View {
         if library != nil || assetCatalog != nil || gameCubeEntry != nil {
             GeometryReader { proxy in
@@ -171,8 +171,8 @@ struct ResourceLibraryWorkbenchView: View {
             Fact(label: "Rejected", value: "\(report.graph.rejectedPointerCandidates.count)"),
             Fact(label: "Free Space", value: "\(report.graph.freeSpaceRanges.count) range(s)"),
             Fact(label: "Assets", value: "\(report.assetCatalog.assetCount)"),
-            Fact(label: "Playtest", value: report.playtestReport.isRunnable ? "Runnable" : "Preview only"),
-            Fact(label: "Diagnostics", value: "\(report.diagnostics.count)")
+            Fact(label: "Playtest", value: report.playtestReport.isRunnable ? "Runnable" : "Read-only preview"),
+            Fact(label: "Diagnostics", value: "\(report.diagnostics.count)"),
         ]
     }
 
@@ -220,11 +220,16 @@ struct ResourceLibraryWorkbenchView: View {
                             .padding(layoutMode.isCompact ? 14 : 24)
                     }
                 } else {
-                    ContentUnavailableView(
-                        "No Assets",
-                        systemImage: "tray",
-                        description: Text(emptyAssetDescription)
-                    )
+                    ContentUnavailableView {
+                        Label(emptyAssetTitle, systemImage: emptyAssetSystemImage)
+                    } description: {
+                        Text(emptyAssetDescription)
+                    } actions: {
+                        Button(assetLoadStatusActionTitle, systemImage: assetLoadStatusActionSystemImage) {
+                            handleEmptyAssetAction()
+                        }
+                        .disabled(assetLoadStatus == .loading)
+                    }
                     .frame(maxWidth: .infinity, minHeight: 260)
                 }
             } else {
@@ -310,9 +315,9 @@ struct ResourceLibraryWorkbenchView: View {
                                 onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
                                 onDiscardNDSDataEdits: onDiscardNDSDataEdits
                             )
-                                .frame(maxWidth: .infinity, minHeight: 220)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .padding(.top, 8)
+                            .frame(maxWidth: .infinity, minHeight: 220)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .padding(.top, 8)
                         }
                     }
                 }
@@ -357,10 +362,72 @@ struct ResourceLibraryWorkbenchView: View {
         case .loading:
             "The selected project's asset catalog is still loading."
         case .loaded:
-            "No catalog assets match the current filters."
-        case .failed(let message):
-            message
+            hasActiveAssetFilters
+                ? "No catalog assets match the current filters."
+                : "The selected project's asset catalog has no source-backed rows yet."
+        case let .failed(message):
+            "\(message) Reload the asset catalog after fixing the source input."
         }
+    }
+
+    private var emptyAssetTitle: String {
+        switch assetLoadStatus {
+        case .idle:
+            "Asset Catalog Unavailable"
+        case .loading:
+            "Loading Asset Catalog"
+        case .loaded:
+            "No Assets"
+        case .failed:
+            "Asset Catalog Error"
+        }
+    }
+
+    private var emptyAssetSystemImage: String {
+        switch assetLoadStatus {
+        case .failed:
+            "exclamationmark.triangle"
+        case .idle:
+            "tray"
+        case .loading:
+            "hourglass"
+        case .loaded:
+            "line.3.horizontal.decrease.circle"
+        }
+    }
+
+    private var assetLoadStatusActionTitle: String {
+        switch assetLoadStatus {
+        case .idle:
+            "Load Asset Catalog"
+        case .failed:
+            "Retry Asset Catalog"
+        case .loading:
+            "Loading"
+        case .loaded:
+            hasActiveAssetFilters ? "Clear Asset Filters" : "Reload Asset Catalog"
+        }
+    }
+
+    private var assetLoadStatusActionSystemImage: String {
+        if case .loaded = assetLoadStatus, hasActiveAssetFilters {
+            return "line.3.horizontal.decrease.circle"
+        }
+        return "arrow.clockwise"
+    }
+
+    private var hasActiveAssetFilters: Bool {
+        selectedCategory != Self.allCategories || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func handleEmptyAssetAction() {
+        if case .loaded = assetLoadStatus, hasActiveAssetFilters {
+            selectedCategory = Self.allCategories
+            searchText = ""
+            selectedAssetID = nil
+            return
+        }
+        onLoadAssetCatalog()
     }
 
     private func iconName(for category: String) -> String {
@@ -508,7 +575,7 @@ private struct ResourceLibraryDetailRow: View {
             Fact(label: "Write Policy", value: entry.writePolicy),
             Fact(label: "Details", value: entry.detailMode),
             Fact(label: "Items", value: "\(entry.items.count)"),
-            Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)")
+            Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)"),
         ]
     }
 
@@ -683,7 +750,7 @@ private struct ResourceAssetDetailPane: View {
             Fact(label: "Availability", value: asset.availability),
             Fact(label: "Size", value: asset.sizeSummary),
             Fact(label: "Checksum", value: asset.checksumSummary),
-            Fact(label: "Source Line", value: "\(asset.source.line)")
+            Fact(label: "Source Line", value: "\(asset.source.line)"),
         ]
     }
 }

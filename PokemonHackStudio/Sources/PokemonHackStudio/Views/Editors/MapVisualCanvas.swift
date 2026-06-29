@@ -30,13 +30,13 @@ struct MapVisualCanvas: NSViewRepresentable {
     let onZoom: (CGFloat) -> Void
     let onCommand: (MapEditorCommand) -> Void
 
-    func makeNSView(context: Context) -> MapCanvasNSView {
+    func makeNSView(context _: Context) -> MapCanvasNSView {
         let view = MapCanvasNSView()
         view.update(from: self)
         return view
     }
 
-    func updateNSView(_ nsView: MapCanvasNSView, context: Context) {
+    func updateNSView(_ nsView: MapCanvasNSView, context _: Context) {
         nsView.update(from: self)
     }
 }
@@ -107,9 +107,18 @@ final class MapCanvasNSView: NSView {
     private var onZoom: (CGFloat) -> Void = { _ in }
     private var onCommand: (MapEditorCommand) -> Void = { _ in }
 
-    override var isFlipped: Bool { true }
-    private var tileSize: CGFloat { max(2, 16 * zoom) }
-    private var isReadOnlyZoom: Bool { zoom < MapViewportGeometry.minimumEditableZoom }
+    override var isFlipped: Bool {
+        true
+    }
+
+    private var tileSize: CGFloat {
+        max(2, 16 * zoom)
+    }
+
+    private var isReadOnlyZoom: Bool {
+        zoom < MapViewportGeometry.minimumEditableZoom
+    }
+
     private var canvasSize: MapCanvasSize? {
         document.map {
             MapCanvasSize(
@@ -121,7 +130,31 @@ final class MapCanvasNSView: NSView {
         }
     }
 
-    override var acceptsFirstResponder: Bool { true }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureFocusAffordance()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureFocusAffordance()
+    }
+
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecomeFirstResponder = super.becomeFirstResponder()
+        updateFocusAffordance()
+        return didBecomeFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResignFirstResponder = super.resignFirstResponder()
+        updateFocusAffordance()
+        return didResignFirstResponder
+    }
 
     override func isAccessibilityElement() -> Bool {
         true
@@ -236,7 +269,8 @@ final class MapCanvasNSView: NSView {
                 if overlays.showConnections,
                    let placement = document.scene.placement(containingSceneX: sceneX, sceneY: sceneY),
                    placement.role == .connection,
-                   let rawValue = placement.rawValue(sceneX: sceneX, sceneY: sceneY) {
+                   let rawValue = placement.rawValue(sceneX: sceneX, sceneY: sceneY)
+                {
                     drawMetatile(rawValue: rawValue, in: rect)
                     collisionRawValue = rawValue
                 }
@@ -336,17 +370,17 @@ final class MapCanvasNSView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         switch dragState {
-        case .painting(let last, let target):
+        case let .painting(last, target):
             guard let coordinate = hitTester().coordinate(at: point), coordinate != last else { return }
             commit(.paintMapCell(x: coordinate.x, y: coordinate.y, target: target))
             dragState = .painting(last: coordinate, target: target)
-        case .rectangle(let anchor, let current, let target):
+        case let .rectangle(anchor, current, target):
             guard let coordinate = hitTester().coordinate(at: point), coordinate != current else { return }
             let preview = MapCanvasRectanglePreview(anchor: anchor, focus: coordinate)
             rectanglePreview = preview
             dragState = .rectangle(anchor: anchor, current: coordinate, target: target)
             setNeedsDisplay(bounds)
-        case .event(let eventID, let origin, let current, _):
+        case let .event(eventID, origin, current, _):
             guard !eventID.isEmpty,
                   let coordinate = hitTester().coordinate(at: point),
                   coordinate != current
@@ -354,7 +388,7 @@ final class MapCanvasNSView: NSView {
             eventDragPreview = MapCanvasEventDragPreview(eventID: eventID, origin: origin, focus: coordinate)
             dragState = .event(eventID: eventID, origin: origin, current: coordinate, didDrag: true)
             setNeedsDisplay(bounds)
-        case .panning(let lastPoint):
+        case let .panning(lastPoint):
             let delta = CGSize(width: point.x - lastPoint.x, height: point.y - lastPoint.y)
             pan(by: delta)
             dragState = .panning(lastPoint: point)
@@ -373,7 +407,7 @@ final class MapCanvasNSView: NSView {
         }
 
         switch dragState {
-        case .rectangle(let anchor, let current, let target):
+        case let .rectangle(anchor, current, target):
             let focus = hitTester().coordinate(at: point) ?? current
             let preview = MapCanvasRectanglePreview(anchor: anchor, focus: focus)
             commit(
@@ -386,7 +420,7 @@ final class MapCanvasNSView: NSView {
                     rawValue: brushRawValue
                 )
             )
-        case .event(let eventID, let origin, let current, let didDrag):
+        case let .event(eventID, origin, current, didDrag):
             guard !eventID.isEmpty else { return }
             let focus = hitTester().coordinate(at: point) ?? current
             if didDrag || origin == nil {
@@ -408,7 +442,7 @@ final class MapCanvasNSView: NSView {
         }
     }
 
-    override func mouseExited(with event: NSEvent) {
+    override func mouseExited(with _: NSEvent) {
         clearHover()
     }
 
@@ -484,11 +518,11 @@ final class MapCanvasNSView: NSView {
         commit(.addMapEvent(template: eventTemplate, x: parts[0], y: parts[1]))
     }
 
-    @objc private func duplicateEventFromContextMenu(_ sender: NSMenuItem) {
+    @objc private func duplicateEventFromContextMenu(_: NSMenuItem) {
         commit(.duplicateSelectedMapEvent)
     }
 
-    @objc private func deleteEventFromContextMenu(_ sender: NSMenuItem) {
+    @objc private func deleteEventFromContextMenu(_: NSMenuItem) {
         commit(.deleteSelectedMapEvent)
     }
 
@@ -518,6 +552,7 @@ final class MapCanvasNSView: NSView {
         installScrollObserverIfNeeded()
         handleViewportRequestIfNeeded()
         reportViewportIfNeeded()
+        updateFocusAffordance()
     }
 
     deinit {
@@ -581,6 +616,19 @@ final class MapCanvasNSView: NSView {
         )
     }
 
+    private func configureFocusAffordance() {
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.masksToBounds = false
+        updateFocusAffordance()
+    }
+
+    private func updateFocusAffordance() {
+        let isFocused = window?.firstResponder === self
+        layer?.borderWidth = isFocused ? 2 : 0
+        layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+    }
+
     private func installScrollObserverIfNeeded() {
         guard let clipView = enclosingScrollView?.contentView, observedClipView !== clipView else { return }
         if let observedClipView {
@@ -596,7 +644,7 @@ final class MapCanvasNSView: NSView {
         )
     }
 
-    @objc private func clipViewBoundsDidChange(_ notification: Notification) {
+    @objc private func clipViewBoundsDidChange(_: Notification) {
         reportViewportIfNeeded()
     }
 
@@ -661,21 +709,21 @@ final class MapCanvasNSView: NSView {
     private func commit(_ command: MapEditorCommand) {
         emit(command)
         switch command {
-        case .selectMapCell(let x, let y, _):
+        case let .selectMapCell(x, y, _):
             onSelectCell(x, y)
-        case .paintMapCell(let x, let y, _):
+        case let .paintMapCell(x, y, _):
             onPaintCell(x, y)
-        case .eyedropMapCell(let x, let y, _):
+        case let .eyedropMapCell(x, y, _):
             onEyedropCell(x, y)
-        case .fillMapRectangle(let x, let y, let width, let height, _, _):
+        case let .fillMapRectangle(x, y, width, height, _, _):
             onFillCell(x + width - 1, y + height - 1)
-        case .fillMapFromSelection(let x, let y, _):
+        case let .fillMapFromSelection(x, y, _):
             onFillCell(x, y)
-        case .selectMapEvent(let eventID):
+        case let .selectMapEvent(eventID):
             onSelectEvent(eventID)
-        case .moveSelectedMapEvent(let x, let y):
+        case let .moveSelectedMapEvent(x, y):
             onMoveEvent(x, y)
-        case .addObjectEvent(let x, let y), .addMapEvent(_, let x, let y):
+        case let .addObjectEvent(x, y), let .addMapEvent(_, x, y):
             onAddEvent(x, y)
         case .duplicateSelectedMapEvent:
             onDuplicateEvent()
@@ -807,7 +855,7 @@ final class MapCanvasNSView: NSView {
         let localEnd = Swift.min(length, Int(ceil(max / tileSize)) + 1)
         let start = origin + localStart
         let end = origin + localEnd
-        return start..<Swift.max(start, end)
+        return start ..< Swift.max(start, end)
     }
 
     private func layoutRawValue(sceneX: Int, sceneY: Int) -> UInt16? {
@@ -842,13 +890,14 @@ final class MapCanvasNSView: NSView {
     }
 
     private func drawMetatile(rawValue: UInt16, in rect: NSRect) {
-        let metatileID = Int(rawValue & 0x03ff)
+        let metatileID = Int(rawValue & 0x03FF)
         if overlays.hasVisibleMetatileLayer,
            let image = renderer?.image(
-            for: metatileID,
-            layers: overlays.visibleMetatileLayers,
-            opacities: overlays.metatileLayerOpacities
-           ) {
+               for: metatileID,
+               layers: overlays.visibleMetatileLayers,
+               opacities: overlays.metatileLayerOpacities
+           )
+        {
             image.draw(in: rect)
         } else if overlays.hasVisibleMetatileLayer {
             MetatileSwatchRenderer.fallbackColor(for: metatileID)
@@ -865,7 +914,7 @@ final class MapCanvasNSView: NSView {
         let label = String(format: "%03X", metatileID)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: max(8, tileSize * 0.22), weight: .medium),
-            .foregroundColor: NSColor.white
+            .foregroundColor: NSColor.white,
         ]
         let size = label.size(withAttributes: attributes)
         label.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attributes)
@@ -881,12 +930,12 @@ final class MapCanvasNSView: NSView {
 
     private func drawGrid(viewport: MapSceneViewport, opacity: Double) {
         let path = NSBezierPath()
-        for column in viewport.minX...viewport.maxXExclusive {
+        for column in viewport.minX ... viewport.maxXExclusive {
             let x = CGFloat(column - viewport.minX) * tileSize
             path.move(to: NSPoint(x: x, y: 0))
             path.line(to: NSPoint(x: x, y: CGFloat(viewport.height) * tileSize))
         }
-        for row in viewport.minY...viewport.maxYExclusive {
+        for row in viewport.minY ... viewport.maxYExclusive {
             let y = CGFloat(row - viewport.minY) * tileSize
             path.move(to: NSPoint(x: 0, y: y))
             path.line(to: NSPoint(x: CGFloat(viewport.width) * tileSize, y: y))
@@ -901,14 +950,15 @@ final class MapCanvasNSView: NSView {
         let rect = NSRect(x: 8, y: 8, width: CGFloat(border.width) * 12, height: CGFloat(border.height) * 12)
         NSColor.black.withAlphaComponent(CGFloat(0.42 * opacity)).setFill()
         NSBezierPath(roundedRect: rect.insetBy(dx: -6, dy: -6), xRadius: 6, yRadius: 6).fill()
-        for row in 0..<border.height {
-            for column in 0..<border.width {
+        for row in 0 ..< border.height {
+            for column in 0 ..< border.width {
                 let index = row * border.width + column
                 guard border.rawValues.indices.contains(index) else { continue }
-                let id = Int(border.rawValues[index] & 0x03ff)
+                let id = Int(border.rawValues[index] & 0x03FF)
                 let cell = NSRect(x: rect.minX + CGFloat(column) * 12, y: rect.minY + CGFloat(row) * 12, width: 12, height: 12)
                 if overlays.hasVisibleMetatileLayer,
-                   let image = renderer?.image(for: id, layers: overlays.visibleMetatileLayers, opacities: overlays.metatileLayerOpacities) {
+                   let image = renderer?.image(for: id, layers: overlays.visibleMetatileLayers, opacities: overlays.metatileLayerOpacities)
+                {
                     image.draw(in: cell, from: .zero, operation: .sourceOver, fraction: CGFloat(opacity))
                 } else if overlays.hasVisibleMetatileLayer {
                     MetatileSwatchRenderer.fallbackColor(for: id).withAlphaComponent(CGFloat(opacity)).setFill()
@@ -1040,7 +1090,7 @@ final class MapCanvasNSView: NSView {
     private func drawBadge(_ label: String, near rect: NSRect) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold),
-            .foregroundColor: NSColor.white
+            .foregroundColor: NSColor.white,
         ]
         let size = label.size(withAttributes: attributes)
         let badge = NSRect(

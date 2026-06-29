@@ -3,10 +3,10 @@ import XCTest
 
 final class WorkbenchLayoutModeTests: XCTestCase {
     func testContentWidthThresholdKeepsSmallSidebarWindowsCompact() {
-        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1_029), .compact)
-        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1_059), .compact)
-        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1_060), .wide)
-        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1_320), .wide)
+        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1029), .compact)
+        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1059), .compact)
+        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1060), .wide)
+        XCTAssertEqual(WorkbenchLayoutMode(contentWidth: 1320), .wide)
     }
 
     func testCompactModeUsesTighterLayoutMetrics() {
@@ -14,6 +14,18 @@ final class WorkbenchLayoutModeTests: XCTestCase {
         XCTAssertLessThan(WorkbenchLayoutMode.compact.sectionSpacing, WorkbenchLayoutMode.wide.sectionSpacing)
         XCTAssertEqual(WorkbenchLayoutMode.compactPopoverWidth, 360)
         XCTAssertEqual(WorkbenchLayoutMode.compactPopoverHeight, 620)
+    }
+
+    func testMapEditorCompactBreakpointMatchesPalettePopoverPath() {
+        XCTAssertEqual(MapEditorLayoutMode(width: 1179), .compact)
+        XCTAssertEqual(MapEditorLayoutMode(width: 1180), .wide)
+    }
+
+    func testSidebarModesUseGuidedDisclosureOrder() {
+        XCTAssertEqual(WorkbenchSidebarMode.allCases, [.browse, .tools, .properties])
+        XCTAssertEqual(WorkbenchSidebarMode.browse.systemImage, "list.bullet")
+        XCTAssertEqual(WorkbenchSidebarMode.tools.systemImage, "wrench.and.screwdriver")
+        XCTAssertEqual(WorkbenchSidebarMode.properties.systemImage, "info.circle")
     }
 
     func testWorkbenchModuleGroupsUseCreatorIntentOrder() {

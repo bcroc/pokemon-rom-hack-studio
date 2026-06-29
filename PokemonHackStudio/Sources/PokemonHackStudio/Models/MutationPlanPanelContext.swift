@@ -1,6 +1,7 @@
 import PokemonHackCore
 
 struct MutationPlanPanelContext {
+    let target: WorkbenchToolbarMutationTarget
     let title: String
     let summary: String
     let status: ValidationState
@@ -61,6 +62,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .map,
             title: plan?.mutationPlan.title ?? "Map Mutation Plan",
             summary: Self.summary(plan: plan, result: result, session: session),
             status: status,
@@ -101,6 +103,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .trainer,
             title: plan?.mutationPlan.title ?? "Trainer Mutation Plan",
             summary: Self.trainerSummary(plan: plan, result: result, isDirty: isDirty),
             status: status,
@@ -141,6 +144,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .pokemon,
             title: plan?.mutationPlan.title ?? "Pokemon Mutation Plan",
             summary: Self.speciesSummary(plan: plan, result: result, isDirty: isDirty),
             status: status,
@@ -193,6 +197,7 @@ extension MutationPlanPanelContext {
         }
 
         return MutationPlanPanelContext(
+            target: .pokemonBatch,
             title: "Pokemon Compatibility Batch",
             summary: Self.speciesBatchSummary(plans: plans, result: result, dirtyDraftCount: dirtyDraftCount),
             status: status,
@@ -233,6 +238,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .move,
             title: plan?.mutationPlan.title ?? "Move Mutation Plan",
             summary: Self.editSummary(kind: "Move", planSummary: plan?.mutationPlan.summary, appliedCount: result?.appliedChanges.count, hasApplyDiagnostics: !(result?.diagnostics.isEmpty ?? true), isDirty: isDirty),
             status: status,
@@ -273,6 +279,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .item,
             title: plan?.mutationPlan.title ?? "Item Mutation Plan",
             summary: Self.editSummary(kind: "Item", planSummary: plan?.mutationPlan.summary, appliedCount: result?.appliedChanges.count, hasApplyDiagnostics: !(result?.diagnostics.isEmpty ?? true), isDirty: isDirty),
             status: status,
@@ -314,6 +321,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .graphics,
             title: plan?.mutationPlan.title ?? "Graphics Mutation Plan",
             summary: Self.graphicsSummary(plan: plan, result: result, isDirty: isDirty),
             status: status,
@@ -349,6 +357,7 @@ extension MutationPlanPanelContext {
         )
 
         return MutationPlanPanelContext(
+            target: .ndsData,
             title: plan?.mutationPlan.title ?? "NDS Data Mutation Plan",
             summary: Self.editSummary(
                 kind: "NDS data",

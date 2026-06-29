@@ -33,16 +33,18 @@ struct ContentView: View {
             ),
             presenting: store.pendingMapNavigation
         ) { _ in
-            Button("Preview Changes") {
+            Button(store.pendingMapNavigationPreviewTitle) {
                 store.previewBeforePendingMapNavigation()
             }
-            Button("Discard and Continue", role: .destructive) {
+            .disabled(!store.canPreviewPendingMapNavigationDraft)
+
+            Button(store.pendingMapNavigationDiscardTitle, role: .destructive) {
                 store.discardMapEditsAndContinueNavigation()
             }
             Button("Cancel", role: .cancel) {
                 store.cancelPendingMapNavigation()
             }
-        } message: { pending in
+        } message: { _ in
             Text(store.pendingMapNavigationMessage)
         }
         .toolbar {
@@ -150,54 +152,13 @@ struct ContentView: View {
     }
 
     private var mutationActions: some View {
-        let state = store.toolbarMutationState
-        return HStack(spacing: 4) {
-            Menu {
-                Button("Preview \(state.title)", systemImage: "doc.text.magnifyingglass") {
-                    store.previewToolbarMutationTarget()
-                }
-                .disabled(!state.canPreview)
-                .help(state.previewHelp)
-
-                Button("Apply \(state.title)", systemImage: "checkmark.seal") {
-                    store.applyToolbarMutationTarget()
-                }
-                .disabled(!state.canApply)
-                .help(state.applyHelp)
-
-                Button("Discard \(state.title)", systemImage: "trash") {
-                    store.discardToolbarMutationTarget()
-                }
-                .disabled(!state.canDiscard)
-                .help(state.discardHelp)
-            } label: {
-                Label("Mutations", systemImage: state.systemImage)
-            }
-            .labelStyle(.iconOnly)
-            .help(state.hasEditableTarget ? state.title : state.previewHelp)
-            .disabled(!state.hasEditableTarget)
-
-            Button("Preview", systemImage: "doc.text.magnifyingglass") {
-                store.previewToolbarMutationTarget()
-            }
-            .labelStyle(.iconOnly)
-            .help(state.previewHelp)
-            .disabled(!state.canPreview)
-
-            Button("Apply", systemImage: "checkmark.seal") {
-                store.applyToolbarMutationTarget()
-            }
-            .labelStyle(.iconOnly)
-            .help(state.applyHelp)
-            .disabled(!state.canApply)
-
-            Button("Discard", systemImage: "trash") {
-                store.discardToolbarMutationTarget()
-            }
-            .labelStyle(.iconOnly)
-            .help(state.discardHelp)
-            .disabled(!state.canDiscard)
-        }
+        MutationActionBar(
+            state: store.mutationActionBarState,
+            style: .toolbar,
+            onPreview: store.previewToolbarMutationTarget,
+            onApply: store.applyToolbarMutationTarget,
+            onDiscard: store.discardToolbarMutationTarget
+        )
     }
 
     private var navigationMenu: some View {

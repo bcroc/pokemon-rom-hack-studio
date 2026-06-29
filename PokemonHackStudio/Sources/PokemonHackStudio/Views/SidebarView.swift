@@ -19,12 +19,9 @@ struct WorkbenchSidebarPanel: View {
                 projectSummary
                 currentEditorSessionSection
                 moduleNavigation
-                recentModuleNavigation
-                sidebarSearch
                 currentTargetNavigation
-                objectNavigation
-                contextualTools
-                selectionProperties
+                sidebarModePicker
+                sidebarModeContent
             }
             .padding(12)
         }
@@ -114,6 +111,33 @@ struct WorkbenchSidebarPanel: View {
                     sidebarMetric("Diagnostics", "\(session.diagnosticsCount)")
                 }
             }
+        }
+    }
+
+    private var sidebarModePicker: some View {
+        Picker("Sidebar Mode", selection: $store.sidebarMode) {
+            ForEach(WorkbenchSidebarMode.allCases) { mode in
+                Label(mode.rawValue, systemImage: mode.systemImage)
+                    .tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .help("Choose sidebar content")
+    }
+
+    @ViewBuilder
+    private var sidebarModeContent: some View {
+        switch store.sidebarMode {
+        case .browse:
+            recentModuleNavigation
+            sidebarSearch
+            objectNavigation
+        case .tools:
+            sidebarSearch
+            contextualTools
+        case .properties:
+            selectionProperties
         }
     }
 
@@ -210,59 +234,29 @@ struct WorkbenchSidebarPanel: View {
             VStack(alignment: .leading, spacing: 12) {
                 mutationTools(
                     title: "Graphics Mutation",
-                    isDirty: store.selectedGraphicsIsDirty,
-                    canPreview: store.canPreviewSelectedGraphicsMutationPlan,
-                    canApply: store.canApplySelectedGraphicsMutationPlan,
-                    canDiscard: store.canDiscardGraphicsEdits,
-                    preview: store.previewSelectedGraphicsMutationPlan,
-                    apply: store.applySelectedGraphicsMutationPlan,
-                    discard: store.discardGraphicsEdits
+                    state: store.mutationActionBarState
                 )
                 previewOnlyTools(title: "Graphics Package Tools", actions: ["Import", "Convert", "Apply Package"])
             }
         case .pokemon:
             mutationTools(
                 title: "Pokemon Mutation",
-                isDirty: store.selectedSpeciesIsDirty,
-                canPreview: store.canPreviewSelectedSpeciesMutationPlan,
-                canApply: store.canApplySelectedSpeciesMutationPlan,
-                canDiscard: store.canDiscardSpeciesEdits,
-                preview: store.previewSelectedSpeciesMutationPlan,
-                apply: store.applySelectedSpeciesMutationPlan,
-                discard: store.discardSpeciesEdits
+                state: store.mutationActionBarState
             )
         case .trainers:
             mutationTools(
                 title: "Trainer Mutation",
-                isDirty: store.selectedTrainerIsDirty,
-                canPreview: store.canPreviewSelectedTrainerMutationPlan,
-                canApply: store.canApplySelectedTrainerMutationPlan,
-                canDiscard: store.canDiscardTrainerEdits,
-                preview: store.previewSelectedTrainerMutationPlan,
-                apply: store.applySelectedTrainerMutationPlan,
-                discard: store.discardTrainerEdits
+                state: store.mutationActionBarState
             )
         case .moves:
             mutationTools(
-                title: "Move Mutation",
-                isDirty: store.selectedMoveIsDirty,
-                canPreview: store.canPreviewSelectedMoveMutationPlan,
-                canApply: store.canApplySelectedMoveMutationPlan,
-                canDiscard: store.canDiscardMoveEdits,
-                preview: store.previewSelectedMoveMutationPlan,
-                apply: store.applySelectedMoveMutationPlan,
-                discard: store.discardMoveEdits
+                title: store.mutationActionBarState.target == .pokemonBatch ? "Pokemon Batch Mutation" : "Move Mutation",
+                state: store.mutationActionBarState
             )
         case .items:
             mutationTools(
                 title: "Item Mutation",
-                isDirty: store.selectedItemIsDirty,
-                canPreview: store.canPreviewSelectedItemMutationPlan,
-                canApply: store.canApplySelectedItemMutationPlan,
-                canDiscard: store.canDiscardItemEdits,
-                preview: store.previewSelectedItemMutationPlan,
-                apply: store.applySelectedItemMutationPlan,
-                discard: store.discardItemEdits
+                state: store.mutationActionBarState
             )
         default:
             sidebarSection("Tools", systemImage: "wrench.and.screwdriver") {
@@ -798,6 +792,8 @@ struct WorkbenchSidebarPanel: View {
     private var mapTools: some View {
         sidebarSection("Map Tools", systemImage: "paintbrush.pointed") {
             VStack(alignment: .leading, spacing: 12) {
+                mutationToolContent(state: store.mutationActionBarState)
+
                 MapEditorGroupedToolPicker(session: store.mapEditorSession)
 
                 Picker("Panel", selection: $store.selectedMapWorkbenchTab) {
@@ -859,6 +855,11 @@ struct WorkbenchSidebarPanel: View {
     private var resourceTools: some View {
         sidebarSection("Resource Tools", systemImage: "line.3.horizontal.decrease.circle") {
             VStack(alignment: .leading, spacing: 10) {
+                if store.mutationActionBarState.target == .ndsData {
+                    mutationToolContent(state: store.mutationActionBarState)
+                    Divider()
+                }
+
                 Picker("Mode", selection: $store.selectedResourceLibraryMode) {
                     ForEach(ResourceLibraryMode.allCases) { mode in
                         Label(mode.title, systemImage: mode.systemImage).tag(mode)
@@ -960,7 +961,7 @@ struct WorkbenchSidebarPanel: View {
                     }
                 }
 
-                Text(store.selectedBuildReport?.isNDS == true ? "NDS health actions copy manual setup or rerun guidance only. Builds, Docker, extraction, emulator launch, and ROM writes stay disabled." : "Build runs only selected declared make targets. Validate, patch apply, export, conversion, and source writes stay locked.")
+                Text(store.selectedBuildReport?.isNDS == true ? "NDS health actions copy manual setup or rerun guidance only. Builds, Docker, extraction, emulator launch, and ROM writes stay disabled." : "Build runs only selected declared make targets. Validate, patched-ROM artifact export, conversion, and source writes stay locked.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -993,29 +994,27 @@ struct WorkbenchSidebarPanel: View {
 
     private func mutationTools(
         title: String,
-        isDirty: Bool,
-        canPreview: Bool,
-        canApply: Bool,
-        canDiscard: Bool,
-        preview: @escaping () -> Void,
-        apply: @escaping () -> Void,
-        discard: @escaping () -> Void
+        state: MutationActionBarState
     ) -> some View {
         sidebarSection(title, systemImage: "doc.text.magnifyingglass") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    DirtyPill(isDirty: isDirty)
-                    Spacer()
-                }
-                HStack(spacing: 8) {
-                    Button("Preview", systemImage: "doc.text.magnifyingglass", action: preview)
-                        .disabled(!canPreview)
-                    Button("Apply", systemImage: "checkmark.seal", action: apply)
-                        .disabled(!canApply)
-                    Button("Discard", systemImage: "arrow.counterclockwise", action: discard)
-                        .disabled(!canDiscard)
-                }
+            mutationToolContent(state: state)
+        }
+    }
+
+    private func mutationToolContent(state: MutationActionBarState) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                DirtyPill(isDirty: isMutationToolDirty(state.target))
+                Spacer()
             }
+
+            MutationActionBar(
+                state: state,
+                style: .sidebar,
+                onPreview: store.previewToolbarMutationTarget,
+                onApply: store.applyToolbarMutationTarget,
+                onDiscard: store.discardToolbarMutationTarget
+            )
         }
     }
 
@@ -1031,7 +1030,7 @@ struct WorkbenchSidebarPanel: View {
                 Button(action, systemImage: "lock") {}
                     .disabled(true)
             }
-            Text("Preview only")
+            Text("Read-only preview")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1065,7 +1064,7 @@ struct WorkbenchSidebarPanel: View {
                     propertyFacts(asset.facts + [
                         Fact(label: "Category", value: asset.category),
                         Fact(label: "Availability", value: asset.availabilitySummary),
-                        Fact(label: "Checksum", value: asset.checksumSummary)
+                        Fact(label: "Checksum", value: asset.checksumSummary),
                     ])
                     SourceLocationView(source: asset.source)
                     if let targetModule = asset.targetModule {
@@ -1083,7 +1082,7 @@ struct WorkbenchSidebarPanel: View {
                         Fact(label: "Family", value: entry.family),
                         Fact(label: "Profile", value: entry.profile),
                         Fact(label: "Items", value: "\(entry.items.count)"),
-                        Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)")
+                        Fact(label: "Diagnostics", value: "\(entry.diagnosticCount)"),
                     ])
                     SourceLocationView(source: entry.source)
                 } else {
@@ -1104,7 +1103,7 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "Events", value: "\(map.eventCounts.total)"),
                     Fact(label: "Connections", value: "\(map.connections.count)"),
                     Fact(label: "Tool", value: store.selectedMapTool.title),
-                    Fact(label: "Panel", value: store.selectedMapWorkbenchTab.title)
+                    Fact(label: "Panel", value: store.selectedMapWorkbenchTab.title),
                 ])
                 SourceLocationView(source: map.source)
             } else {
@@ -1122,7 +1121,10 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "Abilities", value: species.abilities.joined(separator: ", ")),
                     Fact(label: "Stats", value: statSummary(species.baseStats)),
                     Fact(label: "Editable", value: species.isEditable ? "Yes" : "No"),
-                    Fact(label: "Dirty", value: store.selectedSpeciesIsDirty ? "Yes" : "No")
+                    Fact(label: "Dirty", value: store.selectedSpeciesIsDirty ? "Yes" : "No"),
+                    Fact(label: "Write Policy", value: species.isEditable ? (store.selectedIndexedProject?.writePolicy ?? "Editable") : "Read-only"),
+                    Fact(label: "Preview", value: mutationPreviewFact(store.mutationActionBarState)),
+                    Fact(label: "Apply", value: mutationApplyFact(store.mutationActionBarState)),
                 ])
                 SourceLocationView(source: SourceLocation(path: species.sourceSpan.relativePath, symbol: species.speciesID, line: species.sourceSpan.startLine))
             } else {
@@ -1141,7 +1143,7 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "Battle", value: trainer.doubleBattle ? "Double" : "Single"),
                     Fact(label: "Items", value: "\(trainer.trainerItems.filter { $0 != "ITEM_NONE" }.count)"),
                     Fact(label: "Editable", value: trainer.isEditable ? "Yes" : "No"),
-                    Fact(label: "Dirty", value: store.selectedTrainerIsDirty ? "Yes" : "No")
+                    Fact(label: "Dirty", value: store.selectedTrainerIsDirty ? "Yes" : "No"),
                 ])
                 SourceLocationView(source: SourceLocation(path: trainer.sourceSpan.relativePath, symbol: trainer.trainerID, line: trainer.sourceSpan.startLine))
             } else {
@@ -1159,8 +1161,12 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "Tutor", value: "\(move.tutorLearners.count)"),
                     Fact(label: "Learned By", value: "\(move.learnedBy.count)"),
                     Fact(label: "Editable", value: move.isEditable ? "Yes" : "No"),
-                    Fact(label: "Dirty", value: store.selectedMoveIsDirty ? "Yes" : "No"),
-                    Fact(label: "Diagnostics", value: "\(move.diagnostics.count)")
+                    Fact(label: "Dirty", value: store.selectedMoveIsDirty || !store.dirtySpeciesBatchDrafts.isEmpty ? "Yes" : "No"),
+                    Fact(label: "Diagnostics", value: "\(move.diagnostics.count)"),
+                    Fact(label: "Write Policy", value: move.isEditable ? (store.selectedIndexedProject?.writePolicy ?? "Editable") : "Read-only"),
+                    Fact(label: "Compatibility Drafts", value: "\(store.dirtySpeciesBatchDrafts.count)"),
+                    Fact(label: "Preview", value: mutationPreviewFact(store.mutationActionBarState)),
+                    Fact(label: "Apply", value: mutationApplyFact(store.mutationActionBarState)),
                 ])
                 SourceLocationView(source: move.source)
             } else {
@@ -1176,7 +1182,7 @@ struct WorkbenchSidebarPanel: View {
                 propertyFacts([
                     Fact(label: "Editable", value: item.isEditable ? "Yes" : "No"),
                     Fact(label: "Dirty", value: store.selectedItemIsDirty ? "Yes" : "No"),
-                    Fact(label: "Diagnostics", value: "\(item.diagnostics.count)")
+                    Fact(label: "Diagnostics", value: "\(item.diagnostics.count)"),
                 ] + item.facts.prefix(4))
                 SourceLocationView(source: item.source)
             } else {
@@ -1192,7 +1198,7 @@ struct WorkbenchSidebarPanel: View {
                 propertyFacts([
                     Fact(label: "Kind", value: label.kind.rawValue),
                     Fact(label: "Commands", value: "\(label.commands.count)"),
-                    Fact(label: "Text Refs", value: "\(label.textReferences.count)")
+                    Fact(label: "Text Refs", value: "\(label.textReferences.count)"),
                 ])
                 SourceLocationView(source: SourceLocation(path: label.sourcePath, symbol: label.label, line: label.sourceSpan.startLine))
             } else if let source = store.selectedScriptSource {
@@ -1200,13 +1206,13 @@ struct WorkbenchSidebarPanel: View {
                 propertyFacts([
                     Fact(label: "Labels", value: "\(source.labelCount)"),
                     Fact(label: "Text Blocks", value: "\(source.textBlockCount)"),
-                    Fact(label: "Diagnostics", value: "\(source.diagnosticCount)")
+                    Fact(label: "Diagnostics", value: "\(source.diagnosticCount)"),
                 ])
             } else if let block = store.selectedScriptTextBlock {
                 propertyHeader(block.label, subtitle: block.sourcePath, systemImage: "text.quote", status: .valid)
                 propertyFacts([
                     Fact(label: "Preview", value: block.preview),
-                    Fact(label: "Line", value: "\(block.sourceSpan.startLine)")
+                    Fact(label: "Line", value: "\(block.sourceSpan.startLine)"),
                 ])
             } else {
                 emptySidebarText("No script row selected.")
@@ -1232,7 +1238,7 @@ struct WorkbenchSidebarPanel: View {
                 propertyHeader(row.title, subtitle: row.detail, systemImage: row.section.systemImage, status: row.status)
                 propertyFacts([
                     Fact(label: "Section", value: row.section.rawValue),
-                    Fact(label: "Kind", value: row.subtitle)
+                    Fact(label: "Kind", value: row.subtitle),
                 ])
                 SourceLocationView(source: row.source)
             } else {
@@ -1248,7 +1254,7 @@ struct WorkbenchSidebarPanel: View {
                 propertyFacts([
                     Fact(label: "Section", value: row.section.rawValue),
                     Fact(label: "Status", value: row.status.rawValue),
-                    Fact(label: "Tab", value: store.selectedBuildWorkbenchTab.title)
+                    Fact(label: "Tab", value: store.selectedBuildWorkbenchTab.title),
                 ])
                 SourceLocationView(source: row.source)
             } else {
@@ -1263,7 +1269,7 @@ struct WorkbenchSidebarPanel: View {
                 propertyHeader(row.title, subtitle: row.message, systemImage: "exclamationmark.triangle", status: row.severity)
                 propertyFacts([
                     Fact(label: "Bucket", value: store.selectedDiagnosticBucket.title),
-                    Fact(label: "Severity", value: row.severity.rawValue)
+                    Fact(label: "Severity", value: row.severity.rawValue),
                 ])
                 SourceLocationView(source: row.source)
             } else {
@@ -1418,6 +1424,37 @@ struct WorkbenchSidebarPanel: View {
 
     private func dirtyBadgeText(forMoveID moveID: String) -> String? {
         store.isMoveDirty(moveID) ? "Dirty" : nil
+    }
+
+    private func mutationPreviewFact(_ state: MutationActionBarState) -> String {
+        state.canPreview ? "Ready" : state.previewHelp
+    }
+
+    private func mutationApplyFact(_ state: MutationActionBarState) -> String {
+        state.canApply ? "Ready" : state.applyHelp
+    }
+
+    private func isMutationToolDirty(_ target: WorkbenchToolbarMutationTarget) -> Bool {
+        switch target {
+        case .none:
+            false
+        case .map:
+            store.hasStagedMapEdits
+        case .pokemon:
+            store.selectedSpeciesIsDirty
+        case .pokemonBatch:
+            !store.dirtySpeciesBatchDrafts.isEmpty
+        case .trainer:
+            store.selectedTrainerIsDirty
+        case .move:
+            store.selectedMoveIsDirty
+        case .item:
+            store.selectedItemIsDirty
+        case .graphics:
+            store.selectedGraphicsIsDirty
+        case .ndsData:
+            store.selectedNDSDataIsDirty
+        }
     }
 
     private func hiddenTargetControls(
@@ -1673,7 +1710,7 @@ struct WorkbenchSidebarPanel: View {
             stats.defense,
             stats.speed,
             stats.spAttack,
-            stats.spDefense
+            stats.spDefense,
         ]
         .map { value in
             value.map(String.init) ?? "?"

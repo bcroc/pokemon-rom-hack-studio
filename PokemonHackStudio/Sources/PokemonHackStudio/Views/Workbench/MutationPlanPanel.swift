@@ -7,6 +7,8 @@ struct MutationPlanPanel: View {
     let onApply: () -> Void
     let onDiscard: () -> Void
 
+    private static let detailRowLimit = 4
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -31,7 +33,7 @@ struct MutationPlanPanel: View {
                     StatusPill(state: context.status)
                 }
 
-                actionButtons
+                actionBar
             }
         } else {
             HStack(alignment: .top, spacing: 12) {
@@ -40,7 +42,7 @@ struct MutationPlanPanel: View {
                 Spacer()
 
                 StatusPill(state: context.status)
-                actionButtons
+                actionBar
             }
         }
     }
@@ -57,26 +59,14 @@ struct MutationPlanPanel: View {
         }
     }
 
-    private var actionButtons: some View {
-        HStack(spacing: 8) {
-            Button("Preview", systemImage: "doc.text.magnifyingglass") {
-                onPreview()
-            }
-            .disabled(!context.canPreview)
-            .help(context.previewBlockedReason ?? "Preview staged source mutations")
-
-            Button("Apply", systemImage: "checkmark.seal") {
-                onApply()
-            }
-            .disabled(!context.canApply)
-            .help(context.applyBlockedReason ?? "Apply previewed source mutations")
-
-            Button("Discard", systemImage: "trash") {
-                onDiscard()
-            }
-            .disabled(!context.canDiscard)
-            .help("Discard staged source mutations")
-        }
+    private var actionBar: some View {
+        MutationActionBar(
+            state: MutationActionBarState(context: context),
+            style: .panel,
+            onPreview: onPreview,
+            onApply: onApply,
+            onDiscard: onDiscard
+        )
     }
 
     private var summaryCounters: some View {
@@ -111,9 +101,10 @@ struct MutationPlanPanel: View {
         if !context.changes.isEmpty {
             panelColumn("Planned Changes") {
                 VStack(spacing: 8) {
-                    ForEach(context.changes.prefix(4)) { change in
+                    ForEach(context.changes.prefix(Self.detailRowLimit)) { change in
                         planChangeRow(change)
                     }
+                    overflowRow(hiddenCount: context.changes.count - Self.detailRowLimit, noun: "planned change")
                 }
             }
             .frame(width: panelColumnWidth)
@@ -122,9 +113,10 @@ struct MutationPlanPanel: View {
         if !context.appliedChanges.isEmpty {
             panelColumn("Applied") {
                 VStack(spacing: 8) {
-                    ForEach(context.appliedChanges.prefix(4)) { change in
+                    ForEach(context.appliedChanges.prefix(Self.detailRowLimit)) { change in
                         appliedChangeRow(change)
                     }
+                    overflowRow(hiddenCount: context.appliedChanges.count - Self.detailRowLimit, noun: "applied change")
                 }
             }
             .frame(width: panelColumnWidth)
@@ -133,9 +125,10 @@ struct MutationPlanPanel: View {
         if !context.diagnostics.isEmpty {
             panelColumn("Diagnostics") {
                 VStack(spacing: 8) {
-                    ForEach(context.diagnostics.prefix(4)) { diagnostic in
+                    ForEach(context.diagnostics.prefix(Self.detailRowLimit)) { diagnostic in
                         diagnosticRow(diagnostic)
                     }
+                    overflowRow(hiddenCount: context.diagnostics.count - Self.detailRowLimit, noun: "diagnostic")
                 }
             }
             .frame(width: panelColumnWidth)
@@ -241,5 +234,15 @@ struct MutationPlanPanel: View {
                 .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func overflowRow(hiddenCount: Int, noun: String) -> some View {
+        if hiddenCount > 0 {
+            Text("+\(hiddenCount) more \(noun)\(hiddenCount == 1 ? "" : "s")")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
