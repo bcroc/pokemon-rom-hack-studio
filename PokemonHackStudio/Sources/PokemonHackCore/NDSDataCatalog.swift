@@ -575,6 +575,7 @@ public enum NDSDataCatalogBuilder {
                         catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
                     }
                     + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                    + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
                     + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
                 ).sorted(by: recordSort),
                 profile: index.profile
@@ -712,7 +713,9 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.resources, "files"),
                 CatalogPathDescriptor(.audio, "files/wb_sound_data.sdat", required: false),
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
+                CatalogPathDescriptor(.scripts, "overlays", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.scripts, "overlays", required: false),
+                CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "ndsdisasm_config", required: false),
                 CatalogPathDescriptor(.resources, "arm9.ld", format: .text, required: false),
                 CatalogPathDescriptor(.resources, "arm7.ld", format: .text, required: false),
@@ -960,7 +963,41 @@ public enum NDSDataCatalogBuilder {
         }
     }
 
+    private static func discoveredGenVAudioRecords(for profile: GameProfile, root: URL, fileManager: FileManager) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeblack else { return [] }
+        return discoveredFiles(root: root, searchRoot: "files", extensions: ["sdat"], fileManager: fileManager)
+            .map { relativePath in
+                record(
+                    for: CatalogPathDescriptor(.audio, relativePath, required: false),
+                    relativePath: relativePath,
+                    root: root,
+                    exists: true,
+                    fileManager: fileManager
+                )
+            }
+    }
+
     private static func literalNARCRecords(root: URL, searchRoot: String, fileManager: FileManager) -> [NDSDataCatalogRecord] {
+        discoveredFiles(root: root, searchRoot: searchRoot, extensions: ["narc"], fileManager: fileManager)
+            .prefix(maxDiscoveredContainerRecords)
+            .map { relativePath in
+                containerRecord(
+                    relativePath: relativePath,
+                    root: root,
+                    domain: domain(forContainerPath: relativePath),
+                    format: .narc,
+                    isDirectory: false,
+                    fileManager: fileManager
+                )
+            }
+    }
+
+    private static func discoveredFiles(
+        root: URL,
+        searchRoot: String,
+        extensions: Set<String>,
+        fileManager: FileManager
+    ) -> [String] {
         let searchURL = root.appendingPathComponent(searchRoot)
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: searchURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
@@ -982,23 +1019,10 @@ public enum NDSDataCatalogBuilder {
                 }
                 continue
             }
-            guard url.pathExtension.lowercased() == "narc" else { continue }
+            guard extensions.contains(url.pathExtension.lowercased()) else { continue }
             paths.append(relativePath(for: url, root: root))
         }
-
-        return paths
-            .sorted()
-            .prefix(maxDiscoveredContainerRecords)
-            .map { relativePath in
-                containerRecord(
-                    relativePath: relativePath,
-                    root: root,
-                    domain: domain(forContainerPath: relativePath),
-                    format: .narc,
-                    isDirectory: false,
-                    fileManager: fileManager
-                )
-            }
+        return paths.sorted()
     }
 
     private static func unpackedArchiveDirectoryRecords(root: URL, searchRoot: String, fileManager: FileManager) -> [NDSDataCatalogRecord] {
@@ -1425,12 +1449,6 @@ public enum NDSDataCatalogBuilder {
         if lower == "data" {
             return "dataInventory"
         }
-        if record.domain == .audio {
-            return "audioMetadata"
-        }
-        if record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc {
-            return "nitroArchiveRoute"
-        }
         if lower == "makefile" || lower == "config.mk" {
             return "buildConfig"
         }
@@ -1455,11 +1473,29 @@ public enum NDSDataCatalogBuilder {
         if lower.hasPrefix("files/a/") {
             return "nitroArchiveGroup"
         }
+        if lower.hasPrefix("files/"), lower.hasSuffix(".sdat") {
+            return "soundArchiveMetadata"
+        }
+        if isGenVSoundContainer(record, lower: lower) {
+            return "soundContainerRoute"
+        }
+        if record.domain == .audio {
+            return "audioMetadata"
+        }
+        if record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc {
+            return "boundedContainerSummary"
+        }
         if lower.hasPrefix("files/") {
             return "nitroFSResource"
         }
+        if lower == "overlays" {
+            return "overlayInventory"
+        }
         if lower.hasPrefix("overlays/") {
             return "overlayRouting"
+        }
+        if lower == "ndsdisasm_config" {
+            return "disassemblyConfigInventory"
         }
         if lower.hasPrefix("ndsdisasm_config/") {
             return "disassemblyConfig"
@@ -1476,6 +1512,25 @@ public enum NDSDataCatalogBuilder {
         return "sourceInventory"
     }
 
+    private static func isGenVSoundContainer(_ record: NDSDataCatalogRecord, lower: String) -> Bool {
+        guard lower.hasSuffix(".narc"),
+              record.role == .binaryContainer || record.containerSummary != nil || record.format == .narc
+        else {
+            return false
+        }
+        return record.domain == .audio
+            || lower.contains("sound")
+            || lower.contains("/snd")
+            || lower.contains("sdat")
+            || lower.contains("sseq")
+            || lower.contains("sbnk")
+            || lower.contains("swar")
+            || lower.contains("strm")
+            || lower.contains("bgm")
+            || lower.contains("music")
+            || lower.contains("cries")
+    }
+
     private static func genVSourceRoleDetail(for role: String) -> String {
         switch role {
         case "encounterPreview":
@@ -1484,8 +1539,12 @@ public enum NDSDataCatalogBuilder {
             return "The Gen V data root is summarized as manual-only source inventory."
         case "audioMetadata":
             return "SDAT/SSEQ/SBNK/SWAR/STRM candidates retain read-only audio metadata facts."
-        case "nitroArchiveRoute":
-            return "NARC or container-like resources are routed for inventory and migration planning only."
+        case "soundArchiveMetadata":
+            return "Gen V SDAT files under files/ retain read-only sound archive metadata facts."
+        case "soundContainerRoute":
+            return "Sound-adjacent Gen V NARC rows are routed as manual-only container metadata."
+        case "boundedContainerSummary":
+            return "Gen V NARC or container-like rows are summarized as bounded manual-only inventory."
         case "buildConfig":
             return "Build configuration is indexed for manual setup and checksum orientation only."
         case "linkerConfig":
@@ -1504,8 +1563,12 @@ public enum NDSDataCatalogBuilder {
             return "files/a archive-group paths are identified for future Gen V container routing."
         case "nitroFSResource":
             return "NitroFS resource files are indexed as source-tree inventory."
+        case "overlayInventory":
+            return "The overlays root is summarized as manual-only overlay source inventory."
         case "overlayRouting":
             return "Overlay sources are indexed for disassembly and script-routing context."
+        case "disassemblyConfigInventory":
+            return "The ndsdisasm_config root is summarized as manual-only disassembly configuration inventory."
         case "disassemblyConfig":
             return "Disassembly configuration files are indexed as orientation metadata."
         case "filesystemManifest":

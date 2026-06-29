@@ -85,11 +85,16 @@ struct PokemonSpeciesWorkbenchView: View {
                         if supportsEvolutionEditing(for: selectedSpecies) {
                             evolutionSection(draft: draft)
                         }
+                        if supportsFormsEditing(for: selectedSpecies) {
+                            formsSection(draft: draft)
+                        }
                         if supportsTMHMEditing(for: selectedSpecies) {
                             tmhmSection(draft: draft)
                         }
-                        if supportsClassicSpeciesMutationEditing {
+                        if supportsTutorEditing(for: selectedSpecies) {
                             tutorSection(draft: draft)
+                        }
+                        if supportsClassicSpeciesMutationEditing {
                             eggMovesSection(draft: draft)
                         }
                         relatedDataSection(for: selectedSpecies, layoutMode: layoutMode)
@@ -240,6 +245,50 @@ struct PokemonSpeciesWorkbenchView: View {
                         Toggle(displayConstant(move.symbol), isOn: tmhmBinding(move.symbol))
                             .toggleStyle(.checkbox)
                             .help(move.symbol)
+                    }
+                }
+            }
+        }
+    }
+
+    private func formsSection(draft: PokemonHackCore.SpeciesEditDraft) -> some View {
+        EditorSection(title: "Forms") {
+            VStack(alignment: .leading, spacing: 14) {
+                if !draft.formSpecies.isEmpty {
+                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                        GridRow {
+                            Text("Slot").foregroundStyle(.secondary)
+                            Text("Species").foregroundStyle(.secondary)
+                        }
+                        .font(.caption.weight(.semibold))
+
+                        ForEach(draft.formSpecies) { row in
+                            GridRow {
+                                Text("\(row.slot + 1)")
+                                    .foregroundStyle(.secondary)
+                                SpeciesConstantPicker(title: "Form Species", selection: formSpeciesBinding(slot: row.slot), constants: constants(.species))
+                                    .labelsHidden()
+                            }
+                        }
+                    }
+                }
+
+                if !draft.formChanges.isEmpty {
+                    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                        GridRow {
+                            Text("Change").foregroundStyle(.secondary)
+                            Text("Target").foregroundStyle(.secondary)
+                        }
+                        .font(.caption.weight(.semibold))
+
+                        ForEach(draft.formChanges) { row in
+                            GridRow {
+                                SpeciesConstantPicker(title: "Change", selection: formChangeMethodBinding(index: row.index), constants: constants(.formChangeMethods))
+                                    .labelsHidden()
+                                SpeciesConstantPicker(title: "Target", selection: formChangeTargetBinding(index: row.index), constants: constants(.species))
+                                    .labelsHidden()
+                            }
+                        }
                     }
                 }
             }
@@ -630,6 +679,8 @@ struct PokemonSpeciesWorkbenchView: View {
             return true
         case .pokeruby:
             return species.learnsets.tmhmSourceSpan?.relativePath == "src/data/pokemon/tmhm_learnsets.h"
+        case .pokeemeraldExpansion:
+            return species.learnsets.tmhmSourceSpan?.relativePath == "src/data/pokemon/tmhm_learnsets.h"
         default:
             return false
         }
@@ -646,6 +697,10 @@ struct PokemonSpeciesWorkbenchView: View {
         }
     }
 
+    private func supportsFormsEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
+        catalog?.profile == .pokeemeraldExpansion && species.forms.hasEditableRows
+    }
+
     private func supportsLevelUpEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered:
@@ -656,6 +711,17 @@ struct PokemonSpeciesWorkbenchView: View {
             guard let path = species.learnsets.levelUpSourceSpan?.relativePath else { return false }
             return path == "src/data/pokemon/level_up_learnsets.h"
                 || path.hasPrefix("src/data/pokemon/level_up_learnsets/")
+        default:
+            return false
+        }
+    }
+
+    private func supportsTutorEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered:
+            return true
+        case .pokeemeraldExpansion:
+            return species.learnsets.tutorSourceSpan?.relativePath == "src/data/pokemon/tutor_learnsets.h"
         default:
             return false
         }
@@ -824,6 +890,42 @@ struct PokemonSpeciesWorkbenchView: View {
                 updateDraft { draft in
                     guard let index = draft.levelUpMoves.firstIndex(where: { $0.id == id }) else { return }
                     draft.levelUpMoves[index].move = value
+                }
+            }
+        )
+    }
+
+    private func formSpeciesBinding(slot: Int) -> Binding<String> {
+        Binding(
+            get: { draft?.formSpecies.first(where: { $0.slot == slot })?.speciesID ?? "SPECIES_NONE" },
+            set: { value in
+                updateDraft { draft in
+                    guard let index = draft.formSpecies.firstIndex(where: { $0.slot == slot }) else { return }
+                    draft.formSpecies[index].speciesID = value
+                }
+            }
+        )
+    }
+
+    private func formChangeMethodBinding(index: Int) -> Binding<String> {
+        Binding(
+            get: { draft?.formChanges.first(where: { $0.index == index })?.method ?? "FORM_CHANGE_BATTLE_MEGA_EVOLUTION" },
+            set: { value in
+                updateDraft { draft in
+                    guard let rowIndex = draft.formChanges.firstIndex(where: { $0.index == index }) else { return }
+                    draft.formChanges[rowIndex].method = value
+                }
+            }
+        )
+    }
+
+    private func formChangeTargetBinding(index: Int) -> Binding<String> {
+        Binding(
+            get: { draft?.formChanges.first(where: { $0.index == index })?.targetSpecies ?? "SPECIES_NONE" },
+            set: { value in
+                updateDraft { draft in
+                    guard let rowIndex = draft.formChanges.firstIndex(where: { $0.index == index }) else { return }
+                    draft.formChanges[rowIndex].targetSpecies = value
                 }
             }
         )

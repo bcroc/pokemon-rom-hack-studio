@@ -11,10 +11,35 @@ struct WorkbenchGuidedFlow: Identifiable {
     let facts: [Fact]
     let primaryAction: WorkbenchGuidedAction
     let secondaryActions: [WorkbenchGuidedAction]
+
+    init(
+        id: String,
+        title: String,
+        subtitle: String,
+        detail: String,
+        systemImage: String,
+        status: ValidationState,
+        run: GuidedWorkflowRun,
+        facts: [Fact],
+        primaryAction: WorkbenchGuidedAction,
+        secondaryActions: [WorkbenchGuidedAction]
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.detail = detail
+        self.systemImage = systemImage
+        self.status = status
+        self.run = run
+        self.facts = facts
+        self.primaryAction = primaryAction.withFlowID(id)
+        self.secondaryActions = secondaryActions.map { $0.withFlowID(id) }
+    }
 }
 
 struct WorkbenchGuidedAction: Identifiable {
     let id: String
+    let flowID: String?
     let title: String
     let subtitle: String
     let systemImage: String
@@ -26,6 +51,7 @@ struct WorkbenchGuidedAction: Identifiable {
 
     init(
         id: String,
+        flowID: String? = nil,
         title: String,
         subtitle: String,
         systemImage: String,
@@ -36,6 +62,7 @@ struct WorkbenchGuidedAction: Identifiable {
         buildTab: BuildWorkbenchTab? = nil
     ) {
         self.id = id
+        self.flowID = flowID
         self.title = title
         self.subtitle = subtitle
         self.systemImage = systemImage
@@ -44,6 +71,21 @@ struct WorkbenchGuidedAction: Identifiable {
         self.resourceAssetPath = resourceAssetPath
         self.resourceAssetCategory = resourceAssetCategory
         self.buildTab = buildTab
+    }
+
+    func withFlowID(_ flowID: String) -> WorkbenchGuidedAction {
+        WorkbenchGuidedAction(
+            id: id,
+            flowID: flowID,
+            title: title,
+            subtitle: subtitle,
+            systemImage: systemImage,
+            targetModule: targetModule,
+            searchText: searchText,
+            resourceAssetPath: resourceAssetPath,
+            resourceAssetCategory: resourceAssetCategory,
+            buildTab: buildTab
+        )
     }
 }
 

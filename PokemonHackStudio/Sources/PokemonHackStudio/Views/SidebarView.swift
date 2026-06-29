@@ -1041,8 +1041,15 @@ struct WorkbenchSidebarPanel: View {
         let flow = store.guidedFlows.first { $0.id == store.selectedGuidedFlowID } ?? store.guidedFlows.first
         return sidebarSection("Properties", systemImage: "info.circle") {
             if let flow {
+                let run = flow.run
                 propertyHeader(flow.title, subtitle: flow.detail, systemImage: flow.systemImage, status: flow.status)
-                propertyFacts(flow.facts)
+                propertyFacts(flow.facts + [
+                    Fact(label: "Step", value: run.currentStep),
+                    Fact(label: "Target", value: run.activeObject),
+                    Fact(label: "Gate", value: run.mutationGate),
+                    Fact(label: "Next", value: run.nextAction),
+                    Fact(label: "Diagnostics", value: "\(run.diagnosticsCount)")
+                ])
             } else {
                 emptySidebarText("No guided project action selected.")
             }

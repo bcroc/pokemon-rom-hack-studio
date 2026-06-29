@@ -248,6 +248,8 @@ public enum NDSDataSemanticEditor {
     private enum SemanticFieldSyntax {
         case json
         case cScalar
+        case csvCell
+        case textLine
     }
 
     public static func snapshot(
@@ -413,13 +415,13 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix JSON records, HeartGold/SoulSilver personal/trainer/item/encounter/zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix JSON records and existing text lines under res/text/**/*.txt, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
-        if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts].contains(record.domain) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, and HGSS zone-event script records in this slice.", span: record.sourceSpan))
+        if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text-line records in this slice.", span: record.sourceSpan))
         }
         if catalog.profile == .pokeheartgold, !isHeartGoldSoulSilverSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, and direct zone-event JSON rows under files/fielddata/eventdata/zone_event; NARC, generated, script binary, map matrix, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, and direct zone-event JSON rows under files/fielddata/eventdata/zone_event; NARC, generated, script binary, map matrix, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, item mapping scalars in arm9/src/itemtool.c, and trainer class gender scalars in arm9/src/trainer_data.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
@@ -428,7 +430,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves; nested move tables, HeartGold/SoulSilver and Diamond/Pearl move containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .items, !isSemanticItemDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows under files/itemtool/itemdata, Diamond/Pearl item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; CSV, generated, binary, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows and direct item CSV rows under files/itemtool/itemdata, Diamond/Pearl item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; non-HGSS CSV, generated, binary, container, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
         if record.domain == .trainers, !isSemanticTrainerDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED", message: "Semantic trainer editing is limited to Platinum trainer data JSON rows under res/trainers/data, direct Platinum trainer class JSON rows under res/trainers/classes, HeartGold/SoulSilver trainer JSON rows under files/poketool/trainer, Diamond/Pearl trainer JSON rows under files/poketool/trainer, and Diamond/Pearl trainer class gender scalars in arm9/src/trainer_data.c; nested trainer class rows, trainer resources, other C anchors, and other trainer assets remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
@@ -442,8 +444,11 @@ public enum NDSDataSemanticEditor {
         if record.domain == .scripts, !isSemanticScriptDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
+        if record.domain == .text, !isSemanticTextDataPath(catalog.profile, record) {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TEXT_PATH_BLOCKED", message: "Semantic text editing is limited to existing line contents in Platinum source-tree .txt rows under res/text/**/*.txt; BMG/message-bank rows, JSON message banks, containers, generated/reference rows, ROM-backed rows, multiline edits, insert/delete/reorder edits, extraction/rebuild/export paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+        }
         if !isSemanticFormatSupported(catalog.profile, record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON or an explicitly supported Diamond/Pearl C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON, an eligible Platinum source text .txt row, an eligible HeartGold/SoulSilver item CSV row, or an explicitly supported Diamond/Pearl C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
         }
         return diagnostics
     }
@@ -580,6 +585,29 @@ public enum NDSDataSemanticEditor {
         }
     }
 
+    private static func isPlatinumSourceTextLineDataPath(_ relativePath: String) -> Bool {
+        let prefix = "res/text/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".txt") else { return false }
+        return !lower.dropFirst(prefix.count).isEmpty
+    }
+
+    private static func isPlatinumSourceTextLineRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .text
+            && record.role == .sourceTree
+            && record.format == .text
+            && isPlatinumSourceTextLineDataPath(record.relativePath)
+    }
+
+    private static func isSemanticTextDataPath(_ profile: GameProfile, _ record: NDSDataCatalogRecord) -> Bool {
+        switch profile {
+        case .pokeplatinum:
+            return isPlatinumSourceTextLineRecord(record)
+        default:
+            return false
+        }
+    }
+
     private static func isSemanticProfileSupported(_ profile: GameProfile, record: NDSDataCatalogRecord) -> Bool {
         switch profile {
         case .pokeplatinum:
@@ -626,6 +654,12 @@ public enum NDSDataSemanticEditor {
 
     private static func isSemanticFormatSupported(_ profile: GameProfile, _ record: NDSDataCatalogRecord) -> Bool {
         if record.format == .json {
+            return true
+        }
+        if profile == .pokeheartgold, isHeartGoldSoulSilverItemCSVRecord(record) {
+            return true
+        }
+        if profile == .pokeplatinum, isPlatinumSourceTextLineRecord(record) {
             return true
         }
         return profile == .pokediamond && isDiamondPearlSemanticDataPath(record)
@@ -681,7 +715,25 @@ public enum NDSDataSemanticEditor {
     }
 
     private static func isHeartGoldSoulSilverItemDataPath(_ relativePath: String) -> Bool {
+        isHeartGoldSoulSilverItemJSONDataPath(relativePath) || isHeartGoldSoulSilverItemCSVDataPath(relativePath)
+    }
+
+    private static func isHeartGoldSoulSilverItemJSONDataPath(_ relativePath: String) -> Bool {
         relativePath.hasPrefix("files/itemtool/itemdata/") && relativePath.lowercased().hasSuffix(".json")
+    }
+
+    private static func isHeartGoldSoulSilverItemCSVDataPath(_ relativePath: String) -> Bool {
+        let prefix = "files/itemtool/itemdata/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".csv") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func isHeartGoldSoulSilverItemCSVRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .items
+            && record.format == .csv
+            && isHeartGoldSoulSilverItemCSVDataPath(record.relativePath)
     }
 
     private static func isHeartGoldSoulSilverEncounterDataPath(_ relativePath: String) -> Bool {
@@ -706,6 +758,11 @@ public enum NDSDataSemanticEditor {
         let unsupportedNestedKeys: Set<String>
     }
 
+    private struct ParsedCSVCell {
+        let value: String
+        let valueRange: Range<String.Index>
+    }
+
     private static func parseSemanticFields(
         sourceText: String,
         record: NDSDataCatalogRecord?,
@@ -723,7 +780,217 @@ public enum NDSDataSemanticEditor {
         if record == nil, recordID == "trainers:\(diamondPearlTrainerCAnchorPath)" {
             return parseDiamondPearlTrainerClassGenderFields(sourceText: sourceText, record: nil)
         }
+        if let record, isHeartGoldSoulSilverItemCSVRecord(record) {
+            return parseHeartGoldSoulSilverItemCSVFields(sourceText: sourceText, record: record)
+        }
+        if let record, isPlatinumSourceTextLineRecord(record) {
+            return parsePlatinumSourceTextLineFields(sourceText: sourceText, record: record)
+        }
         return parseTopLevelScalarJSONFields(sourceText: sourceText, record: record)
+    }
+
+    private static func parsePlatinumSourceTextLineFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord
+    ) -> ParsedSemanticFields {
+        var fields: [ParsedSemanticField] = []
+        for (lineIndex, lineRange) in csvLineRanges(sourceText).enumerated() {
+            fields.append(
+                ParsedSemanticField(
+                    semanticField: NDSDataSemanticField(
+                        key: "lines.\(lineIndex).text",
+                        label: "Line \(lineIndex + 1)",
+                        value: String(sourceText[lineRange]),
+                        valueKind: .string,
+                        sourceSpan: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: sourceText, before: lineRange.lowerBound))
+                    ),
+                    valueRange: lineRange,
+                    syntax: .textLine
+                )
+            )
+        }
+
+        var diagnostics: [Diagnostic] = []
+        if fields.isEmpty {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_TEXT_LINES", message: "No existing text lines were found for Platinum source text semantic editing.", span: record.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parseHeartGoldSoulSilverItemCSVFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        var lineRanges = csvLineRanges(sourceText)
+        while let last = lineRanges.last, String(sourceText[last]).isEmpty {
+            lineRanges.removeLast()
+        }
+        guard let headerRange = lineRanges.first else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_HEADER_REQUIRED", message: "HeartGold/SoulSilver item CSV semantic editing requires a nonempty header row.", span: record.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        let header = parseCSVRow(sourceText, lineRange: headerRange, record: record, rowDescription: "header")
+        diagnostics.append(contentsOf: header.diagnostics)
+        var headers: [String] = []
+        var seenHeaders = Set<String>()
+        var duplicateHeaders = Set<String>()
+        for cell in header.cells {
+            let name = cell.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_HEADER_EMPTY", message: "HeartGold/SoulSilver item CSV semantic editing requires nonempty header names.", span: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: sourceText, before: cell.valueRange.lowerBound))))
+            } else if !seenHeaders.insert(name).inserted {
+                duplicateHeaders.insert(name)
+            }
+            headers.append(name)
+        }
+        for headerName in duplicateHeaders.sorted() {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_HEADER_DUPLICATE", message: "HeartGold/SoulSilver item CSV header \(headerName) appears more than once; duplicate headers must be resolved before field-level edits are planned.", span: record.sourceSpan))
+        }
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else {
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+        guard !headers.isEmpty else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_HEADER_REQUIRED", message: "HeartGold/SoulSilver item CSV semantic editing requires at least one header column.", span: record.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+        guard lineRanges.count > 1 else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_ROW_REQUIRED", message: "HeartGold/SoulSilver item CSV semantic editing requires at least one existing data row.", span: record.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        for (dataRowIndex, lineRange) in lineRanges.dropFirst().enumerated() {
+            let row = parseCSVRow(sourceText, lineRange: lineRange, record: record, rowDescription: "row \(dataRowIndex + 1)")
+            diagnostics.append(contentsOf: row.diagnostics)
+            guard row.cells.count == headers.count else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_CSV_ROW_BAD_SHAPE", message: "HeartGold/SoulSilver item CSV row \(dataRowIndex + 1) has \(row.cells.count) cell(s), but the header has \(headers.count); this row remains raw-source only.", span: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: sourceText, before: lineRange.lowerBound))))
+                continue
+            }
+            for (columnIndex, cell) in row.cells.enumerated() {
+                let headerName = headers[columnIndex]
+                fields.append(
+                    ParsedSemanticField(
+                        semanticField: NDSDataSemanticField(
+                            key: "rows.\(dataRowIndex).\(headerName)",
+                            label: "Row \(dataRowIndex + 1) \(semanticLabel(for: headerName))",
+                            value: cell.value,
+                            valueKind: .string,
+                            sourceSpan: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: sourceText, before: cell.valueRange.lowerBound))
+                        ),
+                        valueRange: cell.valueRange,
+                        syntax: .csvCell
+                    )
+                )
+            }
+        }
+
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_CSV_CELLS", message: "No editable CSV cells were found for HeartGold/SoulSilver item semantic editing.", span: record.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func csvLineRanges(_ text: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var lineStart = text.startIndex
+        var index = text.startIndex
+        while index < text.endIndex {
+            if text[index] == "\n" {
+                var lineEnd = index
+                if lineStart < lineEnd {
+                    let beforeEnd = text.index(before: lineEnd)
+                    if text[beforeEnd] == "\r" {
+                        lineEnd = beforeEnd
+                    }
+                }
+                ranges.append(lineStart..<lineEnd)
+                lineStart = text.index(after: index)
+            }
+            index = text.index(after: index)
+        }
+        if lineStart < text.endIndex {
+            var lineEnd = text.endIndex
+            let beforeEnd = text.index(before: lineEnd)
+            if text[beforeEnd] == "\r" {
+                lineEnd = beforeEnd
+            }
+            ranges.append(lineStart..<lineEnd)
+        }
+        return ranges
+    }
+
+    private static func parseCSVRow(
+        _ text: String,
+        lineRange: Range<String.Index>,
+        record: NDSDataCatalogRecord,
+        rowDescription: String
+    ) -> (cells: [ParsedCSVCell], diagnostics: [Diagnostic]) {
+        var cells: [ParsedCSVCell] = []
+        var diagnostics: [Diagnostic] = []
+        var index = lineRange.lowerBound
+        while true {
+            let cellStart = index
+            if index < lineRange.upperBound, text[index] == "\"" {
+                let quoted = parseQuotedCSVCell(text, start: index, end: lineRange.upperBound, record: record, rowDescription: rowDescription)
+                diagnostics.append(contentsOf: quoted.diagnostics)
+                if let cell = quoted.cell {
+                    cells.append(cell)
+                }
+                index = quoted.end
+            } else {
+                var cellEnd = index
+                while cellEnd < lineRange.upperBound, text[cellEnd] != "," {
+                    cellEnd = text.index(after: cellEnd)
+                }
+                cells.append(ParsedCSVCell(value: String(text[cellStart..<cellEnd]), valueRange: cellStart..<cellEnd))
+                index = cellEnd
+            }
+
+            if index < lineRange.upperBound, text[index] == "," {
+                index = text.index(after: index)
+                continue
+            }
+            break
+        }
+        return (cells, diagnostics)
+    }
+
+    private static func parseQuotedCSVCell(
+        _ text: String,
+        start: String.Index,
+        end: String.Index,
+        record: NDSDataCatalogRecord,
+        rowDescription: String
+    ) -> (cell: ParsedCSVCell?, end: String.Index, diagnostics: [Diagnostic]) {
+        var diagnostics: [Diagnostic] = []
+        var value = ""
+        var index = text.index(after: start)
+        while index < end {
+            if text[index] == "\"" {
+                let next = text.index(after: index)
+                if next < end, text[next] == "\"" {
+                    value.append("\"")
+                    index = text.index(after: next)
+                    continue
+                }
+
+                var cellEnd = next
+                while cellEnd < end, text[cellEnd] != "," {
+                    if !text[cellEnd].isWhitespace {
+                        diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_QUOTED_TRAILING_TEXT", message: "HeartGold/SoulSilver item CSV \(rowDescription) has non-whitespace text after a quoted cell; this row remains raw-source only.", span: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: text, before: cellEnd))))
+                    }
+                    cellEnd = text.index(after: cellEnd)
+                }
+                return (ParsedCSVCell(value: value, valueRange: start..<cellEnd), cellEnd, diagnostics)
+            }
+            value.append(text[index])
+            index = text.index(after: index)
+        }
+
+        diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_QUOTE_UNCLOSED", message: "HeartGold/SoulSilver item CSV \(rowDescription) has an unterminated quoted cell; multiline CSV cells remain raw-source only.", span: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: text, before: start))))
+        return (nil, end, diagnostics)
     }
 
     private static func parseDiamondPearlItemCAnchorFields(
@@ -1347,12 +1614,40 @@ public enum NDSDataSemanticEditor {
         return isCIntegerLiteral(trimmed) ? trimmed : nil
     }
 
+    private static func renderedCSVCellValue(_ value: String) -> String? {
+        guard !value.contains(where: { $0 == "\n" || $0 == "\r" }) else { return nil }
+        let needsQuoting = value.contains(",")
+            || value.contains("\"")
+            || value.first?.isWhitespace == true
+            || value.last?.isWhitespace == true
+        guard needsQuoting else { return value }
+
+        var rendered = "\""
+        for character in value {
+            if character == "\"" {
+                rendered += "\"\""
+            } else {
+                rendered.append(character)
+            }
+        }
+        rendered += "\""
+        return rendered
+    }
+
+    private static func renderedTextLineValue(_ value: String) -> String? {
+        value.contains(where: { $0 == "\n" || $0 == "\r" }) ? nil : value
+    }
+
     private static func renderedValue(_ value: String, for field: ParsedSemanticField) -> String? {
         switch field.syntax {
         case .json:
             return renderedJSONValue(value, as: field.semanticField.valueKind)
         case .cScalar:
             return renderedCScalarValue(value)
+        case .csvCell:
+            return renderedCSVCellValue(value)
+        case .textLine:
+            return renderedTextLineValue(value)
         }
     }
 

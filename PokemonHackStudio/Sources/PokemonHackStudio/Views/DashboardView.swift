@@ -130,7 +130,7 @@ struct DashboardView: View {
         EditorSection(title: "Next Actions") {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12)], spacing: 12) {
                 ForEach(store.guidedFlows) { flow in
-                    GuidedFlowCard(flow: flow) { action in
+                    GuidedFlowCard(flow: flow, isSelected: store.selectedGuidedFlowID == flow.id) { action in
                         store.route(to: action)
                     }
                 }
@@ -195,6 +195,7 @@ struct DashboardView: View {
 
 private struct GuidedFlowCard: View {
     let flow: WorkbenchGuidedFlow
+    let isSelected: Bool
     let route: (WorkbenchGuidedAction) -> Void
 
     var body: some View {
@@ -245,6 +246,10 @@ private struct GuidedFlowCard: View {
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.55) : Color.clear, lineWidth: 1)
+        }
     }
 }
 

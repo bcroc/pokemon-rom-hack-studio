@@ -31,6 +31,7 @@ public struct ProjectSpeciesCatalog: Codable, Equatable {
 }
 
 public enum SpeciesConstantGroup: String, Codable, Equatable, CaseIterable, Identifiable, Sendable {
+    case species
     case types
     case abilities
     case eggGroups
@@ -41,6 +42,7 @@ public enum SpeciesConstantGroup: String, Codable, Equatable, CaseIterable, Iden
     case tmhmMoves
     case tutorMoves
     case evolutionMethods
+    case formChangeMethods
 
     public var id: String { rawValue }
 }
@@ -78,6 +80,7 @@ public struct SpeciesDetail: Codable, Equatable, Identifiable {
     public let noFlip: String?
     public let learnsets: SpeciesLearnsets
     public let evolutions: [SpeciesEvolution]
+    public let forms: SpeciesForms
     public let pokedex: SpeciesPokedexEntry?
     public let assets: [SpeciesAsset]
     public let diagnostics: [Diagnostic]
@@ -99,6 +102,7 @@ public struct SpeciesDetail: Codable, Equatable, Identifiable {
         noFlip: String? = nil,
         learnsets: SpeciesLearnsets = SpeciesLearnsets(),
         evolutions: [SpeciesEvolution] = [],
+        forms: SpeciesForms = SpeciesForms(),
         pokedex: SpeciesPokedexEntry? = nil,
         assets: [SpeciesAsset] = [],
         diagnostics: [Diagnostic] = [],
@@ -119,6 +123,7 @@ public struct SpeciesDetail: Codable, Equatable, Identifiable {
         self.noFlip = noFlip
         self.learnsets = learnsets
         self.evolutions = evolutions
+        self.forms = forms
         self.pokedex = pokedex
         self.assets = assets
         self.diagnostics = diagnostics
@@ -304,6 +309,69 @@ public struct SpeciesEvolution: Codable, Equatable, Identifiable {
     public init(method: String, parameter: String, targetSpecies: String, sourceSpan: SourceSpan) {
         self.method = method
         self.parameter = parameter
+        self.targetSpecies = targetSpecies
+        self.sourceSpan = sourceSpan
+    }
+}
+
+public struct SpeciesForms: Codable, Equatable {
+    public let formSpeciesTableSymbol: String?
+    public let formSpeciesSourceSpan: SourceSpan?
+    public let species: [SpeciesFormSpecies]
+    public let formChangeTableSymbol: String?
+    public let formChangeSourceSpan: SourceSpan?
+    public let changes: [SpeciesFormChange]
+    public let diagnostics: [Diagnostic]
+
+    public var hasEditableRows: Bool {
+        (formSpeciesSourceSpan != nil && !species.isEmpty)
+            || (formChangeSourceSpan != nil && !changes.isEmpty)
+    }
+
+    public init(
+        formSpeciesTableSymbol: String? = nil,
+        formSpeciesSourceSpan: SourceSpan? = nil,
+        species: [SpeciesFormSpecies] = [],
+        formChangeTableSymbol: String? = nil,
+        formChangeSourceSpan: SourceSpan? = nil,
+        changes: [SpeciesFormChange] = [],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.formSpeciesTableSymbol = formSpeciesTableSymbol
+        self.formSpeciesSourceSpan = formSpeciesSourceSpan
+        self.species = species
+        self.formChangeTableSymbol = formChangeTableSymbol
+        self.formChangeSourceSpan = formChangeSourceSpan
+        self.changes = changes
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct SpeciesFormSpecies: Codable, Equatable, Identifiable {
+    public var id: Int { slot }
+
+    public let slot: Int
+    public let speciesID: String
+    public let sourceSpan: SourceSpan
+
+    public init(slot: Int, speciesID: String, sourceSpan: SourceSpan) {
+        self.slot = slot
+        self.speciesID = speciesID
+        self.sourceSpan = sourceSpan
+    }
+}
+
+public struct SpeciesFormChange: Codable, Equatable, Identifiable {
+    public var id: Int { index }
+
+    public let index: Int
+    public let method: String
+    public let targetSpecies: String
+    public let sourceSpan: SourceSpan
+
+    public init(index: Int, method: String, targetSpecies: String, sourceSpan: SourceSpan) {
+        self.index = index
+        self.method = method
         self.targetSpecies = targetSpecies
         self.sourceSpan = sourceSpan
     }
@@ -829,6 +897,40 @@ public struct SpeciesEvolutionDraft: Codable, Equatable, Identifiable {
     }
 }
 
+public struct SpeciesFormSpeciesDraft: Codable, Equatable, Identifiable {
+    public var id: Int { slot }
+
+    public var slot: Int
+    public var speciesID: String
+
+    public init(slot: Int, speciesID: String) {
+        self.slot = slot
+        self.speciesID = speciesID
+    }
+
+    public init(row: SpeciesFormSpecies) {
+        self.init(slot: row.slot, speciesID: row.speciesID)
+    }
+}
+
+public struct SpeciesFormChangeDraft: Codable, Equatable, Identifiable {
+    public var id: Int { index }
+
+    public var index: Int
+    public var method: String
+    public var targetSpecies: String
+
+    public init(index: Int, method: String, targetSpecies: String) {
+        self.index = index
+        self.method = method
+        self.targetSpecies = targetSpecies
+    }
+
+    public init(row: SpeciesFormChange) {
+        self.init(index: row.index, method: row.method, targetSpecies: row.targetSpecies)
+    }
+}
+
 public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
     public var id: String { speciesID }
 
@@ -854,6 +956,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
     public var eggMoves: [String]
     public var tutorMoves: [String]
     public var evolutions: [SpeciesEvolutionDraft]
+    public var formSpecies: [SpeciesFormSpeciesDraft]
+    public var formChanges: [SpeciesFormChangeDraft]
     public var pokedex: SpeciesPokedexDraft?
     public var assetData: [SpeciesAssetKind: Data]
     public var assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance]
@@ -881,6 +985,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         eggMoves: [String],
         tutorMoves: [String],
         evolutions: [SpeciesEvolutionDraft],
+        formSpecies: [SpeciesFormSpeciesDraft] = [],
+        formChanges: [SpeciesFormChangeDraft] = [],
         pokedex: SpeciesPokedexDraft? = nil,
         assetData: [SpeciesAssetKind: Data] = [:],
         assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance] = [:]
@@ -907,6 +1013,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         self.eggMoves = eggMoves
         self.tutorMoves = Array(Set(tutorMoves)).sorted()
         self.evolutions = evolutions
+        self.formSpecies = formSpecies
+        self.formChanges = formChanges
         self.pokedex = pokedex
         self.assetData = assetData
         self.assetImports = assetImports
@@ -920,6 +1028,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         let eggMoves = detail.learnsets.egg.map(\.move)
         let tutorMoves = detail.learnsets.tutor.map(\.move)
         let evolutions = detail.evolutions.map { SpeciesEvolutionDraft(evolution: $0) }
+        let formSpecies = detail.forms.species.map { SpeciesFormSpeciesDraft(row: $0) }
+        let formChanges = detail.forms.changes.map { SpeciesFormChangeDraft(row: $0) }
         let pokedex = detail.pokedex.map { SpeciesPokedexDraft(entry: $0) }
 
         self.init(
@@ -945,6 +1055,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
             eggMoves: eggMoves,
             tutorMoves: tutorMoves,
             evolutions: evolutions,
+            formSpecies: formSpecies,
+            formChanges: formChanges,
             pokedex: pokedex,
             assetData: [:],
             assetImports: [:]
@@ -1117,14 +1229,16 @@ public enum ProjectSpeciesCatalogBuilder {
         let tutorLearnsets = try readTutorLearnsets(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
         let evolutions = try readEvolutions(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
         let pokedexEntries = try readPokedexEntries(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
+        let formTables = try readFormTables(descriptor: descriptor, root: root, fileManager: fileManager, diagnostics: &diagnostics)
 
         let species = speciesEntries.map { entry -> SpeciesDetail in
             let fields = entry.fields
             let speciesID = entry.symbol
+            let forms = formsForSpecies(speciesID, fields: fields, formTables: formTables)
             let assets = assetLinks(for: speciesID, root: root, fileManager: fileManager)
             let assetDiagnostics = assets.flatMap(\.diagnostics)
             let editDiagnostics = editabilityDiagnostics(entry: entry, descriptor: descriptor)
-            let detailDiagnostics = assetDiagnostics + editDiagnostics
+            let detailDiagnostics = assetDiagnostics + editDiagnostics + forms.diagnostics
             let levelUp = levelUpLearnsets[speciesID]
             let tmhm = tmhmLearnsets[speciesID]
             let egg = eggMoves[speciesID]
@@ -1182,6 +1296,7 @@ public enum ProjectSpeciesCatalogBuilder {
                     tutorSourceSpan: tutor?.span
                 ),
                 evolutions: evolutions[speciesID] ?? [],
+                forms: forms,
                 pokedex: pokedexEntries[speciesID],
                 assets: assets,
                 diagnostics: detailDiagnostics,
@@ -1767,6 +1882,163 @@ public enum ProjectSpeciesCatalogBuilder {
         return result
     }
 
+    private static func readFormTables(
+        descriptor: SpeciesCatalogDescriptor,
+        root: URL,
+        fileManager: FileManager,
+        diagnostics: inout [Diagnostic]
+    ) throws -> SpeciesFormTableRecords {
+        var records = SpeciesFormTableRecords()
+        if let relativePath = descriptor.formSpeciesPath {
+            let url = root.appendingPathComponent(relativePath)
+            if fileManager.fileExists(atPath: url.path) {
+                let text = try readText(at: url)
+                for record in formSpeciesTableRecords(in: text, relativePath: relativePath) {
+                    records.formSpeciesTables[record.symbol] = record
+                    diagnostics.append(contentsOf: record.diagnostics)
+                }
+            }
+        }
+        if let relativePath = descriptor.formChangePath {
+            let url = root.appendingPathComponent(relativePath)
+            if fileManager.fileExists(atPath: url.path) {
+                let text = try readText(at: url)
+                for record in formChangeTableRecords(in: text, relativePath: relativePath) {
+                    records.formChangeTables[record.symbol] = record
+                    diagnostics.append(contentsOf: record.diagnostics)
+                }
+            }
+        }
+        return records
+    }
+
+    private static func formsForSpecies(
+        _ speciesID: String,
+        fields: [String: String],
+        formTables: SpeciesFormTableRecords
+    ) -> SpeciesForms {
+        let formSpeciesSymbol = compact(fields["formSpeciesIdTable"])
+            ?? defaultFormSpeciesTableSymbol(for: speciesID, suffix: "FormSpeciesIdTable")
+        let formChangeSymbol = compact(fields["formChangeTable"])
+            ?? defaultFormSpeciesTableSymbol(for: speciesID, suffix: "FormChangeTable")
+        let formSpeciesTable = formTables.formSpeciesTables[formSpeciesSymbol]
+        let formChangeTable = formTables.formChangeTables[formChangeSymbol]
+        let diagnostics = (formSpeciesTable?.diagnostics ?? []) + (formChangeTable?.diagnostics ?? [])
+        return SpeciesForms(
+            formSpeciesTableSymbol: formSpeciesTable?.symbol,
+            formSpeciesSourceSpan: formSpeciesTable?.span,
+            species: formSpeciesTable?.species ?? [],
+            formChangeTableSymbol: formChangeTable?.symbol,
+            formChangeSourceSpan: formChangeTable?.span,
+            changes: formChangeTable?.changes ?? [],
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func defaultFormSpeciesTableSymbol(for speciesID: String, suffix: String) -> String {
+        "s\(camelCaseSpeciesName(from: speciesID))\(suffix)"
+    }
+
+    private static func camelCaseSpeciesName(from speciesID: String) -> String {
+        speciesID
+            .replacingOccurrences(of: "SPECIES_", with: "")
+            .split(separator: "_")
+            .map { part in
+                let lower = part.lowercased()
+                return lower.prefix(1).uppercased() + lower.dropFirst()
+            }
+            .joined()
+    }
+
+    private static func formSpeciesTableRecords(in text: String, relativePath: String) -> [SpeciesFormSpeciesTableRecord] {
+        let lines = text.components(separatedBy: .newlines)
+        var records: [SpeciesFormSpeciesTableRecord] = []
+        var index = 0
+        while index < lines.count {
+            guard let symbol = firstRegexMatch(#"([sg][A-Za-z0-9_]+FormSpeciesIdTable)"#, in: lines[index]) else {
+                index += 1
+                continue
+            }
+            let start = index
+            var end = index
+            while end < lines.count, !lines[end].contains("};") {
+                end += 1
+            }
+            let clampedEnd = min(end, lines.count - 1)
+            var rows: [SpeciesFormSpecies] = []
+            for lineIndex in start...clampedEnd {
+                for match in regexMatches(#"\b(SPECIES_[A-Z0-9_]+)\b"#, in: lines[lineIndex]) {
+                    guard match.count >= 2 else { continue }
+                    rows.append(SpeciesFormSpecies(
+                        slot: rows.count,
+                        speciesID: match[1],
+                        sourceSpan: SourceSpan(relativePath: relativePath, startLine: lineIndex + 1)
+                    ))
+                }
+            }
+            records.append(SpeciesFormSpeciesTableRecord(
+                symbol: symbol,
+                span: SourceSpan(relativePath: relativePath, startLine: start + 1, endLine: clampedEnd + 1),
+                species: rows
+            ))
+            index = clampedEnd + 1
+        }
+        return records
+    }
+
+    private static func formChangeTableRecords(in text: String, relativePath: String) -> [SpeciesFormChangeTableRecord] {
+        let lines = text.components(separatedBy: .newlines)
+        var records: [SpeciesFormChangeTableRecord] = []
+        var index = 0
+        while index < lines.count {
+            guard let symbol = firstRegexMatch(#"([sg][A-Za-z0-9_]+FormChangeTable)"#, in: lines[index]) else {
+                index += 1
+                continue
+            }
+            let start = index
+            var end = index
+            while end < lines.count, !lines[end].contains("};") {
+                end += 1
+            }
+            let clampedEnd = min(end, lines.count - 1)
+            var rows: [SpeciesFormChange] = []
+            var diagnostics: [Diagnostic] = []
+            for lineIndex in start...clampedEnd {
+                let line = lines[lineIndex]
+                guard line.contains("FORM_CHANGE_") else { continue }
+                if line.contains("FORM_CHANGE_TERMINATOR") || line.contains("FORM_CHANGE_END") {
+                    continue
+                }
+                let matches = regexMatches(#"\{\s*(FORM_CHANGE_[A-Z0-9_]+)\s*,\s*(SPECIES_[A-Z0-9_]+)\s*\}"#, in: line)
+                if matches.isEmpty {
+                    diagnostics.append(Diagnostic(
+                        severity: .error,
+                        code: "SPECIES_FORM_CHANGE_ROW_UNSUPPORTED_SHAPE",
+                        message: "\(symbol) has a form-change row shape that cannot be safely rewritten yet.",
+                        span: SourceSpan(relativePath: relativePath, startLine: lineIndex + 1)
+                    ))
+                    continue
+                }
+                for match in matches where match.count >= 3 {
+                    rows.append(SpeciesFormChange(
+                        index: rows.count,
+                        method: match[1],
+                        targetSpecies: match[2],
+                        sourceSpan: SourceSpan(relativePath: relativePath, startLine: lineIndex + 1)
+                    ))
+                }
+            }
+            records.append(SpeciesFormChangeTableRecord(
+                symbol: symbol,
+                span: SourceSpan(relativePath: relativePath, startLine: start + 1, endLine: clampedEnd + 1),
+                changes: rows,
+                diagnostics: diagnostics
+            ))
+            index = clampedEnd + 1
+        }
+        return records
+    }
+
     private static func assetLinks(
         for speciesID: String,
         root: URL,
@@ -1924,14 +2196,23 @@ public enum SpeciesMutationPlanner {
             }
             if tmhmChanged(species: species, draft: draft) {
                 if let span = species.learnsets.tmhmSourceSpan,
-                   let path = descriptor.tmhmPath,
-                   let tmhmChange = rewriteChange(
-                    root: root,
-                    path: path,
-                    span: span,
-                    replacement: renderTMHMLearnset(speciesID: draft.speciesID, moves: draft.tmhmMoves, catalog: catalog, profile: catalog.profile)
-                   ) {
-                    changes.append(tmhmChange)
+                   let path = descriptor.tmhmPath {
+                    if descriptor.speciesInfoStyle == .expansionSpeciesScalars && !isExpansionTMHMLearnsetPath(path) {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_TMHM_PATH_UNSUPPORTED", message: "\(draft.speciesID) TM/HM rewrites are limited to local Expansion TM/HM learnset source rows.", span: span))
+                    } else if let tmhmChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderTMHMLearnset(
+                            speciesID: draft.speciesID,
+                            moves: draft.tmhmMoves,
+                            catalog: catalog,
+                            profile: catalog.profile,
+                            sourceText: sourceEntryText(root: root, path: path, span: span)
+                        )
+                    ) {
+                        changes.append(tmhmChange)
+                    }
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_TMHM_SPAN_MISSING", message: "\(draft.speciesID) has no editable TM/HM learnset source span.", span: species.sourceSpan))
                 }
@@ -1962,6 +2243,42 @@ public enum SpeciesMutationPlanner {
                     changes.append(evolutionChange)
                 } else if descriptor.evolutionPath != nil {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTION_SPAN_MISSING", message: "\(draft.speciesID) has no editable evolution source span.", span: species.sourceSpan))
+                }
+            }
+            if formSpeciesChanged(species: species, draft: draft) {
+                if let span = species.forms.formSpeciesSourceSpan,
+                   let symbol = species.forms.formSpeciesTableSymbol,
+                   let path = descriptor.formSpeciesPath {
+                    if span.relativePath != path {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_SPECIES_PATH_UNSUPPORTED", message: "\(draft.speciesID) form species rewrites are limited to local Expansion form species table source files.", span: span))
+                    } else if let formSpeciesChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderFormSpeciesTable(symbol: symbol, rows: draft.formSpecies)
+                    ) {
+                        changes.append(formSpeciesChange)
+                    }
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_SPECIES_SPAN_MISSING", message: "\(draft.speciesID) has no editable form species table source span.", span: species.sourceSpan))
+                }
+            }
+            if formChangesChanged(species: species, draft: draft) {
+                if let span = species.forms.formChangeSourceSpan,
+                   let symbol = species.forms.formChangeTableSymbol,
+                   let path = descriptor.formChangePath {
+                    if span.relativePath != path {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_CHANGE_PATH_UNSUPPORTED", message: "\(draft.speciesID) form change rewrites are limited to local Expansion form change table source files.", span: span))
+                    } else if let formChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderFormChangeTable(symbol: symbol, rows: draft.formChanges)
+                    ) {
+                        changes.append(formChange)
+                    }
+                } else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_CHANGE_SPAN_MISSING", message: "\(draft.speciesID) has no editable form change table source span.", span: species.sourceSpan))
                 }
             }
             if pokedexChanged(species: species, draft: draft) {
@@ -2097,6 +2414,9 @@ public enum SpeciesMutationPlanner {
         if pokedexTextChanged(species: species, draft: draft), !capabilities.pokedexText {
             diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) Pokedex description text is read-only for this profile.", span: species.pokedex?.descriptionSpan ?? species.pokedex?.sourceSpan ?? species.sourceSpan))
         }
+        if (formSpeciesChanged(species: species, draft: draft) || formChangesChanged(species: species, draft: draft)), !capabilities.forms {
+            diagnostics.append(unsupportedEditDiagnostic(code: "SPECIES_FORMS_EDIT_UNSUPPORTED_PROFILE", message: "\(draft.speciesID) form tables are read-only for this profile.", span: species.forms.formSpeciesSourceSpan ?? species.forms.formChangeSourceSpan ?? species.sourceSpan))
+        }
     }
 
     private static func unsupportedEditDiagnostic(code: String, message: String, span: SourceSpan?) -> Diagnostic {
@@ -2106,6 +2426,10 @@ public enum SpeciesMutationPlanner {
     private static func isExpansionLevelUpLearnsetPath(_ path: String) -> Bool {
         path == "src/data/pokemon/level_up_learnsets.h"
             || path.hasPrefix("src/data/pokemon/level_up_learnsets/")
+    }
+
+    private static func isExpansionTMHMLearnsetPath(_ path: String) -> Bool {
+        path == "src/data/pokemon/tmhm_learnsets.h"
     }
 
     private static func appendStructuralDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
@@ -2150,6 +2474,17 @@ public enum SpeciesMutationPlanner {
         }
         if draft.evolutions.count > 5 {
             diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTIONS_EXCEEDED", message: "Species cannot have more than 5 evolutions.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
+        }
+        if let original = SpeciesEditDraft(detail: species) {
+            if draft.formSpecies.map(\.slot) != original.formSpecies.map(\.slot) {
+                diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_SPECIES_ROW_STRUCTURE_UNSUPPORTED", message: "Form species row insertion, removal, and reorder are blocked; edit existing local rows only.", span: species.forms.formSpeciesSourceSpan ?? species.sourceSpan))
+            }
+            if draft.formChanges.map(\.index) != original.formChanges.map(\.index) {
+                diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_CHANGE_ROW_STRUCTURE_UNSUPPORTED", message: "Form change row insertion, removal, and reorder are blocked; edit existing local rows only.", span: species.forms.formChangeSourceSpan ?? species.sourceSpan))
+            }
+        }
+        if formSpeciesChanged(species: species, draft: draft) || formChangesChanged(species: species, draft: draft) {
+            diagnostics.append(contentsOf: species.forms.diagnostics.filter { $0.severity == .error })
         }
         if let pokedex = draft.pokedex {
             appendPokedexNumericDiagnostic(label: "height", value: pokedex.height, code: "SPECIES_POKEDEX_HEIGHT_INVALID", species: species, diagnostics: &diagnostics)
@@ -2200,6 +2535,15 @@ public enum SpeciesMutationPlanner {
             if descriptor.editCapabilities.levelUp || levelUpChanged(species: species, draft: draft) {
                 appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
             }
+            if descriptor.editCapabilities.tutor || tutorChanged(species: species, draft: draft) {
+                appendUnknown(draft.tutorMoves, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if descriptor.editCapabilities.tmhm || tmhmChanged(species: species, draft: draft) {
+                appendUnknown(draft.tmhmMoves, group: .tmhmMoves, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if formSpeciesChanged(species: species, draft: draft) || formChangesChanged(species: species, draft: draft) {
+                appendFormConstantDiagnostics(catalog: catalog, draft: draft, species: species, constants: constants, diagnostics: &diagnostics)
+            }
             return
         }
         appendUnknown(draft.types, group: .types, constants: constants, species: species, diagnostics: &diagnostics)
@@ -2220,6 +2564,25 @@ public enum SpeciesMutationPlanner {
         if descriptor.editCapabilities.tmhm || tmhmChanged(species: species, draft: draft) {
             appendUnknown(draft.tmhmMoves, group: .tmhmMoves, constants: constants, species: species, diagnostics: &diagnostics)
         }
+        if formSpeciesChanged(species: species, draft: draft) || formChangesChanged(species: species, draft: draft) {
+            appendFormConstantDiagnostics(catalog: catalog, draft: draft, species: species, constants: constants, diagnostics: &diagnostics)
+        }
+    }
+
+    private static func appendFormConstantDiagnostics(
+        catalog: ProjectSpeciesCatalog,
+        draft: SpeciesEditDraft,
+        species: SpeciesDetail,
+        constants: [SpeciesConstantGroup: Set<String>],
+        diagnostics: inout [Diagnostic]
+    ) {
+        let knownSpecies = Set(catalog.species.map(\.speciesID))
+        let knownSpeciesConstants = constants[.species] ?? []
+        let formSpecies = draft.formSpecies.map(\.speciesID) + draft.formChanges.map(\.targetSpecies)
+        for symbol in Set(formSpecies) where !symbol.isEmpty && !knownSpecies.contains(symbol) && !knownSpeciesConstants.contains(symbol) {
+            diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_DRAFT_CONSTANT_UNRESOLVED", message: "\(symbol) is not a valid species in the current project.", span: species.forms.formSpeciesSourceSpan ?? species.forms.formChangeSourceSpan ?? species.sourceSpan))
+        }
+        appendUnknown(draft.formChanges.map(\.method), group: .formChangeMethods, constants: constants, species: species, diagnostics: &diagnostics)
     }
 
     private static func appendEvolutionDiagnostics(catalog: ProjectSpeciesCatalog, draft: SpeciesEditDraft, species: SpeciesDetail, descriptor: SpeciesCatalogDescriptor, diagnostics: inout [Diagnostic]) {
@@ -2502,6 +2865,12 @@ public enum SpeciesMutationPlanner {
         return lines[start...end].joined(separator: "\n")
     }
 
+    private static func sourceEntryText(root: URL, path: String, span: SourceSpan) -> String? {
+        let url = root.appendingPathComponent(path)
+        guard let text = try? readText(at: url) else { return nil }
+        return sourceEntryText(in: text, span: span)
+    }
+
     private static func rewriteChange(root: URL, path: String, span: SourceSpan, replacement: String) -> SpeciesEditFileChange? {
         let url = root.appendingPathComponent(path)
         guard let originalText = try? readText(at: url), let originalData = originalText.data(using: .utf8) else {
@@ -2757,10 +3126,15 @@ public enum SpeciesMutationPlanner {
         """
     }
 
-    private static func renderTMHMLearnset(speciesID: String, moves: [String], catalog: ProjectSpeciesCatalog, profile: GameProfile) -> String {
+    private static func renderTMHMLearnset(
+        speciesID: String,
+        moves: [String],
+        catalog: ProjectSpeciesCatalog,
+        profile: GameProfile,
+        sourceText: String? = nil
+    ) -> String {
         let orderedMoves = orderedTMHMMoves(moves, catalog: catalog)
-        switch profile {
-        case .pokefirered:
+        if profile == .pokefirered || (profile == .pokeemeraldExpansion && tmhmSourceUsesMacroStyle(sourceText)) {
             guard !orderedMoves.isEmpty else {
                 return "    [\(speciesID)]     = TMHM_LEARNSET(0),"
             }
@@ -2778,16 +3152,21 @@ public enum SpeciesMutationPlanner {
                 return "\(firstLine)),"
             }
             return "\(firstLine)\n\(rest)),"
-        default:
-            let rows = orderedMoves.map { move in
-                "        .\(String(move.dropFirst("MOVE_".count))) = TRUE,"
-            }.joined(separator: "\n")
-            return """
-                [\(speciesID)] = { .learnset = {
-            \(rows)
-                } },
-            """
         }
+
+        let rows = orderedMoves.map { move in
+            "        .\(String(move.dropFirst("MOVE_".count))) = TRUE,"
+        }.joined(separator: "\n")
+        return """
+            [\(speciesID)] = { .learnset = {
+        \(rows)
+            } },
+        """
+    }
+
+    private static func tmhmSourceUsesMacroStyle(_ sourceText: String?) -> Bool {
+        guard let sourceText else { return false }
+        return sourceText.contains("TMHM_LEARNSET(") || sourceText.contains("TMHM(")
     }
 
     private static func renderEggMoves(speciesID: String, moves: [String]) -> String {
@@ -2817,6 +3196,26 @@ public enum SpeciesMutationPlanner {
         }
     }
 
+    private static func renderFormSpeciesTable(symbol: String, rows: [SpeciesFormSpeciesDraft]) -> String {
+        let entries = rows.map { "    \($0.speciesID)," }.joined(separator: "\n")
+        return """
+        static const u16 \(symbol)[] = {
+        \(entries)
+            FORM_SPECIES_END,
+        };
+        """
+    }
+
+    private static func renderFormChangeTable(symbol: String, rows: [SpeciesFormChangeDraft]) -> String {
+        let entries = rows.map { "    { \($0.method), \($0.targetSpecies) }," }.joined(separator: "\n")
+        return """
+        static const struct FormChange \(symbol)[] = {
+        \(entries)
+            { FORM_CHANGE_TERMINATOR },
+        };
+        """
+    }
+
     private static func orderedTMHMMoves(_ moves: [String], catalog: ProjectSpeciesCatalog) -> [String] {
         let moveSet = Set(moves)
         let ordered = (catalog.constants[.tmhmMoves] ?? []).map(\.symbol).filter { moveSet.contains($0) }
@@ -2838,6 +3237,14 @@ public enum SpeciesMutationPlanner {
 
     private static func evolutionChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
         draft.evolutions.map { "\($0.method):\($0.parameter):\($0.targetSpecies)" } != species.evolutions.map { "\($0.method):\($0.parameter):\($0.targetSpecies)" }
+    }
+
+    private static func formSpeciesChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        draft.formSpecies.map { "\($0.slot):\($0.speciesID)" } != species.forms.species.map { "\($0.slot):\($0.speciesID)" }
+    }
+
+    private static func formChangesChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
+        draft.formChanges.map { "\($0.index):\($0.method):\($0.targetSpecies)" } != species.forms.changes.map { "\($0.index):\($0.method):\($0.targetSpecies)" }
     }
 
     private static func tutorChanged(species: SpeciesDetail, draft: SpeciesEditDraft) -> Bool {
@@ -2990,6 +3397,8 @@ private struct SpeciesCatalogDescriptor {
     let pokedexTextPath: String?
     let tutorPath: String?
     let tutorTableSymbols: [String]
+    let formSpeciesPath: String?
+    let formChangePath: String?
     let editCapabilities: SpeciesEditCapabilities
     let constants: [SpeciesConstantDescriptor]
 
@@ -3015,6 +3424,8 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
+                formSpeciesPath: nil,
+                formChangePath: nil,
                 editCapabilities: .classic,
                 constants: classicConstants
             )
@@ -3034,6 +3445,8 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
+                formSpeciesPath: nil,
+                formChangePath: nil,
                 editCapabilities: .classic,
                 constants: classicConstants
             )
@@ -3053,7 +3466,9 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokedex_text_en.h",
                 tutorPath: nil,
                 tutorTableSymbols: [],
-                editCapabilities: .rubyBaseStatsPokedexEvolutionsLevelUpAndTMHM,
+                formSpeciesPath: nil,
+                formChangePath: nil,
+                editCapabilities: .rubyBaseStatsPokedexEvolutionsLevelUpTMHMAndEggMoves,
                 constants: classicConstants
             )
         case .pokeemeraldExpansion:
@@ -3072,6 +3487,8 @@ private struct SpeciesCatalogDescriptor {
                 pokedexTextPath: "src/data/pokemon/pokedex_text.h",
                 tutorPath: "src/data/pokemon/tutor_learnsets.h",
                 tutorTableSymbols: ["sTutorLearnsets", "gTutorLearnsets"],
+                formSpeciesPath: "src/data/pokemon/form_species_tables.h",
+                formChangePath: "src/data/pokemon/form_change_tables.h",
                 editCapabilities: .expansionSpeciesScalars,
                 constants: classicConstants
             )
@@ -3082,6 +3499,8 @@ private struct SpeciesCatalogDescriptor {
     }
 
     private static let classicConstants = [
+        SpeciesConstantDescriptor(path: "include/constants/species.h", group: .species, prefixes: ["SPECIES_"]),
+        SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .species, prefixes: ["SPECIES_"]),
         SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .types, prefixes: ["TYPE_"]),
         SpeciesConstantDescriptor(path: "include/constants/abilities.h", group: .abilities, prefixes: ["ABILITY_"]),
         SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .eggGroups, prefixes: ["EGG_GROUP_"]),
@@ -3089,7 +3508,8 @@ private struct SpeciesCatalogDescriptor {
         SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .bodyColors, prefixes: ["BODY_COLOR_"]),
         SpeciesConstantDescriptor(path: "include/constants/items.h", group: .items, prefixes: ["ITEM_"]),
         SpeciesConstantDescriptor(path: "include/constants/moves.h", group: .moves, prefixes: ["MOVE_"]),
-        SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .evolutionMethods, prefixes: ["EVO_"])
+        SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .evolutionMethods, prefixes: ["EVO_"]),
+        SpeciesConstantDescriptor(path: "include/constants/pokemon.h", group: .formChangeMethods, prefixes: ["FORM_CHANGE_"])
     ]
 }
 
@@ -3111,6 +3531,37 @@ private enum SpeciesInfoStyle {
     case classicSpeciesInfo
     case rubyBaseStats
     case expansionSpeciesScalars
+}
+
+private struct SpeciesFormTableRecords {
+    var formSpeciesTables: [String: SpeciesFormSpeciesTableRecord] = [:]
+    var formChangeTables: [String: SpeciesFormChangeTableRecord] = [:]
+}
+
+private struct SpeciesFormSpeciesTableRecord {
+    let symbol: String
+    let span: SourceSpan
+    let species: [SpeciesFormSpecies]
+    let diagnostics: [Diagnostic]
+
+    init(
+        symbol: String,
+        span: SourceSpan,
+        species: [SpeciesFormSpecies],
+        diagnostics: [Diagnostic] = []
+    ) {
+        self.symbol = symbol
+        self.span = span
+        self.species = species
+        self.diagnostics = diagnostics
+    }
+}
+
+private struct SpeciesFormChangeTableRecord {
+    let symbol: String
+    let span: SourceSpan
+    let changes: [SpeciesFormChange]
+    let diagnostics: [Diagnostic]
 }
 
 private struct SpeciesInfoScalarFieldChange {
@@ -3393,9 +3844,10 @@ private struct SpeciesEditCapabilities {
     let pokedexText: Bool
     let tutor: Bool
     let assets: Bool
+    let forms: Bool
 
     var supportsAnyEditing: Bool {
-        speciesInfo || levelUp || tmhm || eggMoves || evolutions || pokedex || pokedexText || tutor || assets
+        speciesInfo || levelUp || tmhm || eggMoves || evolutions || pokedex || pokedexText || tutor || assets || forms
     }
 
     static let classic = SpeciesEditCapabilities(
@@ -3407,31 +3859,34 @@ private struct SpeciesEditCapabilities {
         pokedex: true,
         pokedexText: true,
         tutor: true,
-        assets: true
+        assets: true,
+        forms: false
     )
 
-    static let rubyBaseStatsPokedexEvolutionsLevelUpAndTMHM = SpeciesEditCapabilities(
+    static let rubyBaseStatsPokedexEvolutionsLevelUpTMHMAndEggMoves = SpeciesEditCapabilities(
         speciesInfo: true,
         levelUp: true,
         tmhm: true,
-        eggMoves: false,
+        eggMoves: true,
         evolutions: true,
         pokedex: true,
         pokedexText: true,
         tutor: false,
-        assets: false
+        assets: false,
+        forms: false
     )
 
     static let expansionSpeciesScalars = SpeciesEditCapabilities(
         speciesInfo: true,
         levelUp: true,
-        tmhm: false,
+        tmhm: true,
         eggMoves: false,
         evolutions: false,
         pokedex: false,
         pokedexText: false,
-        tutor: false,
-        assets: false
+        tutor: true,
+        assets: false,
+        forms: true
     )
 
     static let none = SpeciesEditCapabilities(
@@ -3443,7 +3898,8 @@ private struct SpeciesEditCapabilities {
         pokedex: false,
         pokedexText: false,
         tutor: false,
-        assets: false
+        assets: false,
+        forms: false
     )
 }
 

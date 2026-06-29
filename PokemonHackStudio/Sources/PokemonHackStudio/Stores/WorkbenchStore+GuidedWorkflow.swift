@@ -39,6 +39,10 @@ extension WorkbenchStore {
     }
 
     func route(to action: WorkbenchGuidedAction) {
+        if let flowID = action.flowID {
+            selectedGuidedFlowID = flowID
+        }
+
         if let resourceAssetPath = action.resourceAssetPath {
             navigateToResourceAsset(path: resourceAssetPath)
             return
