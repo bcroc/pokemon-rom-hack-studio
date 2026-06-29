@@ -7,6 +7,7 @@ struct WorkbenchGuidedFlow: Identifiable {
     let detail: String
     let systemImage: String
     let status: ValidationState
+    let run: GuidedWorkflowRun
     let facts: [Fact]
     let primaryAction: WorkbenchGuidedAction
     let secondaryActions: [WorkbenchGuidedAction]
@@ -211,7 +212,7 @@ struct DiagnosticSummary {
         buckets.first { $0.bucket == bucket } ?? DiagnosticBucketSummary(bucket: bucket, diagnostics: [])
     }
 
-    private static func bucket(for diagnostic: IndexedDiagnosticRow) -> DiagnosticSummaryBucket {
+    static func bucket(for diagnostic: IndexedDiagnosticRow) -> DiagnosticSummaryBucket {
         if diagnostic.severity == .error {
             return .blockingErrors
         }

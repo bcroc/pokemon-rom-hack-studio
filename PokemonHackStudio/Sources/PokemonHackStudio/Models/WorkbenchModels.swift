@@ -291,6 +291,280 @@ enum ValidationState: String, Identifiable {
     var id: String { rawValue }
 }
 
+enum ProjectIdentityKind: String, Identifiable {
+    case editableSource
+    case bundledFallback
+    case reference
+    case romInput
+    case localSourceReadOnly
+    case fixtureDev
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .editableSource:
+            "Editable Project"
+        case .bundledFallback:
+            "Bundled Fallback"
+        case .reference:
+            "Reference Source"
+        case .romInput:
+            "ROM Input"
+        case .localSourceReadOnly:
+            "Read-Only Source"
+        case .fixtureDev:
+            "Demo Fixture"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .editableSource:
+            "folder.badge.gearshape"
+        case .bundledFallback:
+            "shippingbox"
+        case .reference:
+            "books.vertical"
+        case .romInput:
+            "opticaldiscdrive"
+        case .localSourceReadOnly:
+            "folder.badge.questionmark"
+        case .fixtureDev:
+            "testtube.2"
+        }
+    }
+}
+
+struct ProjectWritePolicy: Equatable, Identifiable {
+    let kind: ProjectIdentityKind
+    let title: String
+    let detail: String
+    let isWritable: Bool
+
+    var id: String { "\(kind.rawValue)::\(title)" }
+
+    static func policy(originLabel: String, rawWritePolicy: String) -> ProjectWritePolicy {
+        switch originLabel {
+        case "Editable":
+            if rawWritePolicy.caseInsensitiveCompare("editable") == .orderedSame {
+                return ProjectWritePolicy(
+                    kind: .editableSource,
+                    title: "Editable source",
+                    detail: "Source-tree writes require preview, explicit apply, and backups.",
+                    isWritable: true
+                )
+            }
+            return ProjectWritePolicy(
+                kind: .localSourceReadOnly,
+                title: "Read-only source",
+                detail: "Source is indexed for inspection; mutation apply is blocked.",
+                isWritable: false
+            )
+        case "Bundled Fallback":
+            return ProjectWritePolicy(
+                kind: .bundledFallback,
+                title: "Read-only bundled fallback",
+                detail: "Bundled data is for exploration; open a local source tree before editing.",
+                isWritable: false
+            )
+        case "Reference":
+            return ProjectWritePolicy(
+                kind: .reference,
+                title: "Read-only reference",
+                detail: "Reference repositories are research material, not editable project roots.",
+                isWritable: false
+            )
+        case "Local Input":
+            return ProjectWritePolicy(
+                kind: .romInput,
+                title: "Read-only ROM input",
+                detail: "Standalone ROMs can be inspected; direct binary mutation remains blocked.",
+                isWritable: false
+            )
+        case "Local Source":
+            return ProjectWritePolicy(
+                kind: .localSourceReadOnly,
+                title: "Read-only source",
+                detail: "This source tree is preview/readiness-only until an explicit writer row opens it.",
+                isWritable: false
+            )
+        default:
+            return ProjectWritePolicy(
+                kind: rawWritePolicy.caseInsensitiveCompare("editable") == .orderedSame ? .editableSource : .localSourceReadOnly,
+                title: rawWritePolicy.caseInsensitiveCompare("editable") == .orderedSame ? "Editable source" : "Review before writing",
+                detail: "Review the selected project policy before applying mutations.",
+                isWritable: rawWritePolicy.caseInsensitiveCompare("editable") == .orderedSame
+            )
+        }
+    }
+
+    static let fixture = ProjectWritePolicy(
+        kind: .fixtureDev,
+        title: "Read-only fixture",
+        detail: "Demo records are safe fallback data and do not write to a project.",
+        isWritable: false
+    )
+}
+
+struct ProjectIdentity: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let rootPath: String
+    let originLabel: String
+    let writePolicy: ProjectWritePolicy
+
+    var kind: ProjectIdentityKind { writePolicy.kind }
+    var isWritable: Bool { writePolicy.isWritable }
+    var kindTitle: String { kind.title }
+    var systemImage: String { kind.systemImage }
+
+    var rootDisplay: String {
+        rootPath.isEmpty ? "No source root selected" : rootPath
+    }
+
+    static func fixture(title: String) -> ProjectIdentity {
+        ProjectIdentity(
+            id: "fixture::\(title)",
+            title: title,
+            rootPath: "",
+            originLabel: "Demo Fixture",
+            writePolicy: .fixture
+        )
+    }
+}
+
+enum GuidedWorkflowStepState: String, Identifiable {
+    case ready = "Ready"
+    case needsProject = "Needs Project"
+    case needsSelection = "Needs Selection"
+    case hasDraft = "Draft Active"
+    case needsPreview = "Preview Needed"
+    case previewReady = "Preview Ready"
+    case blocked = "Blocked"
+
+    var id: String { rawValue }
+
+    var validationState: ValidationState {
+        switch self {
+        case .ready, .previewReady:
+            .valid
+        case .needsProject, .needsSelection, .hasDraft, .needsPreview:
+            .warning
+        case .blocked:
+            .error
+        }
+    }
+}
+
+struct GuidedWorkflowRun: Identifiable {
+    let id: String
+    let currentStep: String
+    let state: GuidedWorkflowStepState
+    let activeObject: String
+    let mutationGate: String
+    let nextAction: String
+    let diagnosticsCount: Int
+    let artifacts: [String]
+}
+
+enum ModuleEditorMutationStage: String, Identifiable {
+    case browse = "Browse"
+    case draftReady = "Draft Ready"
+    case previewReady = "Preview Ready"
+    case blocked = "Blocked"
+
+    var id: String { rawValue }
+
+    var validationState: ValidationState {
+        switch self {
+        case .browse, .previewReady:
+            .valid
+        case .draftReady:
+            .warning
+        case .blocked:
+            .error
+        }
+    }
+}
+
+struct ModuleEditorSession: Identifiable {
+    let module: WorkbenchModule
+    let selectedObjectTitle: String
+    let selectedObjectID: String?
+    let isDirty: Bool
+    let canPreview: Bool
+    let canApply: Bool
+    let canDiscard: Bool
+    let stage: ModuleEditorMutationStage
+    let nextActionTitle: String
+    let blockedReason: String?
+    let diagnosticsCount: Int
+
+    var id: String {
+        "\(module.id)::\(selectedObjectID ?? "none")"
+    }
+}
+
+enum SourceLocationAction: String, CaseIterable, Identifiable {
+    case copyPath = "Copy Path"
+    case revealInFinder = "Reveal in Finder"
+    case openExternally = "Open Externally"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .copyPath:
+            "doc.on.doc"
+        case .revealInFinder:
+            "finder"
+        case .openExternally:
+            "arrow.up.forward.app"
+        }
+    }
+}
+
+enum ValidationTier: String, CaseIterable, Identifiable {
+    case synthetic
+    case localGBAFixtures
+    case centralNDSReferences
+    case appGUISmoke
+    case releaseCandidate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .synthetic:
+            "Synthetic"
+        case .localGBAFixtures:
+            "Local GBA Fixtures"
+        case .centralNDSReferences:
+            "Central NDS References"
+        case .appGUISmoke:
+            "App GUI Smoke"
+        case .releaseCandidate:
+            "Release Candidate"
+        }
+    }
+
+    var command: String {
+        switch self {
+        case .synthetic:
+            "make validate-synthetic"
+        case .localGBAFixtures:
+            "make validate-gba-fixtures"
+        case .centralNDSReferences:
+            "make validate-nds-strict"
+        case .appGUISmoke:
+            "make validate-gui-smoke"
+        case .releaseCandidate:
+            "make validate-release-candidate"
+        }
+    }
+}
+
 enum ScriptReadinessTargetMode: String, CaseIterable, Identifiable {
     case map = "Map"
     case script = "Script"
@@ -1197,6 +1471,16 @@ struct IndexedProjectSummary: Identifiable {
     let generatedOutputs: [IndexedSourceSurface]
     let diagnostics: [IndexedDiagnosticRow]
     let buildTargets: [IndexedBuildTargetPreview]
+
+    var identity: ProjectIdentity {
+        ProjectIdentity(
+            id: id,
+            title: title,
+            rootPath: rootPath,
+            originLabel: originLabel,
+            writePolicy: ProjectWritePolicy.policy(originLabel: originLabel, rawWritePolicy: writePolicy)
+        )
+    }
 }
 
 struct IndexedSourceSurface: Identifiable {

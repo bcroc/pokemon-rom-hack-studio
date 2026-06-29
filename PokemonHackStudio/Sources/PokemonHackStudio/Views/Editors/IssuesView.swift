@@ -5,6 +5,7 @@ struct IssuesView: View {
     let indexedProject: IndexedProjectSummary?
     let indexedDiagnostics: [IndexedDiagnosticRow]
     let diagnosticSummary: DiagnosticSummary
+    let onRouteDiagnostic: (IndexedDiagnosticRow) -> Void
 
     @State private var expandedBuckets: Set<DiagnosticSummaryBucket> = [.blockingErrors]
     @State private var visibleRowLimits: [DiagnosticSummaryBucket: Int] = [:]
@@ -90,7 +91,9 @@ struct IssuesView: View {
                 if expandedBuckets.contains(bucket.bucket) {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(visibleDiagnostics(for: bucket)) { diagnostic in
-                            IndexedDiagnosticRowView(diagnostic: diagnostic)
+                            IndexedDiagnosticRowView(diagnostic: diagnostic) {
+                                onRouteDiagnostic(diagnostic)
+                            }
                         }
 
                         if remainingCount(for: bucket) > 0 {

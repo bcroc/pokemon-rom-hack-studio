@@ -17,6 +17,7 @@ struct WorkbenchSidebarPanel: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 projectSummary
+                currentEditorSessionSection
                 moduleNavigation
                 recentModuleNavigation
                 sidebarSearch
@@ -32,18 +33,19 @@ struct WorkbenchSidebarPanel: View {
     }
 
     private var projectSummary: some View {
-        sidebarSection("Workspace", systemImage: "folder") {
+        let identity = store.selectedProjectIdentity
+        return sidebarSection("Workspace", systemImage: "folder") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: store.selection.systemImage)
+                    Image(systemName: identity.systemImage)
                         .foregroundStyle(.secondary)
                         .frame(width: 18)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(store.selectedIndexedProject?.title ?? store.selectedTarget.name)
+                        Text(identity.title)
                             .font(.headline)
                             .lineLimit(1)
-                        Text(store.selectedIndexedProject?.rootPath ?? "Open a source project")
+                        Text(identity.rootDisplay)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -52,6 +54,15 @@ struct WorkbenchSidebarPanel: View {
 
                     Spacer(minLength: 6)
                     StatusPill(state: store.selectedIndexedProject?.status ?? store.projectIndexStatus.validationState)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(identity.writePolicy.title)
+                        .font(.caption.weight(.semibold))
+                    Text(identity.writePolicy.detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
 
                 HStack(spacing: 8) {
@@ -68,6 +79,39 @@ struct WorkbenchSidebarPanel: View {
                         .font(.caption2)
                         .foregroundStyle(store.workspacePersistenceError == nil ? Color.secondary : Color.red)
                         .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private var currentEditorSessionSection: some View {
+        let session = store.currentModuleEditorSession
+        return sidebarSection("Editor Session", systemImage: "slider.horizontal.3") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    StatusPill(state: session.stage.validationState)
+                    Text(session.stage.rawValue)
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Text(session.module.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(session.selectedObjectTitle)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(session.nextActionTitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                HStack(spacing: 8) {
+                    sidebarMetric("Preview", session.canPreview ? "Yes" : "No")
+                    sidebarMetric("Apply", session.canApply ? "Yes" : "No")
+                    sidebarMetric("Diagnostics", "\(session.diagnosticsCount)")
                 }
             }
         }

@@ -247,7 +247,8 @@ struct ModuleDetailView: View {
                 issues: store.issues,
                 indexedProject: store.selectedIndexedProject,
                 indexedDiagnostics: store.selectedDiagnosticRows,
-                diagnosticSummary: store.diagnosticSummary
+                diagnosticSummary: store.diagnosticSummary,
+                onRouteDiagnostic: store.route(to:)
             )
             .onAppear {
                 store.loadSelectedBuildReportIfNeeded()

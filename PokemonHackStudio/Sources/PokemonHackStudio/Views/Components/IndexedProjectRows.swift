@@ -39,6 +39,12 @@ struct IndexedSourceSurfaceRow: View {
 
 struct IndexedDiagnosticRowView: View {
     let diagnostic: IndexedDiagnosticRow
+    let onRoute: (() -> Void)?
+
+    init(diagnostic: IndexedDiagnosticRow, onRoute: (() -> Void)? = nil) {
+        self.diagnostic = diagnostic
+        self.onRoute = onRoute
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -53,6 +59,18 @@ struct IndexedDiagnosticRowView: View {
                 Spacer()
 
                 StatusPill(state: diagnostic.severity)
+            }
+
+            if let onRoute {
+                HStack {
+                    Button("Route", systemImage: "arrow.turn.down.right") {
+                        onRoute()
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Route to the owning workbench surface")
+
+                    Spacer()
+                }
             }
 
             SourceLocationView(source: diagnostic.source)

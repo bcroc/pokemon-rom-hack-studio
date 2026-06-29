@@ -77,6 +77,23 @@ extension WorkbenchStore {
         }
     }
 
+    func route(to diagnostic: IndexedDiagnosticRow) {
+        let bucket = DiagnosticSummary.bucket(for: diagnostic)
+        selectedDiagnosticBucket = bucket
+        selectedDiagnosticRowID = diagnostic.id
+
+        switch bucket {
+        case .healthToolchain, .generatedArtifacts:
+            selectedBuildReportRowID = diagnostic.id
+            selectWorkbenchModule(.build)
+            selectedBuildWorkbenchTab = .build
+        case .optionalAssets:
+            selectWorkbenchModule(.resources, search: .replace(diagnostic.source.path))
+        case .blockingErrors, .sourceWarnings:
+            selectWorkbenchModule(.issues)
+        }
+    }
+
     private var mapsGuidedFlow: WorkbenchGuidedFlow {
         let mapCount = selectedMapCatalog?.mapCount ?? records(for: .maps).count
         let layoutCount = selectedMapCatalog?.layoutCount ?? 0
@@ -87,6 +104,13 @@ extension WorkbenchStore {
             detail: "Map edits stay staged until a mutation plan is previewed and explicitly applied.",
             systemImage: WorkbenchModule.maps.systemImage,
             status: moduleStatus(for: .maps),
+            run: workflowRun(
+                id: "maps-events",
+                module: .maps,
+                activeObject: selectedMapCatalog?.maps.first(where: { $0.id == selectedMapID })?.name ?? "First editable map",
+                diagnosticsCount: 0,
+                defaultNextAction: "Open Maps"
+            ),
             facts: [
                 Fact(label: "Maps", value: "\(mapCount)"),
                 Fact(label: "Layouts", value: layoutCount == 0 ? "Load catalog" : "\(layoutCount)")
@@ -120,6 +144,13 @@ extension WorkbenchStore {
             detail: "Pokemon edits use preview/apply/discard mutation plans with source path visibility.",
             systemImage: WorkbenchModule.pokemon.systemImage,
             status: moduleStatus(for: .pokemon),
+            run: workflowRun(
+                id: "pokemon-data",
+                module: .pokemon,
+                activeObject: selectedSpeciesDetail?.displayName ?? "First editable Pokemon",
+                diagnosticsCount: selectedSpeciesDetail?.diagnostics.count ?? 0,
+                defaultNextAction: "Open Pokemon"
+            ),
             facts: [
                 Fact(label: "Species", value: "\(selectedSpeciesCatalog?.speciesCount ?? records(for: .pokemon).count)"),
                 Fact(label: "Selected", value: selectedSpeciesDetail?.displayName ?? "First editable")
@@ -153,6 +184,13 @@ extension WorkbenchStore {
             detail: "Trainer edits share the same mutation-plan review rhythm as Pokemon.",
             systemImage: WorkbenchModule.trainers.systemImage,
             status: moduleStatus(for: .trainers),
+            run: workflowRun(
+                id: "trainer-battles",
+                module: .trainers,
+                activeObject: selectedTrainerDetail?.trainerName ?? "First editable trainer",
+                diagnosticsCount: selectedTrainerDetail?.diagnostics.count ?? 0,
+                defaultNextAction: "Open Trainers"
+            ),
             facts: [
                 Fact(label: "Trainers", value: "\(selectedTrainerCatalog?.trainerCount ?? records(for: .trainers).count)"),
                 Fact(label: "Selected", value: selectedTrainerDetail?.trainerName ?? "First editable")
@@ -207,6 +245,13 @@ extension WorkbenchStore {
             detail: "Resource rows can route into maps, Pokemon, trainers, graphics, scripts, and build reports.",
             systemImage: WorkbenchModule.resources.systemImage,
             status: moduleStatus(for: .resources),
+            run: workflowRun(
+                id: "resources-assets",
+                module: .resources,
+                activeObject: firstResourcePath ?? "Asset catalog",
+                diagnosticsCount: (selectedAssetCatalog?.diagnostics.count ?? 0) + (resourceLibrary?.allDiagnostics.count ?? 0),
+                defaultNextAction: "Open Resources"
+            ),
             facts: [
                 Fact(label: "Resources", value: "\(resourceLibrary?.entryCount ?? 0)"),
                 Fact(label: "Assets", value: "\(selectedAssetCatalog?.assetCount ?? 0)")
@@ -232,6 +277,14 @@ extension WorkbenchStore {
                 : "GBA projects can run declared make targets and external mGBA handoffs; patch apply/export and source writes remain locked behind preview/report flows.",
             systemImage: WorkbenchModule.build.systemImage,
             status: moduleStatus(for: .build),
+            run: workflowRun(
+                id: "ship-preview",
+                module: .build,
+                activeObject: selectedBuildWorkbenchTab.title,
+                diagnosticsCount: selectedBuildReport?.diagnostics.count ?? 0,
+                artifacts: selectedBuildReport == nil ? [] : ["Build report", "Patch report", "Playtest handoff"],
+                defaultNextAction: "Open Build Readiness"
+            ),
             facts: [
                 Fact(label: "Build Rows", value: "\(selectedBuildReport?.rows.count ?? filteredBuildReportRows.count)"),
                 Fact(label: "Patch", value: patchManifestLoadStatus.validationState.rawValue)
@@ -268,6 +321,13 @@ extension WorkbenchStore {
             detail: "Use diagnostics as the project health queue before editing or shipping.",
             systemImage: WorkbenchModule.issues.systemImage,
             status: summary.status,
+            run: workflowRun(
+                id: "diagnostics-triage",
+                module: .issues,
+                activeObject: summary.compactLabel,
+                diagnosticsCount: summary.totalCount,
+                defaultNextAction: "Open Diagnostics"
+            ),
             facts: [
                 Fact(label: "Blocking", value: "\(summary.blockingErrorCount)"),
                 Fact(label: "Warnings", value: "\(summary.warningCount)")
@@ -302,5 +362,77 @@ extension WorkbenchStore {
                 source: issue.source
             )
         }
+    }
+
+    private func workflowRun(
+        id: String,
+        module: WorkbenchModule,
+        activeObject: String,
+        diagnosticsCount: Int,
+        artifacts: [String] = [],
+        defaultNextAction: String
+    ) -> GuidedWorkflowRun {
+        let identity = selectedProjectIdentity
+        guard selectedIndexedProject != nil else {
+            return GuidedWorkflowRun(
+                id: id,
+                currentStep: "Open Project",
+                state: .needsProject,
+                activeObject: identity.title,
+                mutationGate: identity.writePolicy.title,
+                nextAction: "Open Project",
+                diagnosticsCount: diagnosticsCount,
+                artifacts: artifacts
+            )
+        }
+
+        let session = currentModuleEditorSession
+        if session.module == module {
+            let state: GuidedWorkflowStepState
+            switch session.stage {
+            case .browse:
+                state = .ready
+            case .draftReady:
+                state = session.canPreview ? .needsPreview : .hasDraft
+            case .previewReady:
+                state = .previewReady
+            case .blocked:
+                state = .blocked
+            }
+
+            return GuidedWorkflowRun(
+                id: id,
+                currentStep: session.stage.rawValue,
+                state: state,
+                activeObject: session.selectedObjectTitle,
+                mutationGate: mutationGateLabel(for: module, identity: identity),
+                nextAction: session.nextActionTitle,
+                diagnosticsCount: session.diagnosticsCount,
+                artifacts: artifacts
+            )
+        }
+
+        return GuidedWorkflowRun(
+            id: id,
+            currentStep: "Open \(module.title)",
+            state: .ready,
+            activeObject: activeObject,
+            mutationGate: mutationGateLabel(for: module, identity: identity),
+            nextAction: defaultNextAction,
+            diagnosticsCount: diagnosticsCount,
+            artifacts: artifacts
+        )
+    }
+
+    private func mutationGateLabel(for module: WorkbenchModule, identity: ProjectIdentity) -> String {
+        let mutationModules: Set<WorkbenchModule> = [.maps, .pokemon, .trainers, .moves, .items, .graphics]
+        guard mutationModules.contains(module) else {
+            return identity.writePolicy.title
+        }
+
+        if identity.isWritable {
+            return "Preview -> Apply -> Backup"
+        }
+        return "\(identity.writePolicy.title): apply blocked"
     }
 }

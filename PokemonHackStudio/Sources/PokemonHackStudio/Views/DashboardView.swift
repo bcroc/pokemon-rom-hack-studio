@@ -85,12 +85,13 @@ struct DashboardView: View {
     }
 
     private func projectHeader(_ project: IndexedProjectSummary) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let identity = project.identity
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(project.title)
                         .font(.largeTitle.weight(.semibold))
-                    Text("Guided workbench for maps, Pokemon data, trainer battles, assets, patch readiness, and diagnostics.")
+                    Text(identity.kindTitle)
                         .foregroundStyle(.secondary)
                     Text(project.rootPath)
                         .font(.system(.caption, design: .monospaced))
@@ -105,10 +106,12 @@ struct DashboardView: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     StatusPill(state: project.status)
                     StatusPill(state: store.projectIndexStatus.validationState)
-                    DashboardResourceTag(text: project.originLabel)
-                    DashboardResourceTag(text: project.writePolicy)
+                    DashboardResourceTag(text: identity.originLabel)
+                    DashboardResourceTag(text: identity.writePolicy.title)
                 }
             }
+
+            ProjectIdentityPanel(identity: identity)
 
             let mapMetric = store.dashboardMapMetric
             let diagnosticSummary = store.diagnosticSummary
@@ -144,14 +147,24 @@ struct DashboardView: View {
     }
 
     private var fixtureDashboard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(store.selectedTarget.name)
-                    .font(.largeTitle.weight(.semibold))
-                Text("Open a Generation III source project to use guided ROM-hacking workflows.")
-                    .foregroundStyle(.secondary)
+        let identity = store.selectedProjectIdentity
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(store.selectedTarget.name)
+                        .font(.largeTitle.weight(.semibold))
+                    Text(identity.kindTitle)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Open Project", systemImage: "folder.badge.plus") {
+                    store.requestOpenProjectPanel()
+                }
             }
 
+            ProjectIdentityPanel(identity: identity)
             workflowHub
             diagnosticsHub
 
@@ -210,6 +223,7 @@ private struct GuidedFlowCard: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            WorkflowRunStrip(run: flow.run)
             FactGrid(facts: flow.facts)
 
             HStack(spacing: 8) {
@@ -231,6 +245,89 @@ private struct GuidedFlowCard: View {
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct ProjectIdentityPanel: View {
+    let identity: ProjectIdentity
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: identity.systemImage)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 26)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(identity.writePolicy.title)
+                        .font(.headline)
+                    DashboardResourceTag(text: identity.originLabel)
+                    DashboardResourceTag(text: identity.isWritable ? "Mutation apply enabled" : "Mutation apply blocked")
+                }
+                Text(identity.writePolicy.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(identity.rootDisplay)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct WorkflowRunStrip: View {
+    let run: GuidedWorkflowRun
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                StatusPill(state: run.state.validationState)
+                Text(run.currentStep)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(run.nextAction)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+                WorkflowRunFact(label: "Target", value: run.activeObject)
+                WorkflowRunFact(label: "Gate", value: run.mutationGate)
+                WorkflowRunFact(label: "Diagnostics", value: "\(run.diagnosticsCount)")
+                if !run.artifacts.isEmpty {
+                    WorkflowRunFact(label: "Artifacts", value: run.artifacts.joined(separator: ", "))
+                }
+            }
+        }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct WorkflowRunFact: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 }
 

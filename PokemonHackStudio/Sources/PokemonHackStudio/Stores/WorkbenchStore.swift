@@ -255,6 +255,7 @@ final class WorkbenchStore: ObservableObject {
         didSet { persistWorkflowContext() }
     }
     @Published var selectedGuidedFlowID: String = ""
+    @Published private(set) var openProjectPanelRequestID: UUID?
     @Published var selectedRecordIDsByModule: [WorkbenchModule: UUID] = [:]
     @Published var mapShowsPalette = true
     @Published var mapMetatileFilter = ""
@@ -566,6 +567,10 @@ final class WorkbenchStore: ObservableObject {
 
     var selectedIndexedProject: IndexedProjectSummary? {
         indexedProjects.first { $0.id == selectedProjectID } ?? defaultIndexedProject
+    }
+
+    var selectedProjectIdentity: ProjectIdentity {
+        selectedIndexedProject?.identity ?? ProjectIdentity.fixture(title: selectedTarget.name)
     }
 
     private var defaultIndexedProject: IndexedProjectSummary? {
@@ -1327,6 +1332,44 @@ final class WorkbenchStore: ObservableObject {
         selectedIndexedProject != nil
     }
 
+    var currentModuleEditorSession: ModuleEditorSession {
+        let state = toolbarMutationState
+        let object = currentEditorObject
+        let stage: ModuleEditorMutationStage
+        if state.canApply {
+            stage = .previewReady
+        } else if state.canPreview || state.canDiscard {
+            stage = .draftReady
+        } else {
+            stage = .browse
+        }
+
+        let nextAction: String
+        if state.canApply {
+            nextAction = "Apply \(state.title)"
+        } else if state.canPreview {
+            nextAction = "Preview \(state.title)"
+        } else if state.canDiscard {
+            nextAction = "Discard \(state.title)"
+        } else {
+            nextAction = state.previewBlockedReason ?? "Select an editable object"
+        }
+
+        return ModuleEditorSession(
+            module: selection,
+            selectedObjectTitle: object.title,
+            selectedObjectID: object.id,
+            isDirty: state.canPreview || state.canApply || state.canDiscard,
+            canPreview: state.canPreview,
+            canApply: state.canApply,
+            canDiscard: state.canDiscard,
+            stage: stage,
+            nextActionTitle: nextAction,
+            blockedReason: state.previewBlockedReason ?? state.applyBlockedReason,
+            diagnosticsCount: currentModuleDiagnosticCount
+        )
+    }
+
     var toolbarMutationState: WorkbenchToolbarMutationState {
         switch selection {
         case .maps:
@@ -1407,6 +1450,94 @@ final class WorkbenchStore: ObservableObject {
             )
         case .dashboard, .encounters, .scripts, .text, .build, .issues:
             return .unavailable
+        }
+    }
+
+    private var currentEditorObject: (title: String, id: String?) {
+        switch selection {
+        case .dashboard:
+            let identity = selectedProjectIdentity
+            return (identity.title, identity.id)
+        case .resources:
+            if let asset = selectedResourceAsset {
+                return (asset.title, asset.id)
+            }
+            if let entry = selectedResourceLibraryEntry {
+                return (entry.title, entry.id)
+            }
+            return ("No resource selected", nil)
+        case .maps:
+            if let map = selectedMapCatalog?.maps.first(where: { $0.id == selectedMapID }) {
+                return (map.name, map.id)
+            }
+            return (selectedMapID.isEmpty ? "No map selected" : selectedMapID, selectedMapID.isEmpty ? nil : selectedMapID)
+        case .pokemon:
+            if let species = selectedSpeciesDetail {
+                return (species.displayName, species.speciesID)
+            }
+            return ("No Pokemon selected", nil)
+        case .trainers:
+            if let trainer = selectedTrainerDetail {
+                return (trainer.trainerName, trainer.trainerID)
+            }
+            return ("No trainer selected", nil)
+        case .moves:
+            if let move = selectedMoveDetail {
+                return (move.displayName, move.moveID)
+            }
+            return ("No move selected", nil)
+        case .items:
+            if let item = selectedItemDetail {
+                return (item.displayName, item.itemID)
+            }
+            return ("No item selected", nil)
+        case .encounters, .text:
+            if let record = selectedRecord(for: selection) {
+                return (record.title, record.id.uuidString)
+            }
+            return ("No \(selection.title.lowercased()) row selected", nil)
+        case .scripts:
+            if let label = selectedScriptLabel {
+                return (label.label, label.id)
+            }
+            if let source = selectedScriptSource {
+                return (source.path, source.id)
+            }
+            return ("No script selected", nil)
+        case .graphics:
+            if let row = selectedGraphicsReportRow {
+                return (row.title, row.id)
+            }
+            return ("No graphics row selected", nil)
+        case .build:
+            if let row = selectedBuildReportRow {
+                return (row.title, row.id)
+            }
+            return (selectedBuildWorkbenchTab.title, selectedBuildWorkbenchTab.id)
+        case .issues:
+            if let diagnostic = selectedDiagnosticRow {
+                return (diagnostic.title, diagnostic.id)
+            }
+            return ("No diagnostic selected", nil)
+        }
+    }
+
+    private var currentModuleDiagnosticCount: Int {
+        switch selection {
+        case .dashboard, .issues:
+            return diagnosticSummary.totalCount
+        case .resources:
+            return (selectedAssetCatalog?.diagnostics.count ?? 0) + (resourceLibrary?.allDiagnostics.count ?? 0)
+        case .moves:
+            return selectedMoveDetail?.diagnostics.count ?? selectedMoveCatalog?.diagnostics.count ?? 0
+        case .items:
+            return selectedItemDetail?.diagnostics.count ?? selectedItemCatalogView?.diagnostics.count ?? 0
+        case .build:
+            return selectedBuildReport?.diagnostics.count ?? 0
+        case .graphics:
+            return selectedGraphicsReport?.diagnostics.count ?? 0
+        default:
+            return 0
         }
     }
 
@@ -5337,6 +5468,14 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func requestOpenProjectPanel() {
+        openProjectPanelRequestID = UUID()
+    }
+
+    func clearOpenProjectPanelRequest() {
+        openProjectPanelRequestID = nil
+    }
+
     func revealSelectedProjectInFinder() {
         guard let selectedIndexedProject else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: selectedIndexedProject.rootPath)])
@@ -6174,6 +6313,9 @@ final class WorkbenchStore: ObservableObject {
 
     private static func projectOrigin(for index: PokemonHackCore.ProjectIndex) -> (label: String, detail: String) {
         let rootURL = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        if pathIsBundledAssetRoot(rootURL.path) {
+            return ("Bundled Fallback", "Read-only bundled project data")
+        }
         if index.documents.allSatisfy({ $0.role == .localInput }) {
             return ("Local Input", "Local ROM/media input")
         }
@@ -6187,7 +6329,9 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private static func writePolicyDisplayValue(for index: PokemonHackCore.ProjectIndex) -> String {
-        isNDSSourceProject(index) ? PokemonHackCore.WritePolicy.readOnly.rawValue : index.writePolicy.rawValue
+        isNDSSourceProject(index) || pathIsBundledAssetRoot(index.root.path)
+            ? PokemonHackCore.WritePolicy.readOnly.rawValue
+            : index.writePolicy.rawValue
     }
 
     private static func buildReport(

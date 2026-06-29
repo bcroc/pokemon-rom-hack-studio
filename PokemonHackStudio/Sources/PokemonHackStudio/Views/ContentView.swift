@@ -16,6 +16,11 @@ struct ContentView: View {
             store.refreshSelectedMapCatalog()
             store.loadSelectedModuleDataIfNeeded()
         }
+        .onChange(of: store.openProjectPanelRequestID) { _, requestID in
+            guard requestID != nil else { return }
+            openProjectPanel()
+            store.clearOpenProjectPanelRequest()
+        }
         .confirmationDialog(
             store.pendingMapNavigationTitle,
             isPresented: Binding(
