@@ -1,5 +1,64 @@
 import Foundation
 
+public enum ValidationTier: String, CaseIterable, Identifiable, Codable, Equatable, Sendable {
+    case synthetic
+    case localGBAFixtures
+    case centralNDSReferences
+    case appGUISmoke
+    case releaseCandidate
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .synthetic:
+            "Synthetic"
+        case .localGBAFixtures:
+            "Local GBA Fixtures"
+        case .centralNDSReferences:
+            "Central NDS References"
+        case .appGUISmoke:
+            "App GUI Smoke"
+        case .releaseCandidate:
+            "Release Candidate"
+        }
+    }
+
+    public var command: String {
+        switch self {
+        case .synthetic:
+            "make validate-synthetic"
+        case .localGBAFixtures:
+            "make validate-gba-fixtures"
+        case .centralNDSReferences:
+            "make validate-nds-strict"
+        case .appGUISmoke:
+            "make validate-gui-smoke"
+        case .releaseCandidate:
+            "make validate-release-candidate"
+        }
+    }
+}
+
+public struct ValidationTierCommandRow: Identifiable, Equatable, Sendable {
+    public let tier: ValidationTier
+
+    public init(tier: ValidationTier) {
+        self.tier = tier
+    }
+
+    public var id: String { tier.id }
+    public var title: String { tier.title }
+    public var command: String { tier.command }
+    public var copyValue: String { command }
+    public var runStateTitle: String { "Run manually" }
+    public var canRunInApp: Bool { false }
+    public var canCopyCommand: Bool { true }
+    public var disabledReason: String {
+        "Validation commands are copy-only in PokemonHackStudio; run this command from the repository root in Terminal."
+    }
+}
+
 public struct ToolAvailability: Codable, Equatable, Sendable {
     public let name: String
     public let isAvailable: Bool

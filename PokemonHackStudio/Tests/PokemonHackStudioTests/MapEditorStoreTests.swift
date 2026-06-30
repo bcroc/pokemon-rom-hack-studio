@@ -705,7 +705,7 @@ final class MapEditorStoreTests: XCTestCase {
                 && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "nitroFSRootInventory" }
         })
         XCTAssertEqual(filesRootRow.kind, "directory")
-        XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Shallow Count" && $0.value == "4" })
+        XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Shallow Count" && $0.value == "8" })
         XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
         XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
         XCTAssertFalse(filesRootRow.facts.contains { $0.label == "Migration Status" })
@@ -737,6 +737,79 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNil(store.selectedNDSDataDraft)
         XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
         XCTAssertEqual(try Data(contentsOf: archiveGroupChild), Data([0x2A]))
+    }
+
+    @MainActor
+    func testGenVFielddataInventoryStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let mapMatrixChild = root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let fielddataRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "files/fielddata"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataInventory" }
+        })
+        XCTAssertEqual(fielddataRootRow.kind, "directory")
+        XCTAssertTrue(fielddataRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertTrue(fielddataRootRow.facts.contains { $0.label == "Gen V Blocked Actions" && $0.value.contains("NARC pack") })
+        XCTAssertTrue(fielddataRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
+        XCTAssertFalse(fielddataRootRow.facts.contains { $0.label == "Migration Status" })
+
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/mapmatrix"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapMatrixInventory" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/mapmatrix/0001.bin"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapMatrixMember" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/maptable"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapTableInventory" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/maptable/map.bin"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapTableMember" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/script"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataScriptInventory" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/script/scr_seq/0001.bin"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataScriptMember" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/eventdata/zone_event"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataZoneEventInventory" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/fielddata/eventdata/zone_event/zone_001.json"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataZoneEventMetadata" }
+        })
+
+        store.requestResourceAssetSelection(fielddataRootRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "resources:files/fielddata")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(try Data(contentsOf: mapMatrixChild), Data([0x10]))
     }
 
     @MainActor
@@ -2045,6 +2118,55 @@ final class MapEditorStoreTests: XCTestCase {
         store.updateSelectedNDSDataSemanticField(key: "rows.0.name", value: "BINARY")
         XCTAssertFalse(store.selectedNDSDataIsDirty)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(binaryItemPath)), Data([0x05]))
+    }
+
+    @MainActor
+    func testHeartGoldSoulSilverMapHeaderSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSHeartGoldSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let mapHeaderRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "src/data/map_headers.h" })
+        store.requestResourceAssetSelection(mapHeaderRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "maps:src/data/map_headers.h")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "mapHeaders.MAP_EVERYWHERE.areaDataBank" && $0.value == "0" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "mapHeaders.MAP_EVERYWHERE.worldMapX" && $0.value == "0" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "mapHeaders.MAP_NEW_BARK.weather" && $0.value == "1" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "mapHeaders.MAP_EVERYWHERE.mapType" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "mapHeaders.MAP_EVERYWHERE.bikeAllowed" })
+
+        store.updateSelectedNDSDataSemanticField(key: "mapHeaders.MAP_EVERYWHERE.areaDataBank", value: "8")
+        store.updateSelectedNDSDataSemanticField(key: "mapHeaders.MAP_EVERYWHERE.worldMapX", value: "9")
+        store.updateSelectedNDSDataSemanticField(key: "mapHeaders.MAP_NEW_BARK.cameraType", value: "4")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("src/data/map_headers.h"), encoding: .utf8)
+        XCTAssertTrue(updated.contains(".areaDataBank = 8"))
+        XCTAssertTrue(updated.contains(".worldMapX = 9"))
+        XCTAssertTrue(updated.contains("[MAP_NEW_BARK] = { .areaDataBank = 3, .worldMapX = 4, .worldMapY = 7, .weather = 1, .cameraType = 4, .bikeAllowed = FALSE }"))
+
+        let matrixRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/mapmatrix/0001.bin" })
+        store.requestResourceAssetSelection(matrixRow.id)
+        let matrixEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(matrixEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "mapHeaders.MAP_EVERYWHERE.areaDataBank", value: "7")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertNil(store.latestNDSDataEditPlan)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin")), Data([0x00]))
     }
 
     @MainActor
@@ -3568,6 +3690,137 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNotNil(object?["patchManifest"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: patch.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: gba.path))
+    }
+
+    @MainActor
+    func testPatchCreationPreviewLoadsReadonlyMetadataWithoutWritingPatchArtifacts() throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abcd".utf8)
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+        store.requestBaseROMPath("  \(baseROM.path)  ")
+        store.loadSelectedPatchCreationPreview()
+
+        XCTAssertEqual(store.patchCreationPreviewLoadStatus, .loaded(isReady: true, label: "Ready"))
+        let preview = try XCTUnwrap(store.selectedPatchCreationPreviewReport)
+        XCTAssertTrue(preview.isPreviewOnly)
+        XCTAssertTrue(preview.isReady)
+        XCTAssertEqual(preview.candidateFormat, "BPS")
+        XCTAssertEqual(preview.sizeDeltaBytes, 1)
+        XCTAssertEqual(preview.hashesMatch, false)
+        XCTAssertEqual(preview.plannedPatchPath, ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        XCTAssertEqual(preview.absolutePlannedPatchPath, root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps").path)
+        XCTAssertTrue(preview.blockedActions.contains("BPS/IPS patch file writes"))
+        XCTAssertTrue(preview.blockedActions.contains("ROM export"))
+        XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "Patch creation preview" && $0.detail.contains("no patch files") })
+        XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "ROM comparison" && $0.subtitle.contains("+1 bytes") })
+        XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "Header policy" && $0.subtitle == "no-header-rewrite" })
+        XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "Blocked actions" && $0.detail.contains("binary writes") })
+
+        let plannedPatchURL = URL(fileURLWithPath: preview.absolutePlannedPatchPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: plannedPatchURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: plannedPatchURL.path + ".manifest.json"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/builds").path))
+        XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let rawPreview = try XCTUnwrap(object?["patchCreationPreview"] as? [String: Any])
+        XCTAssertEqual(rawPreview["plannedPatchPath"] as? String, preview.plannedPatchPath)
+        XCTAssertNil(object?["patchManifest"])
+    }
+
+    @MainActor
+    func testBinaryROMMutationDryRunLoadsSelectedLocalGBAAndCopiesJSONWithoutWritingOutputs() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("dry-run.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.requestBinaryROMMutationDryRunPath("  \(rom.path)  ")
+        store.loadSelectedBinaryROMMutationDryRunManifest()
+
+        let report = try XCTUnwrap(store.selectedBinaryROMMutationDryRunReport)
+        XCTAssertEqual(store.selectedBinaryROMMutationDryRunPath, rom.path)
+        XCTAssertTrue(report.isDryRun)
+        XCTAssertFalse(report.canApply)
+        XCTAssertEqual(report.sourceTreeStatus, BinaryROMMutationSourceTreeStatus.binaryOnlyCandidate.rawValue)
+        XCTAssertNotNil(report.baseIdentity)
+        XCTAssertFalse(report.ignoredOutputGuidance.willWriteFiles)
+        XCTAssertEqual(report.ignoredOutputGuidance.relativeManifestPath, ".pokemonhackstudio/rom-mutations/dry-run/manifest.json")
+        XCTAssertTrue(report.operationPreviews.isEmpty)
+        XCTAssertTrue(report.diagnostics.contains { $0.title == "BINARY_ROM_MUTATION_NO_OPERATIONS" })
+        XCTAssertTrue(store.filteredBinaryROMMutationDryRunRows.contains { $0.title == "Base ROM identity" })
+        if case let .loaded(label, state) = store.binaryROMMutationDryRunLoadStatus {
+            XCTAssertEqual(label, "Dry Run")
+            XCTAssertEqual(state, .valid)
+        } else {
+            XCTFail("Expected loaded binary ROM mutation dry-run status")
+        }
+
+        NSPasteboard.general.clearContents()
+        store.copyBinaryROMMutationDryRunManifestJSONToPasteboard()
+
+        let manifestJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let manifestData = try XCTUnwrap(manifestJSON.data(using: .utf8))
+        let manifestObject = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
+        XCTAssertEqual(manifestObject?["isDryRun"] as? Bool, true)
+        XCTAssertEqual(manifestObject?["canApply"] as? Bool, false)
+        let ignoredOutput = manifestObject?["ignoredOutputGuidance"] as? [String: Any]
+        XCTAssertEqual(ignoredOutput?["willWriteFiles"] as? Bool, false)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        XCTAssertNotNil(reportObject?["binaryROMMutationDryRunManifest"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    @MainActor
+    func testBinaryROMMutationDryRunRefusesMatchingSourceTreeCandidateWithoutWritingOutputs() throws {
+        let root = try makeSourceIndexProject()
+        let rom = root.appendingPathComponent("source-first.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.loadSelectedBinaryROMMutationDryRunManifest()
+
+        let report = try XCTUnwrap(store.selectedBinaryROMMutationDryRunReport)
+        XCTAssertTrue(report.isDryRun)
+        XCTAssertFalse(report.canApply)
+        XCTAssertEqual(report.sourceTreeStatus, BinaryROMMutationSourceTreeStatus.refusedSourceTreeAvailable.rawValue)
+        XCTAssertEqual(report.sourceCandidates, [root.path])
+        XCTAssertTrue(report.operationPreviews.isEmpty)
+        XCTAssertTrue(report.diagnostics.contains { $0.title == "BINARY_ROM_MUTATION_SOURCE_TREE_AVAILABLE_REFUSED" })
+        XCTAssertTrue(store.selectedDiagnosticRows.contains { $0.title == "BINARY_ROM_MUTATION_SOURCE_TREE_AVAILABLE_REFUSED" })
+        if case let .loaded(label, state) = store.binaryROMMutationDryRunLoadStatus {
+            XCTAssertEqual(label, "Blocked")
+            XCTAssertEqual(state, .error)
+        } else {
+            XCTFail("Expected blocked binary ROM mutation dry-run status")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
     }
 
     @MainActor
@@ -5838,6 +6091,46 @@ final class MapEditorStoreTests: XCTestCase {
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/script/scr_seq/0001.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/maptable/map.bin"))
+        try write(
+            """
+            static const MapHeader sMapHeaders[] = {
+                [MAP_EVERYWHERE] = {
+                    .wildEncounterBank = ENCDATA_NA,
+                    .areaDataBank = 0,
+                    .moveModelBank = 15,
+                    .worldMapX = 0,
+                    .worldMapY = 0,
+                    .matrixId = NARC_map_matrix_map_matrix_0000_EVERYWHERE_bin,
+                    .scriptsBank = NARC_scr_seq_scr_seq_0139_EVERYWHERE_bin,
+                    .scriptHeaderBank = NARC_scr_seq_scr_seq_0399_EVERYWHERE_hdr_bin,
+                    .msgBank = NARC_msg_msg_0003_EVERYWHERE_bin,
+                    .dayMusicId = SEQ_DUMMY,
+                    .nightMusicId = SEQ_DUMMY,
+                    .eventsBank = NARC_zone_event_000_DUMMY_bin,
+                    .mapsec = MAPSEC_MYSTERY_ZONE,
+                    .areaIcon = 6,
+                    .momCallIntroParam = 10,
+                    .regionNo = MAP_REGION_JOHTO,
+                    .weather = 0,
+                    .mapType = MAP_TYPE_ROUTE,
+                    .cameraType = 0,
+                    .followMode = MAP_FOLLOWMODE_PREVENT,
+                    .battleBg = BATTLE_BG_FOREST,
+                    .bikeAllowed = TRUE,
+                    .runningAllowed_Unused = TRUE,
+                    .escapeRopeAllowed = TRUE,
+                    .flyAllowed = FALSE,
+                    .outgoingCalls = FALSE,
+                    .incomingCalls = FALSE,
+                    .radioSignal = FALSE,
+                },
+                [MAP_NEW_BARK] = { .areaDataBank = 3, .worldMapX = 4, .worldMapY = 7, .weather = 1, .cameraType = 2, .bikeAllowed = FALSE },
+                { .areaDataBank = 99 },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/map_headers.h")
+        )
 
         return root
     }
@@ -5855,6 +6148,10 @@ final class MapEditorStoreTests: XCTestCase {
         try write("#define BLACK 1\n", to: root.appendingPathComponent("include/globals.h"))
         try write("encounter\n", to: root.appendingPathComponent("data/encounters/route_1.txt"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/root.bin"))
+        try write(Data([0x10]), to: root.appendingPathComponent("files/fielddata/mapmatrix/0001.bin"))
+        try write(Data([0x11]), to: root.appendingPathComponent("files/fielddata/maptable/map.bin"))
+        try write(Data([0x12]), to: root.appendingPathComponent("files/fielddata/script/scr_seq/0001.bin"))
+        try write("{\"zone\":1}\n", to: root.appendingPathComponent("files/fielddata/eventdata/zone_event/zone_001.json"))
         try write(Data("SDAT".utf8), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
         try write("Route 1 hello\n", to: root.appendingPathComponent("files/msgdata/story/message_bank.txt"))
         try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
@@ -6894,6 +7191,21 @@ final class MapEditorStoreTests: XCTestCase {
             return "\(channel) \(channel) \(channel)"
         }
         return Data(("JASC-PAL\n0100\n\(colorCount)\n" + colors.joined(separator: "\n") + "\n").utf8)
+    }
+
+    private func writeBinaryMutationSyntheticGBA(to rom: URL) throws {
+        var bytes = [UInt8](repeating: 0xFF, count: 0x240)
+        bytes.replaceSubrange(0x04 ..< 0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0 ..< 0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC ..< 0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0 ..< 0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x20
+        bytes[0x101] = 0x01
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        bytes[0x120] = 0x11
+        bytes[0x121] = 0x22
+        try write(Data(bytes), to: rom)
     }
 
     private func write(_ text: String, to url: URL) throws {

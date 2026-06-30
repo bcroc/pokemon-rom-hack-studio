@@ -1101,6 +1101,10 @@ struct WorkbenchSidebarPanel: View {
                     Fact(label: "Layout", value: map.layout?.name ?? "None"),
                     Fact(label: "Size", value: map.layout.map { "\($0.width)x\($0.height)" } ?? "Unknown"),
                     Fact(label: "Events", value: "\(map.eventCounts.total)"),
+                    Fact(label: "Objects", value: mapCapacityFact(map, for: .object)),
+                    Fact(label: "Warps", value: mapCapacityFact(map, for: .warp)),
+                    Fact(label: "Coords", value: mapCapacityFact(map, for: .coord)),
+                    Fact(label: "BG", value: mapCapacityFact(map, for: .bg)),
                     Fact(label: "Connections", value: "\(map.connections.count)"),
                     Fact(label: "Tool", value: store.selectedMapTool.title),
                     Fact(label: "Panel", value: store.selectedMapWorkbenchTab.title),
@@ -1339,6 +1343,16 @@ struct WorkbenchSidebarPanel: View {
     private func currentMapIsHidden(_ map: MapSummaryViewState) -> Bool {
         guard let catalog = store.selectedMapCatalog else { return false }
         return !filteredMaps(in: catalog).prefix(Self.mapRowLimit).contains { $0.id == map.id }
+    }
+
+    private func mapCapacityFact(_ map: MapSummaryViewState, for kind: PokemonHackCore.MapEventKind) -> String {
+        guard let usage = map.eventCapacity.usages.first(where: { $0.kind == kind }) else {
+            return "Unknown"
+        }
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        return usage.isOverLimit ? "\(usage.count)/\(limit) over" : "\(usage.count)/\(limit)"
     }
 
     private func currentSpeciesIsHidden(_ species: PokemonHackCore.SpeciesDetail) -> Bool {

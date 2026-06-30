@@ -187,7 +187,8 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_SPAN_MISSING" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_SPAN_MISSING" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
@@ -248,6 +249,103 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(plan.isApplyable)
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_SPAN_MISSING" })
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
+    }
+
+    func testRubySapphireTutorLearnsetPlanPreviewApplyBackupReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        try writeRubyTutorLearnsets(at: root)
+        let tutorPath = root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.learnsets.tutor.map(\.move).sorted(), ["MOVE_MEGA_PUNCH", "MOVE_SWORD_DANCE"])
+        XCTAssertEqual(treecko.learnsets.tutorSourceSpan?.relativePath, "src/data/pokemon/tutor_learnsets.h")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.tutorMoves.removeAll { $0 == "MOVE_MEGA_PUNCH" }
+        draft.tutorMoves.append("MOVE_FURY_CUTTER")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/tutor_learnsets.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("TUTOR(FURY_CUTTER)"))
+        XCTAssertTrue(preview.contains("TUTOR(SWORD_DANCE)"))
+        XCTAssertFalse(preview.contains("TUTOR(MEGA_PUNCH)"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/tutor_learnsets.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        let source = try String(contentsOf: tutorPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("TUTOR(FURY_CUTTER)"))
+        XCTAssertFalse(source.contains("TUTOR(MEGA_PUNCH)"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.learnsets.tutor.map(\.move).sorted(), ["MOVE_FURY_CUTTER", "MOVE_SWORD_DANCE"])
+        XCTAssertEqual(edited.baseStats.hp, 40)
+    }
+
+    func testRubySapphireTutorLearnsetPlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        try writeRubyTutorLearnsets(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.tutorMoves.append("MOVE_FURY_CUTTER")
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.isApplyable)
+
+        let tutorPath = root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        let source = try String(contentsOf: tutorPath, encoding: .utf8)
+            .replacingOccurrences(of: "TUTOR(SWORD_DANCE)", with: "TUTOR(FURY_CUTTER)")
+        try write(source, to: tutorPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testRubySapphireTutorLearnsetPlanRejectsUnknownMoveConstants() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        try writeRubyTutorLearnsets(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.tutorMoves.append("MOVE_NOT_REAL")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("MOVE_NOT_REAL") })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_SPAN_MISSING" })
+    }
+
+    func testRubySapphireTutorLearnsetEditsRequireParsedSourceRow() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.tutorMoves.append("MOVE_SWORD_DANCE")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_SPAN_MISSING" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
     }
 
     func testRubySapphireEggMovePlanApplyBackUpReloadAndPreserveRowOrder() throws {
@@ -2207,6 +2305,7 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/pokemon/egg_moves.h")
         )
+        try writeRubyTutorLearnsets(at: root)
         try write(
             """
             const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
@@ -2237,20 +2336,23 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         )
         try write(
             """
+            const u8 gTreeckoPokedexText[] = _(
+                \"It makes its nest in a giant tree in the\\n\"
+                \"forest. It is said to be the protector of the forest.\");
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h")
+        )
+    }
+
+    private func writeRubyTutorLearnsets(at root: URL) throws {
+        try write(
+            """
             const u16 gTutorLearnsets[] =
             {
                 [SPECIES_TREECKO] = (TUTOR(MEGA_PUNCH) | TUTOR(SWORD_DANCE)),
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
-        )
-        try write(
-            """
-            const u8 gTreeckoPokedexText[] = _(
-                \"It makes its nest in a giant tree in the\\n\"
-                \"forest. It is said to be the protector of the forest.\");
-            """,
-            to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h")
         )
     }
 

@@ -891,6 +891,10 @@ struct ModuleDetailView: View {
         var facts = [
             SourceInspectorFact(label: "Group", value: map.groupName),
             SourceInspectorFact(label: "Events", value: "\(map.eventCounts.total)"),
+            SourceInspectorFact(label: "Objects", value: mapCapacityFact(map, for: .object)),
+            SourceInspectorFact(label: "Warps", value: mapCapacityFact(map, for: .warp)),
+            SourceInspectorFact(label: "Coords", value: mapCapacityFact(map, for: .coord)),
+            SourceInspectorFact(label: "BG", value: mapCapacityFact(map, for: .bg)),
             SourceInspectorFact(label: "Connections", value: "\(map.connections.count)"),
         ]
 
@@ -900,6 +904,16 @@ struct ModuleDetailView: View {
         }
 
         return facts
+    }
+
+    private func mapCapacityFact(_ map: MapSummaryViewState, for kind: PokemonHackCore.MapEventKind) -> String {
+        guard let usage = map.eventCapacity.usages.first(where: { $0.kind == kind }) else {
+            return "Unknown"
+        }
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        return usage.isOverLimit ? "\(usage.count)/\(limit) over" : "\(usage.count)/\(limit)"
     }
 
     private func mapSources(_ map: MapSummaryViewState) -> [SourceInspectorSource] {

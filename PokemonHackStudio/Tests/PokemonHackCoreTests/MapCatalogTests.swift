@@ -264,6 +264,128 @@ final class MapCatalogTests: XCTestCase {
         XCTAssertEqual(map.eventCounts.bgEvents, 2)
     }
 
+    func testMapEventCapacityLoadsObjectTemplateAndStoredCountLimits() throws {
+        let root = try makeProjectRoot(
+            mapGroups:
+            """
+            {
+              "group_order": ["gMapGroup_Routes"],
+              "gMapGroup_Routes": ["Route1"]
+            }
+            """,
+            layouts:
+            """
+            {
+              "layouts_table_label": "gMapLayouts",
+              "layouts": [
+                {
+                  "id": "LAYOUT_ROUTE1",
+                  "name": "Route1_Layout",
+                  "width": 1,
+                  "height": 1,
+                  "primary_tileset": "gTileset_General",
+                  "secondary_tileset": "gTileset_Route",
+                  "border_filepath": "data/layouts/Route1/border.bin",
+                  "blockdata_filepath": "data/layouts/Route1/map.bin"
+                }
+              ]
+            }
+            """
+        )
+        try writeEventCapacitySources(root: root)
+        try writeMap(
+            named: "Route1",
+            root: root,
+            json: mapJSON(
+                id: "MAP_ROUTE1",
+                name: "Route1",
+                layout: "LAYOUT_ROUTE1",
+                objectCount: 2,
+                warpCount: 1,
+                coordCount: 1,
+                bgCount: 1
+            )
+        )
+
+        let map = try XCTUnwrap(try ProjectMapCatalogLoader.load(from: projectIndex(root: root)).maps.first)
+
+        XCTAssertEqual(map.eventCapacity.counts.objectEvents, 2)
+        XCTAssertEqual(map.eventCapacity.limits.objectEvents, 64)
+        XCTAssertEqual(map.eventCapacity.limits.objectRuntimeSlots, 16)
+        XCTAssertEqual(map.eventCapacity.limits.warpEvents, 255)
+        XCTAssertEqual(map.eventCapacity.limits.coordEvents, 255)
+        XCTAssertEqual(map.eventCapacity.limits.bgEvents, 255)
+        XCTAssertEqual(map.eventCapacity.usages.first { $0.kind == .object }?.source?.symbol, "OBJECT_EVENT_TEMPLATES_COUNT")
+        XCTAssertEqual(map.eventCapacity.usages.first { $0.kind == .warp }?.source?.symbol, "u8 warpCount")
+        XCTAssertTrue(map.eventCapacity.diagnostics.isEmpty)
+    }
+
+    func testMapEventCapacityOverLimitAddsWarningDiagnosticWithMapSpan() throws {
+        let root = try makeProjectRoot(
+            mapGroups:
+            """
+            {
+              "group_order": ["gMapGroup_Routes"],
+              "gMapGroup_Routes": ["Route1"]
+            }
+            """,
+            layouts:
+            """
+            {
+              "layouts_table_label": "gMapLayouts",
+              "layouts": []
+            }
+            """
+        )
+        try writeEventCapacitySources(root: root, objectTemplateLimit: 1)
+        try writeMap(
+            named: "Route1",
+            root: root,
+            json: mapJSON(id: "MAP_ROUTE1", name: "Route1", layout: "LAYOUT_ROUTE1", objectCount: 2)
+        )
+
+        let catalog = try ProjectMapCatalogLoader.load(from: projectIndex(root: root))
+        let diagnostic = try XCTUnwrap(catalog.diagnostics.first { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+
+        XCTAssertEqual(diagnostic.severity, .warning)
+        XCTAssertEqual(diagnostic.span?.relativePath, "data/maps/Route1/map.json")
+        XCTAssertTrue(diagnostic.message.contains("object events use 2 entries"))
+        XCTAssertTrue(diagnostic.message.contains("OBJECT_EVENT_TEMPLATES_COUNT"))
+    }
+
+    func testMissingMapEventCapacitySourcesLeaveLimitsUnknownWithoutWarnings() throws {
+        let root = try makeProjectRoot(
+            mapGroups:
+            """
+            {
+              "group_order": ["gMapGroup_Routes"],
+              "gMapGroup_Routes": ["Route1"]
+            }
+            """,
+            layouts:
+            """
+            {
+              "layouts_table_label": "gMapLayouts",
+              "layouts": []
+            }
+            """
+        )
+        try writeMap(
+            named: "Route1",
+            root: root,
+            json: mapJSON(id: "MAP_ROUTE1", name: "Route1", layout: "LAYOUT_ROUTE1", objectCount: 2)
+        )
+
+        let catalog = try ProjectMapCatalogLoader.load(from: projectIndex(root: root))
+        let map = try XCTUnwrap(catalog.maps.first)
+
+        XCTAssertNil(map.eventCapacity.limits.objectEvents)
+        XCTAssertNil(map.eventCapacity.limits.warpEvents)
+        XCTAssertNil(map.eventCapacity.limits.coordEvents)
+        XCTAssertNil(map.eventCapacity.limits.bgEvents)
+        XCTAssertFalse(catalog.diagnostics.contains { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+    }
+
     func testBlockdataSizeMismatchIsReported() throws {
         let root = try makeProjectRoot(
             mapGroups:
@@ -386,6 +508,63 @@ final class MapCatalogTests: XCTestCase {
           "bg_events": []
         }
         """
+    }
+
+    private func mapJSON(
+        id: String,
+        name: String,
+        layout: String,
+        objectCount: Int = 0,
+        warpCount: Int = 0,
+        coordCount: Int = 0,
+        bgCount: Int = 0
+    ) -> String {
+        """
+        {
+          "id": "\(id)",
+          "name": "\(name)",
+          "layout": "\(layout)",
+          "music": "MUS_NONE",
+          "region_map_section": "MAPSEC_NONE",
+          "weather": "WEATHER_NONE",
+          "map_type": "MAP_TYPE_NONE",
+          "connections": [],
+          "object_events": \(eventArray(count: objectCount)),
+          "warp_events": \(eventArray(count: warpCount)),
+          "coord_events": \(eventArray(count: coordCount)),
+          "bg_events": \(eventArray(count: bgCount))
+        }
+        """
+    }
+
+    private func eventArray(count: Int) -> String {
+        "[" + Array(repeating: "{}", count: count).joined(separator: ", ") + "]"
+    }
+
+    private func writeEventCapacitySources(root: URL, objectTemplateLimit: Int = 64) throws {
+        try write(
+            """
+            #define OBJECT_EVENTS_COUNT 16
+            #define OBJECT_EVENT_TEMPLATES_COUNT \(objectTemplateLimit)
+            """,
+            to: root.appendingPathComponent("include/constants/global.h")
+        )
+        try write(
+            """
+            struct MapEvents
+            {
+                u8 objectEventCount;
+                u8 warpCount;
+                u8 coordEventCount;
+                u8 bgEventCount;
+                const struct ObjectEventTemplate *objectEvents;
+                const struct WarpEvent *warps;
+                const struct CoordEvent *coordEvents;
+                const struct BgEvent *bgEvents;
+            };
+            """,
+            to: root.appendingPathComponent("include/global.fieldmap.h")
+        )
     }
 
     private func writeMap(named name: String, root: URL, json: String) throws {

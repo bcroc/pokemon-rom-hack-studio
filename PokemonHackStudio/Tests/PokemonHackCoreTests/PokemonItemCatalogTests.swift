@@ -176,6 +176,15 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(potion.name, "Potion")
         XCTAssertEqual(potion.price, "(I_PRICE >= GEN_7) ? 200 : 300")
         XCTAssertEqual(potion.descriptionText, "Restores HP.")
+        XCTAssertEqual(potion.effect, "ITEM_EFFECT_HEAL")
+        XCTAssertEqual(potion.iconPic, "gItemIcon_Potion")
+        XCTAssertEqual(potion.iconPalette, "gItemIconPalette_Potion")
+
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potionSource = try XCTUnwrap(sourceIndex.records.first { $0.module == .items && $0.title == "ITEM_POTION" })
+        XCTAssertEqual(fact("effect", in: potionSource.facts), "ITEM_EFFECT_HEAL")
+        XCTAssertEqual(fact("iconPic", in: potionSource.facts), "gItemIcon_Potion")
+        XCTAssertEqual(fact("iconPalette", in: potionSource.facts), "gItemIconPalette_Potion")
 
         var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
         draft.name = "Potion Plus"
@@ -194,6 +203,9 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(#""Restores HP by\n""#))
         XCTAssertTrue(preview.contains(#""30 points.""#))
         XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_HEALTH_RECOVERY,"))
+        XCTAssertTrue(preview.contains(".effect = ITEM_EFFECT_HEAL,"))
+        XCTAssertTrue(preview.contains(".iconPic = gItemIcon_Potion,"))
+        XCTAssertTrue(preview.contains(".iconPalette = gItemIconPalette_Potion,"))
 
         let result = try ItemMutationApplier.apply(plan: plan)
         XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
@@ -206,6 +218,9 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.price, "250")
         XCTAssertEqual(edited.holdEffectParam, "30")
         XCTAssertEqual(edited.descriptionText, "Restores HP by\n30 points.")
+        XCTAssertEqual(edited.effect, "ITEM_EFFECT_HEAL")
+        XCTAssertEqual(edited.iconPic, "gItemIcon_Potion")
+        XCTAssertEqual(edited.iconPalette, "gItemIconPalette_Potion")
     }
 
     func testExpansionInlineCompoundStringConcatenatesCLiteralsWithoutExtraBlankLines() throws {
@@ -432,6 +447,7 @@ final class PokemonItemCatalogTests: XCTestCase {
                     .pocket = POCKET_ITEMS,
                     .sortType = ITEM_TYPE_HEALTH_RECOVERY,
                     .type = ITEM_USE_PARTY_MENU,
+                    .effect = ITEM_EFFECT_HEAL,
                     .fieldUseFunc = ItemUseOutOfBattle_Medicine,
                     .battleUsage = EFFECT_ITEM_RESTORE_HP,
                     .battleUseFunc = NULL,
@@ -592,5 +608,9 @@ final class PokemonItemCatalogTests: XCTestCase {
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func fact(_ label: String, in facts: [SourceIndexFact]) -> String? {
+        facts.first { $0.label == label }?.value
     }
 }

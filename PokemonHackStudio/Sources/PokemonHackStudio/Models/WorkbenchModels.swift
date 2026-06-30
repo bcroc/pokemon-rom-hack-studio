@@ -608,60 +608,6 @@ enum SourceLocationAction: String, CaseIterable, Identifiable {
     }
 }
 
-enum ValidationTier: String, CaseIterable, Identifiable {
-    case synthetic
-    case localGBAFixtures
-    case centralNDSReferences
-    case appGUISmoke
-    case releaseCandidate
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .synthetic:
-            "Synthetic"
-        case .localGBAFixtures:
-            "Local GBA Fixtures"
-        case .centralNDSReferences:
-            "Central NDS References"
-        case .appGUISmoke:
-            "App GUI Smoke"
-        case .releaseCandidate:
-            "Release Candidate"
-        }
-    }
-
-    var command: String {
-        switch self {
-        case .synthetic:
-            "make validate-synthetic"
-        case .localGBAFixtures:
-            "make validate-gba-fixtures"
-        case .centralNDSReferences:
-            "make validate-nds-strict"
-        case .appGUISmoke:
-            "make validate-gui-smoke"
-        case .releaseCandidate:
-            "make validate-release-candidate"
-        }
-    }
-}
-
-struct ValidationTierCommandRow: Identifiable, Equatable {
-    let tier: ValidationTier
-
-    var id: String { tier.id }
-    var title: String { tier.title }
-    var command: String { tier.command }
-    var runStateTitle: String { "Run manually" }
-    var canRunInApp: Bool { false }
-    var canCopyCommand: Bool { true }
-    var disabledReason: String {
-        "Validation commands are copy-only in PokemonHackStudio; run this command from the repository root in Terminal."
-    }
-}
-
 enum ScriptReadinessTargetMode: String, CaseIterable, Identifiable {
     case map = "Map"
     case script = "Script"
@@ -910,6 +856,68 @@ enum PatchManifestLoadStatus: Equatable {
     }
 }
 
+enum PatchCreationPreviewLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(isReady: Bool, label: String)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No patch creation preview loaded"
+        case .loading:
+            "Loading patch creation preview"
+        case let .loaded(_, label):
+            "Patch creation preview loaded: \(label)"
+        case let .failed(message):
+            "Patch creation preview failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case .loaded(let isReady, _):
+            isReady ? .valid : .warning
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
+enum BinaryROMMutationDryRunLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String, ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No binary ROM dry-run manifest loaded"
+        case .loading:
+            "Loading binary ROM dry-run manifest"
+        case let .loaded(label, _):
+            "Binary ROM dry-run manifest loaded: \(label)"
+        case let .failed(message):
+            "Binary ROM dry-run manifest failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, state):
+            state
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
 struct BaseROMOptionViewState: Identifiable, Hashable {
     let id: String
     let title: String
@@ -932,6 +940,71 @@ struct PatchManifestReportViewState: Identifiable {
     let selectedBaseROM: PatchSelectedBaseROMViewState?
     let baseROMCandidates: [PatchBaseROMCandidateViewState]
     let dryRunPlans: [PatchDryRunPlanViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchCreationPreviewReportViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let isPreviewOnly: Bool
+    let isReady: Bool
+    let candidateFormat: String
+    let sizeDeltaBytes: Int64?
+    let hashesMatch: Bool?
+    let plannedPatchPath: String
+    let absolutePlannedPatchPath: String
+    let blockedActions: [String]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct BinaryROMMutationBaseIdentityViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let facts: [Fact]
+}
+
+struct BinaryROMMutationIgnoredOutputGuidanceViewState: Identifiable {
+    let id: String
+    let relativeRoot: String
+    let relativeManifestPath: String
+    let relativeOutputROMPath: String
+    let relativeBackupRoot: String
+    let willWriteFiles: Bool
+    let guidance: [String]
+}
+
+struct BinaryROMMutationOperationPreviewViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let canApply: Bool
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
+struct BinaryROMMutationDryRunReportViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let inputPath: String
+    let isDryRun: Bool
+    let canApply: Bool
+    let sourceTreeStatus: String
+    let sourceTreeDetail: String
+    let sourceCandidates: [String]
+    let baseIdentity: BinaryROMMutationBaseIdentityViewState?
+    let ignoredOutputGuidance: BinaryROMMutationIgnoredOutputGuidanceViewState
+    let operationPreviews: [BinaryROMMutationOperationPreviewViewState]
     let diagnostics: [IndexedDiagnosticRow]
     let rows: [BuildReportRow]
 }
@@ -2369,6 +2442,7 @@ struct MapSummaryViewState: Identifiable {
     let weather: String?
     let regionMapSection: String?
     let eventCounts: MapEventCountViewState
+    let eventCapacity: MapEventCapacitySummary
     let connections: [MapConnectionViewState]
     let notes: [String]
 }

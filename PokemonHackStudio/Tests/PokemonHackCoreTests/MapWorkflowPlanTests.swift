@@ -139,6 +139,54 @@ final class MapWorkflowPlanTests: XCTestCase {
         XCTAssertTrue(blocked.diagnostics.contains { $0.code == "MAP_PREFAB_PASTE_OUT_OF_BOUNDS" })
     }
 
+    func testEventCapacityWarningsDoNotBlockMapMutationPlanApplyability() throws {
+        let root = try makeTemporaryProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try write(Data([0, 0, 1, 0, 2, 0, 3, 0]), to: root.appendingPathComponent("data/layouts/Test/map.bin"))
+        try write("{}", to: root.appendingPathComponent("data/maps/TestRoom/map.json"))
+        let capacity = MapEventCapacitySummary(
+            counts: MapEventCounts(),
+            limits: MapEventCapacityLimits(
+                objectEvents: 1,
+                sources: [
+                    MapEventCapacityLimits.Source(
+                        kind: .object,
+                        path: "include/constants/global.h",
+                        symbol: "OBJECT_EVENT_TEMPLATES_COUNT",
+                        detail: "Object map template capacity."
+                    )
+                ]
+            ),
+            mapSourcePath: "data/maps/TestRoom/map.json"
+        )
+        let document = makeMapVisualDocument(root: root, eventCapacity: capacity, mapJSONText: "{}")
+        let operations = [
+            MapEditOperation(
+                action: .addEvent,
+                x: 0,
+                y: 0,
+                eventKind: .object,
+                templateProperties: MapEventTemplateKind.object.templateProperties(x: 0, y: 0)
+            ),
+            MapEditOperation(
+                action: .addEvent,
+                x: 1,
+                y: 1,
+                eventKind: .object,
+                templateProperties: MapEventTemplateKind.object.templateProperties(x: 1, y: 1)
+            )
+        ]
+
+        let plan = MapMutationPlanner.plan(document: document, operations: operations)
+        let diagnostic = try XCTUnwrap(plan.diagnostics.first { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+
+        XCTAssertEqual(diagnostic.severity, .warning)
+        XCTAssertEqual(diagnostic.span?.relativePath, "data/maps/TestRoom/map.json")
+        XCTAssertTrue(plan.changes.contains { $0.path == "data/maps/TestRoom/map.json" })
+        XCTAssertTrue(plan.isApplyable, "\(plan.applyability.diagnostics.map(\.code))")
+    }
+
     func testDuplicationApplyBlocksStaleSnapshots() throws {
         let root = try makeTemporaryProjectRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -222,7 +270,11 @@ final class MapWorkflowPlanTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: plan.artifacts[0].absolutePath))
     }
 
-    private func makeMapVisualDocument(root: URL) -> MapVisualDocument {
+    private func makeMapVisualDocument(
+        root: URL,
+        eventCapacity: MapEventCapacitySummary? = nil,
+        mapJSONText: String = "{}"
+    ) -> MapVisualDocument {
         let layout = LayoutSlot(
             slotIndex: 0,
             layoutID: "LAYOUT_TEST",
@@ -256,7 +308,8 @@ final class MapWorkflowPlanTests: XCTestCase {
             secondaryTileset: nil,
             metatiles: [],
             events: [],
-            mapJSONText: "{}"
+            eventCapacity: eventCapacity,
+            mapJSONText: mapJSONText
         )
     }
 

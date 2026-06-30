@@ -17,6 +17,7 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
     public let tileLimits: MapTileLimits
     public let metatiles: [MetatileDefinition]
     public let events: [MapEventDescriptor]
+    public let eventCapacity: MapEventCapacitySummary
     public let eventOptions: MapEventOptionsCatalog
     public let scriptIndex: MapScriptIndex?
     public let wildEncounters: MapWildEncounterIndex?
@@ -41,6 +42,7 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         tileLimits: MapTileLimits = MapTileLimits(),
         metatiles: [MetatileDefinition],
         events: [MapEventDescriptor],
+        eventCapacity: MapEventCapacitySummary? = nil,
         eventOptions: MapEventOptionsCatalog = .empty,
         scriptIndex: MapScriptIndex? = nil,
         wildEncounters: MapWildEncounterIndex? = nil,
@@ -64,6 +66,11 @@ public struct MapVisualDocument: Codable, Equatable, Identifiable {
         self.tileLimits = tileLimits
         self.metatiles = metatiles
         self.events = events
+        self.eventCapacity = eventCapacity ?? MapEventCapacitySummary(
+            counts: MapEventCounts(events: events),
+            limits: .unknown,
+            mapSourcePath: mapSourcePath
+        )
         self.eventOptions = eventOptions
         self.scriptIndex = scriptIndex
         self.wildEncounters = wildEncounters
@@ -1969,6 +1976,7 @@ public enum ProjectMapVisualLoader {
             tileLimits: tilesets.tileLimits,
             metatiles: metatiles,
             events: events,
+            eventCapacity: map.eventCapacity,
             eventOptions: eventOptions,
             scriptIndex: scriptIndex,
             wildEncounters: wildEncounters,
@@ -2606,6 +2614,13 @@ public enum MapMutationPlanner {
             draftEvents = document.events
         }
         appendEventValidationDiagnostics(events: draftEvents, document: document, scriptTexts: scriptTexts, diagnostics: &diagnostics)
+        diagnostics.append(
+            contentsOf: MapEventCapacitySummary(
+                counts: MapEventCounts(events: draftEvents),
+                limits: document.eventCapacity.limits,
+                mapSourcePath: document.mapSourcePath
+            ).diagnostics
+        )
         let scriptFiles = scriptTexts.keys.sorted().compactMap { path -> MapScriptFileDraft? in
             guard let originalText = originalScriptTexts[path], let text = scriptTexts[path], originalText != text else {
                 return nil

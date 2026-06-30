@@ -9,6 +9,29 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testValidationTierCommandRowsStayCopyOnlyAndManual() {
+        let rows = ValidationTier.allCases.map(ValidationTierCommandRow.init(tier:))
+
+        XCTAssertEqual(
+            ValidationTier.allCases.map(\.command),
+            [
+                "make validate-synthetic",
+                "make validate-gba-fixtures",
+                "make validate-nds-strict",
+                "make validate-gui-smoke",
+                "make validate-release-candidate"
+            ]
+        )
+        XCTAssertEqual(rows.map(\.title), ValidationTier.allCases.map(\.title))
+        XCTAssertEqual(rows.map(\.command), ValidationTier.allCases.map(\.command))
+        XCTAssertEqual(rows.map(\.copyValue), ValidationTier.allCases.map(\.command))
+        XCTAssertTrue(rows.allSatisfy(\.canCopyCommand))
+        XCTAssertTrue(rows.allSatisfy { !$0.canRunInApp })
+        XCTAssertTrue(rows.allSatisfy { $0.runStateTitle == "Run manually" })
+        XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("copy-only") })
+        XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("repository root") })
+    }
+
     func testBuildReportValidatesOutputChecksumFreshnessAndToolAvailability() throws {
         let root = try makeTemporaryRoot()
         let source = root.appendingPathComponent("src/main.c")

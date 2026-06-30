@@ -572,15 +572,18 @@ public enum NDSDataCatalogBuilder {
             records: enrichDiamondPearlMapInventory(
                 records: enrichHeartGoldSoulSilverScriptSequenceInventory(
                     records: enrichHeartGoldSoulSilverMapInventory(
-                        records: enrichRelationships(
-                            records: uniqueRecords(
-                                descriptors.flatMap { descriptor in
-                                    catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                                }
-                                + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                            ).sorted(by: recordSort),
+                        records: enrichPlatinumMapInventory(
+                            records: enrichRelationships(
+                                records: uniqueRecords(
+                                    descriptors.flatMap { descriptor in
+                                        catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                                    }
+                                    + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                    + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                    + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                ).sorted(by: recordSort),
+                                profile: index.profile
+                            ),
                             profile: index.profile
                         ),
                         profile: index.profile
@@ -651,6 +654,7 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.text, "res/text"),
                 CatalogPathDescriptor(.scripts, "res/field/scripts"),
                 CatalogPathDescriptor(.scripts, "res/field/frontier_scripts", required: false),
+                CatalogPathDescriptor(.maps, "res/field/maps", summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "res/field/maps"),
                 CatalogPathDescriptor(.maps, "res/field/matrices", required: false),
                 CatalogPathDescriptor(.maps, "res/field/events"),
@@ -726,6 +730,11 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.encounters, "data/encounters", required: false),
                 CatalogPathDescriptor(.resources, "data", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files/a", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "files/fielddata", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/maptable", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.scripts, "files/fielddata/script", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.scripts, "files/fielddata/eventdata/zone_event", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.text, "files/msgdata", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files"),
@@ -828,7 +837,8 @@ public enum NDSDataCatalogBuilder {
         let containerSummary = exists
             ? containerSummary(url: url, relativePath: relativePath, format: format, isDirectory: isDirectory, fileManager: fileManager)
             : nil
-        let byteCount = containerSummary?.byteCount ?? (exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil)
+        let genVScriptInventory = genVFielddataScriptInventory(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory, fileManager: fileManager)
+        let byteCount = containerSummary?.byteCount ?? genVScriptInventory?.byteCount ?? (exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil)
         let recordCount = containerSummary?.memberCount ?? (exists ? shallowRecordCount(url: url, format: format, isDirectory: isDirectory, fileManager: fileManager) : nil)
         var diagnostics: [Diagnostic] = []
 
@@ -894,7 +904,8 @@ public enum NDSDataCatalogBuilder {
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
             audioPreview: audioPreview
-        ) + genVSHA1TextFacts(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory)
+        ) + genVFielddataScriptInventoryFacts(genVScriptInventory)
+          + genVSHA1TextFacts(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory)
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
             domain: descriptor.domain,
@@ -907,7 +918,7 @@ public enum NDSDataCatalogBuilder {
             byteCount: byteCount,
             sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
             facts: facts,
-            preview: containerPreview(containerSummary) ?? preview(url: url, format: format),
+            preview: genVFielddataScriptInventoryPreview(genVScriptInventory) ?? containerPreview(containerSummary) ?? preview(url: url, format: format),
             containerSummary: containerSummary,
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
@@ -1216,6 +1227,11 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static let relationshipDomains: Set<NDSDataDomain> = [.maps, .scripts, .text]
+    private static let heartGoldSoulSilverMapInventoryRelationshipRootPaths: Set<String> = [
+        "files/fielddata/mapmatrix",
+        "files/fielddata/maptable",
+        "src/data/map_headers.h"
+    ]
 
     private static func relationshipRecordIDs(
         records: [NDSDataCatalogRecord],
@@ -1354,6 +1370,74 @@ public enum NDSDataCatalogBuilder {
         }
     }
 
+    private static let platinumMapBlockedActions = [
+        "semantic editing",
+        "nested map writer",
+        "extraction",
+        "NARC/container work",
+        "generated output write",
+        "reference write",
+        "build/playtest execution",
+        "ROM export",
+        "mutation apply",
+        "binary write"
+    ]
+
+    private static let platinumMapActionState = "Platinum res/field/maps rows are inventory-only map metadata; no semantic editor, nested map writer, extraction, NARC/container work, generated/reference write, build/playtest, ROM export, mutation apply, or binary write path is enabled."
+
+    private static func enrichPlatinumMapInventory(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeplatinum else { return records }
+        return records.map { record in
+            guard let sourceRole = platinumMapSourceRole(for: record) else {
+                return record
+            }
+
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: "platinum:res/field/maps"),
+                SourceIndexFact(label: "Gen IV Readiness", value: "inventoryOnly"),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: platinumMapBlockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: platinumMapActionState)
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                diagnostics: record.diagnostics + platinumMapDiagnostics(for: record)
+            )
+        }
+    }
+
+    private static func platinumMapSourceRole(for record: NDSDataCatalogRecord) -> String? {
+        guard record.domain == .maps else { return nil }
+        let lower = record.relativePath.lowercased()
+        if lower == "res/field/maps" {
+            return "platinumMapInventory"
+        }
+        if lower.hasPrefix("res/field/maps/") {
+            return "platinumMapMember"
+        }
+        return nil
+    }
+
+    private static func platinumMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
+        return [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_DATA_PLATINUM_MAP_INVENTORY_PREVIEW_ONLY",
+                message: "Platinum map inventory for \(record.relativePath) is source provenance and blocker metadata only.",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_DATA_PLATINUM_MAP_WRITE_BLOCKED",
+                message: "Platinum res/field/maps edits, extraction, NARC/container work, generated/reference writes, build/playtest, ROM export, mutation apply, and binary writes remain blocked; blocked actions: \(platinumMapBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
     private static let heartGoldSoulSilverMapBlockedActions = [
         "semantic editing",
         "map editor",
@@ -1367,7 +1451,26 @@ public enum NDSDataCatalogBuilder {
         "binary write"
     ]
 
-    private static let heartGoldSoulSilverMapActionState = "HeartGold/SoulSilver map matrix, map table, and map header rows are inventory-only HGSS map metadata; no semantic editor, compiler, container rebuild, generated output, reference, or ROM write path is enabled."
+    private static let heartGoldSoulSilverMapHeaderBlockedActions = [
+        "non-integer C scalar write",
+        "identifier or macro write",
+        "complex expression write",
+        "row insertion/removal/reorder",
+        "map editor",
+        "nested map directory editing",
+        "map matrix write",
+        "map table write",
+        "script editing",
+        "generated output write",
+        "reference write",
+        "NARC rebuild",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let heartGoldSoulSilverMapActionState = "HeartGold/SoulSilver map matrix and map table rows are inventory-only HGSS map metadata; no semantic editor, compiler, container rebuild, generated output, reference, or ROM write path is enabled."
+    private static let heartGoldSoulSilverMapHeaderActionState = "HeartGold/SoulSilver map header rows expose existing integer-literal sMapHeaders scalars through the semantic mutation-plan gate; map matrix, map table, scripts, generated/reference writes, NARC rebuild, ROM rebuild/export, and binary writes remain blocked."
 
     private static func enrichHeartGoldSoulSilverMapInventory(
         records: [NDSDataCatalogRecord],
@@ -1384,8 +1487,9 @@ public enum NDSDataCatalogBuilder {
             let facts = [
                 SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
                 SourceIndexFact(label: "Gen IV Source Provenance", value: provenance),
-                SourceIndexFact(label: "Gen IV Blocked Actions", value: heartGoldSoulSilverMapBlockedActions.joined(separator: ", ")),
-                SourceIndexFact(label: "Gen IV Action State", value: heartGoldSoulSilverMapActionState)
+                SourceIndexFact(label: "Gen IV Readiness", value: heartGoldSoulSilverMapReadiness(for: record)),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: heartGoldSoulSilverMapBlockedActions(for: record).joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: heartGoldSoulSilverMapActionState(for: record))
             ]
             return record.copy(
                 facts: record.facts + facts,
@@ -1429,8 +1533,40 @@ public enum NDSDataCatalogBuilder {
         return nil
     }
 
+    private static func isHeartGoldSoulSilverMapHeaderRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .maps && record.relativePath.lowercased() == "src/data/map_headers.h"
+    }
+
+    private static func heartGoldSoulSilverMapReadiness(for record: NDSDataCatalogRecord) -> String {
+        isHeartGoldSoulSilverMapHeaderRecord(record) ? "semanticIntegerScalars" : "inventoryOnly"
+    }
+
+    private static func heartGoldSoulSilverMapBlockedActions(for record: NDSDataCatalogRecord) -> [String] {
+        isHeartGoldSoulSilverMapHeaderRecord(record) ? heartGoldSoulSilverMapHeaderBlockedActions : heartGoldSoulSilverMapBlockedActions
+    }
+
+    private static func heartGoldSoulSilverMapActionState(for record: NDSDataCatalogRecord) -> String {
+        isHeartGoldSoulSilverMapHeaderRecord(record) ? heartGoldSoulSilverMapHeaderActionState : heartGoldSoulSilverMapActionState
+    }
+
     private static func heartGoldSoulSilverMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
-        [
+        if isHeartGoldSoulSilverMapHeaderRecord(record) {
+            return [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_DATA_HGSS_MAP_HEADER_SEMANTIC_SCALARS",
+                    message: "HeartGold/SoulSilver map header C anchor for \(record.relativePath) exposes existing integer-literal sMapHeaders scalar fields through the semantic mutation-plan gate.",
+                    span: record.sourceSpan
+                ),
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_DATA_HGSS_MAP_HEADER_WRITE_LIMITED",
+                    message: "HeartGold/SoulSilver map header writes are limited to existing integer-literal sMapHeaders scalar replacements; blocked actions: \(heartGoldSoulSilverMapHeaderBlockedActions.joined(separator: ", ")).",
+                    span: record.sourceSpan
+                )
+            ]
+        }
+        return [
             Diagnostic(
                 severity: .info,
                 code: "NDS_DATA_HGSS_MAP_INVENTORY_PREVIEW_ONLY",
@@ -1440,7 +1576,7 @@ public enum NDSDataCatalogBuilder {
             Diagnostic(
                 severity: .warning,
                 code: "NDS_DATA_HGSS_MAP_WRITE_BLOCKED",
-                message: "HeartGold/SoulSilver map matrix, map table, and map header writes remain blocked; blocked actions: \(heartGoldSoulSilverMapBlockedActions.joined(separator: ", ")).",
+                message: "HeartGold/SoulSilver map matrix and map table writes remain blocked; blocked actions: \(heartGoldSoulSilverMapBlockedActions.joined(separator: ", ")).",
                 span: record.sourceSpan
             )
         ]
@@ -1498,7 +1634,7 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static func heartGoldSoulSilverScriptSequenceDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
-        [
+        return [
             Diagnostic(
                 severity: .info,
                 code: "NDS_DATA_HGSS_SCRIPT_SEQUENCE_INVENTORY_PREVIEW_ONLY",
@@ -1514,7 +1650,7 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
-    private static let diamondPearlMapBlockedActions = [
+    private static let diamondPearlMapInventoryBlockedActions = [
         "semantic editing",
         "raw C-anchor write",
         "map editor",
@@ -1528,7 +1664,27 @@ public enum NDSDataCatalogBuilder {
         "binary write"
     ]
 
-    private static let diamondPearlMapActionState = "Diamond/Pearl map header, map matrix, map table, land data, and area data rows are inventory-only map metadata; no semantic editor, raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
+    private static let diamondPearlMapHeaderBlockedActions = [
+        "non-integer C scalar write",
+        "row add/remove/reorder",
+        "map table write",
+        "map matrix write",
+        "land data write",
+        "area data write",
+        "script write",
+        "map editor",
+        "matrix compiler",
+        "map data compiler",
+        "generated output write",
+        "reference write",
+        "NARC rebuild",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let diamondPearlMapInventoryActionState = "Diamond/Pearl map matrix, map table, land data, and area data rows are inventory-only map metadata; no semantic editor, raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
+    private static let diamondPearlMapHeaderActionState = "Diamond/Pearl map header rows expose existing integer-literal sMapHeaders scalars through the semantic mutation-plan gate; map table, map matrix, land data, area data, scripts, compilers, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
 
     private static func enrichDiamondPearlMapInventory(
         records: [NDSDataCatalogRecord],
@@ -1545,9 +1701,9 @@ public enum NDSDataCatalogBuilder {
             let facts = [
                 SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
                 SourceIndexFact(label: "Gen IV Source Provenance", value: provenance),
-                SourceIndexFact(label: "Gen IV Readiness", value: "inventoryOnly"),
-                SourceIndexFact(label: "Gen IV Blocked Actions", value: diamondPearlMapBlockedActions.joined(separator: ", ")),
-                SourceIndexFact(label: "Gen IV Action State", value: diamondPearlMapActionState)
+                SourceIndexFact(label: "Gen IV Readiness", value: diamondPearlMapReadiness(for: record)),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: diamondPearlMapBlockedActions(for: record).joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: diamondPearlMapActionState(for: record))
             ]
             return record.copy(
                 facts: record.facts + facts,
@@ -1609,8 +1765,40 @@ public enum NDSDataCatalogBuilder {
         return nil
     }
 
+    private static func isDiamondPearlMapHeaderRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .maps && record.relativePath.lowercased() == "arm9/src/map_header.c"
+    }
+
+    private static func diamondPearlMapReadiness(for record: NDSDataCatalogRecord) -> String {
+        isDiamondPearlMapHeaderRecord(record) ? "semanticIntegerScalars" : "inventoryOnly"
+    }
+
+    private static func diamondPearlMapBlockedActions(for record: NDSDataCatalogRecord) -> [String] {
+        isDiamondPearlMapHeaderRecord(record) ? diamondPearlMapHeaderBlockedActions : diamondPearlMapInventoryBlockedActions
+    }
+
+    private static func diamondPearlMapActionState(for record: NDSDataCatalogRecord) -> String {
+        isDiamondPearlMapHeaderRecord(record) ? diamondPearlMapHeaderActionState : diamondPearlMapInventoryActionState
+    }
+
     private static func diamondPearlMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
-        [
+        if isDiamondPearlMapHeaderRecord(record) {
+            return [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_DATA_DP_MAP_HEADER_SEMANTIC_SCALARS",
+                    message: "Diamond/Pearl map header C anchor for \(record.relativePath) exposes existing integer-literal sMapHeaders scalar fields through the semantic mutation-plan gate.",
+                    span: record.sourceSpan
+                ),
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_DATA_DP_MAP_HEADER_WRITE_LIMITED",
+                    message: "Diamond/Pearl map header writes are limited to existing integer-literal sMapHeaders scalar replacements; blocked actions: \(diamondPearlMapHeaderBlockedActions.joined(separator: ", ")).",
+                    span: record.sourceSpan
+                )
+            ]
+        }
+        return [
             Diagnostic(
                 severity: .info,
                 code: "NDS_DATA_DP_MAP_INVENTORY_PREVIEW_ONLY",
@@ -1620,7 +1808,7 @@ public enum NDSDataCatalogBuilder {
             Diagnostic(
                 severity: .warning,
                 code: "NDS_DATA_DP_MAP_WRITE_BLOCKED",
-                message: "Diamond/Pearl map header, map matrix, map table, land data, and area data writes remain blocked; blocked actions: \(diamondPearlMapBlockedActions.joined(separator: ", ")).",
+                message: "Diamond/Pearl map matrix, map table, land data, and area data writes remain blocked; blocked actions: \(diamondPearlMapInventoryBlockedActions.joined(separator: ", ")).",
                 span: record.sourceSpan
             )
         ]
@@ -1659,8 +1847,78 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Reference Posture", value: "cleanRoomReferenceOnly")
         ]
         facts.append(contentsOf: genVBuildMetadataFacts(for: record, existingRelativePaths: existingRelativePaths))
+        facts.append(contentsOf: genVMessageCandidateFacts(for: record, existingRelativePaths: existingRelativePaths))
+        facts.append(contentsOf: genVEncounterRecordFacts(for: record))
         facts.append(contentsOf: genVVariantFacts(for: record))
         return facts
+    }
+
+    private static func genVEncounterRecordFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
+        guard record.domain == .encounters,
+              record.relativePath.lowercased().hasPrefix("data/encounters/")
+        else {
+            return []
+        }
+
+        let path = URL(fileURLWithPath: record.relativePath)
+        var facts = [
+            SourceIndexFact(label: "Gen V Encounter Record", value: "previewOnly"),
+            SourceIndexFact(label: "Gen V Encounter Source", value: "data/encounters"),
+            SourceIndexFact(label: "Gen V Encounter Key", value: path.deletingPathExtension().lastPathComponent),
+            SourceIndexFact(label: "Gen V Encounter Format", value: record.format.rawValue),
+            SourceIndexFact(label: "Gen V Encounter Parse State", value: "metadataOnly")
+        ]
+        if let recordCount = record.recordCount {
+            facts.append(SourceIndexFact(label: "Gen V Encounter Shallow Count", value: "\(recordCount)"))
+        }
+        if let byteCount = record.byteCount {
+            facts.append(SourceIndexFact(label: "Gen V Encounter Bytes", value: "\(byteCount)"))
+        }
+        return facts
+    }
+
+    private static func genVMessageCandidateFacts(
+        for record: NDSDataCatalogRecord,
+        existingRelativePaths: Set<String>
+    ) -> [SourceIndexFact] {
+        let lower = record.relativePath.lowercased()
+        guard lower == "files/msgdata" || lower.hasPrefix("files/msgdata/") else { return [] }
+
+        if lower == "files/msgdata" {
+            let candidatePaths = existingRelativePaths
+                .filter { $0.hasPrefix("files/msgdata/") }
+                .sorted()
+            let extensions = Array(Set(candidatePaths.map { URL(fileURLWithPath: $0).pathExtension.lowercased() }.filter { !$0.isEmpty })).sorted()
+            var facts = [
+                SourceIndexFact(label: "Gen V Message Candidate Count", value: "\(candidatePaths.count)"),
+                SourceIndexFact(label: "Gen V Message Candidate Basis", value: "pathExtensionOnly"),
+                SourceIndexFact(label: "Gen V Message Candidate Posture", value: "previewOnlyFilenameFacts")
+            ]
+            if !extensions.isEmpty {
+                facts.append(SourceIndexFact(label: "Gen V Message Candidate Extensions", value: extensions.joined(separator: ", ")))
+            }
+            return facts
+        }
+
+        return [
+            SourceIndexFact(label: "Gen V Message Candidate Kind", value: genVMessageCandidateKind(for: lower)),
+            SourceIndexFact(label: "Gen V Message Candidate Basis", value: "pathExtensionOnly"),
+            SourceIndexFact(label: "Gen V Message Candidate Posture", value: "previewOnlyFilenameFacts")
+        ]
+    }
+
+    private static func genVMessageCandidateKind(for relativePath: String) -> String {
+        let url = URL(fileURLWithPath: relativePath)
+        let ext = url.pathExtension.lowercased()
+        let stem = url.deletingPathExtension().lastPathComponent.lowercased()
+        switch ext {
+        case "txt", "gmm", "str":
+            return "sourceTextCandidate"
+        case "bin", "dat", "msg":
+            return stem.contains { $0.isNumber } ? "numberedBinaryBankCandidate" : "binaryBankCandidate"
+        default:
+            return ext.isEmpty ? "messagePathCandidate" : "messageAssetCandidate"
+        }
     }
 
     private static func genVBuildMetadataFacts(
@@ -1727,6 +1985,53 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V SHA1 Text State", value: "valid"),
             SourceIndexFact(label: "Gen V SHA1 Text Digest", value: digest)
         ]
+    }
+
+    private typealias GenVFielddataScriptInventorySummary = (memberCount: Int, byteCount: UInt64, samplePaths: [String])
+
+    private static func genVFielddataScriptInventory(
+        relativePath: String,
+        url: URL,
+        exists: Bool,
+        isDirectory: Bool,
+        fileManager: FileManager
+    ) -> GenVFielddataScriptInventorySummary? {
+        guard exists,
+              isDirectory,
+              relativePath.lowercased() == "files/fielddata/script"
+        else {
+            return nil
+        }
+
+        let members = recursiveMemberFiles(url: url, fileManager: fileManager)
+        let byteCount = members.reduce(UInt64(0)) { total, member in
+            total + (member.byteCount ?? UInt64(0))
+        }
+        let samplePaths = members.prefix(maxContainerSampleMembers).map { member in
+            "\(relativePath)/\(member.relativePath)"
+        }
+        return (members.count, byteCount, samplePaths)
+    }
+
+    private static func genVFielddataScriptInventoryFacts(
+        _ inventory: GenVFielddataScriptInventorySummary?
+    ) -> [SourceIndexFact] {
+        guard let inventory else { return [] }
+        var facts = [
+            SourceIndexFact(label: "Gen V Script Members", value: "\(inventory.memberCount)"),
+            SourceIndexFact(label: "Gen V Script Bytes", value: "\(inventory.byteCount)")
+        ]
+        if !inventory.samplePaths.isEmpty {
+            facts.append(SourceIndexFact(label: "Gen V Script Sample Paths", value: inventory.samplePaths.joined(separator: ", ")))
+        }
+        return facts
+    }
+
+    private static func genVFielddataScriptInventoryPreview(
+        _ inventory: GenVFielddataScriptInventorySummary?
+    ) -> String? {
+        guard let inventory, !inventory.samplePaths.isEmpty else { return nil }
+        return inventory.samplePaths.joined(separator: ", ")
     }
 
     private static func genVVariantFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
@@ -1837,6 +2142,33 @@ public enum NDSDataCatalogBuilder {
         if lower.hasPrefix("files/a/") {
             return "nitroArchiveGroup"
         }
+        if lower == "files/fielddata" {
+            return "fielddataInventory"
+        }
+        if lower == "files/fielddata/mapmatrix" {
+            return "fielddataMapMatrixInventory"
+        }
+        if lower.hasPrefix("files/fielddata/mapmatrix/") {
+            return "fielddataMapMatrixMember"
+        }
+        if lower == "files/fielddata/maptable" {
+            return "fielddataMapTableInventory"
+        }
+        if lower.hasPrefix("files/fielddata/maptable/") {
+            return "fielddataMapTableMember"
+        }
+        if lower == "files/fielddata/script" {
+            return "fielddataScriptInventory"
+        }
+        if lower.hasPrefix("files/fielddata/script/") {
+            return "fielddataScriptMember"
+        }
+        if lower == "files/fielddata/eventdata/zone_event" {
+            return "fielddataZoneEventInventory"
+        }
+        if lower.hasPrefix("files/fielddata/eventdata/zone_event/") {
+            return "fielddataZoneEventMetadata"
+        }
         if lower == "files/msgdata" {
             return "messageBankInventory"
         }
@@ -1904,7 +2236,7 @@ public enum NDSDataCatalogBuilder {
     private static func genVSourceRoleDetail(for role: String) -> String {
         switch role {
         case "encounterPreview":
-            return "Encounter data is indexed for preview context."
+            return "Encounter data is indexed for preview-only record facts."
         case "dataInventory":
             return "The Gen V data root is summarized as manual-only source inventory."
         case "audioMetadata":
@@ -1933,6 +2265,24 @@ public enum NDSDataCatalogBuilder {
             return "The files/a archive-group root is summarized as manual-only NitroFS inventory."
         case "nitroArchiveGroup":
             return "files/a archive-group paths are identified for future Gen V container routing."
+        case "fielddataInventory":
+            return "The files/fielddata root is summarized as manual-only Gen V fielddata inventory."
+        case "fielddataMapMatrixInventory":
+            return "Gen V map matrix roots are summarized as manual-only fielddata map inventory."
+        case "fielddataMapMatrixMember":
+            return "Gen V map matrix paths are indexed as manual-only fielddata map metadata."
+        case "fielddataMapTableInventory":
+            return "Gen V map table roots are summarized as manual-only fielddata map inventory."
+        case "fielddataMapTableMember":
+            return "Gen V map table paths are indexed as manual-only fielddata map metadata."
+        case "fielddataScriptInventory":
+            return "Gen V fielddata script roots are summarized as manual-only script inventory."
+        case "fielddataScriptMember":
+            return "Gen V fielddata script paths are indexed as manual-only script metadata."
+        case "fielddataZoneEventInventory":
+            return "Gen V zone-event roots are summarized as manual-only fielddata event inventory."
+        case "fielddataZoneEventMetadata":
+            return "Gen V zone-event paths are indexed as manual-only fielddata event metadata."
         case "messageBankInventory":
             return "The files/msgdata root is summarized as manual-only Gen V message-bank inventory."
         case "messageBankMetadata":
@@ -2031,6 +2381,11 @@ public enum NDSDataCatalogBuilder {
 
         if lower.contains("map_headers") || lower.contains("map_header") || lower.contains("maptable") {
             keys.insert("map-header")
+        }
+
+        if profile == .pokeheartgold,
+           heartGoldSoulSilverMapInventoryRelationshipRootPaths.contains(lower) {
+            keys.insert("hgss-map-inventory-roots")
         }
 
         if profile == .pokediamond,

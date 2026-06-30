@@ -19,6 +19,7 @@ struct MapEventsPaneView: View {
             VStack(alignment: .leading, spacing: 12) {
                 eventToolbar
                 eventPalette
+                eventCapacityStrip
                 kindTabs
                 eventBrowser
                 selectedEventEditor
@@ -88,6 +89,28 @@ struct MapEventsPaneView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Event template palette")
+    }
+
+    private var eventCapacityStrip: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(session.stagedMapEventCapacity.usages) { usage in
+                HStack(spacing: 6) {
+                    Image(systemName: usage.isOverLimit ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                        .foregroundStyle(usage.isOverLimit ? .orange : .secondary)
+                        .frame(width: 14)
+                    Text(usage.kind.title)
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 8)
+                    Text(capacityValueText(for: usage))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(usage.isOverLimit ? .orange : .secondary)
+                }
+                .help(capacityHelpText(for: usage))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var kindTabs: some View {
@@ -809,6 +832,34 @@ struct MapEventsPaneView: View {
 
     private func eventCount(for kind: MapEventKind) -> Int {
         session.stagedMapEvents.filter { $0.kind == kind }.count
+    }
+
+    private func capacityValueText(for usage: MapEventCapacityUsage) -> String {
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        if usage.isOverLimit {
+            return "\(usage.count)/\(limit) over"
+        }
+        guard let remaining = usage.remaining else {
+            return "\(usage.count)/\(limit)"
+        }
+        return "\(usage.count)/\(limit) \(remaining) left"
+    }
+
+    private func capacityHelpText(for usage: MapEventCapacityUsage) -> String {
+        guard let source = usage.source else {
+            return "\(usage.kind.title) count \(usage.count); no source-backed limit was found."
+        }
+        var parts = [
+            "\(usage.kind.title) count \(usage.count).",
+            "Limit source: \(source.symbol) in \(source.path).",
+            source.detail
+        ]
+        if let runtimeSlots = session.stagedMapEventCapacity.limits.objectRuntimeSlots, usage.kind == .object {
+            parts.append("Runtime object slots: \(runtimeSlots) from OBJECT_EVENTS_COUNT.")
+        }
+        return parts.joined(separator: " ")
     }
 
     private func selectAdjacentEvent(offset: Int) {

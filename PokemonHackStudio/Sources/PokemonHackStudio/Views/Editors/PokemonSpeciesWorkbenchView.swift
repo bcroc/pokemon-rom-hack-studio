@@ -743,6 +743,8 @@ struct PokemonSpeciesWorkbenchView: View {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered:
             return true
+        case .pokeruby:
+            return species.learnsets.tutorSourceSpan?.relativePath == "src/data/pokemon/tutor_learnsets.h"
         case .pokeemeraldExpansion:
             return species.learnsets.tutorSourceSpan?.relativePath == "src/data/pokemon/tutor_learnsets.h"
         default:

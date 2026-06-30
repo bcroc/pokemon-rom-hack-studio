@@ -374,9 +374,9 @@ public enum ProjectSourceIndexLoader {
         case .trainers:
             preferred = ["trainerName", "trainerClass", "encounterMusic_gender", "items", "doubleBattle", "aiFlags", "party"]
         case .items:
-            preferred = ["itemId", "name", "price", "pocket", "type", "fieldUseFunc", "battleUsage"]
+            preferred = ["itemId", "name", "price", "pocket", "type", "effect", "fieldUseFunc", "battleUsage", "iconPic", "iconPalette"]
         case .moves:
-            preferred = ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags"]
+            preferred = ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags", "contestEffect"]
         case .pokedex:
             preferred = ["categoryName", "height", "weight", "description", "description1", "description2", "pokemonScale", "trainerScale"]
         default:
@@ -393,7 +393,8 @@ public enum ProjectSourceIndexLoader {
             }
         }
         facts.append(SourceIndexFact(label: "Lines", value: "\(entry.span.startLine)-\(entry.span.endLine)"))
-        return Array(facts.prefix(8))
+        let limit = (module == .moves || module == .items) ? 12 : 8
+        return Array(facts.prefix(limit))
     }
 
     private static func diagnostics(
@@ -543,12 +544,14 @@ struct SourceIndexDescriptorSet {
         "itemId", "name", "price", "holdEffect", "holdEffectParam",
         "description", "descriptionPage1", "descriptionPage2",
         "importance", "registrability", "pocket", "type",
-        "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "exitsBagOnUse"
+        "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "exitsBagOnUse",
+        "effect", "iconPic", "iconPalette"
     ]
 
     private static let moveFields = [
         "effect", "power", "type", "accuracy", "pp",
-        "secondaryEffectChance", "target", "priority", "flags", "description"
+        "secondaryEffectChance", "target", "priority", "flags", "description",
+        "contestEffect"
     ]
 
     private static let pokedexFields = [
@@ -800,8 +803,12 @@ private enum JSONSourceIndexScanner {
                 title: species,
                 subtitle: relativePath,
                 sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
-                tags: ["learnset", "json", "all-learnables"],
+                tags: ["learnset", "json", "all-learnables", "generated", "read-only"],
                 facts: [
+                    SourceIndexFact(label: "Expansion Learnset Source Role", value: "generatedAllLearnablesIndex"),
+                    SourceIndexFact(label: "Generated From", value: "level-up, TM/HM, tutor, egg learnsets"),
+                    SourceIndexFact(label: "Readiness", value: "read-only generated context"),
+                    SourceIndexFact(label: "Blocked Actions", value: "apply; generated output writes; reference writes; ROM/binary writes"),
                     SourceIndexFact(label: "Moves", value: "\(moves.count)"),
                     SourceIndexFact(label: "First Moves", value: moves.prefix(4).joined(separator: ", "))
                 ],

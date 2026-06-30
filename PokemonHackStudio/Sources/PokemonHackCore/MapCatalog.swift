@@ -64,6 +64,7 @@ public struct MapDescriptor: Codable, Equatable, Identifiable {
     public let connectionsNoInclude: Bool
     public let connections: [MapConnection]
     public let eventCounts: MapEventCounts
+    public let eventCapacity: MapEventCapacitySummary
 
     public init(
         id: String,
@@ -83,7 +84,8 @@ public struct MapDescriptor: Codable, Equatable, Identifiable {
         sharedScriptsMap: String?,
         connectionsNoInclude: Bool = false,
         connections: [MapConnection] = [],
-        eventCounts: MapEventCounts = MapEventCounts()
+        eventCounts: MapEventCounts = MapEventCounts(),
+        eventCapacity: MapEventCapacitySummary? = nil
     ) {
         self.id = id
         self.name = name
@@ -103,10 +105,15 @@ public struct MapDescriptor: Codable, Equatable, Identifiable {
         self.connectionsNoInclude = connectionsNoInclude
         self.connections = connections
         self.eventCounts = eventCounts
+        self.eventCapacity = eventCapacity ?? MapEventCapacitySummary(
+            counts: eventCounts,
+            limits: .unknown,
+            mapSourcePath: sourcePath
+        )
     }
 }
 
-public struct MapEventCounts: Codable, Equatable, Identifiable {
+public struct MapEventCounts: Codable, Equatable, Identifiable, Sendable {
     public var id: String { "map-event-counts" }
 
     public let objectEvents: Int
@@ -123,6 +130,167 @@ public struct MapEventCounts: Codable, Equatable, Identifiable {
         self.warpEvents = warpEvents
         self.coordEvents = coordEvents
         self.bgEvents = bgEvents
+    }
+
+    public init(events: [MapEventDescriptor]) {
+        self.init(
+            objectEvents: events.filter { $0.kind == .object }.count,
+            warpEvents: events.filter { $0.kind == .warp }.count,
+            coordEvents: events.filter { $0.kind == .coord }.count,
+            bgEvents: events.filter { $0.kind == .bg }.count
+        )
+    }
+
+    public func count(for kind: MapEventKind) -> Int {
+        switch kind {
+        case .object:
+            objectEvents
+        case .warp:
+            warpEvents
+        case .coord:
+            coordEvents
+        case .bg:
+            bgEvents
+        case .connection:
+            0
+        }
+    }
+}
+
+public struct MapEventCapacityLimits: Codable, Equatable, Sendable {
+    public struct Source: Codable, Equatable, Identifiable, Sendable {
+        public var id: String { "\(kind.rawValue):\(symbol):\(path)" }
+
+        public let kind: MapEventKind
+        public let path: String
+        public let symbol: String
+        public let detail: String
+
+        public init(kind: MapEventKind, path: String, symbol: String, detail: String) {
+            self.kind = kind
+            self.path = path
+            self.symbol = symbol
+            self.detail = detail
+        }
+    }
+
+    public static let unknown = MapEventCapacityLimits()
+    public static let storedCountFieldLimit = 255
+
+    public let objectEvents: Int?
+    public let warpEvents: Int?
+    public let coordEvents: Int?
+    public let bgEvents: Int?
+    public let objectRuntimeSlots: Int?
+    public let sources: [Source]
+
+    public init(
+        objectEvents: Int? = nil,
+        warpEvents: Int? = nil,
+        coordEvents: Int? = nil,
+        bgEvents: Int? = nil,
+        objectRuntimeSlots: Int? = nil,
+        sources: [Source] = []
+    ) {
+        self.objectEvents = objectEvents
+        self.warpEvents = warpEvents
+        self.coordEvents = coordEvents
+        self.bgEvents = bgEvents
+        self.objectRuntimeSlots = objectRuntimeSlots
+        self.sources = sources
+    }
+
+    public func limit(for kind: MapEventKind) -> Int? {
+        switch kind {
+        case .object:
+            objectEvents
+        case .warp:
+            warpEvents
+        case .coord:
+            coordEvents
+        case .bg:
+            bgEvents
+        case .connection:
+            nil
+        }
+    }
+
+    public func source(for kind: MapEventKind) -> Source? {
+        sources.first { $0.kind == kind }
+    }
+}
+
+public struct MapEventCapacityUsage: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { kind.rawValue }
+
+    public let kind: MapEventKind
+    public let count: Int
+    public let limit: Int?
+    public let source: MapEventCapacityLimits.Source?
+
+    public init(
+        kind: MapEventKind,
+        count: Int,
+        limit: Int?,
+        source: MapEventCapacityLimits.Source?
+    ) {
+        self.kind = kind
+        self.count = count
+        self.limit = limit
+        self.source = source
+    }
+
+    public var remaining: Int? {
+        limit.map { $0 - count }
+    }
+
+    public var isOverLimit: Bool {
+        guard let limit else { return false }
+        return count > limit
+    }
+}
+
+public struct MapEventCapacitySummary: Codable, Equatable, Sendable {
+    public static let unknown = MapEventCapacitySummary()
+    public static let eventKinds: [MapEventKind] = [.object, .warp, .coord, .bg]
+
+    public let counts: MapEventCounts
+    public let limits: MapEventCapacityLimits
+    public let mapSourcePath: String?
+
+    public init(
+        counts: MapEventCounts = MapEventCounts(),
+        limits: MapEventCapacityLimits = .unknown,
+        mapSourcePath: String? = nil
+    ) {
+        self.counts = counts
+        self.limits = limits
+        self.mapSourcePath = mapSourcePath
+    }
+
+    public var usages: [MapEventCapacityUsage] {
+        Self.eventKinds.map { kind in
+            MapEventCapacityUsage(
+                kind: kind,
+                count: counts.count(for: kind),
+                limit: limits.limit(for: kind),
+                source: limits.source(for: kind)
+            )
+        }
+    }
+
+    public var diagnostics: [Diagnostic] {
+        usages.compactMap { usage in
+            guard usage.isOverLimit, let limit = usage.limit else { return nil }
+            let source = usage.source
+            let sourceText = source.map { " from \($0.symbol) in \($0.path)" } ?? ""
+            return Diagnostic(
+                severity: .warning,
+                code: "MAP_EVENT_CAPACITY_OVER_LIMIT",
+                message: "\(usage.kind.rawValue) events use \(usage.count) entries, exceeding the source-backed limit of \(limit)\(sourceText).",
+                span: mapSourcePath.map { SourceSpan(relativePath: $0, startLine: 1) }
+            )
+        }
     }
 }
 
@@ -236,12 +404,15 @@ public enum ProjectMapCatalogLoader {
     private static let maxPreviewMetatiles = 256
     private static let mapGroupsPath = "data/maps/map_groups.json"
     private static let layoutsPath = "data/layouts/layouts.json"
+    private static let globalConstantsPath = "include/constants/global.h"
+    private static let globalFieldmapPath = "include/global.fieldmap.h"
 
     public static func load(from projectIndex: ProjectIndex, fileManager: FileManager = .default) throws -> ProjectMapCatalog {
         let root = URL(fileURLWithPath: projectIndex.root.path).standardizedFileURL
         let mapGroupIndex = try SourceParsers.decodeMapGroups(Data(contentsOf: root.appendingPathComponent(mapGroupsPath)))
         let layoutIndex = try SourceParsers.decodeLayouts(Data(contentsOf: root.appendingPathComponent(layoutsPath)))
         let referencedLayoutIDs = collectReferencedLayoutIDs(mapGroupIndex: mapGroupIndex, root: root, fileManager: fileManager)
+        let eventCapacityLimits = loadEventCapacityLimits(root: root, fileManager: fileManager)
 
         var diagnostics: [Diagnostic] = []
         let layoutSlots = layoutIndex.layoutSlots.enumerated().map { index, descriptor in
@@ -280,6 +451,7 @@ public enum ProjectMapCatalogLoader {
                     mapIndexInGroup: mapIndex,
                     root: root,
                     layoutSlotsByID: layoutSlotsByID,
+                    eventCapacityLimits: eventCapacityLimits,
                     fileManager: fileManager,
                     diagnostics: &diagnostics
                 ) else {
@@ -442,6 +614,7 @@ public enum ProjectMapCatalogLoader {
         mapIndexInGroup: Int,
         root: URL,
         layoutSlotsByID: [String: LayoutSlot],
+        eventCapacityLimits: MapEventCapacityLimits,
         fileManager: FileManager,
         diagnostics: inout [Diagnostic]
     ) -> MapDescriptor? {
@@ -496,6 +669,12 @@ public enum ProjectMapCatalogLoader {
                 direction: connection.direction
             )
         }
+        let eventCapacity = MapEventCapacitySummary(
+            counts: rawMap.eventCounts,
+            limits: eventCapacityLimits,
+            mapSourcePath: sourcePath
+        )
+        diagnostics.append(contentsOf: eventCapacity.diagnostics)
 
         return MapDescriptor(
             id: mapID,
@@ -515,8 +694,99 @@ public enum ProjectMapCatalogLoader {
             sharedScriptsMap: rawMap.sharedScriptsMap,
             connectionsNoInclude: rawMap.connectionsNoInclude,
             connections: connections,
-            eventCounts: rawMap.eventCounts
+            eventCounts: rawMap.eventCounts,
+            eventCapacity: eventCapacity
         )
+    }
+
+    private static func loadEventCapacityLimits(root: URL, fileManager: FileManager) -> MapEventCapacityLimits {
+        let globalConstantsText = readText(root: root, path: globalConstantsPath, fileManager: fileManager)
+        let fieldmapText = readText(root: root, path: globalFieldmapPath, fileManager: fileManager)
+        let objectTemplateLimit = parseDefine("OBJECT_EVENT_TEMPLATES_COUNT", in: globalConstantsText)
+        let objectRuntimeSlots = parseDefine("OBJECT_EVENTS_COUNT", in: globalConstantsText)
+        let storedCountFields = parseMapEventsStoredCountFields(fieldmapText)
+
+        var sources: [MapEventCapacityLimits.Source] = []
+        if objectTemplateLimit != nil {
+            sources.append(
+                MapEventCapacityLimits.Source(
+                    kind: .object,
+                    path: globalConstantsPath,
+                    symbol: "OBJECT_EVENT_TEMPLATES_COUNT",
+                    detail: "Object map template capacity."
+                )
+            )
+        } else if storedCountFields.contains("objectEventCount") {
+            sources.append(
+                MapEventCapacityLimits.Source(
+                    kind: .object,
+                    path: globalFieldmapPath,
+                    symbol: "u8 objectEventCount",
+                    detail: "Stored object event count field width."
+                )
+            )
+        }
+
+        let countFieldSources: [(field: String, kind: MapEventKind, detail: String)] = [
+            ("warpCount", .warp, "Stored warp event count field width."),
+            ("coordEventCount", .coord, "Stored coord event count field width."),
+            ("bgEventCount", .bg, "Stored BG event count field width.")
+        ]
+        for source in countFieldSources where storedCountFields.contains(source.field) {
+            sources.append(
+                MapEventCapacityLimits.Source(
+                    kind: source.kind,
+                    path: globalFieldmapPath,
+                    symbol: "u8 \(source.field)",
+                    detail: source.detail
+                )
+            )
+        }
+
+        let storedLimit = MapEventCapacityLimits.storedCountFieldLimit
+        return MapEventCapacityLimits(
+            objectEvents: objectTemplateLimit ?? (storedCountFields.contains("objectEventCount") ? storedLimit : nil),
+            warpEvents: storedCountFields.contains("warpCount") ? storedLimit : nil,
+            coordEvents: storedCountFields.contains("coordEventCount") ? storedLimit : nil,
+            bgEvents: storedCountFields.contains("bgEventCount") ? storedLimit : nil,
+            objectRuntimeSlots: objectRuntimeSlots,
+            sources: sources
+        )
+    }
+
+    private static func readText(root: URL, path: String, fileManager: FileManager) -> String {
+        let url = root.appendingPathComponent(path)
+        guard fileManager.fileExists(atPath: url.path) else { return "" }
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    private static func parseDefine(_ symbol: String, in text: String) -> Int? {
+        let pattern = #"(?m)^\s*#define\s+\#(symbol)\s+([0-9A-Fa-fx]+)\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)),
+              let valueRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+        let value = String(text[valueRange])
+        if value.lowercased().hasPrefix("0x") {
+            return Int(value.dropFirst(2), radix: 16)
+        }
+        return Int(value)
+    }
+
+    private static func parseMapEventsStoredCountFields(_ text: String) -> Set<String> {
+        guard let structRange = text.range(of: #"struct\s+MapEvents\s*\{([^}]*)\}"#, options: .regularExpression) else {
+            return []
+        }
+        let body = String(text[structRange])
+        let pattern = #"(?m)^\s*u8\s+(objectEventCount|warpCount|coordEventCount|bgEventCount)\s*;"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(body.startIndex..<body.endIndex, in: body)
+        return Set(regex.matches(in: body, range: range).compactMap { match in
+            guard let fieldRange = Range(match.range(at: 1), in: body) else { return nil }
+            return String(body[fieldRange])
+        })
     }
 
     private static func collectReferencedLayoutIDs(

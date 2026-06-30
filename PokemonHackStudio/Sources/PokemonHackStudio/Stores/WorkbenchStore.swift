@@ -82,6 +82,8 @@ private struct BuildPatchPlaytestReportExportPayload: Codable {
     let status: String
     let buildRows: [BuildReportRowExportPayload]
     let patchManifest: PokemonHackCore.PatchManifestReport?
+    let patchCreationPreview: PokemonHackCore.PatchCreationPreviewReport?
+    let binaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     let playtest: PlaytestReportExportPayload?
 }
 
@@ -237,7 +239,10 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedGameCubeResourcePath: String = ""
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
-    @Published var selectedDecompBuildTargetID: String = ""
+    @Published var selectedBinaryROMMutationDryRunPath: String = ""
+    @Published var selectedDecompBuildTargetID: String = "" {
+        didSet { resetPatchCreationPreviewForInputChange() }
+    }
     @Published var scriptReadinessTargetMode: ScriptReadinessTargetMode = .map
     @Published var selectedScriptReadinessLabel: String = ""
     @Published var selectedScriptSourceID: String = ""
@@ -312,6 +317,10 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var itemCatalogLoadStatus: ItemCatalogLoadStatus = .idle
     @Published private(set) var patchManifestLoadStatus: PatchManifestLoadStatus = .idle
     @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
+    @Published private(set) var patchCreationPreviewLoadStatus: PatchCreationPreviewLoadStatus = .idle
+    @Published private(set) var selectedPatchCreationPreviewReport: PatchCreationPreviewReportViewState?
+    @Published private(set) var binaryROMMutationDryRunLoadStatus: BinaryROMMutationDryRunLoadStatus = .idle
+    @Published private(set) var selectedBinaryROMMutationDryRunReport: BinaryROMMutationDryRunReportViewState?
     @Published private(set) var latestPatchApplyExportResult: PokemonHackCore.PatchApplyExportResult?
     @Published private(set) var graphicsImportPackagePlanStatus: GraphicsImportPackagePlanLoadStatus = .idle
     @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
@@ -356,6 +365,8 @@ final class WorkbenchStore: ObservableObject {
     private var scriptOutlinesByID: [String: PokemonHackCore.ProjectScriptOutline] = [:]
     private var buildReportsByID: [String: BuildPatchPlaytestReportViewState] = [:]
     private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
+    private var rawPatchCreationPreviewReport: PokemonHackCore.PatchCreationPreviewReport?
+    private var rawBinaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
     private var mapCatalogsByID: [String: PokemonHackCore.ProjectMapCatalog] = [:]
@@ -1335,6 +1346,8 @@ final class WorkbenchStore: ObservableObject {
         let buildDiagnostics = (selectedBuildReport?.diagnostics ?? [])
             .filter(userSettings.shouldShowHealthDiagnosticInGlobalIssues)
         let patchDiagnostics = selectedPatchManifestReport?.diagnostics ?? []
+        let patchCreationDiagnostics = selectedPatchCreationPreviewReport?.diagnostics ?? []
+        let binaryROMMutationDryRunDiagnostics = selectedBinaryROMMutationDryRunReport?.diagnostics ?? []
         let scriptReadinessDiagnostics = selectedScriptReadinessReport?.diagnostics ?? []
         let graphicsDiagnostics = selectedGraphicsReport?.diagnostics ?? []
         let speciesDiagnostics = selectedSpeciesCatalog?.diagnostics.map {
@@ -1354,6 +1367,8 @@ final class WorkbenchStore: ObservableObject {
             + sourceDiagnostics
             + buildDiagnostics
             + patchDiagnostics
+            + patchCreationDiagnostics
+            + binaryROMMutationDryRunDiagnostics
             + scriptReadinessDiagnostics
             + graphicsDiagnostics
             + speciesDiagnostics
@@ -1691,6 +1706,16 @@ final class WorkbenchStore: ObservableObject {
     var filteredPatchManifestRows: [BuildReportRow] {
         guard let selectedPatchManifestReport else { return [] }
         return filter(buildRows: selectedPatchManifestReport.rows)
+    }
+
+    var filteredPatchCreationPreviewRows: [BuildReportRow] {
+        guard let selectedPatchCreationPreviewReport else { return [] }
+        return filter(buildRows: selectedPatchCreationPreviewReport.rows)
+    }
+
+    var filteredBinaryROMMutationDryRunRows: [BuildReportRow] {
+        guard let selectedBinaryROMMutationDryRunReport else { return [] }
+        return filter(buildRows: selectedBinaryROMMutationDryRunReport.rows)
     }
 
     var filteredScriptReadinessRows: [ScriptReadinessReportRow] {
@@ -3354,18 +3379,43 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func requestBaseROMPath(_ path: String) {
+        let shouldReloadPatchCreationPreview = selectedPatchCreationPreviewReport != nil
         selectedBaseROMPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        resetPatchCreationPreviewForInputChange()
         if !selectedPatchPath.isEmpty, selectedPatchManifestReport != nil {
             loadSelectedPatchManifestReport()
         }
+        if shouldReloadPatchCreationPreview {
+            loadSelectedPatchCreationPreview()
+        }
+    }
+
+    func requestBinaryROMMutationDryRunPath(_ path: String) {
+        selectedBinaryROMMutationDryRunPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        rawBinaryROMMutationDryRunManifest = nil
+        selectedBinaryROMMutationDryRunReport = nil
+        binaryROMMutationDryRunLoadStatus = selectedBinaryROMMutationDryRunPath.isEmpty ? .idle : .idle
     }
 
     private func resetPatchManifestReportForProjectChange() {
         selectedBaseROMPath = ""
+        selectedBinaryROMMutationDryRunPath = ""
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
+        rawPatchCreationPreviewReport = nil
+        selectedPatchCreationPreviewReport = nil
+        rawBinaryROMMutationDryRunManifest = nil
+        selectedBinaryROMMutationDryRunReport = nil
         latestPatchApplyExportResult = nil
         patchManifestLoadStatus = .idle
+        patchCreationPreviewLoadStatus = .idle
+        binaryROMMutationDryRunLoadStatus = .idle
+    }
+
+    private func resetPatchCreationPreviewForInputChange() {
+        rawPatchCreationPreviewReport = nil
+        selectedPatchCreationPreviewReport = nil
+        patchCreationPreviewLoadStatus = selectedBaseROMPath.isEmpty ? .idle : .idle
     }
 
     private func resetGraphicsImportPackagePlanForProjectChange() {
@@ -3430,6 +3480,73 @@ final class WorkbenchStore: ObservableObject {
             selectedPatchManifestReport = nil
             patchManifestLoadStatus = .failed(error.localizedDescription)
         }
+    }
+
+    func loadSelectedPatchCreationPreview() {
+        guard !selectedBaseROMPath.isEmpty else {
+            rawPatchCreationPreviewReport = nil
+            selectedPatchCreationPreviewReport = nil
+            patchCreationPreviewLoadStatus = .idle
+            return
+        }
+        guard let projectRoot = selectedIndexedProject?.rootPath else {
+            rawPatchCreationPreviewReport = nil
+            selectedPatchCreationPreviewReport = nil
+            patchCreationPreviewLoadStatus = .failed("Open a project before previewing patch creation.")
+            return
+        }
+
+        patchCreationPreviewLoadStatus = .loading
+
+        do {
+            let targetID = selectedEffectiveDecompBuildTargetID
+            let report = try PatchCreationPreviewBuilder.build(
+                projectPath: projectRoot,
+                baseROMPath: selectedBaseROMPath,
+                targetID: targetID.isEmpty ? nil : targetID,
+                fileManager: fileManager
+            )
+            rawPatchCreationPreviewReport = report
+            selectedPatchCreationPreviewReport = Self.patchCreationPreviewReportViewState(
+                from: report,
+                rootPath: projectRoot
+            )
+            patchCreationPreviewLoadStatus = .loaded(
+                isReady: report.isReady,
+                label: report.isReady ? "Ready" : "Blocked"
+            )
+        } catch {
+            rawPatchCreationPreviewReport = nil
+            selectedPatchCreationPreviewReport = nil
+            patchCreationPreviewLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func loadSelectedBinaryROMMutationDryRunManifest() {
+        guard !selectedBinaryROMMutationDryRunPath.isEmpty else {
+            rawBinaryROMMutationDryRunManifest = nil
+            selectedBinaryROMMutationDryRunReport = nil
+            binaryROMMutationDryRunLoadStatus = .idle
+            return
+        }
+
+        binaryROMMutationDryRunLoadStatus = .loading
+
+        let request = BinaryROMMutationDryRunRequest(workspaceRoot: selectedIndexedProject?.rootPath)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: selectedBinaryROMMutationDryRunPath,
+            request: request,
+            fileManager: fileManager
+        )
+        rawBinaryROMMutationDryRunManifest = manifest
+        selectedBinaryROMMutationDryRunReport = Self.binaryROMMutationDryRunReportViewState(
+            from: manifest,
+            rootPath: selectedIndexedProject?.rootPath ?? workspaceRoot.path
+        )
+        binaryROMMutationDryRunLoadStatus = .loaded(
+            manifest.sourceTreeFirst.canUseBinaryOnlyPlan ? "Dry Run" : "Blocked",
+            selectedBinaryROMMutationDryRunReport?.status ?? .warning
+        )
     }
 
     func applyExportSelectedPatchROM() {
@@ -5835,6 +5952,8 @@ final class WorkbenchStore: ObservableObject {
             status: report?.status.rawValue ?? moduleStatus(for: .build).rawValue,
             buildRows: (report?.rows ?? []).map(Self.exportPayload(from:)),
             patchManifest: rawPatchManifestReport,
+            patchCreationPreview: rawPatchCreationPreviewReport,
+            binaryROMMutationDryRunManifest: rawBinaryROMMutationDryRunManifest,
             playtest: report.map(Self.exportPayload(fromPlaytest:))
         )
         let encoder = JSONEncoder()
@@ -5853,7 +5972,17 @@ final class WorkbenchStore: ObservableObject {
 
     func copyValidationTierCommandToPasteboard(_ row: ValidationTierCommandRow) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(row.command, forType: .string)
+        NSPasteboard.general.setString(row.copyValue, forType: .string)
+    }
+
+    func copyBinaryROMMutationDryRunManifestJSONToPasteboard() {
+        guard let rawBinaryROMMutationDryRunManifest else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawBinaryROMMutationDryRunManifest), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
     }
 
     func copyGraphicsImportPackagePlanJSONToPasteboard() {
@@ -8017,6 +8146,302 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    private static func patchCreationPreviewReportViewState(
+        from report: PokemonHackCore.PatchCreationPreviewReport,
+        rootPath: String
+    ) -> PatchCreationPreviewReportViewState {
+        let diagnostics = report.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = validationStatus(
+            for: [report.isReady ? .valid : .warning] + diagnostics.map(\.severity)
+        )
+        let candidateFormat = report.candidateFormat.rawValue.uppercased()
+        let readiness = report.isReady ? "Ready" : "Blocked"
+        let baseTitle = URL(fileURLWithPath: report.baseROM.path).lastPathComponent
+        let baseSize = patchCreationByteSummary(report.baseROM.sizeBytes)
+        let baseSHA1 = patchCreationSHA1Summary(report.baseROM.sha1)
+        let builtOutput = report.builtOutput
+        let builtTitle = builtOutput?.targetName ?? "Built output"
+        let builtPath = builtOutput?.absolutePath ?? rootPath
+        let builtDetail = builtOutput.map {
+            "Declared output \($0.relativePath); checksum \($0.checksumStatus.rawValue); freshness \($0.freshnessStatus.rawValue)."
+        } ?? "No declared built output was selected for this preview."
+        let deltaSummary = patchCreationDeltaSummary(report.sizeDeltaBytes)
+        let hashSummary: String
+        switch report.hashesMatch {
+        case .some(true):
+            hashSummary = "hashes match"
+        case .some(false):
+            hashSummary = "hashes differ"
+        case .none:
+            hashSummary = "hash comparison unavailable"
+        }
+
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-creation:summary",
+                section: .patchManifest,
+                title: "Patch creation preview",
+                subtitle: "\(candidateFormat) · \(readiness)",
+                detail: "Preview-only metadata for planned path \(report.plannedPatchPath); no patch files, ROMs, manifests, builds, playtests, source writes, or binary writes are performed.",
+                status: status,
+                source: SourceLocation(path: report.absolutePlannedPatchPath, symbol: "patch-creation-preview", line: 1),
+                tags: [candidateFormat, readiness, report.plannedPatchPath, report.absolutePlannedPatchPath]
+            ),
+            BuildReportRow(
+                id: "patch-creation:base-rom",
+                section: .patchManifest,
+                title: baseTitle.isEmpty ? "Base ROM" : baseTitle,
+                subtitle: "\(baseSize); \(baseSHA1)",
+                detail: report.baseROM.exists ? "Selected base ROM metadata was read from \(report.baseROM.absolutePath)." : "Selected base ROM is missing at \(report.baseROM.absolutePath).",
+                status: report.baseROM.exists && report.baseROM.sha1 != nil ? .valid : .warning,
+                source: SourceLocation(path: report.baseROM.absolutePath, symbol: "base-rom", line: 1),
+                tags: [report.baseROM.path, report.baseROM.absolutePath, report.baseROM.sha1 ?? ""]
+            ),
+            BuildReportRow(
+                id: "patch-creation:built-output",
+                section: .patchManifest,
+                title: builtTitle,
+                subtitle: [
+                    builtOutput?.relativePath ?? "No output path",
+                    patchCreationByteSummary(builtOutput?.sizeBytes),
+                    patchCreationSHA1Summary(builtOutput?.sha1),
+                ].joined(separator: " · "),
+                detail: builtDetail,
+                status: builtOutput?.exists == true && builtOutput?.sha1 != nil ? .valid : .warning,
+                source: SourceLocation(path: builtPath, symbol: builtOutput?.targetID ?? "built-output", line: 1),
+                tags: [
+                    builtOutput?.targetID ?? "",
+                    builtOutput?.targetName ?? "",
+                    builtOutput?.relativePath ?? "",
+                    builtOutput?.absolutePath ?? "",
+                    builtOutput?.sha1 ?? "",
+                ]
+            ),
+            BuildReportRow(
+                id: "patch-creation:comparison",
+                section: .patchManifest,
+                title: "ROM comparison",
+                subtitle: "\(deltaSummary); \(hashSummary)",
+                detail: "The selected base ROM and existing built output are compared as-is for metadata only.",
+                status: report.sizeDeltaBytes == nil || report.hashesMatch == nil ? .warning : .valid,
+                source: SourceLocation(path: builtOutput?.absolutePath ?? report.baseROM.absolutePath, symbol: "comparison", line: 1),
+                tags: [deltaSummary, hashSummary]
+            ),
+            BuildReportRow(
+                id: "patch-creation:header-policy",
+                section: .patchManifest,
+                title: "Header policy",
+                subtitle: report.headerPolicy.mode,
+                detail: report.headerPolicy.detail,
+                status: report.headerPolicy.shouldRewriteHeader ? .warning : .valid,
+                source: SourceLocation(path: report.baseROM.absolutePath, symbol: "rom-header", line: 1),
+                tags: [report.headerPolicy.mode, report.headerPolicy.detail]
+            ),
+            BuildReportRow(
+                id: "patch-creation:blocked-actions",
+                section: .patchManifest,
+                title: "Blocked actions",
+                subtitle: "\(report.blockedActions.count) write or execution path\(report.blockedActions.count == 1 ? "" : "s") blocked",
+                detail: report.blockedActions.joined(separator: "; "),
+                status: .valid,
+                source: SourceLocation(path: report.absolutePlannedPatchPath, symbol: "blocked-actions", line: 1),
+                tags: report.blockedActions
+            ),
+        ]
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return PatchCreationPreviewReportViewState(
+            id: "patch-creation-preview:\(report.absolutePlannedPatchPath)",
+            title: "Patch creation preview",
+            subtitle: "\(candidateFormat) · \(readiness)",
+            detail: "Planned path \(report.plannedPatchPath); preview-only.",
+            status: status,
+            isPreviewOnly: report.isPreviewOnly,
+            isReady: report.isReady,
+            candidateFormat: candidateFormat,
+            sizeDeltaBytes: report.sizeDeltaBytes,
+            hashesMatch: report.hashesMatch,
+            plannedPatchPath: report.plannedPatchPath,
+            absolutePlannedPatchPath: report.absolutePlannedPatchPath,
+            blockedActions: report.blockedActions,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func patchCreationByteSummary(_ sizeBytes: UInt64?) -> String {
+        sizeBytes.map { "\($0) bytes" } ?? "size unavailable"
+    }
+
+    private static func patchCreationSHA1Summary(_ sha1: String?) -> String {
+        sha1.map { "sha1 \($0.prefix(8))" } ?? "sha1 unavailable"
+    }
+
+    private static func patchCreationDeltaSummary(_ delta: Int64?) -> String {
+        guard let delta else { return "size delta unavailable" }
+        if delta > 0 {
+            return "+\(delta) bytes"
+        }
+        return "\(delta) bytes"
+    }
+
+    private static func binaryROMMutationDryRunReportViewState(
+        from manifest: PokemonHackCore.BinaryROMMutationDryRunManifest,
+        rootPath: String
+    ) -> BinaryROMMutationDryRunReportViewState {
+        let diagnostics = manifest.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = validationStatus(for: diagnostics.map(\.severity))
+        let title = URL(fileURLWithPath: manifest.inputPath).lastPathComponent
+        let sourceStatus = manifest.sourceTreeFirst.canUseBinaryOnlyPlan ? ValidationState.valid : .warning
+        let sourceCandidates = manifest.sourceTreeFirst.sourceCandidates.map(\.path)
+        let sourceCandidateDetail = sourceCandidates.isEmpty ? "" : " Candidates: \(sourceCandidates.joined(separator: ", "))."
+        let ignored = BinaryROMMutationIgnoredOutputGuidanceViewState(
+            id: manifest.ignoredOutputGuidance.relativeRoot,
+            relativeRoot: manifest.ignoredOutputGuidance.relativeRoot,
+            relativeManifestPath: manifest.ignoredOutputGuidance.relativeManifestPath,
+            relativeOutputROMPath: manifest.ignoredOutputGuidance.relativeOutputROMPath,
+            relativeBackupRoot: manifest.ignoredOutputGuidance.relativeBackupRoot,
+            willWriteFiles: manifest.ignoredOutputGuidance.willWriteFiles,
+            guidance: manifest.ignoredOutputGuidance.guidance
+        )
+        let baseIdentity = manifest.baseROM.map { base -> BinaryROMMutationBaseIdentityViewState in
+            var facts = [
+                Fact(label: "SHA1", value: base.sha1),
+                Fact(label: "CRC32", value: base.crc32),
+                Fact(label: "Size", value: "\(base.sizeBytes) bytes"),
+            ]
+            if let gameCode = base.gameCode {
+                facts.append(Fact(label: "Game Code", value: gameCode))
+            }
+            if let title = base.title {
+                facts.append(Fact(label: "Title", value: title))
+            }
+            if let revision = base.revision {
+                facts.append(Fact(label: "Revision", value: "\(revision)"))
+            }
+            if let isValid = base.isHeaderComplementChecksumValid {
+                facts.append(Fact(label: "Header Checksum", value: isValid ? "valid" : "invalid"))
+            }
+            facts.append(contentsOf: base.headerFacts.map { Fact(label: $0.key, value: $0.value) })
+            return BinaryROMMutationBaseIdentityViewState(
+                id: base.path,
+                title: base.fileName,
+                subtitle: "sha1 \(base.sha1.prefix(8)) · crc32 \(base.crc32)",
+                detail: "\(base.sizeBytes) byte(s); title \(base.title ?? "unknown"); game code \(base.gameCode ?? "unknown").",
+                facts: facts
+            )
+        }
+        let operations = manifest.operationPreviews.map { preview -> BinaryROMMutationOperationPreviewViewState in
+            let operationDiagnostics = preview.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+            let operationStatus = validationStatus(
+                for: [
+                    preview.status == .blocked ? ValidationState.warning : .valid,
+                ] + operationDiagnostics.map(\.severity)
+            )
+            let offset = preview.offset.map { String(format: "0x%06X", $0) } ?? "offset unavailable"
+            let length = preview.length.map { "\($0) byte(s)" } ?? "length unavailable"
+            return BinaryROMMutationOperationPreviewViewState(
+                id: preview.id,
+                title: preview.kind.rawValue,
+                subtitle: "\(preview.status.rawValue) · \(offset) · \(length)",
+                detail: preview.summary,
+                status: operationStatus,
+                canApply: preview.canApply,
+                diagnostics: operationDiagnostics
+            )
+        }
+
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "binary-rom-mutation:summary",
+                section: .patchManifest,
+                title: title.isEmpty ? "Binary ROM mutation dry run" : title,
+                subtitle: "\(manifest.profile.rawValue) · \(manifest.isDryRun ? "dry-run" : "not dry-run") · \(manifest.canApply ? "applyable" : "copy-only")",
+                detail: "Manifest schema \(manifest.schemaVersion); \(manifest.sourceTreeFirst.rationale)",
+                status: status,
+                source: SourceLocation(path: manifest.inputPath, symbol: "binary-rom-dry-run", line: 1),
+                tags: [manifest.inputPath, manifest.profile.rawValue, "\(manifest.canApply)", "\(manifest.isDryRun)"]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation:source-tree-first",
+                section: .patchManifest,
+                title: "Source-tree-first gate",
+                subtitle: manifest.sourceTreeFirst.status.rawValue,
+                detail: manifest.sourceTreeFirst.rationale + sourceCandidateDetail,
+                status: sourceStatus,
+                source: SourceLocation(path: manifest.inputPath, symbol: "source-tree-first", line: 1),
+                tags: [manifest.sourceTreeFirst.status.rawValue, manifest.sourceTreeFirst.rationale] + sourceCandidates
+            ),
+        ]
+
+        if let baseIdentity {
+            rows.append(
+                BuildReportRow(
+                    id: "binary-rom-mutation:base-identity",
+                    section: .patchManifest,
+                    title: "Base ROM identity",
+                    subtitle: baseIdentity.subtitle,
+                    detail: baseIdentity.detail,
+                    status: .valid,
+                    source: SourceLocation(path: manifest.inputPath, symbol: "base-rom", line: 1),
+                    tags: baseIdentity.facts.flatMap { [$0.label, $0.value] }
+                )
+            )
+        }
+
+        rows.append(
+            BuildReportRow(
+                id: "binary-rom-mutation:ignored-output-guidance",
+                section: .patchManifest,
+                title: "Ignored future output guidance",
+                subtitle: ignored.relativeRoot,
+                detail: ignored.guidance.joined(separator: " "),
+                status: ignored.willWriteFiles ? .warning : .valid,
+                source: SourceLocation(path: ignored.relativeManifestPath, symbol: "ignored-output", line: 1),
+                tags: [
+                    ignored.relativeRoot,
+                    ignored.relativeManifestPath,
+                    ignored.relativeOutputROMPath,
+                    ignored.relativeBackupRoot,
+                    "\(ignored.willWriteFiles)",
+                ] + ignored.guidance
+            )
+        )
+
+        rows.append(contentsOf: operations.map { operation in
+            BuildReportRow(
+                id: "binary-rom-mutation:operation:\(operation.id)",
+                section: .patchManifest,
+                title: operation.title,
+                subtitle: "\(operation.subtitle) · canApply \(operation.canApply)",
+                detail: operation.detail,
+                status: operation.status,
+                source: SourceLocation(path: manifest.inputPath, symbol: operation.id, line: 1),
+                tags: [operation.title, operation.subtitle, operation.detail, "\(operation.canApply)"]
+            )
+        })
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return BinaryROMMutationDryRunReportViewState(
+            id: "binary-rom-mutation-dry-run:\(manifest.inputPath)",
+            title: title.isEmpty ? "Binary ROM mutation dry run" : title,
+            subtitle: "\(manifest.profile.rawValue) · \(manifest.sourceTreeFirst.status.rawValue)",
+            detail: manifest.sourceTreeFirst.rationale,
+            status: status,
+            inputPath: manifest.inputPath,
+            isDryRun: manifest.isDryRun,
+            canApply: manifest.canApply,
+            sourceTreeStatus: manifest.sourceTreeFirst.status.rawValue,
+            sourceTreeDetail: manifest.sourceTreeFirst.rationale,
+            sourceCandidates: sourceCandidates,
+            baseIdentity: baseIdentity,
+            ignoredOutputGuidance: ignored,
+            operationPreviews: operations,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
     private static func patchManifestReportViewState(
         from report: PokemonHackCore.PatchManifestReport,
         patchPath: String,
@@ -8911,6 +9336,7 @@ final class WorkbenchStore: ObservableObject {
                 coordEvents: map.eventCounts.coordEvents,
                 bgEvents: map.eventCounts.bgEvents
             ),
+            eventCapacity: map.eventCapacity,
             connections: map.connections.map { connection in
                 MapConnectionViewState(
                     id: connection.id,

@@ -559,6 +559,10 @@ struct MapWorkbenchPanels: View {
                     Fact(label: "Primary", value: document.primaryTileset?.symbol ?? "Missing"),
                     Fact(label: "Secondary", value: document.secondaryTileset?.symbol ?? "Missing"),
                     Fact(label: "Events", value: "\(document.events.count)"),
+                    Fact(label: "Objects", value: capacityFact(for: .object)),
+                    Fact(label: "Warps", value: capacityFact(for: .warp)),
+                    Fact(label: "Coords", value: capacityFact(for: .coord)),
+                    Fact(label: "BG", value: capacityFact(for: .bg)),
                     Fact(label: "Scene", value: "\(document.scene.viewport.width)x\(document.scene.viewport.height)"),
                     Fact(label: "Connections", value: "\(document.scene.connections.filter(\.isResolved).count)/\(document.scene.connections.count)")
                 ]
@@ -983,6 +987,16 @@ struct MapWorkbenchPanels: View {
     private func eventPositionText(_ event: MapEventDescriptor) -> String {
         guard let x = event.x, let y = event.y else { return "No position" }
         return "\(x), \(y)"
+    }
+
+    private func capacityFact(for kind: MapEventKind) -> String {
+        guard let usage = document.eventCapacity.usages.first(where: { $0.kind == kind }) else {
+            return "Unknown"
+        }
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        return usage.isOverLimit ? "\(usage.count)/\(limit) over" : "\(usage.count)/\(limit)"
     }
 
     private func centerConnection(_ connection: MapSceneConnection) {

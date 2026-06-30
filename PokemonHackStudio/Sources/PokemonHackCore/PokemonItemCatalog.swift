@@ -41,9 +41,12 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
     public let pocket: String?
     public let type: String?
     public let battleUsage: String?
+    public let effect: String?
     public let secondaryId: String?
     public let fieldUseFunc: String?
     public let battleUseFunc: String?
+    public let iconPic: String?
+    public let iconPalette: String?
     public let descriptionSymbol: String?
     public let descriptionText: String?
     public let isDescriptionEditable: Bool
@@ -62,9 +65,12 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         pocket: String? = nil,
         type: String? = nil,
         battleUsage: String? = nil,
+        effect: String? = nil,
         secondaryId: String? = nil,
         fieldUseFunc: String? = nil,
         battleUseFunc: String? = nil,
+        iconPic: String? = nil,
+        iconPalette: String? = nil,
         descriptionSymbol: String? = nil,
         descriptionText: String? = nil,
         isDescriptionEditable: Bool = false,
@@ -82,9 +88,12 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         self.pocket = pocket
         self.type = type
         self.battleUsage = battleUsage
+        self.effect = effect
         self.secondaryId = secondaryId
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
+        self.iconPic = iconPic
+        self.iconPalette = iconPalette
         self.descriptionSymbol = descriptionSymbol
         self.descriptionText = descriptionText
         self.isDescriptionEditable = isDescriptionEditable
@@ -362,9 +371,12 @@ public enum ProjectItemCatalogBuilder {
                 pocket: fact("pocket", in: record.facts),
                 type: fact("type", in: record.facts),
                 battleUsage: fact("battleUsage", in: record.facts),
+                effect: fact("effect", in: record.facts),
                 secondaryId: fact("secondaryId", in: record.facts),
                 fieldUseFunc: fact("fieldUseFunc", in: record.facts),
                 battleUseFunc: fact("battleUseFunc", in: record.facts),
+                iconPic: fact("iconPic", in: record.facts),
+                iconPalette: fact("iconPalette", in: record.facts),
                 descriptionSymbol: fact("description", in: record.facts),
                 descriptionText: nil,
                 isDescriptionEditable: false,
@@ -406,9 +418,12 @@ public enum ProjectItemCatalogBuilder {
             pocket: compact(fields["pocket"]),
             type: compact(fields["type"]),
             battleUsage: compact(fields["battleUsage"]),
+            effect: compact(fields["effect"]),
             secondaryId: compact(fields["secondaryId"]),
             fieldUseFunc: compact(fields["fieldUseFunc"]),
             battleUseFunc: compact(fields["battleUseFunc"]),
+            iconPic: compact(fields["iconPic"]),
+            iconPalette: compact(fields["iconPalette"]),
             descriptionSymbol: descriptionSymbol,
             descriptionText: inlineDescriptionText ?? descriptionSymbol.flatMap { descriptions[$0]?.text },
             isDescriptionEditable: descriptor.supportsDescriptionEditing && (
@@ -1198,7 +1213,7 @@ private let itemFields = [
     "description", "descriptionPage1", "descriptionPage2",
     "importance", "registrability", "pocket", "sortType", "type",
     "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId",
-    "exitsBagOnUse", "iconPic", "iconPalette"
+    "exitsBagOnUse", "effect", "iconPic", "iconPalette"
 ]
 
 private func readOnlyDiagnostic(profile: GameProfile, span: SourceSpan?) -> Diagnostic {

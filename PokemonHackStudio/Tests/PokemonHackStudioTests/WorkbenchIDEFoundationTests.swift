@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PokemonHackCore
 import XCTest
 
 final class WorkbenchIDEFoundationTests: XCTestCase {
@@ -44,6 +45,7 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
 
         XCTAssertEqual(rows.map(\.command), ValidationTier.allCases.map(\.command))
         XCTAssertEqual(rows.map(\.title), ValidationTier.allCases.map(\.title))
+        XCTAssertEqual(rows.map(\.copyValue), ValidationTier.allCases.map(\.command))
         XCTAssertTrue(rows.allSatisfy(\.canCopyCommand))
         XCTAssertTrue(rows.allSatisfy { !$0.canRunInApp })
         XCTAssertTrue(rows.allSatisfy { $0.runStateTitle == "Run manually" })

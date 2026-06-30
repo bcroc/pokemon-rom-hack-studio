@@ -157,6 +157,15 @@ final class MapEditorSession: ObservableObject {
         return stagedMapEvents.first { $0.id == selectedMapEventID }
     }
 
+    var stagedMapEventCapacity: MapEventCapacitySummary {
+        guard let document = selectedMapVisualDocument else { return .unknown }
+        return MapEventCapacitySummary(
+            counts: MapEventCounts(events: stagedMapEvents),
+            limits: document.eventCapacity.limits,
+            mapSourcePath: document.mapSourcePath
+        )
+    }
+
     var isLatestMapEditPlanCurrent: Bool {
         guard let document = selectedMapVisualDocument, let latestMapEditPlan else { return false }
         return latestMapEditPlan.documentID == document.id

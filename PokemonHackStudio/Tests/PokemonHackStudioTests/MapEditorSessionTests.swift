@@ -158,6 +158,41 @@ final class MapEditorSessionTests: XCTestCase {
     }
 
     @MainActor
+    func testEventCapacityWarningsTrackStagedEventsWithoutBlockingInsertion() throws {
+        let capacity = MapEventCapacitySummary(
+            counts: MapEventCounts(objectEvents: 1),
+            limits: MapEventCapacityLimits(
+                objectEvents: 1,
+                sources: [
+                    MapEventCapacityLimits.Source(
+                        kind: .object,
+                        path: "include/constants/global.h",
+                        symbol: "OBJECT_EVENT_TEMPLATES_COUNT",
+                        detail: "Object map template capacity."
+                    )
+                ]
+            ),
+            mapSourcePath: "data/maps/Route1/map.json"
+        )
+        let session = MapEditorSession(document: makeDocument(eventCapacity: capacity))
+
+        XCTAssertEqual(session.stagedMapEventCapacity.usages.first { $0.kind == .object }?.count, 1)
+        XCTAssertTrue(session.addObjectEvent(atX: 0, y: 0))
+        XCTAssertTrue(session.duplicateSelectedMapEvent())
+
+        let usage = try XCTUnwrap(session.stagedMapEventCapacity.usages.first { $0.kind == .object })
+        XCTAssertEqual(usage.count, 3)
+        XCTAssertEqual(usage.limit, 1)
+        XCTAssertTrue(usage.isOverLimit)
+
+        let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
+        let diagnostic = try XCTUnwrap(plan.diagnostics.first { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+        XCTAssertEqual(diagnostic.severity, .warning)
+        XCTAssertEqual(diagnostic.span?.relativePath, "data/maps/Route1/map.json")
+        XCTAssertTrue(session.canApplySelectedMapMutationPlan)
+    }
+
+    @MainActor
     func testGraphicsIDFieldRefreshesStagedSpritePreview() throws {
         let replacementSprite = MapEventSpriteDescriptor(
             graphicsID: "OBJ_EVENT_GFX_GIRL_1",
@@ -690,7 +725,8 @@ final class MapEditorSessionTests: XCTestCase {
         mapName: String = "Route1",
         blockdata: [UInt16] = [1, 2, 3, 4],
         scriptIndex: MapScriptIndex? = nil,
-        eventOptions: MapEventOptionsCatalog = .empty
+        eventOptions: MapEventOptionsCatalog = .empty,
+        eventCapacity: MapEventCapacitySummary? = nil
     ) -> MapVisualDocument {
         let layout = LayoutSlot(
             slotIndex: 0,
@@ -748,6 +784,7 @@ final class MapEditorSessionTests: XCTestCase {
             secondaryTileset: nil,
             metatiles: [],
             events: [event],
+            eventCapacity: eventCapacity,
             eventOptions: eventOptions,
             scriptIndex: scriptIndex,
             mapJSONText: mapJSONText(mapID: mapID, mapName: mapName)

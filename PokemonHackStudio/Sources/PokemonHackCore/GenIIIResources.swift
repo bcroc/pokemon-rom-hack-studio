@@ -256,6 +256,17 @@ public struct GameCubeDiscHeader: Codable, Equatable {
 }
 
 public struct GameCubeResource: Codable, Equatable, Identifiable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case path
+        case kind
+        case offset
+        case size
+        case uncompressedSize
+        case containerPath
+        case facts
+    }
+
     public let id: String
     public let path: String
     public let kind: GameCubeResourceKind
@@ -263,6 +274,7 @@ public struct GameCubeResource: Codable, Equatable, Identifiable {
     public let size: UInt64
     public let uncompressedSize: UInt64?
     public let containerPath: String?
+    public let facts: [SourceIndexFact]
 
     public init(
         id: String,
@@ -271,7 +283,8 @@ public struct GameCubeResource: Codable, Equatable, Identifiable {
         offset: UInt64,
         size: UInt64,
         uncompressedSize: UInt64? = nil,
-        containerPath: String? = nil
+        containerPath: String? = nil,
+        facts: [SourceIndexFact] = []
     ) {
         self.id = id
         self.path = path
@@ -280,6 +293,19 @@ public struct GameCubeResource: Codable, Equatable, Identifiable {
         self.size = size
         self.uncompressedSize = uncompressedSize
         self.containerPath = containerPath
+        self.facts = facts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        path = try container.decode(String.self, forKey: .path)
+        kind = try container.decode(GameCubeResourceKind.self, forKey: .kind)
+        offset = try container.decode(UInt64.self, forKey: .offset)
+        size = try container.decode(UInt64.self, forKey: .size)
+        uncompressedSize = try container.decodeIfPresent(UInt64.self, forKey: .uncompressedSize)
+        containerPath = try container.decodeIfPresent(String.self, forKey: .containerPath)
+        facts = try container.decodeIfPresent([SourceIndexFact].self, forKey: .facts) ?? []
     }
 }
 
@@ -622,7 +648,8 @@ public enum GenIIIResourceRegistry {
                 category: category(for: resource.kind),
                 offset: resource.offset,
                 size: resource.size,
-                uncompressedSize: resource.uncompressedSize
+                uncompressedSize: resource.uncompressedSize,
+                facts: resource.facts
             )
         }
 
@@ -1235,6 +1262,7 @@ public enum GenIIIResourceRegistry {
 
 public enum GameCubeDiscParser {
     private static let minimumHeaderSize = 0x430
+    private static let dolHeaderSize: UInt64 = 0x100
     private static let maxFSTReadBytes: UInt64 = 32 * 1024 * 1024
     private static let maxArchiveReadBytes: UInt64 = 64 * 1024 * 1024
 
@@ -1312,14 +1340,22 @@ public enum GameCubeDiscParser {
         var resources: [GameCubeResource] = []
 
         if header.dolOffset > 0, header.dolOffset < size {
+            let dolHeaderData = read(handle: handle, offset: header.dolOffset, length: min(dolHeaderSize, size - header.dolOffset))
+            let dolMetadata = parseDOLHeader(data: dolHeaderData, dolOffset: header.dolOffset, imageSize: size)
+            diagnostics.append(contentsOf: dolMetadata.diagnostics)
             resources.append(
                 GameCubeResource(
                     id: "dol:\(header.dolOffset)",
                     path: "main.dol",
                     kind: .dol,
                     offset: header.dolOffset,
-                    size: header.fstOffset > header.dolOffset ? header.fstOffset - header.dolOffset : 0
+                    size: header.fstOffset > header.dolOffset ? header.fstOffset - header.dolOffset : 0,
+                    facts: dolMetadata.facts
                 )
+            )
+        } else if header.dolOffset > 0 {
+            diagnostics.append(
+                Diagnostic(severity: .warning, code: "GAMECUBE_DOL_OUT_OF_BOUNDS", message: "main.dol offset points outside the disc image.")
             )
         }
 
@@ -1358,6 +1394,137 @@ public enum GameCubeDiscParser {
         }
 
         return GameCubeDiscIndex(path: url.path, profile: profile, header: header, resources: resources, diagnostics: diagnostics)
+    }
+
+    private struct DOLSection {
+        let fileOffset: UInt64
+        let memoryAddress: UInt64
+        let size: UInt64
+    }
+
+    private struct DOLMetadata {
+        let facts: [SourceIndexFact]
+        let diagnostics: [Diagnostic]
+    }
+
+    private static func parseDOLHeader(data: Data, dolOffset: UInt64, imageSize: UInt64) -> DOLMetadata {
+        guard UInt64(data.count) >= dolHeaderSize else {
+            return DOLMetadata(
+                facts: dolFacts(
+                    textSections: [],
+                    dataSections: [],
+                    bssAddress: nil,
+                    bssSize: nil,
+                    entryPoint: nil
+                ),
+                diagnostics: [
+                    Diagnostic(severity: .warning, code: "GAMECUBE_DOL_HEADER_TRUNCATED", message: "main.dol is too small to contain a full DOL header.")
+                ]
+            )
+        }
+
+        let textSections = dolSections(data: data, count: 7, offsetTable: 0x00, addressTable: 0x48, sizeTable: 0x90)
+        let dataSections = dolSections(data: data, count: 11, offsetTable: 0x1C, addressTable: 0x64, sizeTable: 0xAC)
+        let bssAddress = UInt64(be32(data, offset: 0xD8))
+        let bssSize = UInt64(be32(data, offset: 0xDC))
+        let entryPoint = UInt64(be32(data, offset: 0xE0))
+        let diagnostics = dolSectionBoundsDiagnostics(
+            textSections: textSections,
+            dataSections: dataSections,
+            dolOffset: dolOffset,
+            imageSize: imageSize
+        )
+
+        return DOLMetadata(
+            facts: dolFacts(
+                textSections: textSections,
+                dataSections: dataSections,
+                bssAddress: bssAddress,
+                bssSize: bssSize,
+                entryPoint: entryPoint
+            ),
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func dolSections(data: Data, count: Int, offsetTable: Int, addressTable: Int, sizeTable: Int) -> [DOLSection] {
+        (0..<count).compactMap { index in
+            let fileOffset = UInt64(be32(data, offset: offsetTable + index * 4))
+            let memoryAddress = UInt64(be32(data, offset: addressTable + index * 4))
+            let size = UInt64(be32(data, offset: sizeTable + index * 4))
+            guard size > 0 else { return nil }
+            return DOLSection(fileOffset: fileOffset, memoryAddress: memoryAddress, size: size)
+        }
+    }
+
+    private static func dolSectionBoundsDiagnostics(
+        textSections: [DOLSection],
+        dataSections: [DOLSection],
+        dolOffset: UInt64,
+        imageSize: UInt64
+    ) -> [Diagnostic] {
+        (textSections.map { ("text", $0) } + dataSections.map { ("data", $0) }).compactMap { kind, section in
+            guard section.fileOffset <= UInt64.max - section.size else {
+                return Diagnostic(
+                    severity: .warning,
+                    code: "GAMECUBE_DOL_SECTION_OUT_OF_BOUNDS",
+                    message: "main.dol \(kind) section at \(hex(section.fileOffset)) points outside the disc image."
+                )
+            }
+            let relativeEnd = section.fileOffset + section.size
+            guard dolOffset <= UInt64.max - relativeEnd else {
+                return Diagnostic(
+                    severity: .warning,
+                    code: "GAMECUBE_DOL_SECTION_OUT_OF_BOUNDS",
+                    message: "main.dol \(kind) section at \(hex(section.fileOffset)) points outside the disc image."
+                )
+            }
+            let absoluteStart = dolOffset + section.fileOffset
+            let absoluteEnd = dolOffset + relativeEnd
+            guard absoluteStart <= imageSize, absoluteEnd <= imageSize else {
+                return Diagnostic(
+                    severity: .warning,
+                    code: "GAMECUBE_DOL_SECTION_OUT_OF_BOUNDS",
+                    message: "main.dol \(kind) section at \(hex(section.fileOffset)) points outside the disc image."
+                )
+            }
+            return nil
+        }
+    }
+
+    private static func dolFacts(
+        textSections: [DOLSection],
+        dataSections: [DOLSection],
+        bssAddress: UInt64?,
+        bssSize: UInt64?,
+        entryPoint: UInt64?
+    ) -> [SourceIndexFact] {
+        let textBytes = textSections.reduce(UInt64(0)) { $0 + $1.size }
+        let dataBytes = dataSections.reduce(UInt64(0)) { $0 + $1.size }
+        return [
+            SourceIndexFact(label: "DOL Metadata", value: "readOnly"),
+            SourceIndexFact(label: "DOL Readiness", value: "metadataOnly"),
+            SourceIndexFact(label: "DOL Text Sections", value: "\(textSections.count)"),
+            SourceIndexFact(label: "DOL Text Bytes", value: "\(textBytes)"),
+            SourceIndexFact(label: "DOL Text Address Range", value: dolAddressSummary(textSections)),
+            SourceIndexFact(label: "DOL Data Sections", value: "\(dataSections.count)"),
+            SourceIndexFact(label: "DOL Data Bytes", value: "\(dataBytes)"),
+            SourceIndexFact(label: "DOL Data Address Range", value: dolAddressSummary(dataSections)),
+            SourceIndexFact(label: "DOL BSS Address", value: bssAddress.map(hex) ?? "unavailable"),
+            SourceIndexFact(label: "DOL BSS Bytes", value: bssSize.map { "\($0)" } ?? "unavailable"),
+            SourceIndexFact(label: "DOL Entry Point", value: entryPoint.map(hex) ?? "unavailable"),
+            SourceIndexFact(label: "DOL Blocked Actions", value: "extract, decompress, export, mutate, write, auto-load")
+        ]
+    }
+
+    private static func dolAddressSummary(_ sections: [DOLSection]) -> String {
+        guard !sections.isEmpty else { return "none" }
+        return sections.prefix(3).map { section in
+            let endAddress = section.memoryAddress <= UInt64.max - section.size
+                ? section.memoryAddress + section.size
+                : section.memoryAddress
+            return "\(hex(section.memoryAddress))-\(hex(endAddress))"
+        }.joined(separator: ", ")
     }
 
     private static func parseHeader(_ data: Data) -> GameCubeDiscHeader? {
@@ -1519,6 +1686,11 @@ public enum GameCubeDiscParser {
         } catch {
             return Data()
         }
+    }
+
+    private static func hex(_ value: UInt64) -> String {
+        let raw = String(value, radix: 16, uppercase: true)
+        return "0x" + String(repeating: "0", count: max(0, 8 - raw.count)) + raw
     }
 
     private static func fstString(data: Data, stringTableOffset: Int, nameOffset: Int) -> String? {

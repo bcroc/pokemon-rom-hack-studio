@@ -1,4 +1,5 @@
 import AppKit
+import PokemonHackCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -278,6 +279,9 @@ struct BuildWorkbenchView: View {
                 }
             }
 
+            patchCreationPreviewSection(rows: store.filteredPatchCreationPreviewRows)
+            binaryROMMutationDryRunSection(rows: store.filteredBinaryROMMutationDryRunRows)
+
             if !store.baseROMOptions.isEmpty {
                 EditorSection(title: "Base ROM Options") {
                     VStack(spacing: 10) {
@@ -329,6 +333,105 @@ struct BuildWorkbenchView: View {
             }
 
             workflowActions(includePatchActions: true)
+        }
+    }
+
+    private func binaryROMMutationDryRunSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Binary ROM Mutation Dry Run") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    TextField(
+                        "GBA ROM path",
+                        text: Binding(
+                            get: { store.selectedBinaryROMMutationDryRunPath },
+                            set: { store.requestBinaryROMMutationDryRunPath($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    Button("Choose", systemImage: "folder") {
+                        chooseBinaryROMMutationDryRunROM()
+                    }
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        store.loadSelectedBinaryROMMutationDryRunManifest()
+                    }
+                    .disabled(store.selectedBinaryROMMutationDryRunPath.isEmpty)
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyBinaryROMMutationDryRunManifestJSONToPasteboard()
+                    }
+                    .disabled(store.selectedBinaryROMMutationDryRunReport == nil)
+                }
+
+                HStack(spacing: 8) {
+                    StatusPill(state: store.binaryROMMutationDryRunLoadStatus.validationState)
+                    Text(store.binaryROMMutationDryRunLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Dry-Run Manifest",
+                        systemImage: "doc.text.magnifyingglass",
+                        description: Text("No local .gba is selected.")
+                    )
+                } else {
+                    ForEach(rows.filter { $0.section == .patchManifest }) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+
+                    ForEach(rows.filter { $0.section == .diagnostics }) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func patchCreationPreviewSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Patch Creation Preview") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.patchCreationPreviewLoadStatus.validationState)
+                    Text(store.patchCreationPreviewLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Preview Patch Creation", systemImage: "eye") {
+                        store.loadSelectedPatchCreationPreview()
+                    }
+                    .disabled(store.selectedBaseROMPath.isEmpty)
+                }
+
+                HStack(spacing: 6) {
+                    Image(systemName: "hammer")
+                    Text(store.selectedEffectiveDecompBuildTargetID.isEmpty ? "Target: auto" : "Target: \(store.selectedEffectiveDecompBuildTargetID)")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Patch Creation Preview",
+                        systemImage: "doc.badge.clock",
+                        description: Text("Preview rows will appear here.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -634,6 +737,18 @@ struct BuildWorkbenchView: View {
         panel.allowedContentTypes = Self.contentTypes(for: ["gba"])
         if panel.runModal() == .OK, let url = panel.url {
             store.requestBaseROMPath(url.path)
+        }
+    }
+
+    private func chooseBinaryROMMutationDryRunROM() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = Self.contentTypes(for: ["gba"])
+        if panel.runModal() == .OK, let url = panel.url {
+            store.requestBinaryROMMutationDryRunPath(url.path)
+            store.loadSelectedBinaryROMMutationDryRunManifest()
         }
     }
 

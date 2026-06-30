@@ -821,10 +821,24 @@ public enum GenIIIAssetCatalogBuilder {
             facts: [
                 SourceIndexFact(label: "Layout", value: map.layout ?? "Unknown"),
                 SourceIndexFact(label: "Events", value: "\(map.eventCounts.total)"),
+                SourceIndexFact(label: "Object Event Capacity", value: mapEventCapacityFact(map, for: .object)),
+                SourceIndexFact(label: "Warp Event Capacity", value: mapEventCapacityFact(map, for: .warp)),
+                SourceIndexFact(label: "Coord Event Capacity", value: mapEventCapacityFact(map, for: .coord)),
+                SourceIndexFact(label: "BG Event Capacity", value: mapEventCapacityFact(map, for: .bg)),
                 SourceIndexFact(label: "Connections", value: "\(map.connections.count)")
             ],
             navigationTarget: GenIIIAssetNavigationTarget(module: .maps, identifier: map.id)
         )
+    }
+
+    private static func mapEventCapacityFact(_ map: MapDescriptor, for kind: MapEventKind) -> String {
+        guard let usage = map.eventCapacity.usages.first(where: { $0.kind == kind }) else {
+            return "Unknown"
+        }
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        return usage.isOverLimit ? "\(usage.count)/\(limit) over" : "\(usage.count)/\(limit)"
     }
 
     private static func layoutAsset(_ layout: LayoutSlot) -> GenIIIAsset {

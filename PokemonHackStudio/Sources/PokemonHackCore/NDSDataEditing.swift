@@ -219,6 +219,10 @@ public enum NDSDataSemanticEditor {
     private static let diamondPearlItemMappingTableSymbol = "sItemIndexMappings"
     private static let diamondPearlTrainerCAnchorPath = "arm9/src/trainer_data.c"
     private static let diamondPearlTrainerClassGenderTableSymbol = "sTrainerClassGenderCountTbl"
+    private static let diamondPearlMapHeaderCAnchorPath = "arm9/src/map_header.c"
+    private static let diamondPearlMapHeaderTableSymbol = "sMapHeaders"
+    private static let heartGoldSoulSilverMapHeaderCAnchorPath = "src/data/map_headers.h"
+    private static let heartGoldSoulSilverMapHeaderTableSymbol = "sMapHeaders"
 
     private enum DiamondPearlItemMappingField: Int, CaseIterable {
         case itemDataIndex
@@ -241,6 +245,76 @@ public enum NDSDataSemanticEditor {
             case .iconIndex: return "Icon Index"
             case .paletteIndex: return "Palette Index"
             case .gen3Index: return "Gen III Index"
+            }
+        }
+    }
+
+    private enum DiamondPearlMapHeaderField: Int, CaseIterable {
+        case areaDataBank
+        case moveModelBank
+        case matrixId
+        case scriptsBank
+        case levelScriptsBank
+        case msgBank
+        case dayMusicId
+        case nightMusicId
+        case wildEncounterBank
+        case eventsBank
+        case mapSection
+        case weatherType
+        case cameraType
+        case mapType
+        case battleBg
+        case isBikeAllowed
+        case isRunningAllowed
+        case isEscapeRopeAllowed
+        case isFlyAllowed
+
+        var key: String {
+            switch self {
+            case .areaDataBank: return "areaDataBank"
+            case .moveModelBank: return "moveModelBank"
+            case .matrixId: return "matrixId"
+            case .scriptsBank: return "scriptsBank"
+            case .levelScriptsBank: return "levelScriptsBank"
+            case .msgBank: return "msgBank"
+            case .dayMusicId: return "dayMusicId"
+            case .nightMusicId: return "nightMusicId"
+            case .wildEncounterBank: return "wildEncounterBank"
+            case .eventsBank: return "eventsBank"
+            case .mapSection: return "mapSection"
+            case .weatherType: return "weatherType"
+            case .cameraType: return "cameraType"
+            case .mapType: return "mapType"
+            case .battleBg: return "battleBg"
+            case .isBikeAllowed: return "isBikeAllowed"
+            case .isRunningAllowed: return "isRunningAllowed"
+            case .isEscapeRopeAllowed: return "isEscapeRopeAllowed"
+            case .isFlyAllowed: return "isFlyAllowed"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .areaDataBank: return "Area Data Bank"
+            case .moveModelBank: return "Move Model Bank"
+            case .matrixId: return "Matrix ID"
+            case .scriptsBank: return "Scripts Bank"
+            case .levelScriptsBank: return "Level Scripts Bank"
+            case .msgBank: return "Message Bank"
+            case .dayMusicId: return "Day Music ID"
+            case .nightMusicId: return "Night Music ID"
+            case .wildEncounterBank: return "Wild Encounter Bank"
+            case .eventsBank: return "Events Bank"
+            case .mapSection: return "Map Section"
+            case .weatherType: return "Weather Type"
+            case .cameraType: return "Camera Type"
+            case .mapType: return "Map Type"
+            case .battleBg: return "Battle Background"
+            case .isBikeAllowed: return "Bike Allowed"
+            case .isRunningAllowed: return "Running Allowed"
+            case .isEscapeRopeAllowed: return "Escape Rope Allowed"
+            case .isFlyAllowed: return "Fly Allowed"
             }
         }
     }
@@ -416,16 +490,16 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
         }
         if catalog.profile == .pokeheartgold, !isHeartGoldSoulSilverSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, and direct zone-event JSON rows under files/fielddata/eventdata/zone_event; NARC, generated, script binary, map matrix, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct zone-event JSON rows under files/fielddata/eventdata/zone_event, and map header integer scalars in src/data/map_headers.h; NARC, generated, script binary, inventory-only map matrix/map table relationship rows, nested map directories, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, item mapping scalars in arm9/src/itemtool.c, and trainer class gender scalars in arm9/src/trainer_data.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .moves, !isSemanticMoveDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves; nested move tables, HeartGold/SoulSilver and Diamond/Pearl move containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -440,7 +514,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; nested encounter arrays, slots, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .maps, !isSemanticMapDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data and Diamond/Pearl direct JSON rows under files/fielddata/eventdata; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, scripts, C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .scripts, !isSemanticScriptDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -449,7 +523,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TEXT_PATH_BLOCKED", message: "Semantic text editing is limited to existing line contents in Platinum source-tree .txt rows under res/text/**/*.txt and existing string leaves in Platinum source-tree JSON rows under res/text/**/*.json; BMG/message-bank binary rows, JSON message-bank writers, containers, generated/reference rows, ROM-backed rows, multiline edits, insert/delete/reorder edits, extraction/rebuild/export paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if !isSemanticFormatSupported(catalog.profile, record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON, an eligible Platinum source text .txt row, an eligible HeartGold/SoulSilver item CSV row, or an explicitly supported Diamond/Pearl C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FORMAT_BLOCKED", message: "Semantic Gen IV field editing requires source-backed JSON, an eligible Platinum source text .txt row, an eligible HeartGold/SoulSilver item CSV or map header row, or an explicitly supported Diamond/Pearl C anchor; \(record.format.rawValue) rows use the raw text editor or stay read-only.", span: record.sourceSpan))
         }
         return diagnostics
     }
@@ -564,8 +638,11 @@ public enum NDSDataSemanticEditor {
             return isPlatinumFieldEventDataPath(relativePath)
                 || isPlatinumMapMatrixDataPath(relativePath)
                 || isPlatinumAreaDataPath(relativePath)
+        case .pokeheartgold:
+            return relativePath == heartGoldSoulSilverMapHeaderCAnchorPath
         case .pokediamond:
             return isDiamondPearlFieldEventDataPath(relativePath)
+                || relativePath == diamondPearlMapHeaderCAnchorPath
         default:
             return false
         }
@@ -659,7 +736,8 @@ public enum NDSDataSemanticEditor {
         case .encounters:
             return isDiamondPearlEncounterDataPath(record.relativePath) && record.format == .json
         case .maps:
-            return isDiamondPearlFieldEventDataPath(record.relativePath) && record.format == .json
+            return (isDiamondPearlFieldEventDataPath(record.relativePath) && record.format == .json)
+                || isDiamondPearlMapHeaderCAnchorRecord(record)
         default:
             return false
         }
@@ -677,11 +755,26 @@ public enum NDSDataSemanticEditor {
             && record.format == .cSource
     }
 
+    private static func isDiamondPearlMapHeaderCAnchorRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .maps
+            && record.relativePath == diamondPearlMapHeaderCAnchorPath
+            && record.format == .cSource
+    }
+
+    private static func isHeartGoldSoulSilverMapHeaderCAnchorRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .maps
+            && record.relativePath == heartGoldSoulSilverMapHeaderCAnchorPath
+            && record.format == .cHeader
+    }
+
     private static func isSemanticFormatSupported(_ profile: GameProfile, _ record: NDSDataCatalogRecord) -> Bool {
         if record.format == .json {
             return true
         }
         if profile == .pokeheartgold, isHeartGoldSoulSilverItemCSVRecord(record) {
+            return true
+        }
+        if profile == .pokeheartgold, isHeartGoldSoulSilverMapHeaderCAnchorRecord(record) {
             return true
         }
         if profile == .pokeplatinum, isPlatinumSourceTextLineRecord(record) {
@@ -702,6 +795,8 @@ public enum NDSDataSemanticEditor {
             return isHeartGoldSoulSilverEncounterDataPath(record.relativePath)
         case .scripts:
             return isHeartGoldSoulSilverZoneEventDataPath(record.relativePath)
+        case .maps:
+            return isHeartGoldSoulSilverMapHeaderCAnchorRecord(record)
         default:
             return false
         }
@@ -804,6 +899,18 @@ public enum NDSDataSemanticEditor {
         }
         if record == nil, recordID == "trainers:\(diamondPearlTrainerCAnchorPath)" {
             return parseDiamondPearlTrainerClassGenderFields(sourceText: sourceText, record: nil)
+        }
+        if let record, isDiamondPearlMapHeaderCAnchorRecord(record) {
+            return parseDiamondPearlMapHeaderFields(sourceText: sourceText, record: record)
+        }
+        if record == nil, recordID == "maps:\(diamondPearlMapHeaderCAnchorPath)" {
+            return parseDiamondPearlMapHeaderFields(sourceText: sourceText, record: nil)
+        }
+        if let record, isHeartGoldSoulSilverMapHeaderCAnchorRecord(record) {
+            return parseHeartGoldSoulSilverMapHeaderFields(sourceText: sourceText, record: record)
+        }
+        if record == nil, recordID == "maps:\(heartGoldSoulSilverMapHeaderCAnchorPath)" {
+            return parseHeartGoldSoulSilverMapHeaderFields(sourceText: sourceText, record: nil)
         }
         if let record, isHeartGoldSoulSilverItemCSVRecord(record) {
             return parseHeartGoldSoulSilverItemCSVFields(sourceText: sourceText, record: record)
@@ -1335,6 +1442,234 @@ public enum NDSDataSemanticEditor {
         return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
     }
 
+    private static func parseDiamondPearlMapHeaderFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        guard let tableRange = cInitializerTableBraceRange(sourceText, symbol: diamondPearlMapHeaderTableSymbol)
+        else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_TABLE_MISSING", message: "Diamond/Pearl map header table \(diamondPearlMapHeaderTableSymbol) was not found; map header C anchors remain raw-source only.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var rowIndex = 0
+        var cursor = sourceText.index(after: tableRange.openBrace)
+        let tableClose = sourceText.index(before: tableRange.closeBraceEnd)
+        while cursor < tableClose {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose else { break }
+            guard sourceText[cursor] == "{",
+                  let entryEnd = matchingCBraceEnd(sourceText, start: cursor),
+                  entryEnd <= tableRange.closeBraceEnd
+            else {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+
+            let entryClose = sourceText.index(before: entryEnd)
+            let scalars = cTopLevelScalars(in: sourceText, start: sourceText.index(after: cursor), end: entryClose)
+            guard scalars.count == DiamondPearlMapHeaderField.allCases.count else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl map header row \(rowIndex) is not a 19-scalar row and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: cursor))))
+                rowIndex += 1
+                cursor = entryEnd
+                continue
+            }
+            for (offset, scalarRange) in scalars.prefix(DiamondPearlMapHeaderField.allCases.count).enumerated() {
+                guard let mapField = DiamondPearlMapHeaderField(rawValue: offset) else { continue }
+                let trimmed = String(sourceText[scalarRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isCIntegerLiteral(trimmed) else {
+                    diagnostics.append(Diagnostic(severity: .info, code: "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED", message: "Diamond/Pearl map header field \(mapField.key) is not an integer literal and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))))
+                    continue
+                }
+                fields.append(
+                    ParsedSemanticField(
+                        semanticField: NDSDataSemanticField(
+                            key: "mapHeaders.\(rowIndex).\(mapField.key)",
+                            label: "Map Header \(rowIndex) \(mapField.label)",
+                            value: trimmed,
+                            valueKind: .number,
+                            sourceSpan: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))
+                        ),
+                        valueRange: scalarRange,
+                        syntax: .cScalar
+                    )
+                )
+            }
+            rowIndex += 1
+            cursor = entryEnd
+        }
+
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_C_SCALARS", message: "No integer scalar fields were found in Diamond/Pearl \(diamondPearlMapHeaderTableSymbol); map header C anchors remain raw-source only.", span: record?.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parseHeartGoldSoulSilverMapHeaderFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        guard let tableRange = cInitializerTableBraceRange(sourceText, symbol: heartGoldSoulSilverMapHeaderTableSymbol)
+        else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_TABLE_MISSING", message: "HeartGold/SoulSilver map header table \(heartGoldSoulSilverMapHeaderTableSymbol) was not found; map header C anchors remain raw-source only.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var cursor = sourceText.index(after: tableRange.openBrace)
+        let tableClose = sourceText.index(before: tableRange.closeBraceEnd)
+        while cursor < tableClose {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose else { break }
+            guard sourceText[cursor] == "[",
+                  let bracketEnd = matchingBracketEnd(sourceText, start: cursor),
+                  bracketEnd <= tableClose,
+                  let mapKeyRange = trimmedRange(sourceText.index(after: cursor)..<sourceText.index(before: bracketEnd), in: sourceText)
+            else {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+
+            let mapKey = String(sourceText[mapKeyRange])
+            guard isCIdentifier(mapKey) else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "HeartGold/SoulSilver map header row \(mapKey) does not use a simple map constant and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: cursor))))
+                cursor = bracketEnd
+                continue
+            }
+
+            cursor = bracketEnd
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose, sourceText[cursor] == "=" else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "HeartGold/SoulSilver map header row \(mapKey) is not a direct designated initializer and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: mapKeyRange.lowerBound))))
+                if cursor < tableClose {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+            cursor = sourceText.index(after: cursor)
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose, sourceText[cursor] == "{",
+                  let entryEnd = matchingCBraceEnd(sourceText, start: cursor),
+                  entryEnd <= tableRange.closeBraceEnd
+            else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "HeartGold/SoulSilver map header row \(mapKey) is not a direct brace initializer and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: mapKeyRange.lowerBound))))
+                if cursor < tableClose {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+
+            parseHeartGoldSoulSilverMapHeaderEntryFields(
+                sourceText: sourceText,
+                mapKey: mapKey,
+                start: sourceText.index(after: cursor),
+                end: sourceText.index(before: entryEnd),
+                record: record,
+                fields: &fields,
+                diagnostics: &diagnostics
+            )
+            cursor = entryEnd
+        }
+
+        let duplicateKeys = duplicateSemanticFieldKeys(fields)
+        for key in duplicateKeys {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_C_FIELD_DUPLICATE", message: "HeartGold/SoulSilver map header scalar \(key) appears more than once; duplicate source fields must be resolved before field-level edits are planned.", span: record?.sourceSpan))
+        }
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_C_SCALARS", message: "No integer scalar fields were found in HeartGold/SoulSilver \(heartGoldSoulSilverMapHeaderTableSymbol); map header C anchors remain raw-source only.", span: record?.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parseHeartGoldSoulSilverMapHeaderEntryFields(
+        sourceText: String,
+        mapKey: String,
+        start: String.Index,
+        end: String.Index,
+        record: NDSDataCatalogRecord?,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        var cursor = start
+        while cursor < end {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+            guard cursor < end else { break }
+            guard sourceText[cursor] == "." else {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+
+            let fieldStart = sourceText.index(after: cursor)
+            guard fieldStart < end, isCIdentifierStart(sourceText[fieldStart]) else {
+                cursor = fieldStart
+                continue
+            }
+            var fieldEnd = sourceText.index(after: fieldStart)
+            while fieldEnd < end, isCIdentifierContinuation(sourceText[fieldEnd]) {
+                fieldEnd = sourceText.index(after: fieldEnd)
+            }
+            let fieldName = String(sourceText[fieldStart..<fieldEnd])
+            cursor = fieldEnd
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+            guard cursor < end, sourceText[cursor] == "=" else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_FIELD_BAD_SHAPE", message: "HeartGold/SoulSilver map header field \(mapKey).\(fieldName) is not a direct assignment and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: fieldStart))))
+                if cursor < end {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+            cursor = sourceText.index(after: cursor)
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+
+            let valueStart = cursor
+            var valueEnd = cursor
+            var depth = 0
+            while valueEnd < end {
+                if skipCCommentOrQuotedLiteral(sourceText, index: &valueEnd, end: end) {
+                    continue
+                }
+                let character = sourceText[valueEnd]
+                if character == "(" || character == "[" || character == "{" {
+                    depth += 1
+                } else if character == ")" || character == "]" || character == "}" {
+                    depth = max(0, depth - 1)
+                } else if character == "," && depth == 0 {
+                    break
+                }
+                valueEnd = sourceText.index(after: valueEnd)
+            }
+
+            if let scalarRange = trimmedRange(valueStart..<valueEnd, in: sourceText) {
+                let trimmed = String(sourceText[scalarRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if isCIntegerLiteral(trimmed) {
+                    fields.append(
+                        ParsedSemanticField(
+                            semanticField: NDSDataSemanticField(
+                                key: "mapHeaders.\(mapKey).\(fieldName)",
+                                label: "\(mapKey) \(semanticLabel(for: fieldName))",
+                                value: trimmed,
+                                valueKind: .number,
+                                sourceSpan: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))
+                            ),
+                            valueRange: scalarRange,
+                            syntax: .cScalar
+                        )
+                    )
+                } else {
+                    diagnostics.append(Diagnostic(severity: .info, code: "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED", message: "HeartGold/SoulSilver map header field \(mapKey).\(fieldName) is not an integer literal and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? heartGoldSoulSilverMapHeaderCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))))
+                }
+            }
+
+            cursor = valueEnd
+            if cursor < end, sourceText[cursor] == "," {
+                cursor = sourceText.index(after: cursor)
+            }
+        }
+    }
+
     private static func parseTopLevelScalarJSONFields(
         sourceText: String,
         record: NDSDataCatalogRecord?
@@ -1725,6 +2060,11 @@ public enum NDSDataSemanticEditor {
 
     private static func isCIdentifierContinuation(_ character: Character) -> Bool {
         isCIdentifierStart(character) || character.isNumber
+    }
+
+    private static func isCIdentifier(_ value: String) -> Bool {
+        guard let first = value.first, isCIdentifierStart(first) else { return false }
+        return value.dropFirst().allSatisfy(isCIdentifierContinuation)
     }
 
     private static func trimmedRange(_ range: Range<String.Index>, in text: String) -> Range<String.Index>? {

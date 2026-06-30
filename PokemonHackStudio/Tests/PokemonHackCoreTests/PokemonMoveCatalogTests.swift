@@ -190,7 +190,13 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(tackle.isDescriptionEditable)
         XCTAssertEqual(tackle.descriptionSymbol, "gMoveDescription_Tackle")
         XCTAssertEqual(tackle.descriptionText, "A physical attack.")
+        XCTAssertEqual(tackle.contestEffect, "CONTEST_EFFECT_NONE")
+        XCTAssertTrue(tackle.isContestEffectEditable)
+        XCTAssertEqual(tackle.facts.first { $0.label == "contestEffect" }?.value, "CONTEST_EFFECT_NONE")
         XCTAssertTrue(tackle.diagnostics.allSatisfy { $0.severity != .error })
+        let encodedMove = try JSONSerialization.jsonObject(with: JSONEncoder().encode(tackle)) as? [String: Any]
+        XCTAssertEqual(encodedMove?["contestEffect"] as? String, "CONTEST_EFFECT_NONE")
+        XCTAssertEqual(encodedMove?["isContestEffectEditable"] as? Bool, true)
 
         var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
         draft.power = 55
@@ -201,6 +207,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         draft.priority = 1
         draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
         draft.descriptionText = "A clean tackle.\nIt lands fast."
+        draft.contestEffect = "CONTEST_EFFECT_HIGHLY_APPEALING"
 
         let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
 
@@ -214,7 +221,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(".description = gMoveDescription_Tackle"))
         XCTAssertTrue(preview.contains(#""A clean tackle.""#))
         XCTAssertTrue(preview.contains(#""It lands fast.""#))
-        XCTAssertTrue(preview.contains(".contestEffect = CONTEST_EFFECT_NONE"))
+        XCTAssertTrue(preview.contains(".contestEffect = CONTEST_EFFECT_HIGHLY_APPEALING"))
 
         let applyabilityBeforeDrift = plan.validateApplyability()
         XCTAssertTrue(applyabilityBeforeDrift.isApplyable)
@@ -229,6 +236,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         var freshDraft = try XCTUnwrap(MoveEditDraft(detail: freshTackle))
         freshDraft.power = 60
         freshDraft.descriptionText = "A sharper tackle."
+        freshDraft.contestEffect = "CONTEST_EFFECT_USER_MORE_EASILY_STARTLED"
         let freshPlan = MoveMutationPlanner.plan(catalog: freshCatalog, draft: freshDraft)
         let result = try MoveMutationApplier.apply(plan: freshPlan)
         XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/battle_moves.c"])
@@ -238,8 +246,10 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_TACKLE" })
         XCTAssertEqual(MoveEditDraft(detail: edited)?.power, 60)
         XCTAssertEqual(edited.descriptionText, "A sharper tackle.")
+        XCTAssertEqual(edited.contestEffect, "CONTEST_EFFECT_USER_MORE_EASILY_STARTLED")
+        XCTAssertEqual(MoveEditDraft(detail: edited)?.contestEffect, "CONTEST_EFFECT_USER_MORE_EASILY_STARTLED")
         XCTAssertTrue(edited.sourcePreview?.contains(".description = gMoveDescription_Tackle") == true)
-        XCTAssertTrue(edited.sourcePreview?.contains(".contestEffect = CONTEST_EFFECT_NONE") == true)
+        XCTAssertTrue(edited.sourcePreview?.contains(".contestEffect = CONTEST_EFFECT_USER_MORE_EASILY_STARTLED") == true)
 
         let sentinelDraft = MoveEditDraft(
             moveID: "MOVE_NONE",
@@ -272,6 +282,28 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let nonSimplePlan = MoveMutationPlanner.plan(catalog: nonSimpleCatalog, draft: nonSimpleDraft)
         XCTAssertTrue(nonSimplePlan.changes.isEmpty)
         XCTAssertTrue(nonSimplePlan.diagnostics.contains { $0.code == "MOVE_FLAGS_UNSUPPORTED_EXPRESSION" })
+
+        try makeRubyBattleMovesProject(at: root, includeContestEffect: false)
+        let missingContestCatalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let missingContestTackle = try XCTUnwrap(missingContestCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertNil(missingContestTackle.contestEffect)
+        XCTAssertFalse(missingContestTackle.isContestEffectEditable)
+        var missingContestDraft = try XCTUnwrap(MoveEditDraft(detail: missingContestTackle))
+        missingContestDraft.contestEffect = "CONTEST_EFFECT_NONE"
+        let missingContestPlan = MoveMutationPlanner.plan(catalog: missingContestCatalog, draft: missingContestDraft)
+        XCTAssertTrue(missingContestPlan.changes.isEmpty)
+        XCTAssertTrue(missingContestPlan.diagnostics.contains { $0.code == "MOVE_CONTEST_EFFECT_NOT_EDITABLE" })
+
+        try makeRubyBattleMovesProject(at: root, contestEffectExpression: "CONTEST_EFFECT_ALIAS(CONTEST_EFFECT_NONE)")
+        let nonSimpleContestCatalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let nonSimpleContestTackle = try XCTUnwrap(nonSimpleContestCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+        XCTAssertNil(nonSimpleContestTackle.contestEffect)
+        XCTAssertFalse(nonSimpleContestTackle.isContestEffectEditable)
+        var nonSimpleContestDraft = try XCTUnwrap(MoveEditDraft(detail: nonSimpleContestTackle))
+        nonSimpleContestDraft.contestEffect = "CONTEST_EFFECT_NONE"
+        let nonSimpleContestPlan = MoveMutationPlanner.plan(catalog: nonSimpleContestCatalog, draft: nonSimpleContestDraft)
+        XCTAssertTrue(nonSimpleContestPlan.changes.isEmpty)
+        XCTAssertTrue(nonSimpleContestPlan.diagnostics.contains { $0.code == "MOVE_CONTEST_EFFECT_UNSUPPORTED_EXPRESSION" })
 
         let wrongSourceCatalog = ProjectMoveCatalog(
             root: catalog.root,
@@ -469,6 +501,29 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(pound.diagnostics.allSatisfy { $0.severity != .error })
         XCTAssertTrue(pound.sourcePreview?.contains(".description = sPoundDescription") == true)
         XCTAssertTrue(pound.sourcePreview?.contains(".contestCategory = CONTEST_CATEGORY_TOUGH") == true)
+        XCTAssertNil(pound.contestEffect)
+        XCTAssertFalse(pound.isContestEffectEditable)
+        let contestMetadata = try XCTUnwrap(pound.contestMetadata)
+        XCTAssertEqual(contestMetadata.contestCategory, "CONTEST_CATEGORY_TOUGH")
+        XCTAssertEqual(contestMetadata.contestAppeal, "2")
+        XCTAssertEqual(contestMetadata.contestJam, "1")
+        XCTAssertEqual(contestMetadata.contestComboStarterId, "COMBO_STARTER_POUND")
+        XCTAssertEqual(contestMetadata.contestComboMoves, "{ MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }")
+        XCTAssertEqual(pound.facts.first { $0.label == "contestCategory" }?.value, "CONTEST_CATEGORY_TOUGH")
+        XCTAssertEqual(pound.facts.first { $0.label == "contestAppeal" }?.value, "2")
+        XCTAssertEqual(pound.facts.first { $0.label == "contestJam" }?.value, "1")
+        XCTAssertEqual(pound.facts.first { $0.label == "contestComboStarterId" }?.value, "COMBO_STARTER_POUND")
+        XCTAssertEqual(pound.facts.first { $0.label == "contestComboMoves" }?.value, "{ MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }")
+        XCTAssertEqual(pound.facts.first { $0.label == "Contest Metadata Readiness" }?.value, "factsOnly")
+        XCTAssertTrue((pound.facts.first { $0.label == "Contest Metadata Blocked Actions" }?.value ?? "").contains("contest writers"))
+        let encodedMove = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pound)) as? [String: Any]
+        let encodedContestMetadata = try XCTUnwrap(encodedMove?["contestMetadata"] as? [String: Any])
+        XCTAssertEqual(encodedContestMetadata["contestCategory"] as? String, "CONTEST_CATEGORY_TOUGH")
+        XCTAssertEqual(encodedContestMetadata["contestAppeal"] as? String, "2")
+        XCTAssertEqual(encodedContestMetadata["contestJam"] as? String, "1")
+        XCTAssertEqual(encodedContestMetadata["contestComboStarterId"] as? String, "COMBO_STARTER_POUND")
+        XCTAssertEqual(encodedContestMetadata["contestComboMoves"] as? String, "{ MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }")
+        XCTAssertEqual(encodedMove?["isContestEffectEditable"] as? Bool, false)
         XCTAssertFalse(catalog.diagnostics.contains { $0.code == "MOVE_CATALOG_UNKNOWN_FIELD" && ($0.message.contains("description") || $0.message.contains("contestCategory")) })
         var draft = try XCTUnwrap(MoveEditDraft(detail: pound))
         draft.power = 55
@@ -484,6 +539,10 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(".flags = FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED"))
         XCTAssertTrue(preview.contains(".description = sPoundDescription"))
         XCTAssertTrue(preview.contains(".contestCategory = CONTEST_CATEGORY_TOUGH"))
+        XCTAssertTrue(preview.contains(".contestAppeal = 2"))
+        XCTAssertTrue(preview.contains(".contestJam = 1"))
+        XCTAssertTrue(preview.contains(".contestComboStarterId = COMBO_STARTER_POUND"))
+        XCTAssertTrue(preview.contains(".contestComboMoves = { MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }"))
 
         let applyabilityBeforeDrift = plan.validateApplyability()
         XCTAssertTrue(applyabilityBeforeDrift.isApplyable)
@@ -684,8 +743,10 @@ final class PokemonMoveCatalogTests: XCTestCase {
     private func makeRubyBattleMovesProject(
         at root: URL,
         flagsExpression: String = "FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED",
+        contestEffectExpression: String = "CONTEST_EFFECT_NONE",
         omitPP: Bool = false,
-        includeDescriptionDeclarations: Bool = true
+        includeDescriptionDeclarations: Bool = true,
+        includeContestEffect: Bool = true
     ) throws {
         try write(
             """
@@ -697,6 +758,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
             to: root.appendingPathComponent("include/constants/moves.h")
         )
         let ppLine = omitPP ? "" : "        .pp = 35,\n"
+        let contestEffectLine = includeContestEffect ? "        .contestEffect = \(contestEffectExpression),\n" : ""
         let descriptionDeclarations = includeDescriptionDeclarations
             ? """
             static const u8 gMoveDescription_None[] = _("No move.");
@@ -720,7 +782,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
                     .priority = 0,
                     .flags = 0,
                     .description = gMoveDescription_None,
-                    .contestEffect = CONTEST_EFFECT_NONE,
+            \(contestEffectLine)\
                 },
                 [MOVE_TACKLE] =
                 {
@@ -733,7 +795,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
                     .priority = 0,
                     .flags = \(flagsExpression),
                     .description = gMoveDescription_Tackle,
-                    .contestEffect = CONTEST_EFFECT_NONE,
+            \(contestEffectLine)\
                 },
             };
 
@@ -773,6 +835,10 @@ final class PokemonMoveCatalogTests: XCTestCase {
                     .split = SPLIT_PHYSICAL,
                     .description = sPoundDescription,
                     .contestCategory = CONTEST_CATEGORY_TOUGH,
+                    .contestAppeal = 2,
+                    .contestJam = 1,
+                    .contestComboStarterId = COMBO_STARTER_POUND,
+                    .contestComboMoves = { MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH },
                 },
             };
 
