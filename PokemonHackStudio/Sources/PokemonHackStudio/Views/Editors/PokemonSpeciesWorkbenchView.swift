@@ -372,13 +372,16 @@ struct PokemonSpeciesWorkbenchView: View {
     private func evolutionSection(draft: PokemonHackCore.SpeciesEditDraft) -> some View {
         EditorSection(title: "Evolutions") {
             VStack(alignment: .leading, spacing: 12) {
+                let canEditRows = supportsEvolutionRowStructureEditing
                 HStack {
                     Text("\(draft.evolutions.count) rows")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Add Evolution", systemImage: "plus") {
-                        addEvolution()
+                    if canEditRows {
+                        Button("Add Evolution", systemImage: "plus") {
+                            addEvolution()
+                        }
                     }
                 }
 
@@ -405,13 +408,19 @@ struct PokemonSpeciesWorkbenchView: View {
                                 SearchableConstantPicker(title: "Target", selection: evolutionTargetBinding(id: evolution.id), constants: catalogSpeciesConstants)
                                     .labelsHidden()
 
-                                moveControls(
-                                    canMoveUp: index > 0,
-                                    canMoveDown: index < draft.evolutions.count - 1,
-                                    onMoveUp: { moveEvolution(id: evolution.id, offset: -1) },
-                                    onMoveDown: { moveEvolution(id: evolution.id, offset: 1) },
-                                    onRemove: { removeEvolution(id: evolution.id) }
-                                )
+                                if canEditRows {
+                                    moveControls(
+                                        canMoveUp: index > 0,
+                                        canMoveDown: index < draft.evolutions.count - 1,
+                                        onMoveUp: { moveEvolution(id: evolution.id, offset: -1) },
+                                        onMoveDown: { moveEvolution(id: evolution.id, offset: 1) },
+                                        onRemove: { removeEvolution(id: evolution.id) }
+                                    )
+                                } else {
+                                    Text("")
+                                        .frame(width: 72)
+                                        .accessibilityHidden(true)
+                                }
                             }
                         }
                     }
@@ -477,7 +486,7 @@ struct PokemonSpeciesWorkbenchView: View {
     @ViewBuilder
     private func pokedexSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
         EditorSection(title: "Pokedex") {
-            if supportsPokedexEditing, let draft = draft, draft.pokedex != nil {
+            if supportsPokedexEditing(for: species), let draft = draft, draft.pokedex != nil {
                 VStack(alignment: .leading, spacing: 12) {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                         GridRow {
@@ -664,10 +673,13 @@ struct PokemonSpeciesWorkbenchView: View {
         }
     }
 
-    private var supportsPokedexEditing: Bool {
+    private func supportsPokedexEditing(for species: PokemonHackCore.SpeciesDetail) -> Bool {
         switch catalog?.profile {
         case .pokeemerald, .pokefirered, .pokeruby:
             return true
+        case .pokeemeraldExpansion:
+            return species.pokedex?.sourceSpan.relativePath == "src/data/pokemon/pokedex_entries.h"
+                && species.pokedex?.descriptionSpan?.relativePath == "src/data/pokemon/pokedex_text.h"
         default:
             return false
         }
@@ -692,6 +704,17 @@ struct PokemonSpeciesWorkbenchView: View {
             return true
         case .pokeruby:
             return species.evolutions.contains { $0.sourceSpan.relativePath == "src/data/pokemon/evolution.h" }
+        case .pokeemeraldExpansion:
+            return species.evolutions.contains { $0.sourceSpan.relativePath == "src/data/pokemon/evolution.h" }
+        default:
+            return false
+        }
+    }
+
+    private var supportsEvolutionRowStructureEditing: Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokefirered, .pokeruby:
+            return true
         default:
             return false
         }

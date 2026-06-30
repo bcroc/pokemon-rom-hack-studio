@@ -187,6 +187,9 @@ final class PokemonMoveCatalogTests: XCTestCase {
 
         XCTAssertEqual(tackle.sourceSpan.relativePath, "src/data/battle_moves.c")
         XCTAssertTrue(tackle.isEditable)
+        XCTAssertTrue(tackle.isDescriptionEditable)
+        XCTAssertEqual(tackle.descriptionSymbol, "gMoveDescription_Tackle")
+        XCTAssertEqual(tackle.descriptionText, "A physical attack.")
         XCTAssertTrue(tackle.diagnostics.allSatisfy { $0.severity != .error })
 
         var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
@@ -197,6 +200,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         draft.target = "MOVE_TARGET_BOTH"
         draft.priority = 1
         draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
+        draft.descriptionText = "A clean tackle.\nIt lands fast."
 
         let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
 
@@ -208,6 +212,8 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(".accuracy = 95"))
         XCTAssertTrue(preview.contains(".flags = FLAG_MAGIC_COAT_AFFECTED | FLAG_PROTECT_AFFECTED"))
         XCTAssertTrue(preview.contains(".description = gMoveDescription_Tackle"))
+        XCTAssertTrue(preview.contains(#""A clean tackle.""#))
+        XCTAssertTrue(preview.contains(#""It lands fast.""#))
         XCTAssertTrue(preview.contains(".contestEffect = CONTEST_EFFECT_NONE"))
 
         let applyabilityBeforeDrift = plan.validateApplyability()
@@ -222,6 +228,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let freshTackle = try XCTUnwrap(freshCatalog.moves.first { $0.moveID == "MOVE_TACKLE" })
         var freshDraft = try XCTUnwrap(MoveEditDraft(detail: freshTackle))
         freshDraft.power = 60
+        freshDraft.descriptionText = "A sharper tackle."
         let freshPlan = MoveMutationPlanner.plan(catalog: freshCatalog, draft: freshDraft)
         let result = try MoveMutationApplier.apply(plan: freshPlan)
         XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/battle_moves.c"])
@@ -230,6 +237,7 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let reloaded = try liveMoveCatalog(root: root, profile: .pokeruby)
         let edited = try XCTUnwrap(reloaded.moves.first { $0.moveID == "MOVE_TACKLE" })
         XCTAssertEqual(MoveEditDraft(detail: edited)?.power, 60)
+        XCTAssertEqual(edited.descriptionText, "A sharper tackle.")
         XCTAssertTrue(edited.sourcePreview?.contains(".description = gMoveDescription_Tackle") == true)
         XCTAssertTrue(edited.sourcePreview?.contains(".contestEffect = CONTEST_EFFECT_NONE") == true)
 
@@ -281,6 +289,9 @@ final class PokemonMoveCatalogTests: XCTestCase {
                     sourcePreview: move.sourcePreview,
                     facts: move.facts,
                     flags: move.flags,
+                    descriptionSymbol: move.descriptionSymbol,
+                    descriptionText: move.descriptionText,
+                    isDescriptionEditable: move.isDescriptionEditable,
                     isEditable: true,
                     machineMemberships: move.machineMemberships,
                     tutorMemberships: move.tutorMemberships,
@@ -298,6 +309,25 @@ final class PokemonMoveCatalogTests: XCTestCase {
         let constantPlan = MoveMutationPlanner.plan(catalog: catalog, draft: constantDraft)
         XCTAssertTrue(constantPlan.changes.isEmpty)
         XCTAssertTrue(constantPlan.diagnostics.contains { $0.code == "MOVE_SYMBOL_INVALID" })
+    }
+
+    func testRubySapphireMoveDescriptionTextBlocksMissingDeclaration() throws {
+        let root = try temporaryRoot()
+        try makeRubyBattleMovesProject(at: root, includeDescriptionDeclarations: false)
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeruby)
+        let tackle = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_TACKLE" })
+
+        XCTAssertEqual(tackle.descriptionSymbol, "gMoveDescription_Tackle")
+        XCTAssertNil(tackle.descriptionText)
+        XCTAssertFalse(tackle.isDescriptionEditable)
+
+        var draft = try XCTUnwrap(MoveEditDraft(detail: tackle))
+        draft.descriptionText = "This must stay blocked."
+        let plan = MoveMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "MOVE_DESCRIPTION_NOT_EDITABLE" })
+        XCTAssertFalse(plan.isApplyable)
     }
 
     func testMoveMutationPlannerRendersZeroFlagsAndBlocksNoOp() throws {
@@ -654,7 +684,8 @@ final class PokemonMoveCatalogTests: XCTestCase {
     private func makeRubyBattleMovesProject(
         at root: URL,
         flagsExpression: String = "FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED",
-        omitPP: Bool = false
+        omitPP: Bool = false,
+        includeDescriptionDeclarations: Bool = true
     ) throws {
         try write(
             """
@@ -666,8 +697,16 @@ final class PokemonMoveCatalogTests: XCTestCase {
             to: root.appendingPathComponent("include/constants/moves.h")
         )
         let ppLine = omitPP ? "" : "        .pp = 35,\n"
+        let descriptionDeclarations = includeDescriptionDeclarations
+            ? """
+            static const u8 gMoveDescription_None[] = _("No move.");
+            const u8 gMoveDescription_Tackle[] = _("A physical attack.");
+
+            """
+            : ""
         try write(
             """
+            \(descriptionDeclarations)\
             const struct BattleMove gBattleMoves[] =
             {
                 [MOVE_NONE] =

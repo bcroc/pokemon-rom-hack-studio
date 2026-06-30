@@ -548,7 +548,7 @@ struct SourceIndexDescriptorSet {
 
     private static let moveFields = [
         "effect", "power", "type", "accuracy", "pp",
-        "secondaryEffectChance", "target", "priority", "flags"
+        "secondaryEffectChance", "target", "priority", "flags", "description"
     ]
 
     private static let pokedexFields = [

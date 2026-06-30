@@ -569,16 +569,22 @@ public enum NDSDataCatalogBuilder {
         }
 
         let records = enrichGenVReadiness(
-            records: enrichHeartGoldSoulSilverMapInventory(
-                records: enrichRelationships(
-                    records: uniqueRecords(
-                        descriptors.flatMap { descriptor in
-                            catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                        }
-                        + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                        + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                        + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                    ).sorted(by: recordSort),
+            records: enrichDiamondPearlMapInventory(
+                records: enrichHeartGoldSoulSilverScriptSequenceInventory(
+                    records: enrichHeartGoldSoulSilverMapInventory(
+                        records: enrichRelationships(
+                            records: uniqueRecords(
+                                descriptors.flatMap { descriptor in
+                                    catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                                }
+                                + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                            ).sorted(by: recordSort),
+                            profile: index.profile
+                        ),
+                        profile: index.profile
+                    ),
                     profile: index.profile
                 ),
                 profile: index.profile
@@ -664,6 +670,7 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.scripts, "files/fielddata/eventdata/zone_event"),
                 CatalogPathDescriptor(.text, "files/msgdata"),
                 CatalogPathDescriptor(.text, "files/msgdata/scenario", required: false),
+                CatalogPathDescriptor(.scripts, "files/fielddata/script/scr_seq", summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.scripts, "files/fielddata/script/scr_seq"),
                 CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix", summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix"),
@@ -696,9 +703,13 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.text, "files/msgdata/msg", required: false),
                 CatalogPathDescriptor(.text, "files/msgdata/scenario", required: false),
                 CatalogPathDescriptor(.scripts, "files/fielddata/script", required: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/mapmatrix", required: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/land_data", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/land_data", required: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/areadata", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/areadata", required: false),
+                CatalogPathDescriptor(.maps, "files/fielddata/maptable", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/maptable", required: false),
                 CatalogPathDescriptor(.maps, "files/fielddata/eventdata", required: false),
                 CatalogPathDescriptor(.audio, "files/data/sound", required: false),
@@ -716,6 +727,7 @@ public enum NDSDataCatalogBuilder {
                 CatalogPathDescriptor(.resources, "data", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files/a", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.text, "files/msgdata", required: false, summarizeDirectory: true, includeMigrationPlan: false),
+                CatalogPathDescriptor(.resources, "files", required: false, summarizeDirectory: true, includeMigrationPlan: false),
                 CatalogPathDescriptor(.resources, "files"),
                 CatalogPathDescriptor(.audio, "files/wb_sound_data.sdat", required: false),
                 CatalogPathDescriptor(.audio, "files/soundstatus.narc", role: .binaryContainer, format: .narc, required: false),
@@ -882,7 +894,7 @@ public enum NDSDataCatalogBuilder {
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
             audioPreview: audioPreview
-        )
+        ) + genVSHA1TextFacts(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory)
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
             domain: descriptor.domain,
@@ -1434,6 +1446,186 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
+    private static let heartGoldSoulSilverScriptSequenceBlockedActions = [
+        "script parsing",
+        "semantic editing",
+        "script binary write",
+        "script compiler",
+        "generated output write",
+        "reference write",
+        "NARC rebuild",
+        "container rebuild",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let heartGoldSoulSilverScriptSequenceActionState = "HeartGold/SoulSilver script sequence rows are inventory-only HGSS script-sequence metadata; no parser, compiler, semantic editor, binary writer, container rebuild, ROM export, ROM rebuild, or mutation apply path is enabled."
+
+    private static func enrichHeartGoldSoulSilverScriptSequenceInventory(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokeheartgold else { return records }
+        return records.map { record in
+            guard let sourceRole = heartGoldSoulSilverScriptSequenceSourceRole(for: record) else {
+                return record
+            }
+
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: "heartGoldSoulSilver:files/fielddata/script/scr_seq"),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: heartGoldSoulSilverScriptSequenceBlockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: heartGoldSoulSilverScriptSequenceActionState)
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                diagnostics: record.diagnostics + heartGoldSoulSilverScriptSequenceDiagnostics(for: record)
+            )
+        }
+    }
+
+    private static func heartGoldSoulSilverScriptSequenceSourceRole(for record: NDSDataCatalogRecord) -> String? {
+        guard record.domain == .scripts else { return nil }
+        let lower = record.relativePath.lowercased()
+        if lower == "files/fielddata/script/scr_seq" {
+            return "hgssScriptSequenceInventory"
+        }
+        if lower.hasPrefix("files/fielddata/script/scr_seq/") {
+            return "hgssScriptSequenceMember"
+        }
+        return nil
+    }
+
+    private static func heartGoldSoulSilverScriptSequenceDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
+        [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_DATA_HGSS_SCRIPT_SEQUENCE_INVENTORY_PREVIEW_ONLY",
+                message: "HeartGold/SoulSilver script sequence inventory for \(record.relativePath) is source provenance and blocker metadata only.",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_DATA_HGSS_SCRIPT_SEQUENCE_WRITE_BLOCKED",
+                message: "HeartGold/SoulSilver script sequence parsing, compilation, binary writes, rebuilds, exports, and mutation apply remain blocked; blocked actions: \(heartGoldSoulSilverScriptSequenceBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
+    private static let diamondPearlMapBlockedActions = [
+        "semantic editing",
+        "raw C-anchor write",
+        "map editor",
+        "matrix compiler",
+        "map data compiler",
+        "generated output write",
+        "reference write",
+        "NARC rebuild",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let diamondPearlMapActionState = "Diamond/Pearl map header, map matrix, map table, land data, and area data rows are inventory-only map metadata; no semantic editor, raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
+
+    private static func enrichDiamondPearlMapInventory(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokediamond else { return records }
+        return records.map { record in
+            guard let sourceRole = diamondPearlMapSourceRole(for: record),
+                  let provenance = diamondPearlMapSourceProvenance(for: record)
+            else {
+                return record
+            }
+
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: sourceRole),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: provenance),
+                SourceIndexFact(label: "Gen IV Readiness", value: "inventoryOnly"),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: diamondPearlMapBlockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: diamondPearlMapActionState)
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                diagnostics: record.diagnostics + diamondPearlMapDiagnostics(for: record)
+            )
+        }
+    }
+
+    private static func diamondPearlMapSourceRole(for record: NDSDataCatalogRecord) -> String? {
+        guard record.domain == .maps else { return nil }
+        let lower = record.relativePath.lowercased()
+        if lower == "arm9/src/map_header.c" {
+            return "dpMapHeaderCAnchor"
+        }
+        if lower == "files/fielddata/mapmatrix" {
+            return "dpMapMatrixInventory"
+        }
+        if lower.hasPrefix("files/fielddata/mapmatrix/") {
+            return "dpMapMatrixMember"
+        }
+        if lower == "files/fielddata/maptable" {
+            return "dpMapTableInventory"
+        }
+        if lower.hasPrefix("files/fielddata/maptable/") {
+            return "dpMapTableMember"
+        }
+        if lower == "files/fielddata/land_data" {
+            return "dpLandDataInventory"
+        }
+        if lower.hasPrefix("files/fielddata/land_data/") {
+            return "dpLandDataMember"
+        }
+        if lower == "files/fielddata/areadata" {
+            return "dpAreaDataInventory"
+        }
+        if lower.hasPrefix("files/fielddata/areadata/") {
+            return "dpAreaDataMember"
+        }
+        return nil
+    }
+
+    private static func diamondPearlMapSourceProvenance(for record: NDSDataCatalogRecord) -> String? {
+        let lower = record.relativePath.lowercased()
+        if lower == "arm9/src/map_header.c" {
+            return "diamondPearl:arm9/src/map_header.c"
+        }
+        if lower == "files/fielddata/mapmatrix" || lower.hasPrefix("files/fielddata/mapmatrix/") {
+            return "diamondPearl:files/fielddata/mapmatrix"
+        }
+        if lower == "files/fielddata/maptable" || lower.hasPrefix("files/fielddata/maptable/") {
+            return "diamondPearl:files/fielddata/maptable"
+        }
+        if lower == "files/fielddata/land_data" || lower.hasPrefix("files/fielddata/land_data/") {
+            return "diamondPearl:files/fielddata/land_data"
+        }
+        if lower == "files/fielddata/areadata" || lower.hasPrefix("files/fielddata/areadata/") {
+            return "diamondPearl:files/fielddata/areadata"
+        }
+        return nil
+    }
+
+    private static func diamondPearlMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
+        [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_DATA_DP_MAP_INVENTORY_PREVIEW_ONLY",
+                message: "Diamond/Pearl map inventory for \(record.relativePath) is source provenance and blocker metadata only.",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_DATA_DP_MAP_WRITE_BLOCKED",
+                message: "Diamond/Pearl map header, map matrix, map table, land data, and area data writes remain blocked; blocked actions: \(diamondPearlMapBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
     private static func genVReadinessSummary(for record: NDSDataCatalogRecord) -> NDSDataReadinessSummary {
         let sourceRole = genVSourceRole(for: record)
         if isGenVUnavailableTitle(record) {
@@ -1496,6 +1688,44 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Variant Hash Presence", value: variantHashPresence),
             SourceIndexFact(label: "Gen V main.rsf Presence", value: presence("main.rsf")),
             SourceIndexFact(label: "Gen V main.lsf Presence", value: presence("main.lsf"))
+        ]
+    }
+
+    private static func genVSHA1TextFacts(
+        relativePath: String,
+        url: URL,
+        exists: Bool,
+        isDirectory: Bool
+    ) -> [SourceIndexFact] {
+        let checksumPaths: Set<String> = [
+            "black.us/rom.sha1",
+            "white.us/rom.sha1",
+            "black2.us/rom.sha1",
+            "white2.us/rom.sha1"
+        ]
+        guard exists, !isDirectory, checksumPaths.contains(relativePath.lowercased()) else { return [] }
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return [SourceIndexFact(label: "Gen V SHA1 Text State", value: "invalid")]
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return [SourceIndexFact(label: "Gen V SHA1 Text State", value: "empty")]
+        }
+
+        guard let firstToken = trimmed.split(whereSeparator: { $0.isWhitespace }).first,
+              firstToken.count == 40,
+              firstToken.allSatisfy({ $0.isHexDigit })
+        else {
+            return [SourceIndexFact(label: "Gen V SHA1 Text State", value: "invalid")]
+        }
+
+        let digest = firstToken.lowercased()
+        return [
+            SourceIndexFact(label: "Gen V SHA1 Text State", value: "valid"),
+            SourceIndexFact(label: "Gen V SHA1 Text Digest", value: digest)
         ]
     }
 
@@ -1598,6 +1828,9 @@ public enum NDSDataCatalogBuilder {
         if genVTitleCoverageSpecs.contains(where: { $0.id == lower }) {
             return "variantSourceInventory"
         }
+        if lower == "files" {
+            return "nitroFSRootInventory"
+        }
         if lower == "files/a" {
             return "nitroArchiveGroupInventory"
         }
@@ -1694,6 +1927,8 @@ public enum NDSDataCatalogBuilder {
             return "Header roots are summarized as manual-only source inventory."
         case "variantSourceInventory":
             return "Variant marker folders are summarized for title coverage and manual-only source orientation."
+        case "nitroFSRootInventory":
+            return "The files root is summarized as manual-only NitroFS source inventory."
         case "nitroArchiveGroupInventory":
             return "The files/a archive-group root is summarized as manual-only NitroFS inventory."
         case "nitroArchiveGroup":

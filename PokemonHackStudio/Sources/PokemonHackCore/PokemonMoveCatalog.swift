@@ -463,7 +463,7 @@ public enum ProjectMoveCatalogBuilder {
             guard moveID != "MOVE_NONE" else { return nil }
             let fullPreview = sourceEntryPreview(root: root, record: record, fileManager: fileManager) ?? record.preview
             let previewFields = fullPreview.map { MoveTopLevelFieldScanner.fields(in: $0) } ?? [:]
-            let descriptionSymbol = expansionMoveDescriptionSymbol(profile: index.profile, fields: previewFields)
+            let descriptionSymbol = moveDescriptionSymbol(profile: index.profile, fields: previewFields)
             let descriptionText = descriptionSymbol.flatMap { descriptionTexts[$0]?.text }
             let editDiagnostics = editabilityDiagnostics(record: record, profile: index.profile, preview: fullPreview)
             let moveDiagnostics = record.diagnostics + editDiagnostics + diagnostics.filter { $0.span == record.sourceSpan }
@@ -478,7 +478,7 @@ public enum ProjectMoveCatalogBuilder {
                 descriptionSymbol: descriptionSymbol,
                 descriptionText: descriptionText,
                 isDescriptionEditable: descriptionSymbol.flatMap { descriptionTexts[$0] } != nil
-                    && index.profile == .pokeemeraldExpansion
+                    && moveDescriptionSourcePath(for: index.profile) != nil
                     && record.sourceSpan.relativePath == editableMoveSourcePath(for: index.profile),
                 isEditable: moveDiagnostics.allSatisfy { $0.severity != .error },
                 machineMemberships: machineByMove[moveID] ?? [],
@@ -806,8 +806,7 @@ public enum ProjectMoveCatalogBuilder {
         profile: GameProfile,
         fileManager: FileManager
     ) -> [String: MoveDescriptionText] {
-        guard profile == .pokeemeraldExpansion else { return [:] }
-        let path = expansionMoveDescriptionSourcePath
+        guard let path = moveDescriptionSourcePath(for: profile) else { return [:] }
         let url = root.appendingPathComponent(path)
         guard fileManager.fileExists(atPath: url.path), let text = try? moveReadText(at: url) else {
             return [:]
@@ -898,10 +897,18 @@ public enum ProjectMoveCatalogBuilder {
         return value
     }
 
-    private static func expansionMoveDescriptionSymbol(profile: GameProfile, fields: [String: MoveFieldSlice]) -> String? {
-        guard profile == .pokeemeraldExpansion, let value = fields["description"]?.value else { return nil }
+    private static func moveDescriptionSymbol(profile: GameProfile, fields: [String: MoveFieldSlice]) -> String? {
+        guard let value = fields["description"]?.value else { return nil }
         let compacted = compactMoveValue(value)
-        return isMoveDescriptionSymbol(compacted) ? compacted : nil
+        guard isMoveDescriptionSymbol(compacted) else { return nil }
+        switch profile {
+        case .pokeemeraldExpansion:
+            return compacted
+        case .pokeruby where compacted.hasPrefix("gMoveDescription_"):
+            return compacted
+        default:
+            return nil
+        }
     }
 
     private static func firstRegexMatch(_ pattern: String, in text: String) -> String? {
@@ -960,18 +967,9 @@ public enum MoveMutationPlanner {
         var changes: [MoveEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
-            let rewrite = rewriteChange(root: root, profile: catalog.profile, move: move, draft: draft)
+            let rewrite = rewriteChanges(root: root, profile: catalog.profile, move: move, draft: draft)
             diagnostics.append(contentsOf: rewrite.diagnostics)
-            if let change = rewrite.change {
-                changes.append(change)
-            }
-            if diagnostics.allSatisfy({ $0.severity != .error }) {
-                let descriptionRewrite = rewriteDescriptionChange(root: root, profile: catalog.profile, move: move, draft: draft)
-                diagnostics.append(contentsOf: descriptionRewrite.diagnostics)
-                if let change = descriptionRewrite.change {
-                    changes.append(change)
-                }
-            }
+            changes.append(contentsOf: rewrite.changes)
         }
         if changes.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
             diagnostics.append(Diagnostic(severity: .warning, code: "MOVE_PLAN_NO_CHANGES", message: "No move source changes are staged.", span: move.sourceSpan))
@@ -1037,7 +1035,7 @@ public enum MoveMutationPlanner {
            draftDescription != move.descriptionText,
            !move.isDescriptionEditable
         {
-            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_NOT_EDITABLE", message: "\(move.moveID) does not have a source-backed Expansion move description declaration that can be rewritten.", span: move.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_NOT_EDITABLE", message: "\(move.moveID) does not have a source-backed move description declaration that can be rewritten.", span: move.sourceSpan))
         }
         return diagnostics
     }
@@ -1076,10 +1074,76 @@ public enum MoveMutationPlanner {
         }
     }
 
-    private static func rewriteChange(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (change: MoveEditFileChange?, diagnostics: [Diagnostic]) {
+    private struct MoveFileTextReplacement {
+        let range: NSRange
+        let replacement: String
+        let summary: String
+        let textPreview: String
+    }
+
+    private static func rewriteChanges(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (changes: [MoveEditFileChange], diagnostics: [Diagnostic]) {
+        var diagnostics: [Diagnostic] = []
+        var replacementsByPath: [String: [MoveFileTextReplacement]] = [:]
+
+        let fieldRewrite = fieldTextReplacement(root: root, profile: profile, move: move, draft: draft)
+        diagnostics.append(contentsOf: fieldRewrite.diagnostics)
+        if let replacement = fieldRewrite.replacement {
+            replacementsByPath[move.sourceSpan.relativePath, default: []].append(replacement)
+        }
+
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else {
+            return ([], diagnostics)
+        }
+
+        let descriptionRewrite = descriptionTextReplacement(root: root, profile: profile, move: move, draft: draft)
+        diagnostics.append(contentsOf: descriptionRewrite.diagnostics)
+        if let path = descriptionRewrite.path, let replacement = descriptionRewrite.replacement {
+            replacementsByPath[path, default: []].append(replacement)
+        }
+
+        guard diagnostics.allSatisfy({ $0.severity != .error }) else {
+            return ([], diagnostics)
+        }
+
+        var changes: [MoveEditFileChange] = []
+        for path in replacementsByPath.keys.sorted() {
+            let replacements = replacementsByPath[path] ?? []
+            guard !replacements.isEmpty else { continue }
+            let url = root.appendingPathComponent(path)
+            guard let originalText = try? moveReadText(at: url), let originalData = originalText.data(using: .utf8) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_SOURCE_MISSING", message: "Move source file is missing or unreadable: \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+                continue
+            }
+            guard replacementRangesDoNotOverlap(replacements.map(\.range)) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_PLAN_REWRITE_OVERLAP", message: "Move source rewrites overlap in \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+                continue
+            }
+            let mutableText = NSMutableString(string: originalText)
+            for replacement in replacements.sorted(by: { $0.range.location > $1.range.location }) {
+                mutableText.replaceCharacters(in: replacement.range, with: replacement.replacement)
+            }
+            let newText = mutableText as String
+            guard newText != originalText, let newData = newText.data(using: .utf8) else { continue }
+            let summaries = orderedUnique(replacements.map(\.summary))
+            changes.append(
+                MoveEditFileChange(
+                    path: path,
+                    summary: summaries.joined(separator: " and "),
+                    originalByteCount: originalData.count,
+                    originalSHA1: pokemonHackSHA1Hex(originalData),
+                    newByteCount: newData.count,
+                    newData: newData,
+                    textPreview: replacements.map(\.textPreview).joined(separator: "\n\n")
+                )
+            )
+        }
+        return (changes, diagnostics)
+    }
+
+    private static func fieldTextReplacement(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (replacement: MoveFileTextReplacement?, diagnostics: [Diagnostic]) {
         let path = move.sourceSpan.relativePath
         let url = root.appendingPathComponent(path)
-        guard let originalText = try? moveReadText(at: url), let originalData = originalText.data(using: .utf8) else {
+        guard let originalText = try? moveReadText(at: url) else {
             return (
                 nil,
                 [Diagnostic(severity: .error, code: "MOVE_SOURCE_MISSING", message: "Move source file is missing or unreadable: \(path).", span: move.sourceSpan)]
@@ -1113,36 +1177,33 @@ public enum MoveMutationPlanner {
             replacementEntry.replaceSubrange(replacement.field.valueRange, with: replacement.value)
         }
 
-        let newText = moveReplaceLines(in: originalText, span: move.sourceSpan, replacement: replacementEntry)
-        guard newText != originalText, let newData = newText.data(using: .utf8) else { return (nil, []) }
-        return (
-            MoveEditFileChange(
-                path: path,
-                summary: "Update move source fields",
-                originalByteCount: originalData.count,
-                originalSHA1: pokemonHackSHA1Hex(originalData),
-                newByteCount: newData.count,
-                newData: newData,
-                textPreview: replacementEntry
-            ),
-            []
-        )
+        guard let lineRange = moveLineNSRange(in: originalText, span: move.sourceSpan) else {
+            return (nil, [Diagnostic(severity: .error, code: "MOVE_SOURCE_SPAN_INVALID", message: "Move source span could not be resolved in \(path).", span: move.sourceSpan)])
+        }
+        return (MoveFileTextReplacement(range: lineRange, replacement: replacementEntry, summary: "Update move source fields", textPreview: replacementEntry), [])
     }
 
-    private static func rewriteDescriptionChange(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (change: MoveEditFileChange?, diagnostics: [Diagnostic]) {
-        guard profile == .pokeemeraldExpansion else { return (nil, []) }
-        guard let draftText = draft.descriptionText, draftText != move.descriptionText else { return (nil, []) }
+    private static func descriptionTextReplacement(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (path: String?, replacement: MoveFileTextReplacement?, diagnostics: [Diagnostic]) {
+        guard let draftText = draft.descriptionText, draftText != move.descriptionText else { return (nil, nil, []) }
         guard let symbol = move.descriptionSymbol else {
             return (
+                nil,
                 nil,
                 [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SOURCE_MISSING", message: "\(move.moveID) does not have a description symbol that can be rewritten.", span: move.sourceSpan)]
             )
         }
-
-        let path = expansionMoveDescriptionSourcePath
-        let url = root.appendingPathComponent(path)
-        guard let originalText = try? moveReadText(at: url), let originalData = originalText.data(using: .utf8) else {
+        guard let path = moveDescriptionSourcePath(for: profile) else {
             return (
+                nil,
+                nil,
+                [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_NOT_EDITABLE", message: "\(move.moveID) does not have a supported move description source for \(profile.rawValue).", span: move.sourceSpan)]
+            )
+        }
+
+        let url = root.appendingPathComponent(path)
+        guard let originalText = try? moveReadText(at: url) else {
+            return (
+                nil,
                 nil,
                 [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SOURCE_UNREADABLE", message: "Move description source file could not be read before planning: \(path).", span: SourceSpan(relativePath: path, startLine: 1))]
             )
@@ -1150,30 +1211,41 @@ public enum MoveMutationPlanner {
         guard let description = MoveDescriptionScanner.descriptions(in: originalText, relativePath: path)[symbol] else {
             return (
                 nil,
+                nil,
                 [Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_SYMBOL_MISSING", message: "Description symbol \(symbol) was not found in \(path).", span: SourceSpan(relativePath: path, startLine: 1))]
             )
         }
 
         let replacement = renderMoveDescriptionDeclaration(symbol: symbol, text: draftText, usesStatic: description.usesStatic)
-        let mutableText = NSMutableString(string: originalText)
-        mutableText.replaceCharacters(
-            in: NSRange(location: description.startOffset, length: description.endOffset - description.startOffset),
-            with: replacement
-        )
-        let newText = mutableText as String
-        guard newText != originalText, let newData = newText.data(using: .utf8) else { return (nil, []) }
         return (
-            MoveEditFileChange(
-                path: path,
+            path,
+            MoveFileTextReplacement(
+                range: NSRange(location: description.startOffset, length: description.endOffset - description.startOffset),
+                replacement: replacement,
                 summary: "Update move description text",
-                originalByteCount: originalData.count,
-                originalSHA1: pokemonHackSHA1Hex(originalData),
-                newByteCount: newData.count,
-                newData: newData,
                 textPreview: replacement
             ),
             []
         )
+    }
+
+    private static func replacementRangesDoNotOverlap(_ ranges: [NSRange]) -> Bool {
+        let sorted = ranges.sorted { $0.location < $1.location }
+        for (previous, current) in zip(sorted, sorted.dropFirst()) {
+            if previous.location + previous.length > current.location {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func orderedUnique(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for value in values where seen.insert(value).inserted {
+            result.append(value)
+        }
+        return result
     }
 
     private static func missingFieldDiagnostics(profile: GameProfile, move: MoveDetail, fields: [String: MoveFieldSlice]) -> [Diagnostic] {
@@ -1383,6 +1455,17 @@ private let expansionKnownMoveFields = editableMoveFields + [
 ]
 
 private let expansionMoveDescriptionSourcePath = "src/data/text/move_descriptions.h"
+
+private func moveDescriptionSourcePath(for profile: GameProfile) -> String? {
+    switch profile {
+    case .pokeruby:
+        return editableMoveSourcePath(for: profile)
+    case .pokeemeraldExpansion:
+        return expansionMoveDescriptionSourcePath
+    default:
+        return nil
+    }
+}
 
 private struct MoveFieldSlice {
     let name: String
@@ -1740,6 +1823,35 @@ private func moveSourceEntryText(in text: String, span: SourceSpan) -> String {
     let end = min(max(start, span.endLine - 1), max(0, lines.count - 1))
     guard start <= end, start < lines.count else { return "" }
     return lines[start...end].joined(separator: "\n")
+}
+
+private func moveLineNSRange(in text: String, span: SourceSpan) -> NSRange? {
+    let lines = text.components(separatedBy: "\n")
+    guard !lines.isEmpty else { return nil }
+    let startLine = max(1, span.startLine)
+    let endLine = max(startLine, span.endLine)
+    var offset = 0
+    var startOffset: Int?
+    var endOffset: Int?
+
+    for (index, line) in lines.enumerated() {
+        let lineNumber = index + 1
+        let lineLength = (line as NSString).length
+        if lineNumber == startLine {
+            startOffset = offset
+        }
+        if lineNumber == endLine {
+            endOffset = offset + lineLength
+            break
+        }
+        offset += lineLength
+        if index < lines.count - 1 {
+            offset += 1
+        }
+    }
+
+    guard let startOffset, let endOffset, endOffset >= startOffset else { return nil }
+    return NSRange(location: startOffset, length: endOffset - startOffset)
 }
 
 private func moveReplaceLines(in text: String, span: SourceSpan, replacement: String) -> String {

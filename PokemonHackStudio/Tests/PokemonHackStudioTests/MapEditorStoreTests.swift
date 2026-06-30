@@ -686,6 +686,60 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGenVNitroFSRootInventoryStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let archiveGroupChild = root.appendingPathComponent("files/a/0/0/0/resource.bin")
+        try write(Data([0x2A]), to: archiveGroupChild)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let filesRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "files"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "nitroFSRootInventory" }
+        })
+        XCTAssertEqual(filesRootRow.kind, "directory")
+        XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Shallow Count" && $0.value == "4" })
+        XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertTrue(filesRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
+        XCTAssertFalse(filesRootRow.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(filesRootRow.facts.contains { $0.label == "Text Bank Preview" })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/a/0/0/0/resource.bin"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "nitroArchiveGroup" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/msgdata/story/message_bank.txt"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "messageBankMetadata" }
+        })
+        XCTAssertTrue(assetCatalog.rows.contains { row in
+            row.path == "files/wb_sound_data.sdat"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "soundArchiveMetadata" }
+        })
+
+        store.requestResourceAssetSelection(filesRootRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "resources:files")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(try Data(contentsOf: archiveGroupChild), Data([0x2A]))
+    }
+
+    @MainActor
     func testGenVMessageBankInventoryStaysPreviewOnlyInResourcesSelection() async throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -923,13 +977,30 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(entry.writePolicy, "readOnly")
         XCTAssertTrue(entry.items.contains { $0.path == "filesystem.mk" && $0.category.hasPrefix("NDS ") })
         XCTAssertTrue(entry.items.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "NDS Data species" })
+        let matrixRootItem = try XCTUnwrap(entry.items.first { $0.path == "files/fielddata/mapmatrix" && $0.category == "NDS Data maps" })
+        XCTAssertTrue(matrixRootItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMapMatrixInventory" })
+        XCTAssertTrue(matrixRootItem.facts.contains { $0.label == "Gen IV Action State" && $0.value.contains("inventory-only map metadata") })
         XCTAssertTrue(entry.items.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "NDS Data maps" })
+        let tableRootItem = try XCTUnwrap(entry.items.first { $0.path == "files/fielddata/maptable" && $0.category == "NDS Data maps" })
+        XCTAssertTrue(tableRootItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMapTableInventory" })
+        let landRootItem = try XCTUnwrap(entry.items.first { $0.path == "files/fielddata/land_data" && $0.category == "NDS Data maps" })
+        XCTAssertTrue(landRootItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpLandDataInventory" })
+        let areaRootItem = try XCTUnwrap(entry.items.first { $0.path == "files/fielddata/areadata" && $0.category == "NDS Data maps" })
+        XCTAssertTrue(areaRootItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpAreaDataInventory" })
         XCTAssertTrue(store.filteredResourceLibraryEntries.contains { $0.id == entry.id })
 
         store.loadSelectedAssetCatalogIfNeeded()
         let assetCatalog = try await waitForSelectedAssetCatalog(store)
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "arm9/src/pokemon.c" && $0.category == "species" })
+        let matrixRootAsset = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/mapmatrix" && $0.category == "maps" })
+        XCTAssertTrue(matrixRootAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMapMatrixInventory" })
         XCTAssertTrue(assetCatalog.rows.contains { $0.path == "files/fielddata/mapmatrix/matrix.bin" && $0.category == "maps" })
+        let tableRootAsset = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/maptable" && $0.category == "maps" })
+        XCTAssertTrue(tableRootAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMapTableInventory" })
+        let landRootAsset = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/land_data" && $0.category == "maps" })
+        XCTAssertTrue(landRootAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpLandDataInventory" })
+        let areaRootAsset = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/areadata" && $0.category == "maps" })
+        XCTAssertTrue(areaRootAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpAreaDataInventory" })
         XCTAssertFalse(entry.moduleSummary.contains("pokemon"))
     }
 
@@ -2431,6 +2502,10 @@ final class MapEditorStoreTests: XCTestCase {
         )
 
         let scriptBinaryRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/script/scr_seq/0001.bin" })
+        XCTAssertTrue(scriptBinaryRow.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "hgssScriptSequenceMember" })
+        XCTAssertTrue(scriptBinaryRow.facts.contains { $0.label == "Gen IV Source Provenance" && $0.value == "heartGoldSoulSilver:files/fielddata/script/scr_seq" })
+        XCTAssertTrue(scriptBinaryRow.facts.contains { $0.label == "Gen IV Blocked Actions" && $0.value.contains("script binary write") })
+        XCTAssertTrue(scriptBinaryRow.facts.contains { $0.label == "Gen IV Action State" && $0.value.contains("inventory-only HGSS script-sequence metadata") })
         store.requestResourceAssetSelection(scriptBinaryRow.id)
         let scriptBinaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
         XCTAssertTrue(scriptBinaryEditor.semanticFields.isEmpty)
@@ -2874,6 +2949,7 @@ final class MapEditorStoreTests: XCTestCase {
         draft.power = 55
         draft.pp = 30
         draft.flags = ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"]
+        draft.descriptionText = "A sharper pound."
         store.updateSelectedMoveDraft(draft)
 
         XCTAssertTrue(store.selectedMoveIsDirty)
@@ -2884,6 +2960,7 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(plan.changes.map(\.path), ["src/data/battle_moves.c"])
         XCTAssertTrue(store.canApplySelectedMoveMutationPlan)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".power = 55") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("A sharper pound.") == true)
 
         store.applySelectedMoveMutationPlan()
 
@@ -2894,6 +2971,7 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(editedDraft.power, 55)
         XCTAssertEqual(editedDraft.pp, 30)
         XCTAssertEqual(editedDraft.flags, ["FLAG_MAGIC_COAT_AFFECTED", "FLAG_PROTECT_AFFECTED"])
+        XCTAssertEqual(editedDraft.descriptionText, "A sharper pound.")
     }
 
     @MainActor
@@ -3874,6 +3952,80 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExpansionSpeciesPokedexEditsFlowThroughPokemonEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        let entryPath = root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        let textPath = root.appendingPathComponent("src/data/pokemon/pokedex_text.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let generatedPath = root.appendingPathComponent("generated/pokedex/entries.json")
+        let referencePath = root.appendingPathComponent("references/pokeemerald-expansion/src/data/pokemon/pokedex_entries.h")
+        let romPath = root.appendingPathComponent("build/pokeemerald.gba")
+        try write("{\"pokedex\":[]}\n", to: generatedPath)
+        try write("// reference Pokedex entry\n", to: referencePath)
+        try write(Data([0x47, 0x42, 0x41]), to: romPath)
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalGeneratedText = try String(contentsOf: generatedPath, encoding: .utf8)
+        let originalReferenceText = try String(contentsOf: referencePath, encoding: .utf8)
+        let originalROMData = try Data(contentsOf: romPath)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let selected = try XCTUnwrap(store.selectedSpeciesDetail)
+        XCTAssertEqual(selected.pokedex?.sourceSpan.relativePath, "src/data/pokemon/pokedex_entries.h")
+        XCTAssertEqual(selected.pokedex?.descriptionSpan?.relativePath, "src/data/pokemon/pokedex_text.h")
+        XCTAssertEqual(selected.pokedex?.height, "5")
+        XCTAssertEqual(selected.pokedex?.description, "Wood gecko.")
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.pokedex?.height = "6"
+        draft.pokedex?.categoryName = "EXPANSION GECKO"
+        draft.pokedex?.description = "Expansion Pokedex text."
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), [
+            "src/data/pokemon/pokedex_entries.h",
+            "src/data/pokemon/pokedex_text.h"
+        ], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/pokedex_entries.h" }?.textPreview?.contains(".height = 6") == true)
+        XCTAssertTrue(plan.changes.first { $0.path == "src/data/pokemon/pokedex_text.h" }?.textPreview?.contains("Expansion Pokedex text.") == true)
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path).sorted(), [
+            "src/data/pokemon/pokedex_entries.h",
+            "src/data/pokemon/pokedex_text.h"
+        ])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: generatedPath, encoding: .utf8), originalGeneratedText)
+        XCTAssertEqual(try String(contentsOf: referencePath, encoding: .utf8), originalReferenceText)
+        XCTAssertEqual(try Data(contentsOf: romPath), originalROMData)
+
+        XCTAssertTrue(try String(contentsOf: entryPath, encoding: .utf8).contains(".height = 6"))
+        XCTAssertTrue(try String(contentsOf: textPath, encoding: .utf8).contains("Expansion Pokedex text."))
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.pokedex?.height, "6")
+        XCTAssertEqual(reloaded.pokedex?.categoryName, "EXPANSION GECKO")
+        XCTAssertEqual(reloaded.pokedex?.description, "Expansion Pokedex text.")
+    }
+
+    @MainActor
     func testExpansionFormTableEditsFlowThroughPokemonEditor() async throws {
         let root = try makeExpansionPokemonProject()
         let formSpeciesPath = root.appendingPathComponent("src/data/pokemon/form_species_tables.h")
@@ -3947,6 +4099,77 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.forms.species.map(\.speciesID), ["SPECIES_TREECKO", "SPECIES_TREECKO_PRIMAL"])
         XCTAssertEqual(reloaded.forms.changes.map(\.method), ["FORM_CHANGE_ITEM_HOLD"])
         XCTAssertEqual(reloaded.forms.changes.map(\.targetSpecies), ["SPECIES_TREECKO_PRIMAL"])
+    }
+
+    @MainActor
+    func testExpansionSpeciesEvolutionEditsFlowThroughPokemonEditor() async throws {
+        let root = try makeExpansionPokemonProject(includeEvolutionRows: true)
+        let evolutionPath = root.appendingPathComponent("src/data/pokemon/evolution.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let generatedPath = root.appendingPathComponent("generated/species/evolutions.json")
+        let referencePath = root.appendingPathComponent("references/pokeemerald-expansion/src/data/pokemon/evolution.h")
+        let romPath = root.appendingPathComponent("build/pokeemerald.gba")
+        try write("{\"evolutions\":[]}\n", to: generatedPath)
+        try write("// reference evolution table\n", to: referencePath)
+        try write(Data([0x47, 0x42, 0x41]), to: romPath)
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalGeneratedText = try String(contentsOf: generatedPath, encoding: .utf8)
+        let originalReferenceText = try String(contentsOf: referencePath, encoding: .utf8)
+        let originalROMData = try Data(contentsOf: romPath)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let selected = try XCTUnwrap(store.selectedSpeciesDetail)
+        XCTAssertEqual(selected.evolutions.map(\.method), ["EVO_LEVEL", "EVO_ITEM"])
+        XCTAssertEqual(selected.evolutions.map(\.parameter), ["16", "ITEM_POTION"])
+        XCTAssertEqual(selected.evolutions.map(\.targetSpecies), ["SPECIES_GROVYLE", "SPECIES_TREECKO_MEGA"])
+        XCTAssertEqual(selected.evolutions.first?.sourceSpan.relativePath, "src/data/pokemon/evolution.h")
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.evolutions[0].method = "EVO_ITEM"
+        draft.evolutions[0].parameter = "ITEM_POTION"
+        draft.evolutions[0].targetSpecies = "SPECIES_TREECKO_PRIMAL"
+        draft.evolutions[1].method = "EVO_LEVEL"
+        draft.evolutions[1].parameter = "20"
+        draft.evolutions[1].targetSpecies = "SPECIES_GROVYLE"
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/evolution.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("{ EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_PRIMAL },") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("{ EVO_LEVEL, 20, SPECIES_GROVYLE }") == true)
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/evolution.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: generatedPath, encoding: .utf8), originalGeneratedText)
+        XCTAssertEqual(try String(contentsOf: referencePath, encoding: .utf8), originalReferenceText)
+        XCTAssertEqual(try Data(contentsOf: romPath), originalROMData)
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+
+        let source = try String(contentsOf: evolutionPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("{ EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_PRIMAL },"))
+        XCTAssertTrue(source.contains("{ EVO_LEVEL, 20, SPECIES_GROVYLE }"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.evolutions.map(\.method), ["EVO_ITEM", "EVO_LEVEL"])
+        XCTAssertEqual(reloaded.evolutions.map(\.parameter), ["ITEM_POTION", "20"])
+        XCTAssertEqual(reloaded.evolutions.map(\.targetSpecies), ["SPECIES_TREECKO_PRIMAL", "SPECIES_GROVYLE"])
     }
 
     @MainActor
@@ -4110,6 +4333,62 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.learnsets.tutor.map(\.move).sorted(), ["MOVE_FURY_CUTTER", "MOVE_SWORD_DANCE"])
         XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_FURY_CUTTER", bucket: .tutor))
         XCTAssertFalse(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_MEGA_PUNCH", bucket: .tutor))
+    }
+
+    @MainActor
+    func testExpansionSpeciesEggMoveDraftPreviewApplyAndReloadsThroughPokemonEditor() async throws {
+        let root = try makeExpansionPokemonProject(includeEggMoves: true)
+        let eggPath = root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let allLearnablesPath = root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalAllLearnablesText = try String(contentsOf: allLearnablesPath, encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let selected = try XCTUnwrap(store.selectedSpeciesDetail)
+        XCTAssertEqual(selected.learnsets.eggSourceSpan?.relativePath, "src/data/pokemon/egg_moves.h")
+        XCTAssertEqual(selected.learnsets.egg.map(\.move), ["MOVE_CRUNCH", "MOVE_LEECH_SEED"])
+
+        var draft = try XCTUnwrap(store.selectedSpeciesDraft)
+        draft.eggMoves = ["MOVE_LEECH_SEED", "MOVE_FLASH", "MOVE_CRUNCH"]
+        store.updateSelectedSpeciesDraft(draft)
+
+        XCTAssertTrue(store.selectedSpeciesIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedSpeciesMutationPlan)
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/egg_moves.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("egg_moves(TREECKO,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("MOVE_FLASH") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(store.canApplySelectedSpeciesMutationPlan)
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/egg_moves.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertFalse(store.selectedSpeciesIsDirty)
+        XCTAssertEqual(store.selectedSpeciesID, "SPECIES_TREECKO")
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: allLearnablesPath, encoding: .utf8), originalAllLearnablesText)
+
+        let source = try String(contentsOf: eggPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("egg_moves(TREECKO,"))
+        XCTAssertTrue(source.contains("MOVE_FLASH"))
+        XCTAssertTrue(source.contains("egg_moves(GROVYLE,"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.learnsets.egg.map(\.move), ["MOVE_LEECH_SEED", "MOVE_FLASH", "MOVE_CRUNCH"])
     }
 
     @MainActor
@@ -5485,6 +5764,9 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"name\":\"POTION\",\"price\":300,\"field_use\":true,\"effects\":[{\"kind\":\"heal\",\"amount\":20}]}\n", to: root.appendingPathComponent("files/itemtool/itemdata/potion.json"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/itemtool/itemdata/item_0000.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("files/fielddata/mapmatrix/matrix.bin"))
+        try write(Data([0x01]), to: root.appendingPathComponent("files/fielddata/maptable/map.bin"))
+        try write(Data([0x02]), to: root.appendingPathComponent("files/fielddata/land_data/land_0001.bin"))
+        try write(Data([0x03]), to: root.appendingPathComponent("files/fielddata/areadata/area_0001.bin"))
         try write(Data([0x00]), to: root.appendingPathComponent("graphics/icon.bin"))
         try write("// header\n", to: root.appendingPathComponent("include/config.h"))
 
@@ -5884,6 +6166,9 @@ final class MapEditorStoreTests: XCTestCase {
                     .bodyColor = BODY_COLOR_GREEN,
                     .noFlip = FALSE,
                 },
+                [SPECIES_GROVYLE] = { .baseHP = 50 },
+                [SPECIES_TREECKO_MEGA] = { .baseHP = 70 },
+                [SPECIES_TREECKO_PRIMAL] = { .baseHP = 80 },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info.h")
@@ -5948,7 +6233,9 @@ final class MapEditorStoreTests: XCTestCase {
     private func makeExpansionPokemonProject(
         includeLevelUpLearnsets: Bool = false,
         includeTMHMLearnsets: Bool = false,
-        includeTutorLearnsets: Bool = false
+        includeTutorLearnsets: Bool = false,
+        includeEvolutionRows: Bool = false,
+        includeEggMoves: Bool = false
     ) throws -> URL {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -6000,6 +6287,9 @@ final class MapEditorStoreTests: XCTestCase {
                     .formChangeTable = sTreeckoFormChangeTable,
                     .noFlip = FALSE,
                 },
+                [SPECIES_GROVYLE] = { .baseHP = 50 },
+                [SPECIES_TREECKO_MEGA] = { .baseHP = 70 },
+                [SPECIES_TREECKO_PRIMAL] = { .baseHP = 80 },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info.h")
@@ -6033,6 +6323,26 @@ final class MapEditorStoreTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/pokemon/form_change_tables.h")
         )
+        try write(
+            """
+            const struct PokedexEntry gPokedexEntries[] =
+            {
+                [NATIONAL_DEX_TREECKO] =
+                {
+                    .categoryName = _("WOOD GECKO"),
+                    .height = 5,
+                    .weight = 50,
+                    .description = gTreeckoPokedexText,
+                    .pokemonScale = 256,
+                    .pokemonOffset = 0,
+                    .trainerScale = 256,
+                    .trainerOffset = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        )
+        try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h"))
         if includeLevelUpLearnsets {
             try write(
                 """
@@ -6070,7 +6380,36 @@ final class MapEditorStoreTests: XCTestCase {
                 to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
             )
         }
-        if includeLevelUpLearnsets || includeTMHMLearnsets || includeTutorLearnsets {
+        if includeEggMoves {
+            try write(
+                """
+                const u16 gEggMoves[] = {
+                    egg_moves(TREECKO,
+                              MOVE_CRUNCH,
+                              MOVE_LEECH_SEED),
+                    egg_moves(GROVYLE,
+                              MOVE_CRUNCH),
+                    EGG_MOVES_TERMINATOR
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+            )
+        }
+        if includeEvolutionRows {
+            try write(
+                """
+                const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
+                {
+                    [SPECIES_TREECKO] = {
+                                            { EVO_LEVEL, 16, SPECIES_GROVYLE },
+                                            { EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_MEGA }
+                                        },
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/evolution.h")
+            )
+        }
+        if includeLevelUpLearnsets || includeTMHMLearnsets || includeTutorLearnsets || includeEggMoves {
             try write(
                 """
                 {
@@ -6080,6 +6419,8 @@ final class MapEditorStoreTests: XCTestCase {
                     "MOVE_BULLET_SEED",
                     "MOVE_CUT",
                     "MOVE_FLASH",
+                    "MOVE_CRUNCH",
+                    "MOVE_LEECH_SEED",
                     "MOVE_MEGA_PUNCH",
                     "MOVE_SWORD_DANCE"
                   ]
@@ -6395,6 +6736,9 @@ final class MapEditorStoreTests: XCTestCase {
     private func writeRubyBattleMoveTable(to root: URL) throws {
         try write(
             """
+            static const u8 gMoveDescription_None[] = _("No move.");
+            const u8 gMoveDescription_Pound[] = _("Pounds the foe.");
+
             const struct BattleMove gBattleMoves[] =
             {
                 [MOVE_NONE] =

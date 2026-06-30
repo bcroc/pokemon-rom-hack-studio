@@ -55,49 +55,114 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.descriptionText, "Restores HP by\n60 points.")
     }
 
-    func testRubySapphireItemRowsPlanApplyBackUpAndReloadWithoutDescriptionWrites() throws {
+    func testRubySapphireItemRowsAndDescriptionsPlanApplyBackUpAndReload() throws {
         let root = try temporaryRoot()
         try makeRubyProject(at: root)
 
         let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
         let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
         XCTAssertTrue(potion.isEditable)
-        XCTAssertFalse(potion.isDescriptionEditable)
+        XCTAssertTrue(potion.isDescriptionEditable)
         XCTAssertEqual(potion.name, "POTION")
         XCTAssertEqual(potion.price, "300")
-        XCTAssertEqual(potion.descriptionSymbol, "sPotionDesc")
-        XCTAssertNil(potion.descriptionText)
+        XCTAssertEqual(potion.descriptionSymbol, "gItemDescription_Potion")
+        XCTAssertEqual(potion.descriptionText, "Restores HP.")
 
         var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
         draft.name = "SUPER POTION"
         draft.price = "700"
+        draft.descriptionText = "Restores HP by\n20 points."
         draft.holdEffectParam = "60"
         draft.pocket = "POCKET_MEDICINE"
         draft.type = "ITEM_USE_PARTY_MENU"
 
         let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
-        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items_en.h"])
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items_en.h", "src/data/item_descriptions_en.h"])
         XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
         XCTAssertTrue(plan.isApplyable)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(#".name = _("SUPER POTION")"#) == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".price = 700") == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".holdEffectParam = 60") == true)
-        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".description = sPotionDesc") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".description = gItemDescription_Potion") == true)
+        XCTAssertTrue(plan.changes.last?.textPreview?.contains("gItemDescription_Potion") == true)
+        XCTAssertTrue(plan.changes.last?.textPreview?.contains(#""Restores HP by""#) == true)
 
         let result = try ItemMutationApplier.apply(plan: plan)
-        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertEqual(result.appliedChanges.count, 2)
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
 
         let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
         let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
         XCTAssertTrue(edited.isEditable)
-        XCTAssertFalse(edited.isDescriptionEditable)
+        XCTAssertTrue(edited.isDescriptionEditable)
         XCTAssertEqual(edited.name, "SUPER POTION")
         XCTAssertEqual(edited.price, "700")
         XCTAssertEqual(edited.holdEffectParam, "60")
         XCTAssertEqual(edited.pocket, "POCKET_MEDICINE")
         XCTAssertEqual(edited.type, "ITEM_USE_PARTY_MENU")
-        XCTAssertNil(edited.descriptionText)
+        XCTAssertEqual(edited.descriptionText, "Restores HP by\n20 points.")
+    }
+
+    func testRubySapphireDescriptionOnlyPlanAppliesBacksUpAndReloads() throws {
+        let root = try temporaryRoot()
+        try makeRubyProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(potion.isEditable)
+        XCTAssertTrue(potion.isDescriptionEditable)
+        XCTAssertEqual(potion.descriptionText, "Restores HP.")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.descriptionText = "A spray medicine.\nIt restores 20 HP."
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/item_descriptions_en.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("static const u8 gItemDescription_Potion") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(#""A spray medicine.""#) == true)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/item_descriptions_en.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeruby))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.descriptionText, "A spray medicine.\nIt restores 20 HP.")
+    }
+
+    func testRubySapphireMissingOrNonSimpleDescriptionDeclarationStaysDescriptionReadOnly() throws {
+        let missingRoot = try temporaryRoot()
+        try makeRubyProject(at: missingRoot, descriptionText: nil)
+
+        let missingCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: missingRoot, profile: .pokeruby))
+        let missingPotion = try XCTUnwrap(missingCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(missingPotion.isEditable)
+        XCTAssertFalse(missingPotion.isDescriptionEditable)
+        XCTAssertEqual(missingPotion.descriptionSymbol, "gItemDescription_Potion")
+        XCTAssertNil(missingPotion.descriptionText)
+
+        let missingPlan = ItemMutationPlanner.plan(
+            catalog: missingCatalog,
+            draft: ItemEditDraft(itemID: "ITEM_POTION", descriptionText: "Should stay blocked.")
+        )
+        XCTAssertTrue(missingPlan.changes.isEmpty)
+        XCTAssertFalse(missingPlan.isApplyable)
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_DESCRIPTION_NOT_EDITABLE" })
+
+        let nonSimpleRoot = try temporaryRoot()
+        try makeRubyProject(
+            at: nonSimpleRoot,
+            descriptionDeclaration: #"static const u8 gItemDescription_Potion[] = GetItemDescription(ITEM_POTION);"#
+        )
+
+        let nonSimpleCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: nonSimpleRoot, profile: .pokeruby))
+        let nonSimplePotion = try XCTUnwrap(nonSimpleCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertTrue(nonSimplePotion.isEditable)
+        XCTAssertFalse(nonSimplePotion.isDescriptionEditable)
+        XCTAssertEqual(nonSimplePotion.descriptionSymbol, "gItemDescription_Potion")
+        XCTAssertNil(nonSimplePotion.descriptionText)
     }
 
     func testExpansionItemInfoRowsPlanApplyAndReloadThroughDescriptor() throws {
@@ -300,7 +365,11 @@ final class PokemonItemCatalogTests: XCTestCase {
         )
     }
 
-    private func makeRubyProject(at root: URL) throws {
+    private func makeRubyProject(
+        at root: URL,
+        descriptionText: String? = "Restores HP.",
+        descriptionDeclaration: String? = nil
+    ) throws {
         try write(
             """
             const struct Item gItems[] =
@@ -312,7 +381,7 @@ final class PokemonItemCatalogTests: XCTestCase {
                     .price = 300, // shop price
                     .holdEffect = HOLD_EFFECT_NONE,
                     .holdEffectParam = 0,
-                    .description = sPotionDesc,
+                    .description = gItemDescription_Potion,
                     .pocket = POCKET_ITEMS,
                     .type = ITEM_USE_FIELD,
                     .fieldUseFunc = ItemUseOutOfBattle_Medicine,
@@ -324,6 +393,23 @@ final class PokemonItemCatalogTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/items_en.h")
         )
+        if let descriptionDeclaration {
+            try write(
+                descriptionDeclaration,
+                to: root.appendingPathComponent("src/data/item_descriptions_en.h")
+            )
+        } else if let descriptionText {
+            let lines = descriptionText.components(separatedBy: "\n")
+                .map { #"    "\#($0)""# }
+                .joined(separator: "\n")
+            try write(
+                """
+                static const u8 gItemDescription_Potion[] = _(
+                \(lines));
+                """,
+                to: root.appendingPathComponent("src/data/item_descriptions_en.h")
+            )
+        }
     }
 
     private func makeExpansionItemInfoProject(

@@ -7322,6 +7322,7 @@ final class WorkbenchStore: ObservableObject {
             sizeSummary: sizeSummary,
             checksumSummary: checksumSummary,
             source: SourceLocation(path: sourcePath, symbol: item.kind, line: 1),
+            facts: item.facts.map { Fact(label: $0.label, value: $0.value) },
             tags: [
                 item.kind,
                 item.category,

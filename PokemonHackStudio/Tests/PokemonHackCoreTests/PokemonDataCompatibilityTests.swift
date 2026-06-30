@@ -199,7 +199,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(rubyItems.editableCount, 1)
         XCTAssertNil(rubyItems.blockedReason)
         XCTAssertFalse(rubyItems.unsupportedFields.contains("Ruby/Sapphire positional gItems rewrites"))
-        XCTAssertTrue(rubyItems.unsupportedFields.contains("description text rewrites"))
+        XCTAssertFalse(rubyItems.unsupportedFields.contains("description text rewrites"))
         XCTAssertTrue(rubyItems.unsupportedFields.contains("TM/HM item compatibility edits"))
         XCTAssertNil(rubyItems.recommendedFutureRow)
 
@@ -218,12 +218,23 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(rubyMoves.editableCount, 1)
         XCTAssertNil(rubyMoves.blockedReason)
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("Ruby/Sapphire move row rewrites"))
-        XCTAssertTrue(rubyMoves.unsupportedFields.contains("description text rewrites"))
+        XCTAssertFalse(rubyMoves.unsupportedFields.contains("description text rewrites"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("generated move output writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("reference-only move source writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("binary ROM move writes"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("broad Ruby/Sapphire move schema rewrites"))
         XCTAssertNil(rubyMoves.recommendedFutureRow)
+        let rubyMoveSources = try XCTUnwrap(rubyMoves.sourceTables)
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == "gBattleMoves" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == "gMoveDescription_*" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "include/constants/moves.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == "contest data" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "references/pokeruby/src/data/battle_moves.c" && $0.status == .blocked })
+        XCTAssertTrue(rubyMoveSources.contains { $0.path == "ROM output" && $0.status == .blocked })
         let rubyJSON = String(data: try JSONEncoder().encode(ruby), encoding: .utf8) ?? ""
         XCTAssertTrue(rubyJSON.contains(#""gLevelUpLearnsets""#))
         XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
@@ -315,24 +326,25 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(species.status, .editable)
         XCTAssertEqual(species.sourcePath, "src/data/pokemon/species_info.h")
         XCTAssertEqual(species.tableSymbol, "gSpeciesInfo")
-        XCTAssertEqual(species.indexedCount, 1)
-        XCTAssertEqual(species.editableCount, 1)
+        XCTAssertEqual(species.indexedCount, 4)
+        XCTAssertEqual(species.editableCount, 4)
         XCTAssertNil(species.blockedReason)
         XCTAssertNil(species.recommendedFutureRow)
         XCTAssertTrue(species.unsupportedFields.contains("type/ability/egg group brace-list rewrites"))
         XCTAssertFalse(species.unsupportedFields.contains("learnset rewrites"))
         XCTAssertFalse(species.unsupportedFields.contains("TM/HM/tutor/egg move rewrites"))
         XCTAssertTrue(species.unsupportedFields.contains("TM/HM/egg move rewrites"))
-        XCTAssertTrue(species.unsupportedFields.contains("evolution rewrites"))
-        XCTAssertTrue(species.unsupportedFields.contains("Pokedex rewrites"))
-        XCTAssertTrue(species.unsupportedFields.contains("Pokedex text rewrites"))
+        XCTAssertFalse(species.unsupportedFields.contains("evolution rewrites"))
+        XCTAssertTrue(species.unsupportedFields.contains("evolution row insertion/removal/reorder"))
+        XCTAssertFalse(species.unsupportedFields.contains("Pokedex rewrites"))
+        XCTAssertFalse(species.unsupportedFields.contains("Pokedex text rewrites"))
         XCTAssertTrue(species.unsupportedFields.contains("species asset/cries/form rewrites"))
         XCTAssertTrue(species.unsupportedFields.contains("generated species family supplement apply"))
         XCTAssertTrue(species.unsupportedFields.contains("reference-only species source writes"))
         XCTAssertTrue(species.unsupportedFields.contains("Modern Emerald species writers"))
         XCTAssertTrue(species.unsupportedFields.contains("binary ROM species writes"))
         let sourceTables = try XCTUnwrap(species.sourceTables)
-        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info.h" && $0.tableSymbol == "gSpeciesInfo" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info.h" && $0.tableSymbol == "gSpeciesInfo" && $0.status == .editable && $0.indexedCount == 4 })
         XCTAssertTrue(sourceTables.contains { $0.path == "include/config/species_enabled.h" && $0.status == .blocked })
         XCTAssertTrue(sourceTables.contains { $0.path == "include/config/pokemon.h" && $0.status == .blocked })
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/species_info/" && $0.status == .blocked && $0.indexedCount == 1 })
@@ -388,7 +400,28 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(tmhmSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/tmhm_learnsets.h" && $0.tableSymbol == "sTMHMLearnsets/gTMHMLearnsets" && $0.status == .blocked })
         XCTAssertTrue(tmhmSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
-        XCTAssertEqual(entry(.eggMoves, in: expansion).status, .blocked)
+        let egg = entry(.eggMoves, in: expansion)
+        XCTAssertEqual(egg.status, .editable)
+        XCTAssertEqual(egg.sourcePath, "src/data/pokemon/egg_moves.h")
+        XCTAssertEqual(egg.tableSymbol, "gEggMoves")
+        XCTAssertEqual(egg.indexedCount, 1)
+        XCTAssertEqual(egg.editableCount, 1)
+        XCTAssertEqual(egg.readOnlyCount, 0)
+        XCTAssertNil(egg.blockedReason)
+        XCTAssertNil(egg.recommendedFutureRow)
+        XCTAssertTrue(egg.unsupportedFields.contains("egg move family reshaping"))
+        XCTAssertTrue(egg.unsupportedFields.contains("missing egg-move species row insertion"))
+        XCTAssertTrue(egg.unsupportedFields.contains("all_learnables.json apply"))
+        XCTAssertTrue(egg.unsupportedFields.contains("generated learnset output writes"))
+        XCTAssertTrue(egg.unsupportedFields.contains("reference-only learnset source writes"))
+        XCTAssertTrue(egg.unsupportedFields.contains("binary ROM learnset writes"))
+        XCTAssertTrue(egg.unsupportedFields.contains("broad Expansion egg-move schema rewrites"))
+        let eggSources = try XCTUnwrap(egg.sourceTables)
+        XCTAssertTrue(eggSources.contains { $0.path == "src/data/pokemon/egg_moves.h" && $0.tableSymbol == "gEggMoves" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(eggSources.contains { $0.path == "src/data/pokemon/all_learnables.json" && $0.status == .blocked && $0.indexedCount == 1 })
+        XCTAssertTrue(eggSources.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(eggSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/egg_moves.h" && $0.tableSymbol == "gEggMoves" && $0.status == .blocked })
+        XCTAssertTrue(eggSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let tutor = entry(.tutorLearnsets, in: expansion)
         XCTAssertEqual(tutor.status, .editable)
@@ -414,6 +447,29 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(tutorSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(tutorSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/tutor_learnsets.h" && $0.tableSymbol == "gTutorLearnsets" && $0.status == .blocked })
         XCTAssertTrue(tutorSources.contains { $0.path == "ROM output" && $0.status == .blocked })
+
+        let evolutions = entry(.evolutions, in: expansion)
+        XCTAssertEqual(evolutions.status, .editable)
+        XCTAssertEqual(evolutions.sourcePath, "src/data/pokemon/evolution.h")
+        XCTAssertEqual(evolutions.tableSymbol, "gEvolutionTable")
+        XCTAssertEqual(evolutions.indexedCount, 1)
+        XCTAssertEqual(evolutions.editableCount, 1)
+        XCTAssertEqual(evolutions.readOnlyCount, 0)
+        XCTAssertNil(evolutions.blockedReason)
+        XCTAssertNil(evolutions.recommendedFutureRow)
+        XCTAssertTrue(evolutions.unsupportedFields.contains("evolution row insertion/removal/reorder"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("evolution method constant creation"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("species constant/identity changes"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("generated evolution output writes"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("reference-only evolution source writes"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("ROM/export/build outputs"))
+        XCTAssertTrue(evolutions.unsupportedFields.contains("binary ROM evolution writes"))
+        let evolutionSources = try XCTUnwrap(evolutions.sourceTables)
+        XCTAssertTrue(evolutionSources.contains { $0.path == "src/data/pokemon/evolution.h" && $0.tableSymbol == "gEvolutionTable" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(evolutionSources.contains { $0.path == "include/constants/pokemon.h" && $0.status == .blocked })
+        XCTAssertTrue(evolutionSources.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(evolutionSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/evolution.h" && $0.tableSymbol == "gEvolutionTable" && $0.status == .blocked })
+        XCTAssertTrue(evolutionSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let forms = entry(.forms, in: expansion)
         XCTAssertEqual(forms.status, .editable)
@@ -441,18 +497,48 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(formSources.contains { $0.path == "graphics/pokemon" && $0.status == .blocked })
         XCTAssertTrue(formSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
+        let pokedex = entry(.pokedex, in: expansion)
+        XCTAssertEqual(pokedex.status, .editable)
+        XCTAssertEqual(pokedex.sourcePath, "src/data/pokemon/pokedex_entries.h")
+        XCTAssertEqual(pokedex.tableSymbol, "gPokedexEntries")
+        XCTAssertEqual(pokedex.indexedCount, 1)
+        XCTAssertEqual(pokedex.editableCount, 1)
+        XCTAssertEqual(pokedex.readOnlyCount, 0)
+        XCTAssertNil(pokedex.blockedReason)
+        XCTAssertNil(pokedex.recommendedFutureRow)
+        XCTAssertTrue(pokedex.unsupportedFields.contains("national dex identity changes"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("missing Pokedex row insertion"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("generated Pokedex output writes"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("reference-only Pokedex source writes"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("ROM/export/build outputs"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("binary-only Pokedex writes"))
+        XCTAssertTrue(pokedex.unsupportedFields.contains("broad Expansion Pokedex schema rewrites"))
+        let pokedexSources = try XCTUnwrap(pokedex.sourceTables)
+        XCTAssertTrue(pokedexSources.contains { $0.path == "src/data/pokemon/pokedex_entries.h" && $0.tableSymbol == "gPokedexEntries" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(pokedexSources.contains { $0.path == "src/data/pokemon/pokedex_text.h" && $0.tableSymbol == "g*PokedexText" && $0.status == .editable && $0.indexedCount == 1 })
+        XCTAssertTrue(pokedexSources.contains { $0.path == "generated" && $0.status == .blocked })
+        XCTAssertTrue(pokedexSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/pokedex_entries.h" && $0.status == .blocked })
+        XCTAssertTrue(pokedexSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/pokedex_text.h" && $0.status == .blocked })
+        XCTAssertTrue(pokedexSources.contains { $0.path == "ROM output" && $0.status == .blocked })
+
         let json = String(data: try JSONEncoder().encode(expansion), encoding: .utf8) ?? ""
         XCTAssertTrue(json.contains(#""sourceTables""#))
         XCTAssertTrue(json.contains(#""gSpeciesInfo""#))
         XCTAssertTrue(json.contains(#""s*LevelUpLearnset""#))
         XCTAssertTrue(json.contains(#""sTMHMLearnsets\/gTMHMLearnsets""#))
+        XCTAssertTrue(json.contains(#""gEggMoves""#))
         XCTAssertTrue(json.contains(#""gTutorLearnsets""#))
+        XCTAssertTrue(json.contains(#""gEvolutionTable""#))
         XCTAssertTrue(json.contains(#""FormSpeciesIdTable\/FormChangeTable""#))
         XCTAssertTrue(json.contains(#""src\/data\/pokemon\/all_learnables.json""#))
         XCTAssertTrue(json.contains(#""include\/config\/species_enabled.h""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/species_info.h""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/level_up_learnsets""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/tmhm_learnsets.h""#))
+        XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/egg_moves.h""#))
+        XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/evolution.h""#))
+        XCTAssertTrue(json.contains(#""src\/data\/pokemon\/pokedex_entries.h""#))
+        XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/pokedex_text.h""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/tutor_learnsets.h""#))
         XCTAssertTrue(json.contains(#""Modern Emerald species surfaces""#))
     }
@@ -465,6 +551,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         try setModificationDate(generatedDate, for: "src/data/pokemon/all_learnables.json", under: root)
         try setModificationDate(sourceDate, for: "src/data/pokemon/level_up_learnsets/treecko.h", under: root)
         try setModificationDate(sourceDate, for: "src/data/pokemon/tmhm_learnsets.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/egg_moves.h", under: root)
         try setModificationDate(sourceDate, for: "src/data/pokemon/tutor_learnsets.h", under: root)
         let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
         let sourceIndex = try ProjectSourceIndexLoader.load(from: index)
@@ -474,12 +561,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertNoCompletedRowRecommendations(in: report)
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
+        let egg = entry(.eggMoves, in: report)
         let tutor = entry(.tutorLearnsets, in: report)
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertEqual(egg.status, .editable)
         XCTAssertEqual(tutor.status, .editable)
         XCTAssertEqual(levelUp.editableCount, 1)
         XCTAssertEqual(tmhm.editableCount, 1)
+        XCTAssertEqual(egg.editableCount, 1)
         XCTAssertEqual(tutor.editableCount, 1)
         assertStaleLearnablesDiagnostic(
             in: levelUp,
@@ -492,13 +582,19 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             surfaceName: "TM/HM"
         )
         assertStaleLearnablesDiagnostic(
+            in: egg,
+            sourcePath: "src/data/pokemon/egg_moves.h",
+            surfaceName: "egg-move"
+        )
+        assertStaleLearnablesDiagnostic(
             in: tutor,
             sourcePath: "src/data/pokemon/tutor_learnsets.h",
             surfaceName: "tutor"
         )
-        XCTAssertEqual(report.diagnostics.filter { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" }.count, 3)
+        XCTAssertEqual(report.diagnostics.filter { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" }.count, 4)
         assertBlockedGeneratedLearnsetRows(in: levelUp)
         assertBlockedGeneratedLearnsetRows(in: tmhm)
+        assertBlockedGeneratedLearnsetRows(in: egg)
         assertBlockedGeneratedLearnsetRows(in: tutor)
     }
 
@@ -509,6 +605,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         let generatedDate = Date(timeIntervalSince1970: 2_000)
         try setModificationDate(sourceDate, for: "src/data/pokemon/level_up_learnsets/treecko.h", under: root)
         try setModificationDate(sourceDate, for: "src/data/pokemon/tmhm_learnsets.h", under: root)
+        try setModificationDate(sourceDate, for: "src/data/pokemon/egg_moves.h", under: root)
         try setModificationDate(sourceDate, for: "src/data/pokemon/tutor_learnsets.h", under: root)
         try setModificationDate(generatedDate, for: "src/data/pokemon/all_learnables.json", under: root)
         let index = projectIndex(root: root, profile: .pokeemeraldExpansion)
@@ -518,15 +615,19 @@ final class PokemonDataCompatibilityTests: XCTestCase {
 
         let levelUp = entry(.levelUpLearnsets, in: report)
         let tmhm = entry(.tmhmLearnsets, in: report)
+        let egg = entry(.eggMoves, in: report)
         let tutor = entry(.tutorLearnsets, in: report)
         XCTAssertEqual(levelUp.status, .editable)
         XCTAssertEqual(tmhm.status, .editable)
+        XCTAssertEqual(egg.status, .editable)
         XCTAssertEqual(tutor.status, .editable)
         XCTAssertEqual(levelUp.editableCount, 1)
         XCTAssertEqual(tmhm.editableCount, 1)
+        XCTAssertEqual(egg.editableCount, 1)
         XCTAssertEqual(tutor.editableCount, 1)
         XCTAssertFalse(levelUp.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
         XCTAssertFalse(tmhm.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
+        XCTAssertFalse(egg.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
         XCTAssertFalse(tutor.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
         XCTAssertFalse(report.diagnostics.contains { $0.code == "GBA_EXPANSION_LEARNSET_GENERATED_STALE" })
     }
@@ -922,6 +1023,13 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             """,
             to: root.appendingPathComponent("src/data/items_en.h")
         )
+        try write(
+            """
+            static const u8 sPotionDesc[] = _(
+                "Restores HP.");
+            """,
+            to: root.appendingPathComponent("src/data/item_descriptions_en.h")
+        )
     }
 
     private func writeRubySpecies(at root: URL) throws {
@@ -1034,12 +1142,14 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         try write("#define ABILITY_NONE 0\n#define ABILITY_OVERGROW 65\n", to: root.appendingPathComponent("include/constants/abilities.h"))
         try write("#define ITEM_NONE 0\n#define ITEM_TM09_BULLET_SEED ITEM_TM09\n", to: root.appendingPathComponent("include/constants/items.h"))
-        try write("#define MOVE_POUND 1\n#define MOVE_BULLET_SEED 4\n#define MOVE_CRUNCH 8\n", to: root.appendingPathComponent("include/constants/moves.h"))
+        try write("#define MOVE_POUND 1\n#define MOVE_BULLET_SEED 4\n#define MOVE_CRUNCH 8\n#define MOVE_LEECH_SEED 9\n", to: root.appendingPathComponent("include/constants/moves.h"))
     }
 
     private func writeRubyMoves(at root: URL) throws {
         try write(
             """
+            static const u8 gMoveDescription_Tackle[] = _("A physical attack.");
+
             const struct BattleMove gBattleMoves[] =
             {
                 [MOVE_TACKLE] =
@@ -1170,6 +1280,9 @@ final class PokemonDataCompatibilityTests: XCTestCase {
                     .bodyColor = BODY_COLOR_GREEN,
                     .noFlip = FALSE,
                 },
+                [SPECIES_GROVYLE] = { .baseHP = 50 },
+                [SPECIES_TREECKO_MEGA] = { .baseHP = 70 },
+                [SPECIES_TREECKO_PRIMAL] = { .baseHP = 80 },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info.h")
@@ -1237,11 +1350,53 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         try write(
             """
+            const u16 gEggMoves[] = {
+                egg_moves(TREECKO,
+                          MOVE_CRUNCH,
+                          MOVE_LEECH_SEED),
+                EGG_MOVES_TERMINATOR
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        )
+        try write(
+            """
+            const struct PokedexEntry gPokedexEntries[] =
+            {
+                [NATIONAL_DEX_TREECKO] =
+                {
+                    .categoryName = _("WOOD GECKO"),
+                    .height = 5,
+                    .weight = 50,
+                    .description = gTreeckoPokedexText,
+                    .pokemonScale = 256,
+                    .pokemonOffset = 0,
+                    .trainerScale = 256,
+                    .trainerOffset = 0,
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        )
+        try write("const u8 gTreeckoPokedexText[] = _(\"Wood gecko.\");\n", to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h"))
+        try write(
+            """
+            const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
+            {
+                [SPECIES_TREECKO] = {{EVO_LEVEL, 16, SPECIES_GROVYLE}},
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/evolution.h")
+        )
+        try write(
+            """
             {
               "SPECIES_TREECKO": [
                 "MOVE_POUND",
                 "MOVE_ABSORB",
                 "MOVE_BULLET_SEED",
+                "MOVE_CRUNCH",
+                "MOVE_LEECH_SEED",
                 "MOVE_MEGA_PUNCH",
                 "MOVE_SWORD_DANCE"
               ]

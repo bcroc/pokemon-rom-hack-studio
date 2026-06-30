@@ -2229,6 +2229,7 @@ struct ResourceLibraryItemViewState: Identifiable {
     let sizeSummary: String
     let checksumSummary: String
     let source: SourceLocation
+    let facts: [Fact]
     let tags: [String]
 }
 

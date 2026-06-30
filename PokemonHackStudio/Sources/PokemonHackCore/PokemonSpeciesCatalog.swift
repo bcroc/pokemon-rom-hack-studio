@@ -299,18 +299,20 @@ public struct SpeciesMoveReference: Codable, Equatable, Identifiable {
 }
 
 public struct SpeciesEvolution: Codable, Equatable, Identifiable {
-    public var id: String { "\(method):\(parameter):\(targetSpecies):\(sourceSpan.relativePath):\(sourceSpan.startLine)" }
+    public var id: String { "\(sourceSpan.relativePath):\(sourceSpan.startLine):\(rowIndex)" }
 
     public let method: String
     public let parameter: String
     public let targetSpecies: String
     public let sourceSpan: SourceSpan
+    public let rowIndex: Int
 
-    public init(method: String, parameter: String, targetSpecies: String, sourceSpan: SourceSpan) {
+    public init(method: String, parameter: String, targetSpecies: String, sourceSpan: SourceSpan, rowIndex: Int = 0) {
         self.method = method
         self.parameter = parameter
         self.targetSpecies = targetSpecies
         self.sourceSpan = sourceSpan
+        self.rowIndex = rowIndex
     }
 }
 
@@ -890,6 +892,7 @@ public struct SpeciesEvolutionDraft: Codable, Equatable, Identifiable {
 
     public init(evolution: SpeciesEvolution) {
         self.init(
+            id: evolution.id,
             method: evolution.method,
             parameter: evolution.parameter,
             targetSpecies: evolution.targetSpecies
@@ -1789,13 +1792,15 @@ public enum ProjectSpeciesCatalogBuilder {
         return Dictionary(uniqueKeysWithValues: parsed.entries.compactMap { entry in
             guard entry.symbol.hasPrefix("SPECIES_") else { return nil }
             let evolutions = regexMatches(#"\{\s*(EVO_[A-Z0-9_]+)\s*,\s*([^,{}]+)\s*,\s*(SPECIES_[A-Z0-9_]+)\s*\}"#, in: entry.body)
-                .compactMap { match -> SpeciesEvolution? in
+                .enumerated()
+                .compactMap { rowIndex, match -> SpeciesEvolution? in
                     guard match.count >= 4 else { return nil }
                     return SpeciesEvolution(
                         method: compact(match[1]) ?? match[1],
                         parameter: compact(match[2]) ?? match[2],
                         targetSpecies: compact(match[3]) ?? match[3],
-                        sourceSpan: entry.span
+                        sourceSpan: entry.span,
+                        rowIndex: rowIndex
                     )
                 }
             return (entry.symbol, evolutions)
@@ -2219,14 +2224,17 @@ public enum SpeciesMutationPlanner {
             }
             if eggChanged(species: species, draft: draft) {
                 if let span = species.learnsets.eggSourceSpan,
-                   let path = descriptor.eggMovesPath,
-                   let eggChange = rewriteChange(
-                    root: root,
-                    path: path,
-                    span: span,
-                    replacement: renderEggMoves(speciesID: draft.speciesID, moves: draft.eggMoves)
-                   ) {
-                    changes.append(eggChange)
+                   let path = descriptor.eggMovesPath {
+                    if descriptor.speciesInfoStyle == .expansionSpeciesScalars && !isExpansionEggMovePath(path) {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EGG_MOVES_PATH_UNSUPPORTED", message: "\(draft.speciesID) egg-move rewrites are limited to local Expansion egg_moves(...) source rows.", span: span))
+                    } else if let eggChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderEggMoves(speciesID: draft.speciesID, moves: draft.eggMoves)
+                    ) {
+                        changes.append(eggChange)
+                    }
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EGG_MOVES_SPAN_MISSING", message: "\(draft.speciesID) has no editable egg-move source span. Adding new egg-move blocks is not supported yet.", span: species.sourceSpan))
                 }
@@ -2284,14 +2292,17 @@ public enum SpeciesMutationPlanner {
             if pokedexChanged(species: species, draft: draft) {
                 if let span = species.pokedex?.sourceSpan,
                    let path = descriptor.pokedexPath,
-                   let pokedexDraft = draft.pokedex,
-                   let pokedexChange = rewriteChange(
-                    root: root,
-                    path: path,
-                    span: span,
-                    replacement: renderPokedexEntry(speciesID: draft.speciesID, draft: pokedexDraft, descriptionSymbol: species.pokedex?.descriptionSymbol)
-                   ) {
-                    changes.append(pokedexChange)
+                   let pokedexDraft = draft.pokedex {
+                    if descriptor.speciesInfoStyle == .expansionSpeciesScalars && !isExpansionPokedexPath(span.relativePath, expectedPath: path) {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_PATH_UNSUPPORTED", message: "\(draft.speciesID) Pokedex rewrites are limited to local Expansion Pokedex entry source rows.", span: span))
+                    } else if let pokedexChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderPokedexEntry(speciesID: draft.speciesID, draft: pokedexDraft, descriptionSymbol: species.pokedex?.descriptionSymbol)
+                    ) {
+                        changes.append(pokedexChange)
+                    }
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_SPAN_MISSING", message: "\(draft.speciesID) has no editable Pokedex source span.", span: species.sourceSpan))
                 }
@@ -2300,14 +2311,17 @@ public enum SpeciesMutationPlanner {
                 if let span = species.pokedex?.descriptionSpan,
                    let path = descriptor.pokedexTextPath,
                    let text = draft.pokedex?.description,
-                   let symbol = species.pokedex?.descriptionSymbol,
-                   let pokedexTextChange = rewriteChange(
-                    root: root,
-                    path: path,
-                    span: span,
-                    replacement: renderPokedexText(symbol: symbol, text: text)
-                   ) {
-                    changes.append(pokedexTextChange)
+                   let symbol = species.pokedex?.descriptionSymbol {
+                    if descriptor.speciesInfoStyle == .expansionSpeciesScalars && !isExpansionPokedexTextPath(span.relativePath, expectedPath: path) {
+                        diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_TEXT_PATH_UNSUPPORTED", message: "\(draft.speciesID) Pokedex text rewrites are limited to local Expansion Pokedex text declarations.", span: span))
+                    } else if let pokedexTextChange = rewriteChange(
+                        root: root,
+                        path: path,
+                        span: span,
+                        replacement: renderPokedexText(symbol: symbol, text: text)
+                    ) {
+                        changes.append(pokedexTextChange)
+                    }
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_POKEDEX_TEXT_SPAN_MISSING", message: "\(draft.speciesID) has no editable Pokedex description source span.", span: species.sourceSpan))
                 }
@@ -2371,7 +2385,7 @@ public enum SpeciesMutationPlanner {
 
     private static func plannerDiagnostics(catalog: ProjectSpeciesCatalog, species: SpeciesDetail, draft: SpeciesEditDraft, descriptor: SpeciesCatalogDescriptor) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []
-        appendStructuralDiagnostics(draft: draft, species: species, diagnostics: &diagnostics)
+        appendStructuralDiagnostics(descriptor: descriptor, draft: draft, species: species, diagnostics: &diagnostics)
         appendCapabilityDiagnostics(descriptor: descriptor, species: species, draft: draft, diagnostics: &diagnostics)
         appendConstantDiagnostics(catalog: catalog, draft: draft, species: species, descriptor: descriptor, diagnostics: &diagnostics)
         appendEvolutionDiagnostics(catalog: catalog, draft: draft, species: species, descriptor: descriptor, diagnostics: &diagnostics)
@@ -2432,7 +2446,19 @@ public enum SpeciesMutationPlanner {
         path == "src/data/pokemon/tmhm_learnsets.h"
     }
 
-    private static func appendStructuralDiagnostics(draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
+    private static func isExpansionEggMovePath(_ path: String) -> Bool {
+        path == "src/data/pokemon/egg_moves.h"
+    }
+
+    private static func isExpansionPokedexPath(_ path: String, expectedPath: String) -> Bool {
+        path == expectedPath && expectedPath == "src/data/pokemon/pokedex_entries.h"
+    }
+
+    private static func isExpansionPokedexTextPath(_ path: String, expectedPath: String) -> Bool {
+        path == expectedPath && expectedPath == "src/data/pokemon/pokedex_text.h"
+    }
+
+    private static func appendStructuralDiagnostics(descriptor: SpeciesCatalogDescriptor, draft: SpeciesEditDraft, species: SpeciesDetail, diagnostics: inout [Diagnostic]) {
         let stats = [
             ("HP", draft.baseStats.hp),
             ("Attack", draft.baseStats.attack),
@@ -2476,6 +2502,11 @@ public enum SpeciesMutationPlanner {
             diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EVOLUTIONS_EXCEEDED", message: "Species cannot have more than 5 evolutions.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
         }
         if let original = SpeciesEditDraft(detail: species) {
+            if descriptor.speciesInfoStyle == .expansionSpeciesScalars,
+               species.evolutions.contains(where: { $0.sourceSpan.relativePath == "src/data/pokemon/evolution.h" }),
+               draft.evolutions.map(\.id) != original.evolutions.map(\.id) {
+                diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_EXPANSION_EVOLUTION_ROW_STRUCTURE_UNSUPPORTED", message: "Expansion evolution row insertion, removal, and reorder are blocked; edit existing local gEvolutionTable tuples only.", span: species.evolutions.first?.sourceSpan ?? species.sourceSpan))
+            }
             if draft.formSpecies.map(\.slot) != original.formSpecies.map(\.slot) {
                 diagnostics.append(Diagnostic(severity: .error, code: "SPECIES_FORM_SPECIES_ROW_STRUCTURE_UNSUPPORTED", message: "Form species row insertion, removal, and reorder are blocked; edit existing local rows only.", span: species.forms.formSpeciesSourceSpan ?? species.sourceSpan))
             }
@@ -2534,6 +2565,9 @@ public enum SpeciesMutationPlanner {
             appendUnknown(changedItems.compactMap { $0 }.filter { $0 != "ITEM_NONE" }, group: .items, constants: constants, species: species, diagnostics: &diagnostics)
             if descriptor.editCapabilities.levelUp || levelUpChanged(species: species, draft: draft) {
                 appendUnknown(draft.levelUpMoves.map(\.move).filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
+            }
+            if descriptor.editCapabilities.eggMoves || eggChanged(species: species, draft: draft) {
+                appendUnknown(draft.eggMoves.filter { $0 != "MOVE_NONE" }, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
             }
             if descriptor.editCapabilities.tutor || tutorChanged(species: species, draft: draft) {
                 appendUnknown(draft.tutorMoves, group: .moves, constants: constants, species: species, diagnostics: &diagnostics)
@@ -3880,10 +3914,10 @@ private struct SpeciesEditCapabilities {
         speciesInfo: true,
         levelUp: true,
         tmhm: true,
-        eggMoves: false,
-        evolutions: false,
-        pokedex: false,
-        pokedexText: false,
+        eggMoves: true,
+        evolutions: true,
+        pokedex: true,
+        pokedexText: true,
         tutor: true,
         assets: false,
         forms: true

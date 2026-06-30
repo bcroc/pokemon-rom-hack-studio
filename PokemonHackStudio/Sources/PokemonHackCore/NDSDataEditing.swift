@@ -416,7 +416,7 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, and zone-event JSON rows, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, and the Diamond/Pearl trainer class gender C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
@@ -440,7 +440,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; nested encounter arrays, slots, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .maps, !isSemanticMapDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events or res/field/matrices and Diamond/Pearl direct JSON rows under files/fielddata/eventdata; nested event or matrix directories, area data, map binaries, scripts, C anchors, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data and Diamond/Pearl direct JSON rows under files/fielddata/eventdata; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, scripts, C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .scripts, !isSemanticScriptDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -550,10 +550,20 @@ public enum NDSDataSemanticEditor {
         return !remainder.isEmpty && !remainder.contains("/")
     }
 
+    private static func isPlatinumAreaDataPath(_ relativePath: String) -> Bool {
+        let prefix = "res/field/area_data/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
     private static func isSemanticMapDataPath(_ profile: GameProfile, _ relativePath: String) -> Bool {
         switch profile {
         case .pokeplatinum:
-            return isPlatinumFieldEventDataPath(relativePath) || isPlatinumMapMatrixDataPath(relativePath)
+            return isPlatinumFieldEventDataPath(relativePath)
+                || isPlatinumMapMatrixDataPath(relativePath)
+                || isPlatinumAreaDataPath(relativePath)
         case .pokediamond:
             return isDiamondPearlFieldEventDataPath(relativePath)
         default:

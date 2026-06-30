@@ -347,8 +347,14 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexed = learnsetRecordCount(in: sourceIndex, matching: ["tmhm"])
             }
         case .eggMoves:
-            indexed = speciesCatalog?.species.filter { !$0.learnsets.egg.isEmpty }.count
-                ?? learnsetRecordCount(in: sourceIndex, matching: ["egg"])
+            if index.profile == .pokeemeraldExpansion {
+                indexed = speciesCatalog?.species.filter { species in
+                    isExpansionEggMoveSourcePath(species.learnsets.eggSourceSpan?.relativePath)
+                }.count ?? learnsetRecordCount(in: sourceIndex, matching: ["egg"])
+            } else {
+                indexed = speciesCatalog?.species.filter { !$0.learnsets.egg.isEmpty }.count
+                    ?? learnsetRecordCount(in: sourceIndex, matching: ["egg"])
+            }
         case .tutorLearnsets:
             if index.profile == .pokeemeraldExpansion {
                 indexed = speciesCatalog?.species.filter { species in
@@ -388,6 +394,13 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: indexed,
                 editableCount: editable
             )
+        case .eggMoves:
+            sourceTables = eggMoveSourceTables(
+                profile: index.profile,
+                sourceIndex: sourceIndex,
+                indexedCount: indexed,
+                editableCount: editable
+            )
         default:
             sourceTables = nil
         }
@@ -410,8 +423,15 @@ public enum PokemonDataCompatibilityReportBuilder {
         sourceIndex: ProjectSourceIndex
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: .evolutions, profile: index.profile)
-        let indexed = speciesCatalog?.species.filter { !$0.evolutions.isEmpty }.count
-            ?? recordCount(.evolutions, in: sourceIndex)
+        let indexed: Int
+        if let speciesCatalog, index.profile == .pokeemeraldExpansion {
+            indexed = speciesCatalog.species.filter { species in
+                species.evolutions.contains { $0.sourceSpan.relativePath == "src/data/pokemon/evolution.h" }
+            }.count
+        } else {
+            indexed = speciesCatalog?.species.filter { !$0.evolutions.isEmpty }.count
+                ?? recordCount(.evolutions, in: sourceIndex)
+        }
         let editable = supportsEvolutionMutationEditing(index.profile) && indexed > 0 ? indexed : 0
         return entry(
             surface: .evolutions,
@@ -419,8 +439,13 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptor: descriptor,
             indexedCount: indexed,
             editableCount: editable,
-            unsupportedFields: editable > 0 ? ["missing evolution row insertion"] : ["evolution method edits", "target species edits", "parameter edits", "evolution row insertion/reordering"],
-            recommendedFutureRow: editable > 0 ? nil : "PHS-T57"
+            unsupportedFields: evolutionUnsupportedFields(profile: index.profile, editableCount: editable),
+            recommendedFutureRow: editable > 0 ? nil : descriptor?.recommendedFutureRow,
+            sourceTables: evolutionSourceTables(
+                profile: index.profile,
+                indexedCount: indexed,
+                editableCount: editable
+            )
         )
     }
 
@@ -439,8 +464,13 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptor: descriptor,
             indexedCount: indexed,
             editableCount: editable,
-            unsupportedFields: editable > 0 ? ["national dex identity changes", "missing Pokedex row insertion"] : ["category text edits", "height/weight edits", "description text rewrites", "national dex identity changes"],
-            recommendedFutureRow: editable > 0 ? nil : "PHS-T57"
+            unsupportedFields: pokedexUnsupportedFields(profile: index.profile, editableCount: editable),
+            recommendedFutureRow: editable > 0 ? nil : "PHS-T57",
+            sourceTables: pokedexSourceTables(
+                profile: index.profile,
+                indexedCount: indexed,
+                editableCount: editable
+            )
         )
     }
 
@@ -581,6 +611,59 @@ public enum PokemonDataCompatibilityReportBuilder {
         ]
     }
 
+    private static func evolutionSourceTables(
+        profile: GameProfile,
+        indexedCount: Int,
+        editableCount: Int
+    ) -> [PokemonDataCompatibilitySourceTable]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let localStatus: PokemonDataCompatibilityStatus
+        if editableCount > 0 {
+            localStatus = .editable
+        } else if indexedCount > 0 {
+            localStatus = .readOnly
+        } else {
+            localStatus = .blocked
+        }
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/evolution.h",
+                tableSymbol: "gEvolutionTable",
+                indexedCount: indexedCount,
+                status: localStatus,
+                note: "Local source-backed Expansion evolution tuples use the Species mutation-plan gate for existing parsed rows only."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "include/constants/pokemon.h",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Evolution method constants, species constants, identity changes, and row creation/reordering remain blocked."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "generated",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Generated evolution outputs remain blocked and must be refreshed outside this mutation plan."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/pokemon/evolution.h",
+                tableSymbol: "gEvolutionTable",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion clones remain read-only research inputs."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "ROM output",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "ROM/export/build outputs and binary writes remain blocked."
+            )
+        ]
+    }
+
     private static func speciesSourceTables(
         profile: GameProfile,
         sourceIndex: ProjectSourceIndex,
@@ -713,7 +796,6 @@ public enum PokemonDataCompatibilityReportBuilder {
         editableCount: Int,
         descriptionEditableCount: Int
     ) -> [PokemonDataCompatibilitySourceTable]? {
-        guard profile == .pokeemeraldExpansion else { return nil }
         let sourceStatus: PokemonDataCompatibilityStatus
         if editableCount > 0 {
             sourceStatus = .editable
@@ -730,6 +812,74 @@ public enum PokemonDataCompatibilityReportBuilder {
         } else {
             descriptionStatus = .blocked
         }
+        if profile == .pokeruby {
+            return [
+                PokemonDataCompatibilitySourceTable(
+                    path: "src/data/battle_moves.c",
+                    tableSymbol: "gBattleMoves",
+                    indexedCount: indexedCount,
+                    status: sourceStatus,
+                    note: "Local Ruby/Sapphire battle move rows use the move mutation-plan gate."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "src/data/battle_moves.c",
+                    tableSymbol: "gMoveDescription_*",
+                    indexedCount: descriptionEditableCount,
+                    status: descriptionStatus,
+                    note: "Existing in-file Ruby/Sapphire move description declarations referenced by gBattleMoves are editable through move drafts."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "include/constants/moves.h",
+                    tableSymbol: nil,
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "Move constants, identity changes, and row creation/reordering remain blocked."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "src/data/battle_moves.c",
+                    tableSymbol: "contest data",
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "Contest data remains read-only for this slice."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "src/data/pokemon/tmhm_learnsets.h",
+                    tableSymbol: "gTMHMLearnsets",
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "TM/HM compatibility edits remain blocked from move row plans."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "src/data/pokemon/tutor_learnsets.h",
+                    tableSymbol: "gTutorLearnsets",
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "Tutor compatibility edits remain blocked from move row plans."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "generated",
+                    tableSymbol: nil,
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "Generated move outputs remain blocked and must be refreshed outside this mutation plan."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "references/pokeruby/src/data/battle_moves.c",
+                    tableSymbol: "gBattleMoves",
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "Reference Ruby/Sapphire clones remain read-only research inputs."
+                ),
+                PokemonDataCompatibilitySourceTable(
+                    path: "ROM output",
+                    tableSymbol: nil,
+                    indexedCount: 0,
+                    status: .blocked,
+                    note: "ROM and binary move writes remain blocked."
+                )
+            ]
+        }
+        guard profile == .pokeemeraldExpansion else { return nil }
         return [
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/moves_info.h",
@@ -1074,6 +1224,137 @@ public enum PokemonDataCompatibilityReportBuilder {
         ]
     }
 
+    private static func pokedexSourceTables(
+        profile: GameProfile,
+        indexedCount: Int,
+        editableCount: Int
+    ) -> [PokemonDataCompatibilitySourceTable]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let sourceStatus: PokemonDataCompatibilityStatus
+        if editableCount > 0 {
+            sourceStatus = .editable
+        } else if indexedCount > 0 {
+            sourceStatus = .readOnly
+        } else {
+            sourceStatus = .blocked
+        }
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/pokedex_entries.h",
+                tableSymbol: "gPokedexEntries",
+                indexedCount: indexedCount,
+                status: sourceStatus,
+                note: "Local source-backed Expansion Pokedex rows use the Species mutation-plan gate for existing parsed rows only."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/pokedex_text.h",
+                tableSymbol: "g*PokedexText",
+                indexedCount: indexedCount,
+                status: sourceStatus,
+                note: "Local source-backed Expansion Pokedex text declarations use the Species mutation-plan gate for simple existing declarations only."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "generated",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Generated Pokedex outputs remain blocked and must be refreshed outside this mutation plan."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/pokemon/pokedex_entries.h",
+                tableSymbol: "gPokedexEntries",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion Pokedex entry writes remain blocked."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/pokemon/pokedex_text.h",
+                tableSymbol: "g*PokedexText",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion Pokedex text writes remain blocked."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "ROM output",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "ROM/export/build outputs and binary Pokedex writes remain blocked."
+            )
+        ]
+    }
+
+    private static func eggMoveSourceTables(
+        profile: GameProfile,
+        sourceIndex: ProjectSourceIndex,
+        indexedCount: Int,
+        editableCount: Int
+    ) -> [PokemonDataCompatibilitySourceTable]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let localRowCount = Set(
+            sourceIndex.records
+                .filter {
+                    $0.module == .learnsets
+                        && isExpansionEggMoveSourcePath($0.sourceSpan.relativePath)
+                }
+                .map { "\($0.sourceSpan.relativePath):\($0.title)" }
+        ).count
+        let allLearnablesCount = Set(
+            sourceIndex.records
+                .filter {
+                    $0.module == .learnsets
+                        && $0.tags.contains("all-learnables")
+                        && $0.sourceSpan.relativePath == "src/data/pokemon/all_learnables.json"
+                }
+                .map(\.title)
+        ).count
+        let sourceStatus: PokemonDataCompatibilityStatus
+        if editableCount > 0 {
+            sourceStatus = .editable
+        } else if indexedCount > 0 {
+            sourceStatus = .readOnly
+        } else {
+            sourceStatus = .blocked
+        }
+        return [
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/egg_moves.h",
+                tableSymbol: "gEggMoves",
+                indexedCount: max(localRowCount, editableCount),
+                status: sourceStatus,
+                note: "Local source-backed Expansion egg-move rows use the species mutation-plan gate only when an existing egg_moves(...) span is parsed."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/all_learnables.json",
+                tableSymbol: nil,
+                indexedCount: allLearnablesCount,
+                status: .blocked,
+                note: "Generated/all-learnables JSON remains indexed for context and freshness reporting only; apply is blocked and refresh must happen outside PokemonHackStudio."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "generated",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Generated learnset outputs remain blocked and must be refreshed outside this mutation plan."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "references/pokeemerald-expansion/src/data/pokemon/egg_moves.h",
+                tableSymbol: "gEggMoves",
+                indexedCount: 0,
+                status: .blocked,
+                note: "Reference Expansion clones remain read-only research inputs."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "ROM output",
+                tableSymbol: nil,
+                indexedCount: 0,
+                status: .blocked,
+                note: "Binary ROM/export writes remain blocked."
+            )
+        ]
+    }
+
     private static func formRecords(in sourceIndex: ProjectSourceIndex, path: String) -> [SourceIndexRecord] {
         sourceIndex.records.filter { record in
             record.module == .pokemon
@@ -1246,7 +1527,7 @@ public enum PokemonDataCompatibilityReportBuilder {
         fileManager: FileManager
     ) -> [Diagnostic] {
         guard index.profile == .pokeemeraldExpansion,
-              [.levelUpLearnsets, .tmhmLearnsets, .tutorLearnsets].contains(surface)
+              [.levelUpLearnsets, .tmhmLearnsets, .eggMoves, .tutorLearnsets].contains(surface)
         else {
             return []
         }
@@ -1280,6 +1561,8 @@ public enum PokemonDataCompatibilityReportBuilder {
             surfaceLabel = "Expansion level-up learnset"
         case .tmhmLearnsets:
             surfaceLabel = "Expansion TM/HM learnset"
+        case .eggMoves:
+            surfaceLabel = "Expansion egg-move"
         case .tutorLearnsets:
             surfaceLabel = "Expansion tutor learnset"
         default:
@@ -1325,6 +1608,10 @@ public enum PokemonDataCompatibilityReportBuilder {
             return Array(Set(paths)).sorted()
         case .tmhmLearnsets:
             return ["src/data/pokemon/tmhm_learnsets.h"].filter {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+        case .eggMoves:
+            return ["src/data/pokemon/egg_moves.h"].filter {
                 fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
             }
         case .tutorLearnsets:
@@ -1575,6 +1862,16 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         }
         return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/tmhm_learnsets.h", emeraldTable: "gTMHMLearnsets", fireRedTable: "sTMHMLearnsets", rubyTable: "gTMHMLearnsets", expansionTable: "sTMHMLearnsets", supportsEditing: supportsLearnsetMutationEditing(surface: .tmhmLearnsets, profile: profile))
     case .eggMoves:
+        if profile == .pokeemeraldExpansion {
+            let supportsEditing = supportsLearnsetMutationEditing(surface: .eggMoves, profile: profile)
+            return PokemonDataSurfaceDescriptor(
+                sourcePath: "src/data/pokemon/egg_moves.h",
+                tableSymbol: "gEggMoves",
+                supportsEditing: supportsEditing,
+                readOnlyReason: supportsEditing ? nil : "Egg-move edits are currently tied to source-backed species mutation plans.",
+                recommendedFutureRow: supportsEditing ? nil : "PHS-T78J"
+            )
+        }
         return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/egg_moves.h", emeraldTable: "gEggMoves", fireRedTable: "gEggMoves", rubyTable: "gEggMoves", expansionTable: "gEggMoves", supportsEditing: supportsLearnsetMutationEditing(surface: .eggMoves, profile: profile))
     case .evolutions:
         return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/evolution.h", emeraldTable: "gEvolutionTable", fireRedTable: "gEvolutionTable", rubyTable: "gEvolutionTable", expansionTable: "gEvolutionTable", supportsEditing: supportsEvolutionMutationEditing(profile))
@@ -1582,6 +1879,8 @@ private func descriptor(for surface: PokemonDataCompatibilitySurface, profile: G
         switch profile {
         case .pokeruby:
             return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokedex_entries_en.h", tableSymbol: "gPokedexEntries", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
+        case .pokeemeraldExpansion:
+            return PokemonDataSurfaceDescriptor(sourcePath: "src/data/pokemon/pokedex_entries.h", tableSymbol: "gPokedexEntries", supportsEditing: true, readOnlyReason: nil, recommendedFutureRow: nil)
         default:
             return pokemonTableDescriptor(profile: profile, path: "src/data/pokemon/pokedex_entries.h", emeraldTable: "gPokedexEntries", fireRedTable: "gPokedexEntries", rubyTable: "gPokedexEntries", expansionTable: "gPokedexEntries", supportsEditing: supportsClassicSpeciesMutationEditing(profile))
         }
@@ -1657,11 +1956,11 @@ private func supportsClassicSpeciesMutationEditing(_ profile: GameProfile) -> Bo
 }
 
 private func supportsPokedexMutationEditing(_ profile: GameProfile) -> Bool {
-    supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby
+    supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby || profile == .pokeemeraldExpansion
 }
 
 private func supportsEvolutionMutationEditing(_ profile: GameProfile) -> Bool {
-    supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby
+    supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby || profile == .pokeemeraldExpansion
 }
 
 private func supportsLearnsetMutationEditing(surface: PokemonDataCompatibilitySurface, profile: GameProfile) -> Bool {
@@ -1671,7 +1970,7 @@ private func supportsLearnsetMutationEditing(surface: PokemonDataCompatibilitySu
     case .tmhmLearnsets:
         return supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby || profile == .pokeemeraldExpansion
     case .eggMoves:
-        return supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby
+        return supportsClassicSpeciesMutationEditing(profile) || profile == .pokeruby || profile == .pokeemeraldExpansion
     case .tutorLearnsets:
         return supportsClassicSpeciesMutationEditing(profile) || profile == .pokeemeraldExpansion
     default:
@@ -1688,6 +1987,35 @@ private func isExpansionTMHMLearnsetSourcePath(_ path: String?) -> Bool {
     path == "src/data/pokemon/tmhm_learnsets.h"
 }
 
+private func isExpansionEggMoveSourcePath(_ path: String?) -> Bool {
+    path == "src/data/pokemon/egg_moves.h"
+}
+
+private func evolutionUnsupportedFields(profile: GameProfile, editableCount: Int) -> [String] {
+    if profile == .pokeemeraldExpansion {
+        return editableCount > 0
+            ? [
+                "evolution row insertion/removal/reorder",
+                "evolution method constant creation",
+                "species constant/identity changes",
+                "generated evolution output writes",
+                "reference-only evolution source writes",
+                "ROM/export/build outputs",
+                "binary ROM evolution writes"
+            ]
+            : [
+                "evolution method edits",
+                "target species edits",
+                "parameter edits",
+                "evolution row insertion/removal/reorder",
+                "generated/reference/ROM evolution writes"
+            ]
+    }
+    return editableCount > 0
+        ? ["missing evolution row insertion"]
+        : ["evolution method edits", "target species edits", "parameter edits", "evolution row insertion/reordering"]
+}
+
 private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
     var fields = ["species identity changes", "new/reordered species constants", "asset/cries/form rewrites"]
     if !supportsSpeciesBaseStatsEditing(profile), profile != .pokeemeraldExpansion {
@@ -1702,9 +2030,7 @@ private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
         fields.append(contentsOf: [
             "type/ability/egg group brace-list rewrites",
             "TM/HM/egg move rewrites",
-            "evolution rewrites",
-            "Pokedex rewrites",
-            "Pokedex text rewrites",
+            "evolution row insertion/removal/reorder",
             "species asset/cries/form rewrites",
             "include/config/species_enabled.h rewrites",
             "include/config/pokemon.h rewrites",
@@ -1719,9 +2045,26 @@ private func speciesUnsupportedFields(profile: GameProfile) -> [String] {
     return fields
 }
 
+private func pokedexUnsupportedFields(profile: GameProfile, editableCount: Int) -> [String] {
+    if editableCount <= 0 {
+        return ["category text edits", "height/weight edits", "description text rewrites", "national dex identity changes"]
+    }
+    var fields = ["national dex identity changes", "missing Pokedex row insertion"]
+    if profile == .pokeemeraldExpansion {
+        fields.append(contentsOf: [
+            "generated Pokedex output writes",
+            "reference-only Pokedex source writes",
+            "ROM/export/build outputs",
+            "binary-only Pokedex writes",
+            "broad Expansion Pokedex schema rewrites"
+        ])
+    }
+    return fields
+}
+
 private func movesUnsupportedFields(profile: GameProfile) -> [String] {
     var fields = ["new/reordered move constants", "contest data"]
-    if profile != .pokeemeraldExpansion {
+    if profile != .pokeemeraldExpansion && profile != .pokeruby {
         fields.append("description text rewrites")
     }
     if !supportsClassicSpeciesMutationEditing(profile) {
@@ -1731,7 +2074,8 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
         fields.append(contentsOf: [
             "generated move output writes",
             "reference-only move source writes",
-            "binary ROM move writes"
+            "binary ROM move writes",
+            "broad Ruby/Sapphire move schema rewrites"
         ])
     }
     if profile == .pokeemeraldExpansion {
@@ -1754,7 +2098,7 @@ private func itemsUnsupportedFields(profile: GameProfile) -> [String] {
     case .pokefirered:
         return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokeruby:
-        return ["item identity changes", "new/reordered item constants", "description text rewrites", "TM/HM item compatibility edits"]
+        return ["item identity changes", "new/reordered item constants", "TM/HM item compatibility edits"]
     case .pokeemeraldExpansion:
         return [
             "item identity changes",
@@ -1814,6 +2158,14 @@ private func learnsetUnsupportedFields(surface: PokemonDataCompatibilitySurface,
                 "generated learnset output writes",
                 "reference-only learnset source writes",
                 "binary ROM learnset writes"
+            ])
+        case .eggMoves:
+            fields.append(contentsOf: [
+                "all_learnables.json apply",
+                "generated learnset output writes",
+                "reference-only learnset source writes",
+                "binary ROM learnset writes",
+                "broad Expansion egg-move schema rewrites"
             ])
         default:
             fields.append("Expansion generated learnable JSON apply")

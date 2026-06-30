@@ -750,7 +750,7 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
 
         let applyability = plan.validateApplyability()
         XCTAssertFalse(applyability.isApplyable)
-        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
     }
 
     func testExpansionFormTablePlanRejectsUnknownConstantsAndRowInsertion() throws {
@@ -805,6 +805,140 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(plan.changes.count, 0)
         XCTAssertFalse(plan.isApplyable)
         XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_FORM_CHANGE_ROW_UNSUPPORTED_SHAPE" })
+    }
+
+    func testExpansionEvolutionTuplesPlanPreviewApplyBackupReloadPreservesAdjacentOutputs() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEvolutionRows: true)
+        let evolutionPath = root.appendingPathComponent("src/data/pokemon/evolution.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let generatedPath = root.appendingPathComponent("generated/evolutions.json")
+        let referencePath = root.appendingPathComponent("references/pokeemerald-expansion/src/data/pokemon/evolution.h")
+        let romPath = root.appendingPathComponent("pokeemerald.gba")
+        try write("{\"evolutions\":[]}\n", to: generatedPath)
+        try write("reference evolution stays read-only\n", to: referencePath)
+        try write(Data([0x01, 0x02, 0x03]), to: romPath)
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalGeneratedText = try String(contentsOf: generatedPath, encoding: .utf8)
+        let originalReferenceText = try String(contentsOf: referencePath, encoding: .utf8)
+        let originalROMData = try Data(contentsOf: romPath)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.evolutions.map(\.method), ["EVO_LEVEL", "EVO_ITEM"])
+        XCTAssertEqual(treecko.evolutions.map(\.parameter), ["16", "ITEM_POTION"])
+        XCTAssertEqual(treecko.evolutions.map(\.targetSpecies), ["SPECIES_GROVYLE", "SPECIES_TREECKO_MEGA"])
+        XCTAssertEqual(treecko.evolutions.map(\.rowIndex), [0, 1])
+        XCTAssertEqual(treecko.evolutions.first?.sourceSpan.relativePath, "src/data/pokemon/evolution.h")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.evolutions[0].method = "EVO_ITEM"
+        draft.evolutions[0].parameter = "ITEM_POTION"
+        draft.evolutions[0].targetSpecies = "SPECIES_TREECKO_PRIMAL"
+        draft.evolutions[1].method = "EVO_LEVEL"
+        draft.evolutions[1].parameter = "20"
+        draft.evolutions[1].targetSpecies = "SPECIES_GROVYLE"
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/evolution.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("[SPECIES_TREECKO] = {"))
+        XCTAssertTrue(preview.contains("{ EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_PRIMAL },"))
+        XCTAssertTrue(preview.contains("{ EVO_LEVEL, 20, SPECIES_GROVYLE }"))
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/evolution.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: generatedPath, encoding: .utf8), originalGeneratedText)
+        XCTAssertEqual(try String(contentsOf: referencePath, encoding: .utf8), originalReferenceText)
+        XCTAssertEqual(try Data(contentsOf: romPath), originalROMData)
+
+        let source = try String(contentsOf: evolutionPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("{ EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_PRIMAL },"))
+        XCTAssertTrue(source.contains("{ EVO_LEVEL, 20, SPECIES_GROVYLE }"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.evolutions.map(\.method), ["EVO_ITEM", "EVO_LEVEL"])
+        XCTAssertEqual(edited.evolutions.map(\.parameter), ["ITEM_POTION", "20"])
+        XCTAssertEqual(edited.evolutions.map(\.targetSpecies), ["SPECIES_TREECKO_PRIMAL", "SPECIES_GROVYLE"])
+    }
+
+    func testExpansionEvolutionTuplePlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEvolutionRows: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.evolutions[0].parameter = "18"
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let evolutionPath = root.appendingPathComponent("src/data/pokemon/evolution.h")
+        let source = try String(contentsOf: evolutionPath, encoding: .utf8)
+            .replacingOccurrences(of: "EVO_LEVEL, 16", with: "EVO_LEVEL, 17")
+        try write(source, to: evolutionPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testExpansionEvolutionTuplePlanRejectsUnknownConstantsAndRowStructureChanges() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEvolutionRows: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        var unknownDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        unknownDraft.evolutions[0].method = "EVO_NOT_REAL"
+        unknownDraft.evolutions[0].targetSpecies = "SPECIES_NOT_REAL"
+        unknownDraft.evolutions[1].parameter = "ITEM_NOT_REAL"
+
+        let unknownPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: unknownDraft)
+
+        XCTAssertEqual(unknownPlan.changes.count, 0)
+        XCTAssertFalse(unknownPlan.isApplyable)
+        XCTAssertTrue(unknownPlan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("EVO_NOT_REAL") })
+        XCTAssertTrue(unknownPlan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("SPECIES_NOT_REAL") })
+        XCTAssertTrue(unknownPlan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("ITEM_NOT_REAL") })
+
+        var invalidParameterDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        invalidParameterDraft.evolutions[0].method = "EVO_FRIENDSHIP"
+        invalidParameterDraft.evolutions[0].parameter = "16"
+
+        let invalidParameterPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: invalidParameterDraft)
+
+        XCTAssertFalse(invalidParameterPlan.isApplyable)
+        XCTAssertTrue(invalidParameterPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_PARAMETER_INVALID" })
+
+        var insertedDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        insertedDraft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "30", targetSpecies: "SPECIES_GROVYLE"))
+        let insertedPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: insertedDraft)
+        XCTAssertEqual(insertedPlan.changes.count, 0)
+        XCTAssertFalse(insertedPlan.isApplyable)
+        XCTAssertTrue(insertedPlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_EVOLUTION_ROW_STRUCTURE_UNSUPPORTED" })
+
+        var removedDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        removedDraft.evolutions.removeLast()
+        let removedPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: removedDraft)
+        XCTAssertEqual(removedPlan.changes.count, 0)
+        XCTAssertFalse(removedPlan.isApplyable)
+        XCTAssertTrue(removedPlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_EVOLUTION_ROW_STRUCTURE_UNSUPPORTED" })
+
+        var reorderedDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        reorderedDraft.evolutions.swapAt(0, 1)
+        let reorderedPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: reorderedDraft)
+        XCTAssertEqual(reorderedPlan.changes.count, 0)
+        XCTAssertFalse(reorderedPlan.isApplyable)
+        XCTAssertTrue(reorderedPlan.diagnostics.contains { $0.code == "SPECIES_EXPANSION_EVOLUTION_ROW_STRUCTURE_UNSUPPORTED" })
     }
 
     func testExpansionLevelUpLearnsetPlanBlocksSourceDrift() throws {
@@ -1055,6 +1189,103 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
     }
 
+    func testExpansionEggMovePlanPreviewApplyBackupReload() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEggMoves: true)
+        let eggPath = root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let allLearnablesPath = root.appendingPathComponent("src/data/pokemon/all_learnables.json")
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalAllLearnablesText = try String(contentsOf: allLearnablesPath, encoding: .utf8)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+
+        XCTAssertEqual(treecko.learnsets.egg.map(\.move), ["MOVE_CRUNCH", "MOVE_LEECH_SEED"])
+        XCTAssertEqual(treecko.learnsets.eggSourceSpan?.relativePath, "src/data/pokemon/egg_moves.h")
+
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.eggMoves = ["MOVE_LEECH_SEED", "MOVE_FLASH", "MOVE_CRUNCH"]
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/egg_moves.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains("egg_moves(TREECKO,"))
+        XCTAssertTrue(preview.contains("MOVE_FLASH"))
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/egg_moves.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges.first?.backupPath ?? ""))
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: allLearnablesPath, encoding: .utf8), originalAllLearnablesText)
+
+        let source = try String(contentsOf: eggPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("egg_moves(TREECKO,"))
+        XCTAssertTrue(source.contains("MOVE_FLASH"))
+        XCTAssertTrue(source.contains("egg_moves(GROVYLE,"))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.learnsets.egg.map(\.move), ["MOVE_LEECH_SEED", "MOVE_FLASH", "MOVE_CRUNCH"])
+    }
+
+    func testExpansionEggMovePlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEggMoves: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.eggMoves.append("MOVE_FLASH")
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let eggPath = root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        let source = try String(contentsOf: eggPath, encoding: .utf8)
+            .replacingOccurrences(of: "MOVE_CRUNCH", with: "MOVE_ABSORB")
+        try write(source, to: eggPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testExpansionEggMovePlanRejectsUnknownMoveConstants() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root, includeEggMoves: true)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.eggMoves.append("MOVE_NOT_REAL")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" && $0.message.contains("MOVE_NOT_REAL") })
+    }
+
+    func testExpansionEggMoveEditsRequireParsedSourceRow() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.eggMoves.append("MOVE_LEECH_SEED")
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_SPAN_MISSING" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+    }
+
     func testExpansionSpeciesInfoPlannerBlocksCompositeAndAdjacentScopes() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url
@@ -1093,11 +1324,12 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertEqual(adjacentPlan.changes.count, 0)
         XCTAssertFalse(adjacentPlan.isApplyable)
         XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_SPAN_MISSING" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
-        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
         XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_DRAFT_CONSTANT_UNRESOLVED" })
         XCTAssertEqual(try String(contentsOf: speciesPath, encoding: .utf8), originalText)
@@ -1121,6 +1353,147 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         let applyability = plan.validateApplyability()
         XCTAssertFalse(applyability.isApplyable)
         XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testExpansionPokedexPlanPreviewApplyBackupReloadPreservesAdjacentOutputs() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let entryPath = root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        let textPath = root.appendingPathComponent("src/data/pokemon/pokedex_text.h")
+        let familyPath = root.appendingPathComponent("src/data/pokemon/species_info/gen_3_families.h")
+        let generatedPath = root.appendingPathComponent("generated/pokedex/entries.json")
+        let referencePath = root.appendingPathComponent("references/pokeemerald-expansion/src/data/pokemon/pokedex_entries.h")
+        let romPath = root.appendingPathComponent("build/pokeemerald.gba")
+        try write("{\"pokedex\":[]}\n", to: generatedPath)
+        try write("// reference Pokedex entry\n", to: referencePath)
+        try write(Data([0x47, 0x42, 0x41]), to: romPath)
+        let originalFamilyText = try String(contentsOf: familyPath, encoding: .utf8)
+        let originalGeneratedText = try String(contentsOf: generatedPath, encoding: .utf8)
+        let originalReferenceText = try String(contentsOf: referencePath, encoding: .utf8)
+        let originalROMData = try Data(contentsOf: romPath)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.pokedex?.height = "6"
+        draft.pokedex?.weight = "52"
+        draft.pokedex?.categoryName = "EXPANSION \"GECKO\""
+        draft.pokedex?.description = "Expansion \"description\"\\path\nwith two lines."
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.map(\.path).sorted(), [
+            "src/data/pokemon/pokedex_entries.h",
+            "src/data/pokemon/pokedex_text.h"
+        ])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty)
+        XCTAssertTrue(plan.isApplyable)
+        let entryPreview = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/pokedex_entries.h" }?.textPreview)
+        XCTAssertTrue(entryPreview.contains(".height = 6"))
+        XCTAssertTrue(entryPreview.contains(".weight = 52"))
+        XCTAssertTrue(entryPreview.contains(#".categoryName = _("EXPANSION \"GECKO\"")"#))
+        let textPreview = try XCTUnwrap(plan.changes.first { $0.path == "src/data/pokemon/pokedex_text.h" }?.textPreview)
+        XCTAssertEqual(textPreview, #"const u8 gTreeckoPokedexText[] = _("Expansion \"description\"\\path\nwith two lines.");"#)
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(result.appliedChanges.map(\.path).sorted(), [
+            "src/data/pokemon/pokedex_entries.h",
+            "src/data/pokemon/pokedex_text.h"
+        ])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertEqual(try String(contentsOf: familyPath, encoding: .utf8), originalFamilyText)
+        XCTAssertEqual(try String(contentsOf: generatedPath, encoding: .utf8), originalGeneratedText)
+        XCTAssertEqual(try String(contentsOf: referencePath, encoding: .utf8), originalReferenceText)
+        XCTAssertEqual(try Data(contentsOf: romPath), originalROMData)
+        XCTAssertTrue(try String(contentsOf: entryPath, encoding: .utf8).contains(".height = 6"))
+        XCTAssertTrue(try String(contentsOf: textPath, encoding: .utf8).contains(#"Expansion \"description\"\\path\nwith two lines."#))
+
+        let reloaded = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let edited = try XCTUnwrap(reloaded.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(edited.pokedex?.height, "6")
+        XCTAssertEqual(edited.pokedex?.weight, "52")
+        XCTAssertEqual(edited.pokedex?.categoryName, #"EXPANSION "GECKO""#)
+        XCTAssertEqual(edited.pokedex?.description, #"Expansion "description"\\path"# + "\nwith two lines.")
+    }
+
+    func testExpansionPokedexPlanBlocksSourceDrift() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        draft.pokedex?.height = "6"
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        let entryPath = root.appendingPathComponent("src/data/pokemon/pokedex_entries.h")
+        let source = try String(contentsOf: entryPath, encoding: .utf8)
+            .replacingOccurrences(of: ".height = 5,", with: ".height = 7,")
+        try write(source, to: entryPath)
+
+        let applyability = plan.validateApplyability()
+        XCTAssertFalse(applyability.isApplyable)
+        XCTAssertTrue(applyability.diagnostics.contains { $0.code == "SPECIES_APPLY_ORIGINAL_HASH_MISMATCH" })
+    }
+
+    func testExpansionPokedexTextRequiresParsedSimpleDeclaration() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        try write(
+            """
+            const u8 gTreeckoPokedexText[] = {
+                _("Wood gecko.")
+            };
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/pokedex_text.h")
+        )
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        draft.pokedex?.description = "Replacement text must not insert a declaration."
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertEqual(plan.changes.count, 0)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_SPAN_MISSING" })
+    }
+
+    func testExpansionPokedexPlannerKeepsAdjacentScopesBlocked() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeExpansionSpeciesProject(at: root)
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var adjacentDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+
+        adjacentDraft.evolutions.append(SpeciesEvolutionDraft(method: "EVO_LEVEL", parameter: "16", targetSpecies: "SPECIES_GROVYLE"))
+        adjacentDraft.eggMoves.append("MOVE_LEECH_SEED")
+        adjacentDraft.assetData[.front] = testPNGData(width: 64, height: 64, paletteColorCount: 16)
+
+        let adjacentPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: adjacentDraft)
+
+        XCTAssertEqual(adjacentPlan.changes.count, 0)
+        XCTAssertFalse(adjacentPlan.isApplyable)
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EVOLUTION_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_SPAN_MISSING" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_ASSET_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(adjacentPlan.diagnostics.contains { $0.code == "SPECIES_POKEDEX_TEXT_EDIT_UNSUPPORTED_PROFILE" })
+
+        var identityDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        identityDraft.speciesID = "SPECIES_NOT_REAL"
+
+        let identityPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: identityDraft)
+
+        XCTAssertEqual(identityPlan.changes.count, 0)
+        XCTAssertFalse(identityPlan.isApplyable)
+        XCTAssertTrue(identityPlan.diagnostics.contains { $0.code == "SPECIES_PLAN_TARGET_MISSING" })
     }
 
     func testSpeciesMutationPlannerRewritesPokedexEntriesAndText() throws {
@@ -1902,7 +2275,9 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         scalarAliases: Bool = true,
         includeLevelUpLearnsets: Bool = false,
         includeTMHMLearnsets: Bool = false,
-        includeTutorLearnsets: Bool = false
+        includeTutorLearnsets: Bool = false,
+        includeEvolutionRows: Bool = false,
+        includeEggMoves: Bool = false
     ) throws {
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
         try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
@@ -1973,6 +2348,9 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
                     .mysteryExpansionField = KEEP_ME,
                     .noFlip = FALSE,
                 },
+                [SPECIES_GROVYLE] = { .baseHP = 50 },
+                [SPECIES_TREECKO_MEGA] = { .baseHP = 70 },
+                [SPECIES_TREECKO_PRIMAL] = { .baseHP = 80 },
             };
             """,
             to: root.appendingPathComponent("src/data/pokemon/species_info.h")
@@ -2064,7 +2442,36 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
                 to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
             )
         }
-        if includeLevelUpLearnsets || includeTMHMLearnsets || includeTutorLearnsets {
+        if includeEvolutionRows {
+            try write(
+                """
+                const struct Evolution gEvolutionTable[NUM_SPECIES][EVOS_PER_MON] =
+                {
+                    [SPECIES_TREECKO] = {
+                                            { EVO_LEVEL, 16, SPECIES_GROVYLE },
+                                            { EVO_ITEM, ITEM_POTION, SPECIES_TREECKO_MEGA }
+                                        },
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/evolution.h")
+            )
+        }
+        if includeEggMoves {
+            try write(
+                """
+                const u16 gEggMoves[] = {
+                    egg_moves(TREECKO,
+                              MOVE_CRUNCH,
+                              MOVE_LEECH_SEED),
+                    egg_moves(GROVYLE,
+                              MOVE_CRUNCH),
+                    EGG_MOVES_TERMINATOR
+                };
+                """,
+                to: root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+            )
+        }
+        if includeLevelUpLearnsets || includeTMHMLearnsets || includeTutorLearnsets || includeEggMoves {
             try write(
                 """
                 {
@@ -2075,6 +2482,8 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
                     "MOVE_BULLET_SEED",
                     "MOVE_CUT",
                     "MOVE_FLASH",
+                    "MOVE_CRUNCH",
+                    "MOVE_LEECH_SEED",
                     "MOVE_MEGA_PUNCH",
                     "MOVE_SWORD_DANCE"
                   ]
