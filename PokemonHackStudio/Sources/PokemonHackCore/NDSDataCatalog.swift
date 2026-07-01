@@ -570,19 +570,22 @@ public enum NDSDataCatalogBuilder {
 
         let records = enrichGenVReadiness(
             records: enrichDiamondPearlCAnchorFutureReadiness(
-                records: enrichDiamondPearlMapInventory(
-                    records: enrichHeartGoldSoulSilverScriptSequenceInventory(
-                        records: enrichHeartGoldSoulSilverMapInventory(
-                            records: enrichPlatinumMapInventory(
-                                records: enrichRelationships(
-                                    records: uniqueRecords(
-                                        descriptors.flatMap { descriptor in
-                                            catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                                        }
-                                        + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                        + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                        + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                    ).sorted(by: recordSort),
+                records: enrichDiamondPearlMoveCAnchorReadiness(
+                    records: enrichDiamondPearlMapInventory(
+                        records: enrichHeartGoldSoulSilverScriptSequenceInventory(
+                            records: enrichHeartGoldSoulSilverMapInventory(
+                                records: enrichPlatinumMapInventory(
+                                    records: enrichRelationships(
+                                        records: uniqueRecords(
+                                            descriptors.flatMap { descriptor in
+                                                catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                                            }
+                                            + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                            + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                            + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                        ).sorted(by: recordSort),
+                                        profile: index.profile
+                                    ),
                                     profile: index.profile
                                 ),
                                 profile: index.profile
@@ -1826,6 +1829,77 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
+    private static let diamondPearlMoveCAnchorBlockedActions = [
+        "non-simple move C scalar write",
+        "missing field insertion",
+        "row insert/remove/reorder",
+        "encounter C-anchor writer",
+        "NARC/container work",
+        "generated output write",
+        "reference write",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let diamondPearlMoveCAnchorActionState = "Diamond/Pearl move C anchor arm9/src/waza.c exposes existing simple scalar fields in exact static const struct WazaTbl sWazaTbl[] direct designated entries through the semantic mutation-plan gate; encounters, non-simple expressions, missing fields, row insert/remove/reorder, NARC/container work, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
+
+    private static func enrichDiamondPearlMoveCAnchorReadiness(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokediamond else { return records }
+        return records.map { record in
+            guard isDiamondPearlMoveCAnchorRecord(record) else {
+                return record
+            }
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: "dpMoveCAnchorSemanticScalars"),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: "diamondPearl:arm9/src/waza.c"),
+                SourceIndexFact(label: "Gen IV Readiness", value: "semanticSimpleScalars"),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: diamondPearlMoveCAnchorBlockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: diamondPearlMoveCAnchorActionState)
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                readiness: .some(diamondPearlMoveCAnchorReadiness(for: record)),
+                diagnostics: record.diagnostics + diamondPearlMoveCAnchorDiagnostics(for: record)
+            )
+        }
+    }
+
+    private static func isDiamondPearlMoveCAnchorRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .moves
+            && record.relativePath.lowercased() == "arm9/src/waza.c"
+            && record.format == .cSource
+    }
+
+    private static func diamondPearlMoveCAnchorReadiness(for record: NDSDataCatalogRecord) -> NDSDataReadinessSummary {
+        NDSDataReadinessSummary(
+            status: .partial,
+            title: "Diamond/Pearl move C-anchor simple scalar readiness",
+            detail: "\(record.relativePath) exposes existing simple scalar fields in exact static const struct WazaTbl sWazaTbl[] direct designated entries through the semantic mutation-plan gate; adjacent C anchors, non-simple expressions, missing fields, row shape changes, NARC/container work, generated/reference writes, ROM rebuild/export, and binary writes remain blocked.",
+            blockedActions: diamondPearlMoveCAnchorBlockedActions
+        )
+    }
+
+    private static func diamondPearlMoveCAnchorDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
+        [
+            Diagnostic(
+                severity: .info,
+                code: "NDS_DATA_DP_MOVE_C_ANCHOR_SEMANTIC_SCALARS",
+                message: "Diamond/Pearl move C anchor \(record.relativePath) exposes existing simple scalar WazaTbl fields through the semantic mutation-plan gate.",
+                span: record.sourceSpan
+            ),
+            Diagnostic(
+                severity: .warning,
+                code: "NDS_DATA_DP_MOVE_C_ANCHOR_WRITE_LIMITED",
+                message: "Diamond/Pearl move C-anchor writes are limited to existing simple scalar replacements; blocked actions: \(diamondPearlMoveCAnchorBlockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
     private struct DiamondPearlCAnchorFutureSpec {
         let domain: NDSDataDomain
         let relativePath: String
@@ -1835,13 +1909,6 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static let diamondPearlCAnchorFutureSpecs = [
-        DiamondPearlCAnchorFutureSpec(
-            domain: .moves,
-            relativePath: "arm9/src/waza.c",
-            sourceRole: "dpMoveCAnchorFutureRow",
-            domainLabel: "move",
-            diagnosticCode: "NDS_DATA_DP_MOVE_C_ANCHOR_FUTURE_ROW"
-        ),
         DiamondPearlCAnchorFutureSpec(
             domain: .encounters,
             relativePath: "arm9/src/encounter.c",

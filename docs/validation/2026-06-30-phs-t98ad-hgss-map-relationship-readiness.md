@@ -8,9 +8,10 @@
 
 ## Validation
 
-- `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalogTests|PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON'` was rerun on 2026-06-30 17:34 America/Vancouver. SwiftPM built and ran 54 selected tests; `PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON` passed, but the selected run failed in unrelated `NDSDataCatalogTests/testPokeBlackCatalogSurfacesGenVNitroFSRootInventoryFacts` assertions expecting shallow count `10` and observing `13`, with the matching resource-index/fact assertion failing.
-- `make validate-nds` was rerun on 2026-06-30 17:34 America/Vancouver. SwiftPM built and ran 103 selected tests; the routed HGSS map inventory and semantic CLI tests passed, but the tier failed on the same unrelated Gen V NitroFS root shallow-count drift with 3 failures.
-- `git diff --check` passed. Post-validation `git status --short --branch` showed `## main...origin/main [ahead 1]`.
+- `swift test --package-path PokemonHackStudio --filter 'MapCatalogTests|MapWorkflowPlanTests'` passed on 2026-06-30 22:25 America/Vancouver with 17 selected tests and 0 failures. This confirms the `MapEventCapacityLimits.unknown` and `MapEventCapacitySummary.unknown` Swift concurrency blocker is resolved while warning-only map event capacity diagnostics remain non-blocking for mutation-plan applyability.
+- `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalogTests|PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON'` passed on 2026-06-30 22:25 America/Vancouver with 54 selected tests and 0 failures.
+- `make validate-nds` passed on 2026-06-30 22:25 America/Vancouver with 103 selected tests and 0 failures. Central clean-room reference smokes were skipped because `pret__pokeplatinum`, `pret__pokediamond`, `pret__pokeheartgold`, and `pret__pmd-sky` were not present under `/Users/bryan/projects/reference-repos/repos`.
+- `git diff --check` passed after proof reconciliation.
 
 ## Posture
 

@@ -247,24 +247,27 @@ final class NDSDataCatalogTests: XCTestCase {
 
         let moveCAnchor = try XCTUnwrap(catalog.records.first { $0.relativePath == "arm9/src/waza.c" && $0.domain == .moves })
         XCTAssertEqual(moveCAnchor.format, .cSource)
-        XCTAssertEqual(factValue("Gen IV Source Role", in: moveCAnchor), "dpMoveCAnchorFutureRow")
+        XCTAssertEqual(factValue("Gen IV Source Role", in: moveCAnchor), "dpMoveCAnchorSemanticScalars")
         XCTAssertEqual(factValue("Gen IV Source Provenance", in: moveCAnchor), "diamondPearl:arm9/src/waza.c")
-        XCTAssertEqual(factValue("Gen IV Readiness", in: moveCAnchor), "futureRowBlocked")
-        XCTAssertEqual(factValue("Gen IV Future Row", in: moveCAnchor), "PHS-T98")
-        XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("semantic editing") == true)
-        XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("move C-anchor writer") == true)
+        XCTAssertEqual(factValue("Gen IV Readiness", in: moveCAnchor), "semanticSimpleScalars")
+        XCTAssertNil(factValue("Gen IV Future Row", in: moveCAnchor))
+        XCTAssertFalse(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("semantic editing") == true)
+        XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("non-simple move C scalar write") == true)
+        XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("row insert/remove/reorder") == true)
+        XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("encounter C-anchor writer") == true)
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("NARC/container work") == true)
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("ROM export") == true)
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: moveCAnchor)?.contains("binary write") == true)
-        XCTAssertTrue(factValue("Gen IV Action State", in: moveCAnchor)?.contains("no parser") == true)
-        XCTAssertEqual(moveCAnchor.readiness?.status, .blocked)
-        XCTAssertTrue(moveCAnchor.readiness?.blockedActions.contains("move C-anchor writer") == true)
-        XCTAssertTrue(moveCAnchor.diagnostics.contains { $0.code == "NDS_DATA_DP_MOVE_C_ANCHOR_FUTURE_ROW" })
+        XCTAssertTrue(factValue("Gen IV Action State", in: moveCAnchor)?.contains("semantic mutation-plan gate") == true)
+        XCTAssertEqual(moveCAnchor.readiness?.status, .partial)
+        XCTAssertTrue(moveCAnchor.readiness?.blockedActions.contains("non-simple move C scalar write") == true)
+        XCTAssertTrue(moveCAnchor.diagnostics.contains { $0.code == "NDS_DATA_DP_MOVE_C_ANCHOR_SEMANTIC_SCALARS" })
+        XCTAssertTrue(moveCAnchor.diagnostics.contains { $0.code == "NDS_DATA_DP_MOVE_C_ANCHOR_WRITE_LIMITED" })
         let moveSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "moves:arm9/src/waza.c")
-        XCTAssertFalse(moveSnapshot.canEdit)
-        XCTAssertTrue(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
-        XCTAssertTrue(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED" })
-        XCTAssertTrue(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+        XCTAssertTrue(moveSnapshot.canEdit, moveSnapshot.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertFalse(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertFalse(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED" })
+        XCTAssertFalse(moveSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
 
         let encounterCAnchor = try XCTUnwrap(catalog.records.first { $0.relativePath == "arm9/src/encounter.c" && $0.domain == .encounters })
         XCTAssertEqual(encounterCAnchor.format, .cSource)
@@ -342,9 +345,9 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(unpacked.diagnostics.contains { $0.code == "NDS_DATA_READINESS_WRITE_BLOCKED" })
         let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
         let moveResourceItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data moves" && $0.path == "arm9/src/waza.c" })
-        XCTAssertTrue(moveResourceItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMoveCAnchorFutureRow" })
-        XCTAssertTrue(moveResourceItem.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
-        XCTAssertTrue(moveResourceItem.facts.contains { $0.label == "Gen IV Blocked Actions" && $0.value.contains("move C-anchor writer") })
+        XCTAssertTrue(moveResourceItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMoveCAnchorSemanticScalars" })
+        XCTAssertFalse(moveResourceItem.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
+        XCTAssertTrue(moveResourceItem.facts.contains { $0.label == "Gen IV Blocked Actions" && $0.value.contains("non-simple move C scalar write") })
         let encounterResourceItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data encounters" && $0.path == "arm9/src/encounter.c" })
         XCTAssertTrue(encounterResourceItem.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpEncounterCAnchorFutureRow" })
         XCTAssertTrue(encounterResourceItem.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
@@ -352,8 +355,8 @@ final class NDSDataCatalogTests: XCTestCase {
 
         let assetCatalog = GenIIIAssetCatalogBuilder.build(path: root.path)
         let moveAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "arm9/src/waza.c" && $0.category == .moves })
-        XCTAssertTrue(moveAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMoveCAnchorFutureRow" })
-        XCTAssertTrue(moveAsset.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
+        XCTAssertTrue(moveAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpMoveCAnchorSemanticScalars" })
+        XCTAssertFalse(moveAsset.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
         let encounterAsset = try XCTUnwrap(assetCatalog.assets.first { $0.relativePath == "arm9/src/encounter.c" && $0.category == .encounters })
         XCTAssertTrue(encounterAsset.facts.contains { $0.label == "Gen IV Source Role" && $0.value == "dpEncounterCAnchorFutureRow" })
         XCTAssertTrue(encounterAsset.facts.contains { $0.label == "Gen IV Future Row" && $0.value == "PHS-T98" })
@@ -3309,6 +3312,127 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(scriptSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED" })
     }
 
+    func testNDSDataSemanticEditorPlansDiamondPearlMoveCAnchorScalars() throws {
+        let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let snapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "moves:arm9/src/waza.c")
+
+        XCTAssertTrue(snapshot.canEdit, snapshot.diagnostics.map(\.code).joined(separator: ","))
+        let fields = Dictionary(uniqueKeysWithValues: snapshot.fields.map { ($0.key, $0) })
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.effect"]?.value, "MOVE_EFFECT_HIT")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.effect"]?.valueKind, .string)
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.class"]?.value, "CLASS_PHYSICAL")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.power"]?.value, "35")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.power"]?.valueKind, .number)
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.type"]?.value, "TYPE_NORMAL")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.accuracy"]?.value, "95")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.pp"]?.value, "35")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.effectChance"]?.value, "0")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.unk8"]?.value, "0x0")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.priority"]?.value, "0")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.unkB"]?.value, "0")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.unkC"]?.value, "0")
+        XCTAssertEqual(fields["waza.MOVE_TACKLE.contestType"]?.value, "CONTEST_TYPE_COOL")
+        XCTAssertNil(fields["waza.MOVE_TACKLE.padding"])
+        XCTAssertNil(fields["waza.MOVE_FAKE.power"])
+        XCTAssertNil(fields["waza.MOVE_COMPLEX.power"])
+        XCTAssertEqual(fields["waza.MOVE_COMPLEX.effect"]?.value, "MOVE_EFFECT_HIT")
+        XCTAssertTrue(snapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED" })
+        XCTAssertTrue(snapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE" })
+
+        let plan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "moves:arm9/src/waza.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.effect", value: "MOVE_EFFECT_QUICK_ATTACK"),
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.class", value: "CLASS_SPECIAL"),
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.power", value: "40"),
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.type", value: "TYPE_FIGHTING")
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertTrue(plan.textDraft.editedText.contains(".effect = MOVE_EFFECT_QUICK_ATTACK"))
+        XCTAssertTrue(plan.textDraft.editedText.contains(".class = CLASS_SPECIAL"))
+        XCTAssertTrue(plan.textDraft.editedText.contains(".power = 40"))
+        XCTAssertTrue(plan.textDraft.editedText.contains(".type = TYPE_FIGHTING"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("ReadWholeNarcMemberByIdPair"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("MOVE_FAKE"))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/waza.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains(".effect = MOVE_EFFECT_QUICK_ATTACK"))
+        XCTAssertTrue(updated.contains(".class = CLASS_SPECIAL"))
+        XCTAssertTrue(updated.contains(".power = 40"))
+        XCTAssertTrue(updated.contains(".type = TYPE_FIGHTING"))
+        XCTAssertTrue(updated.contains("ReadWholeNarcMemberByIdPair"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        for invalidValue in ["MOVE_EFFECT(1)", "(MOVE_EFFECT_HIT)", "20 + 10", "{ 1 }", "\"MOVE_EFFECT_HIT\""] {
+            let invalidPlan = NDSDataSemanticEditor.plan(
+                catalog: try NDSDataCatalogBuilder.build(path: root.path),
+                draft: NDSDataSemanticEditDraft(
+                    recordID: "moves:arm9/src/waza.c",
+                    fieldEdits: [
+                        NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.effect", value: invalidValue)
+                    ]
+                )
+            )
+            XCTAssertTrue(invalidPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_VALUE_INVALID" }, invalidValue)
+            XCTAssertTrue(invalidPlan.editPlan.changes.isEmpty, invalidValue)
+            XCTAssertFalse(invalidPlan.editPlan.validateApplyability().isApplyable, invalidValue)
+        }
+
+        let duplicatePlan = NDSDataSemanticEditor.plan(
+            catalog: try NDSDataCatalogBuilder.build(path: root.path),
+            draft: NDSDataSemanticEditDraft(
+                recordID: "moves:arm9/src/waza.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.power", value: "50"),
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.power", value: "60")
+                ]
+            )
+        )
+        XCTAssertTrue(duplicatePlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_DUPLICATE" })
+        XCTAssertTrue(duplicatePlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(duplicatePlan.editPlan.validateApplyability().isApplyable)
+
+        let missingPlan = NDSDataSemanticEditor.plan(
+            catalog: try NDSDataCatalogBuilder.build(path: root.path),
+            draft: NDSDataSemanticEditDraft(
+                recordID: "moves:arm9/src/waza.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.padding", value: "1"),
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_MISSING.power", value: "40")
+                ]
+            )
+        )
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_MISSING" })
+        XCTAssertTrue(missingPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(missingPlan.editPlan.validateApplyability().isApplyable)
+
+        let encounterPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:arm9/src/encounter.c",
+                fieldEdits: [
+                    NDSDataSemanticFieldEdit(key: "waza.MOVE_TACKLE.power", value: "40")
+                ]
+            )
+        )
+        XCTAssertTrue(encounterPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(encounterPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(encounterPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+        XCTAssertTrue(encounterPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(encounterPlan.editPlan.validateApplyability().isApplyable)
+    }
+
     func testNDSDataSemanticEditorPlansDiamondPearlItemCAnchorScalars() throws {
         let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)
@@ -3736,7 +3860,28 @@ final class NDSDataCatalogTests: XCTestCase {
         try makeDirectory(root.appendingPathComponent("arm9"))
         try makeDirectory(root.appendingPathComponent("arm7"))
         try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
-        try write("void Waza_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/waza.c"))
+        try write(
+            """
+            #include "move_data.h"
+
+            /* static const struct WazaTbl sWazaTbl[] = {
+                [MOVE_FAKE] = { .power = 99 },
+            }; */
+            static const char *sWazaTblDebug = "sWazaTbl { [MOVE_FAKE] = { .power = 88 } }";
+
+            static const struct WazaTbl sWazaTbl[] = {
+                [MOVE_NONE] = { .effect = 0, .class = CLASS_STATUS, .power = 0, .type = TYPE_NORMAL, .accuracy = 0, .pp = 0, .effectChance = 0, .unk8 = 0, .priority = 0, .unkB = 0, .unkC = 0, .contestType = CONTEST_TYPE_COOL, .padding = 0 },
+                [MOVE_TACKLE] = { .effect = MOVE_EFFECT_HIT, .class = CLASS_PHYSICAL, .power = 35, .type = TYPE_NORMAL, .accuracy = 95, .pp = 35, .effectChance = 0, .unk8 = 0x0, .priority = 0, .unkB = 0, .unkC = 0, .contestType = CONTEST_TYPE_COOL, .padding = 0 },
+                [MOVE_COMPLEX] = { .effect = MOVE_EFFECT_HIT, .power = 20 + 10, .type = TYPE_NORMAL },
+                { .power = 5 },
+            };
+
+            void Waza_Load(void) {}
+            void LoadWazaEntry(u16 waza, struct WazaTbl *wazaTbl) { ReadWholeNarcMemberByIdPair(wazaTbl, NARC_POKETOOL_WAZA_WAZA_TBL, waza); }
+
+            """,
+            to: root.appendingPathComponent("arm9/src/waza.c")
+        )
         try write(
             """
             #include "global.h"

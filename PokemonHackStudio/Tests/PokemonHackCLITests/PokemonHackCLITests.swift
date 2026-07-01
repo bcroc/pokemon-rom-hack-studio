@@ -712,18 +712,21 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(moveCAnchor["domain"] as? String, "moves")
         XCTAssertEqual(moveCAnchor["format"] as? String, "cSource")
         let moveCAnchorFacts = try XCTUnwrap(moveCAnchor["facts"] as? [[String: Any]])
-        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorFutureRow" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorSemanticScalars" })
         XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Provenance" && $0["value"] as? String == "diamondPearl:arm9/src/waza.c" })
-        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Readiness" && $0["value"] as? String == "futureRowBlocked" })
-        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
-        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("move C-anchor writer") == true })
-        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Action State" && ($0["value"] as? String)?.contains("no parser") == true })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Readiness" && $0["value"] as? String == "semanticSimpleScalars" })
+        XCTAssertFalse(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("non-simple move C scalar write") == true })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("row insert/remove/reorder") == true })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("encounter C-anchor writer") == true })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Action State" && ($0["value"] as? String)?.contains("semantic mutation-plan gate") == true })
         let moveCAnchorReadiness = try XCTUnwrap(moveCAnchor["readiness"] as? [String: Any])
-        XCTAssertEqual(moveCAnchorReadiness["status"] as? String, "blocked")
+        XCTAssertEqual(moveCAnchorReadiness["status"] as? String, "partial")
         let moveCAnchorBlockedActions = try XCTUnwrap(moveCAnchorReadiness["blockedActions"] as? [String])
-        XCTAssertTrue(moveCAnchorBlockedActions.contains("move C-anchor writer"))
+        XCTAssertTrue(moveCAnchorBlockedActions.contains("non-simple move C scalar write"))
         let moveCAnchorDiagnostics = try XCTUnwrap(moveCAnchor["diagnostics"] as? [[String: Any]])
-        XCTAssertTrue(moveCAnchorDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MOVE_C_ANCHOR_FUTURE_ROW" })
+        XCTAssertTrue(moveCAnchorDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MOVE_C_ANCHOR_SEMANTIC_SCALARS" })
+        XCTAssertTrue(moveCAnchorDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MOVE_C_ANCHOR_WRITE_LIMITED" })
 
         let encounterCAnchor = try XCTUnwrap(records.first { $0["relativePath"] as? String == "arm9/src/encounter.c" })
         XCTAssertEqual(encounterCAnchor["domain"] as? String, "encounters")
@@ -797,9 +800,9 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(mapHeaderResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMapHeaderCAnchor" })
         let moveCAnchorResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data moves" && $0["path"] as? String == "arm9/src/waza.c" })
         let moveCAnchorResourceFacts = try XCTUnwrap(moveCAnchorResource["facts"] as? [[String: Any]])
-        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorFutureRow" })
-        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
-        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("move C-anchor writer") == true })
+        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorSemanticScalars" })
+        XCTAssertFalse(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("non-simple move C scalar write") == true })
         let encounterCAnchorResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data encounters" && $0["path"] as? String == "arm9/src/encounter.c" })
         let encounterCAnchorResourceFacts = try XCTUnwrap(encounterCAnchorResource["facts"] as? [[String: Any]])
         XCTAssertTrue(encounterCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpEncounterCAnchorFutureRow" })
@@ -3898,6 +3901,125 @@ final class PokemonHackCLITests: XCTestCase {
         )
     }
 
+    func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlMoveCAnchorScalars() throws {
+        let root = try makeTestDiamondDecompRoot()
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-plan",
+                root.path,
+                "moves:arm9/src/waza.c",
+                "--set",
+                "waza.MOVE_TACKLE.effect=MOVE_EFFECT_QUICK_ATTACK",
+                "--set",
+                "waza.MOVE_TACKLE.power=40",
+                "--set",
+                "waza.MOVE_TACKLE.type=TYPE_FIGHTING",
+                "--json"
+            ])
+        )
+        let requestedFieldKeys = try XCTUnwrap(plan["requestedFieldKeys"] as? [String])
+        XCTAssertEqual(
+            requestedFieldKeys,
+            [
+                "waza.MOVE_TACKLE.effect",
+                "waza.MOVE_TACKLE.power",
+                "waza.MOVE_TACKLE.type"
+            ]
+        )
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, "arm9/src/waza.c")
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-semantic-plan",
+            root.path,
+            "moves:arm9/src/waza.c",
+            "--set",
+            "waza.MOVE_TACKLE.power=40",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains(".power = 40"))
+        XCTAssertFalse(redactedPlan.contains("sWazaTbl[]"))
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "moves:arm9/src/waza.c",
+                "--set",
+                "waza.MOVE_TACKLE.effect=MOVE_EFFECT_QUICK_ATTACK",
+                "--set",
+                "waza.MOVE_TACKLE.class=CLASS_SPECIAL",
+                "--set",
+                "waza.MOVE_TACKLE.power=40",
+                "--set",
+                "waza.MOVE_TACKLE.type=TYPE_FIGHTING",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent("arm9/src/waza.c"), encoding: .utf8)
+        XCTAssertTrue(updated.contains(".effect = MOVE_EFFECT_QUICK_ATTACK"))
+        XCTAssertTrue(updated.contains(".class = CLASS_SPECIAL"))
+        XCTAssertTrue(updated.contains(".power = 40"))
+        XCTAssertTrue(updated.contains(".type = TYPE_FIGHTING"))
+        XCTAssertTrue(updated.contains("ReadWholeNarcMemberByIdPair"))
+
+        let invalidApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "moves:arm9/src/waza.c",
+                "--set",
+                "waza.MOVE_TACKLE.power=20 + 10",
+                "--json"
+            ])
+        )
+        let invalidChanges = try XCTUnwrap(invalidApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(invalidChanges.count, 0)
+        let invalidDiagnostics = try XCTUnwrap(invalidApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(invalidDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_VALUE_INVALID" })
+
+        let missingApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "moves:arm9/src/waza.c",
+                "--set",
+                "waza.MOVE_TACKLE.padding=1",
+                "--json"
+            ])
+        )
+        let missingChanges = try XCTUnwrap(missingApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(missingChanges.count, 0)
+        let missingDiagnostics = try XCTUnwrap(missingApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(missingDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FIELD_MISSING" })
+
+        let blockedEncounterApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-semantic-apply",
+                root.path,
+                "encounters:arm9/src/encounter.c",
+                "--set",
+                "waza.MOVE_TACKLE.power=40",
+                "--json"
+            ])
+        )
+        let blockedEncounterChanges = try XCTUnwrap(blockedEncounterApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(blockedEncounterChanges.count, 0)
+        let blockedEncounterDiagnostics = try XCTUnwrap(blockedEncounterApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedEncounterDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
+        XCTAssertTrue(blockedEncounterDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
+        XCTAssertTrue(blockedEncounterDiagnostics.contains { $0["code"] as? String == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("arm9/src/encounter.c"), encoding: .utf8),
+            "void Encounter_Load(void) {}\n"
+        )
+    }
+
     func testNDSDataSemanticCommandsPlanAndApplyDiamondPearlPersonalJSONFields() throws {
         let root = try makeTestDiamondDecompRoot()
         try write(Data([0x00]), to: root.appendingPathComponent("files/poketool/personal/personal_0000.bin"))
@@ -5097,7 +5219,28 @@ final class PokemonHackCLITests: XCTestCase {
         try write("filesystem: $(HOSTFS_FILES)\n", to: root.appendingPathComponent("filesystem.mk"))
         try write("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  build/diamond.us/pokediamond.us.nds\n", to: root.appendingPathComponent("pokediamond.us.sha1"))
         try write("void Pokemon_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/pokemon.c"))
-        try write("void Waza_Load(void) {}\n", to: root.appendingPathComponent("arm9/src/waza.c"))
+        try write(
+            """
+            #include "move_data.h"
+
+            /* static const struct WazaTbl sWazaTbl[] = {
+                [MOVE_FAKE] = { .power = 99 },
+            }; */
+            static const char *sWazaTblDebug = "sWazaTbl { [MOVE_FAKE] = { .power = 88 } }";
+
+            static const struct WazaTbl sWazaTbl[] = {
+                [MOVE_NONE] = { .effect = 0, .class = CLASS_STATUS, .power = 0, .type = TYPE_NORMAL, .accuracy = 0, .pp = 0, .effectChance = 0, .unk8 = 0, .priority = 0, .unkB = 0, .unkC = 0, .contestType = CONTEST_TYPE_COOL, .padding = 0 },
+                [MOVE_TACKLE] = { .effect = MOVE_EFFECT_HIT, .class = CLASS_PHYSICAL, .power = 35, .type = TYPE_NORMAL, .accuracy = 95, .pp = 35, .effectChance = 0, .unk8 = 0x0, .priority = 0, .unkB = 0, .unkC = 0, .contestType = CONTEST_TYPE_COOL, .padding = 0 },
+                [MOVE_COMPLEX] = { .effect = MOVE_EFFECT_HIT, .power = 20 + 10, .type = TYPE_NORMAL },
+                { .power = 5 },
+            };
+
+            void Waza_Load(void) {}
+            void LoadWazaEntry(u16 waza, struct WazaTbl *wazaTbl) { ReadWholeNarcMemberByIdPair(wazaTbl, NARC_POKETOOL_WAZA_WAZA_TBL, waza); }
+
+            """,
+            to: root.appendingPathComponent("arm9/src/waza.c")
+        )
         try write(
             """
             #include "global.h"

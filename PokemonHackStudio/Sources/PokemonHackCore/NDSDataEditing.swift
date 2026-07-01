@@ -215,6 +215,8 @@ public struct NDSDataApplyResult: Codable, Equatable, Identifiable {
 }
 
 public enum NDSDataSemanticEditor {
+    private static let diamondPearlMoveCAnchorPath = "arm9/src/waza.c"
+    private static let diamondPearlMoveTableSymbol = "sWazaTbl"
     private static let diamondPearlItemCAnchorPath = "arm9/src/itemtool.c"
     private static let diamondPearlItemMappingTableSymbol = "sItemIndexMappings"
     private static let diamondPearlTrainerCAnchorPath = "arm9/src/trainer_data.c"
@@ -223,6 +225,42 @@ public enum NDSDataSemanticEditor {
     private static let diamondPearlMapHeaderTableSymbol = "sMapHeaders"
     private static let heartGoldSoulSilverMapHeaderCAnchorPath = "src/data/map_headers.h"
     private static let heartGoldSoulSilverMapHeaderTableSymbol = "sMapHeaders"
+
+    private enum DiamondPearlMoveField: String, CaseIterable {
+        case effect
+        case moveClass = "class"
+        case power
+        case type
+        case accuracy
+        case pp
+        case effectChance
+        case unk8
+        case priority
+        case unkB
+        case unkC
+        case contestType
+
+        var key: String {
+            rawValue
+        }
+
+        var label: String {
+            switch self {
+            case .effect: return "Effect"
+            case .moveClass: return "Class"
+            case .power: return "Power"
+            case .type: return "Type"
+            case .accuracy: return "Accuracy"
+            case .pp: return "PP"
+            case .effectChance: return "Effect Chance"
+            case .unk8: return "Unknown 8"
+            case .priority: return "Priority"
+            case .unkB: return "Unknown B"
+            case .unkC: return "Unknown C"
+            case .contestType: return "Contest Type"
+            }
+        }
+    }
 
     private enum DiamondPearlItemMappingField: Int, CaseIterable {
         case itemDataIndex
@@ -322,6 +360,7 @@ public enum NDSDataSemanticEditor {
     private enum SemanticFieldSyntax {
         case json
         case cScalar
+        case cSimpleScalar
         case csvCell
         case textLine
         case textJSONString
@@ -490,7 +529,7 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl move C anchor, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
@@ -499,10 +538,10 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct zone-event JSON rows under files/fielddata/eventdata/zone_event, and map header integer scalars in src/data/map_headers.h; NARC, generated, script binary, inventory-only map matrix/map table relationship rows, nested map directories, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, move scalars in arm9/src/waza.c, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .moves, !isSemanticMoveDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves; nested move tables, HeartGold/SoulSilver and Diamond/Pearl move containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves and Diamond/Pearl move scalars in arm9/src/waza.c; nested move tables, HeartGold/SoulSilver move containers, generated/reference rows, ROM/export/rebuild paths, row insert/remove/reorder, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .items, !isSemanticItemDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ITEM_PATH_BLOCKED", message: "Semantic item editing is limited to Platinum item JSON rows under res/items, HeartGold/SoulSilver item JSON rows and direct item CSV rows under files/itemtool/itemdata, Diamond/Pearl item JSON rows under files/itemtool/itemdata, and Diamond/Pearl item mapping scalars in arm9/src/itemtool.c; non-HGSS CSV, generated, binary, container, and other item data remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
@@ -565,6 +604,8 @@ public enum NDSDataSemanticEditor {
         switch profile {
         case .pokeplatinum:
             return isPlatinumMoveDataPath(relativePath)
+        case .pokediamond:
+            return relativePath == diamondPearlMoveCAnchorPath
         default:
             return false
         }
@@ -730,6 +771,8 @@ public enum NDSDataSemanticEditor {
         case .trainers:
             return (isDiamondPearlTrainerDataPath(record.relativePath) && record.format == .json)
                 || isDiamondPearlTrainerClassGenderCAnchorRecord(record)
+        case .moves:
+            return isDiamondPearlMoveCAnchorRecord(record)
         case .items:
             return (isDiamondPearlItemDataPath(record.relativePath) && record.format == .json)
                 || isDiamondPearlItemCAnchorRecord(record)
@@ -741,6 +784,12 @@ public enum NDSDataSemanticEditor {
         default:
             return false
         }
+    }
+
+    private static func isDiamondPearlMoveCAnchorRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .moves
+            && record.relativePath == diamondPearlMoveCAnchorPath
+            && record.format == .cSource
     }
 
     private static func isDiamondPearlItemCAnchorRecord(_ record: NDSDataCatalogRecord) -> Bool {
@@ -888,6 +937,12 @@ public enum NDSDataSemanticEditor {
         record: NDSDataCatalogRecord?,
         recordID: String? = nil
     ) -> ParsedSemanticFields {
+        if let record, isDiamondPearlMoveCAnchorRecord(record) {
+            return parseDiamondPearlMoveCAnchorFields(sourceText: sourceText, record: record)
+        }
+        if record == nil, recordID == "moves:\(diamondPearlMoveCAnchorPath)" {
+            return parseDiamondPearlMoveCAnchorFields(sourceText: sourceText, record: nil)
+        }
         if let record, isDiamondPearlItemCAnchorRecord(record) {
             return parseDiamondPearlItemCAnchorFields(sourceText: sourceText, record: record)
         }
@@ -1304,6 +1359,169 @@ public enum NDSDataSemanticEditor {
 
         diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_CSV_QUOTE_UNCLOSED", message: "HeartGold/SoulSilver item CSV \(rowDescription) has an unterminated quoted cell; multiline CSV cells remain raw-source only.", span: SourceSpan(relativePath: record.relativePath, startLine: lineNumber(in: text, before: start))))
         return (nil, end, diagnostics)
+    }
+
+    private static func parseDiamondPearlMoveCAnchorFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        guard let tableRange = cExactStaticConstStructTableBraceRange(
+            sourceText,
+            structName: "WazaTbl",
+            symbol: diamondPearlMoveTableSymbol
+        ) else {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_TABLE_MISSING", message: "Diamond/Pearl move table static const struct WazaTbl \(diamondPearlMoveTableSymbol)[] was not found; move C anchors remain raw-source only.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var cursor = sourceText.index(after: tableRange.openBrace)
+        let tableClose = sourceText.index(before: tableRange.closeBraceEnd)
+        while cursor < tableClose {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose else { break }
+            let rowStart = cursor
+            guard sourceText[cursor] == "[",
+                  let bracketEnd = matchingBracketEnd(sourceText, start: cursor),
+                  bracketEnd <= tableClose,
+                  let moveKeyRange = trimmedRange(sourceText.index(after: cursor)..<sourceText.index(before: bracketEnd), in: sourceText)
+            else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl move table row is not a direct designated \(diamondPearlMoveTableSymbol) entry and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: rowStart))))
+                skipCInitializerEntry(sourceText, cursor: &cursor, end: tableClose)
+                continue
+            }
+
+            let moveKey = String(sourceText[moveKeyRange])
+            guard isCIdentifier(moveKey) else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl move table row \(moveKey) does not use a simple move constant and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: moveKeyRange.lowerBound))))
+                cursor = bracketEnd
+                skipCInitializerEntry(sourceText, cursor: &cursor, end: tableClose)
+                continue
+            }
+
+            cursor = bracketEnd
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose, sourceText[cursor] == "=" else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl move table row \(moveKey) is not a direct designated initializer and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: moveKeyRange.lowerBound))))
+                skipCInitializerEntry(sourceText, cursor: &cursor, end: tableClose)
+                continue
+            }
+            cursor = sourceText.index(after: cursor)
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: tableClose)
+            guard cursor < tableClose, sourceText[cursor] == "{",
+                  let entryEnd = matchingCBraceEnd(sourceText, start: cursor),
+                  entryEnd <= tableRange.closeBraceEnd
+            else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_ROW_BAD_SHAPE", message: "Diamond/Pearl move table row \(moveKey) is not a direct brace initializer and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: moveKeyRange.lowerBound))))
+                if cursor < tableClose {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+
+            parseDiamondPearlMoveEntryFields(
+                sourceText: sourceText,
+                moveKey: moveKey,
+                start: sourceText.index(after: cursor),
+                end: sourceText.index(before: entryEnd),
+                record: record,
+                fields: &fields,
+                diagnostics: &diagnostics
+            )
+            cursor = entryEnd
+        }
+
+        let duplicateKeys = duplicateSemanticFieldKeys(fields)
+        for key in duplicateKeys {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_C_FIELD_DUPLICATE", message: "Diamond/Pearl move scalar \(key) appears more than once; duplicate source fields must be resolved before field-level edits are planned.", span: record?.sourceSpan))
+        }
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_C_SCALARS", message: "No simple scalar fields were found in Diamond/Pearl \(diamondPearlMoveTableSymbol); move C anchors remain raw-source only.", span: record?.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: [])
+    }
+
+    private static func parseDiamondPearlMoveEntryFields(
+        sourceText: String,
+        moveKey: String,
+        start: String.Index,
+        end: String.Index,
+        record: NDSDataCatalogRecord?,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        var cursor = start
+        while cursor < end {
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+            guard cursor < end else { break }
+            guard sourceText[cursor] == "." else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_FIELD_BAD_SHAPE", message: "Diamond/Pearl move table row \(moveKey) contains a non-designated field and remains raw-source only for that field.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: cursor))))
+                let valueEnd = cTopLevelValueEnd(sourceText, start: cursor, end: end)
+                cursor = valueEnd
+                if cursor < end, sourceText[cursor] == "," {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+
+            let fieldStart = sourceText.index(after: cursor)
+            guard fieldStart < end, isCIdentifierStart(sourceText[fieldStart]) else {
+                cursor = fieldStart
+                continue
+            }
+            var fieldEnd = sourceText.index(after: fieldStart)
+            while fieldEnd < end, isCIdentifierContinuation(sourceText[fieldEnd]) {
+                fieldEnd = sourceText.index(after: fieldEnd)
+            }
+            let fieldName = String(sourceText[fieldStart..<fieldEnd])
+            cursor = fieldEnd
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+            guard cursor < end, sourceText[cursor] == "=" else {
+                diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_C_FIELD_BAD_SHAPE", message: "Diamond/Pearl move table field \(moveKey).\(fieldName) is not a direct assignment and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: fieldStart))))
+                if cursor < end {
+                    cursor = sourceText.index(after: cursor)
+                }
+                continue
+            }
+            cursor = sourceText.index(after: cursor)
+            skipCWhitespaceCommentsAndCommas(sourceText, index: &cursor, end: end)
+
+            let valueStart = cursor
+            let valueEnd = cTopLevelValueEnd(sourceText, start: valueStart, end: end)
+            defer {
+                cursor = valueEnd
+                if cursor < end, sourceText[cursor] == "," {
+                    cursor = sourceText.index(after: cursor)
+                }
+            }
+
+            guard fieldName != "padding",
+                  let moveField = DiamondPearlMoveField(rawValue: fieldName),
+                  let scalarRange = trimmedRange(valueStart..<valueEnd, in: sourceText)
+            else {
+                continue
+            }
+
+            let trimmed = String(sourceText[scalarRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isCSimpleScalar(trimmed) else {
+                diagnostics.append(Diagnostic(severity: .info, code: "NDS_DATA_SEMANTIC_C_SCALAR_UNSUPPORTED", message: "Diamond/Pearl move table field \(moveKey).\(fieldName) is not a simple C integer literal or identifier and remains raw-source only.", span: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))))
+                continue
+            }
+            fields.append(
+                ParsedSemanticField(
+                    semanticField: NDSDataSemanticField(
+                        key: "waza.\(moveKey).\(moveField.key)",
+                        label: "\(moveKey) \(moveField.label)",
+                        value: trimmed,
+                        valueKind: isCIntegerLiteral(trimmed) ? .number : .string,
+                        sourceSpan: SourceSpan(relativePath: record?.relativePath ?? diamondPearlMoveCAnchorPath, startLine: lineNumber(in: sourceText, before: scalarRange.lowerBound))
+                    ),
+                    valueRange: scalarRange,
+                    syntax: .cSimpleScalar
+                )
+            )
+        }
     }
 
     private static func parseDiamondPearlItemCAnchorFields(
@@ -1870,6 +2088,71 @@ public enum NDSDataSemanticEditor {
         return nil
     }
 
+    private static func cExactStaticConstStructTableBraceRange(
+        _ text: String,
+        structName: String,
+        symbol: String
+    ) -> (openBrace: String.Index, closeBraceEnd: String.Index)? {
+        var index = text.startIndex
+        while index < text.endIndex {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: text.endIndex) {
+                continue
+            }
+            guard isCIdentifierStart(text[index]) else {
+                index = text.index(after: index)
+                continue
+            }
+            let identifierStart = index
+            index = text.index(after: index)
+            while index < text.endIndex, isCIdentifierContinuation(text[index]) {
+                index = text.index(after: index)
+            }
+            guard String(text[identifierStart..<index]) == symbol,
+                  isExactStaticConstStructDeclarator(
+                    text,
+                    structName: structName,
+                    symbolStart: identifierStart,
+                    symbolEnd: index
+                  )
+            else {
+                continue
+            }
+            var cursor = index
+            guard let openBrace = nextCInitializerOpenBrace(text, from: &cursor),
+                  let closeBraceEnd = matchingCBraceEnd(text, start: openBrace)
+            else {
+                continue
+            }
+            return (openBrace, closeBraceEnd)
+        }
+        return nil
+    }
+
+    private static func isExactStaticConstStructDeclarator(
+        _ text: String,
+        structName: String,
+        symbolStart: String.Index,
+        symbolEnd: String.Index
+    ) -> Bool {
+        let lineStart = text[..<symbolStart].lastIndex(of: "\n").map { text.index(after: $0) } ?? text.startIndex
+        let prefix = String(text[lineStart..<symbolStart])
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard prefix == "static const struct \(structName)" else {
+            return false
+        }
+
+        var cursor = symbolEnd
+        skipCWhitespaceAndComments(text, index: &cursor, end: text.endIndex)
+        guard cursor < text.endIndex, text[cursor] == "[" else { return false }
+        cursor = text.index(after: cursor)
+        skipCWhitespaceAndComments(text, index: &cursor, end: text.endIndex)
+        guard cursor < text.endIndex, text[cursor] == "]" else { return false }
+        cursor = text.index(after: cursor)
+        skipCWhitespaceAndComments(text, index: &cursor, end: text.endIndex)
+        return cursor < text.endIndex && text[cursor] == "="
+    }
+
     private static func cInitializerTableBraceRange(
         _ text: String,
         symbol: String
@@ -1901,6 +2184,11 @@ public enum NDSDataSemanticEditor {
 
     private static func nextCInitializerOpenBrace(_ text: String, from start: String.Index) -> String.Index? {
         var index = start
+        return nextCInitializerOpenBrace(text, from: &index)
+    }
+
+    private static func nextCInitializerOpenBrace(_ text: String, from start: inout String.Index) -> String.Index? {
+        var index = start
         while index < text.endIndex {
             if skipCCommentOrQuotedLiteral(text, index: &index, end: text.endIndex) {
                 continue
@@ -1913,6 +2201,7 @@ public enum NDSDataSemanticEditor {
             }
             index = text.index(after: index)
         }
+        start = index
         return nil
     }
 
@@ -1996,9 +2285,63 @@ public enum NDSDataSemanticEditor {
         return ranges
     }
 
+    private static func cTopLevelValueEnd(_ text: String, start: String.Index, end: String.Index) -> String.Index {
+        var index = start
+        var depth = 0
+        while index < end {
+            if skipCCommentOrQuotedLiteral(text, index: &index, end: end) {
+                continue
+            }
+            let character = text[index]
+            if character == "(" || character == "[" || character == "{" {
+                depth += 1
+            } else if character == ")" || character == "]" || character == "}" {
+                depth = max(0, depth - 1)
+            } else if character == "," && depth == 0 {
+                break
+            }
+            index = text.index(after: index)
+        }
+        return index
+    }
+
+    private static func skipCInitializerEntry(_ text: String, cursor: inout String.Index, end: String.Index) {
+        while cursor < end {
+            if skipCCommentOrQuotedLiteral(text, index: &cursor, end: end) {
+                continue
+            }
+            if text[cursor] == "{",
+               let entryEnd = matchingCBraceEnd(text, start: cursor),
+               entryEnd <= end {
+                cursor = entryEnd
+                if cursor < end, text[cursor] == "," {
+                    cursor = text.index(after: cursor)
+                }
+                return
+            }
+            if text[cursor] == "," {
+                cursor = text.index(after: cursor)
+                return
+            }
+            cursor = text.index(after: cursor)
+        }
+    }
+
     private static func skipCWhitespaceCommentsAndCommas(_ text: String, index: inout String.Index, end: String.Index) {
         while index < end {
             if text[index].isWhitespace || text[index] == "," {
+                index = text.index(after: index)
+            } else if skipCCommentOrQuotedLiteral(text, index: &index, end: end) {
+                continue
+            } else {
+                break
+            }
+        }
+    }
+
+    private static func skipCWhitespaceAndComments(_ text: String, index: inout String.Index, end: String.Index) {
+        while index < end {
+            if text[index].isWhitespace {
                 index = text.index(after: index)
             } else if skipCCommentOrQuotedLiteral(text, index: &index, end: end) {
                 continue
@@ -2088,6 +2431,11 @@ public enum NDSDataSemanticEditor {
         ) != nil
     }
 
+    private static func isCSimpleScalar(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isCIntegerLiteral(trimmed) || isCIdentifier(trimmed)
+    }
+
     private static func parseJSONStringToken(_ text: String, start: String.Index) -> (value: String, end: String.Index)? {
         guard start < text.endIndex, text[start] == "\"" else { return nil }
         var index = text.index(after: start)
@@ -2160,6 +2508,11 @@ public enum NDSDataSemanticEditor {
         return isCIntegerLiteral(trimmed) ? trimmed : nil
     }
 
+    private static func renderedCSimpleScalarValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isCSimpleScalar(trimmed) ? trimmed : nil
+    }
+
     private static func renderedCSVCellValue(_ value: String) -> String? {
         guard !value.contains(where: { $0 == "\n" || $0 == "\r" }) else { return nil }
         let needsQuoting = value.contains(",")
@@ -2195,6 +2548,8 @@ public enum NDSDataSemanticEditor {
             return renderedJSONValue(value, as: field.semanticField.valueKind)
         case .cScalar:
             return renderedCScalarValue(value)
+        case .cSimpleScalar:
+            return renderedCSimpleScalarValue(value)
         case .csvCell:
             return renderedCSVCellValue(value)
         case .textLine:
