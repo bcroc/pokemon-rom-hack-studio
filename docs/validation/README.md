@@ -6,6 +6,7 @@ This directory records validation tiers and closeout proof outside the main plan
 
 | Row | Proof | Outcome |
 | --- | --- | --- |
+| `PHS-T118` | [Guided UI/UX Evidence Closeout](2026-07-01-guided-ui-ux-evidence-closeout.md) | Local screenshot/audit evidence was recorded without adding PNG binaries to Git; archived guided/adoption paths were confirmed as already adopted or local-only evidence. |
 | `PHS-T57T` | [Ruby/Sapphire Contest Move Facts](2026-07-01-phs-t57t-ruby-contest-move-facts.md) | Focused move catalog, compatibility, and CLI compatibility JSON proof passed on 2026-07-01; `git diff --check` passed. |
 | `PHS-T78R` | [Expansion Move Contest Scalar Editing](2026-07-01-phs-t78r-expansion-move-contest-scalars.md) | Focused core/compatibility and CLI JSON proof passed; broader compatibility and `make validate` runs are blocked by unrelated all-learnables assertions after the PHS-T78R tests pass. |
 | `PHS-T112T` | [Gen V Message Metadata Facts](2026-07-01-phs-t112t-genv-message-metadata-facts.md) | Focused catalog/CLI proof and `make validate-nds` passed for preview-only Gen V `files/msgdata/**` byte, line-count, numeric-bank-hint, and `noDecodedPreview` facts. |
