@@ -117,6 +117,73 @@ private struct NDSDataTextLineOperationReport: Codable, Equatable {
     }
 }
 
+private struct NDSDataItemCSVRowOperationPlanReport: Codable, Equatable {
+    let recordID: String
+    let operations: [NDSDataItemCSVRowOperationReport]
+    let beforeRowCount: Int
+    let afterRowCount: Int
+    let changes: [NDSDataSemanticFileChangeReport]
+    let diagnostics: [Diagnostic]
+    let mutationPlan: MutationPlan
+    let backupRelativeRoot: String
+    let changeCount: Int
+
+    init(plan: NDSDataItemCSVRowOperationPlan) {
+        recordID = plan.draft.recordID
+        operations = plan.draft.operations.map(NDSDataItemCSVRowOperationReport.init(operation:))
+        beforeRowCount = plan.beforeRowCount
+        afterRowCount = plan.afterRowCount
+        changes = plan.editPlan.changes.map(NDSDataSemanticFileChangeReport.init(change:))
+        diagnostics = plan.diagnostics
+        mutationPlan = plan.editPlan.mutationPlan
+        backupRelativeRoot = plan.editPlan.backupRelativeRoot
+        changeCount = plan.editPlan.changes.count
+    }
+}
+
+private struct NDSDataItemCSVRowOperationReport: Codable, Equatable {
+    let kind: NDSDataItemCSVRowOperationKind
+    let index: Int?
+    let fromIndex: Int?
+    let toIndex: Int?
+    let insertedColumnCount: Int?
+
+    init(operation: NDSDataItemCSVRowOperation) {
+        kind = operation.kind
+        index = operation.index
+        fromIndex = operation.fromIndex
+        toIndex = operation.toIndex
+        insertedColumnCount = Self.csvColumnCount(rowText: operation.rowText)
+    }
+
+    private static func csvColumnCount(rowText: String?) -> Int? {
+        guard let rowText, !rowText.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+            return nil
+        }
+        var count = 1
+        var inQuotedCell = false
+        var index = rowText.startIndex
+        while index < rowText.endIndex {
+            let character = rowText[index]
+            if character == "\"" {
+                let next = rowText.index(after: index)
+                if inQuotedCell, next < rowText.endIndex, rowText[next] == "\"" {
+                    index = rowText.index(after: next)
+                    continue
+                }
+                inQuotedCell.toggle()
+                index = next
+                continue
+            }
+            if character == ",", !inQuotedCell {
+                count += 1
+            }
+            index = rowText.index(after: index)
+        }
+        return inQuotedCell ? nil : count
+    }
+}
+
 private struct CLICommandMetadata: Codable, Equatable {
     let name: String
     let usage: String
@@ -251,6 +318,10 @@ struct PokemonHackCLI {
             return try ndsDataTextLinesPlan(arguments: Array(arguments.dropFirst()))
         case "nds-data-text-lines-apply":
             return try ndsDataTextLinesApply(arguments: Array(arguments.dropFirst()))
+        case "nds-data-item-csv-rows-plan":
+            return try ndsDataItemCSVRowsPlan(arguments: Array(arguments.dropFirst()))
+        case "nds-data-item-csv-rows-apply":
+            return try ndsDataItemCSVRowsApply(arguments: Array(arguments.dropFirst()))
         case "toolchain-health":
             return try toolchainHealth(arguments: Array(arguments.dropFirst()))
         case "references":
@@ -290,7 +361,7 @@ struct PokemonHackCLI {
         case "patch-apply-export", "patch-create", "rom-mutation-apply":
             guard let object = jsonObject(output) else { return 0 }
             return object["status"] as? String == "blocked" ? 1 : 0
-        case "script-command-edit-apply", "nds-data-edit-apply", "nds-data-semantic-apply", "nds-data-text-lines-apply":
+        case "script-command-edit-apply", "nds-data-edit-apply", "nds-data-semantic-apply", "nds-data-text-lines-apply", "nds-data-item-csv-rows-apply":
             guard let object = jsonObject(output) else { return 0 }
             if diagnosticsContainError(object["diagnostics"]) {
                 return 1
@@ -656,6 +727,24 @@ struct PokemonHackCLI {
         return try encode(try NDSDataMutationApplier.apply(plan: plan.editPlan))
     }
 
+    private static func ndsDataItemCSVRowsPlan(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataItemCSVRowArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let plan = NDSDataItemCSVRowOperationPlanner.plan(catalog: catalog, draft: request.draft)
+        return try encode(NDSDataItemCSVRowOperationPlanReport(plan: plan))
+    }
+
+    private static func ndsDataItemCSVRowsApply(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataItemCSVRowArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let plan = NDSDataItemCSVRowOperationPlanner.plan(catalog: catalog, draft: request.draft)
+        return try encode(try NDSDataMutationApplier.apply(plan: plan.editPlan))
+    }
+
     private static func parseNDSDataEditArguments(_ arguments: [String]) throws -> NDSDataEditCLIRequest? {
         guard arguments.count == 5,
               arguments[2] == "--draft-file",
@@ -742,6 +831,55 @@ struct PokemonHackCLI {
         return NDSDataTextLineCLIRequest(
             projectPath: projectPath,
             draft: NDSDataTextLineOperationDraft(recordID: recordID, operations: operations)
+        )
+    }
+
+    private static func parseNDSDataItemCSVRowArguments(_ arguments: [String]) -> NDSDataItemCSVRowCLIRequest? {
+        guard arguments.count >= 5,
+              arguments.last == "--json"
+        else {
+            return nil
+        }
+
+        let projectPath = arguments[0]
+        let recordID = arguments[1]
+        var index = 2
+        var operations: [NDSDataItemCSVRowOperation] = []
+        while index < arguments.count - 1 {
+            switch arguments[index] {
+            case "--insert":
+                guard index + 2 < arguments.count - 1,
+                      let rowIndex = Int(arguments[index + 1])
+                else {
+                    return nil
+                }
+                operations.append(.insert(index: rowIndex, rowText: arguments[index + 2]))
+                index += 3
+            case "--delete":
+                guard index + 1 < arguments.count - 1,
+                      let rowIndex = Int(arguments[index + 1])
+                else {
+                    return nil
+                }
+                operations.append(.delete(index: rowIndex))
+                index += 2
+            case "--reorder":
+                guard index + 2 < arguments.count - 1,
+                      let fromIndex = Int(arguments[index + 1]),
+                      let toIndex = Int(arguments[index + 2])
+                else {
+                    return nil
+                }
+                operations.append(.reorder(fromIndex: fromIndex, toIndex: toIndex))
+                index += 3
+            default:
+                return nil
+            }
+        }
+        guard !operations.isEmpty else { return nil }
+        return NDSDataItemCSVRowCLIRequest(
+            projectPath: projectPath,
+            draft: NDSDataItemCSVRowOperationDraft(recordID: recordID, operations: operations)
         )
     }
 
@@ -1331,6 +1469,8 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "nds-data-semantic-apply", usage: "nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Apply field-level NDS semantic edits through the existing source mutation gate."),
         CLICommandMetadata(name: "nds-data-text-lines-plan", usage: "nds-data-text-lines-plan <project> <record-id> [--insert <index> <text> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed Platinum text line insert/delete/reorder operations."),
         CLICommandMetadata(name: "nds-data-text-lines-apply", usage: "nds-data-text-lines-apply <project> <record-id> [--insert <index> <text> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe Platinum text line operations through backups and source freshness checks."),
+        CLICommandMetadata(name: "nds-data-item-csv-rows-plan", usage: "nds-data-item-csv-rows-plan <project> <record-id> [--insert <index> <csv-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed HGSS item CSV row insert/delete/reorder operations."),
+        CLICommandMetadata(name: "nds-data-item-csv-rows-apply", usage: "nds-data-item-csv-rows-apply <project> <record-id> [--insert <index> <csv-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe HGSS item CSV row operations through backups and source freshness checks."),
         CLICommandMetadata(name: "toolchain-health", usage: "toolchain-health <path> --json", summary: "Emit toolchain readiness rows."),
         CLICommandMetadata(name: "references", usage: "references --json", summary: "Emit reference repository metadata."),
         CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
@@ -1429,6 +1569,11 @@ private struct NDSDataSemanticCLIRequest {
 private struct NDSDataTextLineCLIRequest {
     let projectPath: String
     let draft: NDSDataTextLineOperationDraft
+}
+
+private struct NDSDataItemCSVRowCLIRequest {
+    let projectPath: String
+    let draft: NDSDataItemCSVRowOperationDraft
 }
 
 struct ValidationReport: Encodable {

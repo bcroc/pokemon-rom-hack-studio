@@ -94,6 +94,8 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
     public let moveMismatchSpeciesCount: Int
     public let staleSourceFileCount: Int
     public let newestStaleSourcePath: String?
+    public let staleSourcePaths: [String]
+    public let disagreements: [PokemonLearnablesCoverageDisagreement]
 
     public init(
         generatedSpeciesCount: Int,
@@ -104,7 +106,9 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
         sourceOnlySpeciesCount: Int,
         moveMismatchSpeciesCount: Int,
         staleSourceFileCount: Int,
-        newestStaleSourcePath: String? = nil
+        newestStaleSourcePath: String? = nil,
+        staleSourcePaths: [String] = [],
+        disagreements: [PokemonLearnablesCoverageDisagreement] = []
     ) {
         self.generatedSpeciesCount = generatedSpeciesCount
         self.parsedSourceSpeciesCount = parsedSourceSpeciesCount
@@ -115,6 +119,48 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
         self.moveMismatchSpeciesCount = moveMismatchSpeciesCount
         self.staleSourceFileCount = staleSourceFileCount
         self.newestStaleSourcePath = newestStaleSourcePath
+        self.staleSourcePaths = staleSourcePaths
+        self.disagreements = disagreements
+    }
+}
+
+public enum PokemonLearnablesCoverageDisagreementStatus: String, Codable, Equatable, Sendable {
+    case generatedOnly
+    case sourceOnly
+    case moveMismatch
+}
+
+public struct PokemonLearnablesSourceMove: Codable, Equatable, Sendable {
+    public let move: String
+    public let bucket: String
+    public let sourceSpan: SourceSpan
+
+    public init(move: String, bucket: String, sourceSpan: SourceSpan) {
+        self.move = move
+        self.bucket = bucket
+        self.sourceSpan = sourceSpan
+    }
+}
+
+public struct PokemonLearnablesCoverageDisagreement: Codable, Equatable, Sendable {
+    public let speciesID: String
+    public let status: PokemonLearnablesCoverageDisagreementStatus
+    public let generatedOnlyMoves: [String]
+    public let sourceOnlyMoves: [PokemonLearnablesSourceMove]
+    public let contributingSourcePaths: [String]
+
+    public init(
+        speciesID: String,
+        status: PokemonLearnablesCoverageDisagreementStatus,
+        generatedOnlyMoves: [String],
+        sourceOnlyMoves: [PokemonLearnablesSourceMove],
+        contributingSourcePaths: [String]
+    ) {
+        self.speciesID = speciesID
+        self.status = status
+        self.generatedOnlyMoves = generatedOnlyMoves
+        self.sourceOnlyMoves = sourceOnlyMoves
+        self.contributingSourcePaths = contributingSourcePaths
     }
 }
 
@@ -322,7 +368,7 @@ public enum ProjectSourceIndexLoader {
         let module = descriptor.module
         let title = title(for: entry, descriptor: descriptor)
         let tags = tags(for: module, descriptor: descriptor)
-        let facts = facts(for: entry, module: module)
+        let facts = facts(for: entry, descriptor: descriptor)
         let diagnostics = diagnostics(for: entry, descriptor: descriptor)
 
         return SourceIndexRecord(
@@ -413,24 +459,9 @@ public enum ProjectSourceIndexLoader {
 
     private static func facts(
         for entry: CInitializerEntry,
-        module: SourceIndexModule
+        descriptor: CInitializerTableDescriptor
     ) -> [SourceIndexFact] {
-        let preferred: [String]
-        switch module {
-        case .pokemon:
-            preferred = ["baseHP", "baseAttack", "baseDefense", "baseSpeed", "types", "type1", "type2", "abilities", "ability1", "ability2", "growthRate"]
-        case .trainers:
-            preferred = ["trainerName", "trainerClass", "encounterMusic_gender", "items", "doubleBattle", "aiFlags", "party"]
-        case .items:
-            preferred = ["itemId", "name", "price", "holdEffect", "holdEffectParam", "importance", "registrability", "pocket", "sortType", "type", "exitsBagOnUse", "effect", "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "iconPic", "iconPalette"]
-        case .moves:
-            preferred = ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags", "contestEffect", "contestCategory", "comboStarterId", "comboMoves"]
-        case .pokedex:
-            preferred = ["categoryName", "height", "weight", "description", "description1", "description2", "pokemonScale", "trainerScale"]
-        default:
-            preferred = []
-        }
-
+        let preferred = preferredFactFields(for: descriptor)
         var facts: [SourceIndexFact] = []
         if let ordinal = entry.ordinal {
             facts.append(SourceIndexFact(label: "Index", value: "\(ordinal)"))
@@ -440,9 +471,64 @@ public enum ProjectSourceIndexLoader {
                 facts.append(SourceIndexFact(label: key, value: compact(value)))
             }
         }
+        appendExpansionMoveContestResourceFact(for: entry, descriptor: descriptor, facts: &facts)
         facts.append(SourceIndexFact(label: "Lines", value: "\(entry.span.startLine)-\(entry.span.endLine)"))
-        let limit = module == .items ? 24 : (module == .moves ? 12 : 8)
-        return Array(facts.prefix(limit))
+        return Array(facts.prefix(factLimit(for: descriptor)))
+    }
+
+    private static func preferredFactFields(for descriptor: CInitializerTableDescriptor) -> [String] {
+        switch descriptor.module {
+        case .pokemon:
+            return ["baseHP", "baseAttack", "baseDefense", "baseSpeed", "types", "type1", "type2", "abilities", "ability1", "ability2", "growthRate"]
+        case .trainers:
+            return ["trainerName", "trainerClass", "encounterMusic_gender", "items", "doubleBattle", "aiFlags", "party"]
+        case .items:
+            return ["itemId", "name", "price", "holdEffect", "holdEffectParam", "importance", "registrability", "pocket", "sortType", "type", "exitsBagOnUse", "effect", "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "iconPic", "iconPalette"]
+        case .moves:
+            if isExpansionMoveInfoDescriptor(descriptor) {
+                return ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags", "contestCategory", "contestAppeal", "contestJam", "contestComboStarterId", "contestComboMoves"]
+            }
+            return ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags", "contestEffect", "contestCategory", "comboStarterId", "comboMoves"]
+        case .pokedex:
+            return ["categoryName", "height", "weight", "description", "description1", "description2", "pokemonScale", "trainerScale"]
+        default:
+            return []
+        }
+    }
+
+    private static func appendExpansionMoveContestResourceFact(
+        for entry: CInitializerEntry,
+        descriptor: CInitializerTableDescriptor,
+        facts: inout [SourceIndexFact]
+    ) {
+        guard isExpansionMoveInfoDescriptor(descriptor) else { return }
+        let contestMetadataFields = ["contestCategory", "contestAppeal", "contestJam", "contestComboStarterId", "contestComboMoves"]
+        guard contestMetadataFields.contains(where: { entry.fields[$0] != nil }) else { return }
+        facts.append(
+            SourceIndexFact(
+                label: "Expansion Contest Resource Facts",
+                value: "preview-only facts; blocked: constants, generated all_learnables.json writes, reference writes, ROM/build/export paths, binary writes, data row creation/removal/reorder"
+            )
+        )
+    }
+
+    private static func factLimit(for descriptor: CInitializerTableDescriptor) -> Int {
+        if descriptor.module == .items {
+            return 24
+        }
+        if isExpansionMoveInfoDescriptor(descriptor) {
+            return 24
+        }
+        if descriptor.module == .moves {
+            return 12
+        }
+        return 8
+    }
+
+    private static func isExpansionMoveInfoDescriptor(_ descriptor: CInitializerTableDescriptor) -> Bool {
+        descriptor.module == .moves
+            && descriptor.relativePath == "src/data/moves_info.h"
+            && descriptor.tableSymbol == "gMovesInfo"
     }
 
     private static func diagnostics(
@@ -570,6 +656,8 @@ struct ExpansionAllLearnablesSpeciesCoverage: Equatable {
     let parsedSourceMoveCount: Int
     let missingGeneratedMoveCount: Int
     let extraGeneratedMoveCount: Int
+    let missingGeneratedMoves: [PokemonLearnablesSourceMove]
+    let extraGeneratedMoves: [String]
 }
 
 enum ExpansionAllLearnablesCoverageBuilder {
@@ -615,18 +703,24 @@ enum ExpansionAllLearnablesCoverageBuilder {
         let generatedSpecies = Set(generatedMoveSets.keys)
         let parsedSpecies = Set(parsedMoveSets.keys)
         var speciesCoverage: [String: ExpansionAllLearnablesSpeciesCoverage] = [:]
+        var disagreements: [PokemonLearnablesCoverageDisagreement] = []
         var matchingSpeciesCount = 0
         var moveMismatchSpeciesCount = 0
 
-        for speciesID in generatedSpecies.sorted() {
+        for speciesID in generatedSpecies.union(parsedSpecies).sorted() {
             let generatedMoves = generatedMoveSets[speciesID] ?? []
-            let parsedMoves = parsedMoveSets[speciesID]
+            let parsedMoves = parsedMoveSets[speciesID] ?? []
+            let parsedMoveIDs = Set(parsedMoves.map(\.move))
             let status: ExpansionAllLearnablesSpeciesCoverage.Status
-            let missingGeneratedMoveCount: Int
-            let extraGeneratedMoveCount: Int
-            if let parsedMoves {
-                let missingGeneratedMoves = parsedMoves.subtracting(generatedMoves)
-                let extraGeneratedMoves = generatedMoves.subtracting(parsedMoves)
+            let missingGeneratedMoves: [PokemonLearnablesSourceMove]
+            let extraGeneratedMoves: [String]
+            if generatedSpecies.contains(speciesID), parsedSpecies.contains(speciesID) {
+                missingGeneratedMoves = parsedMoves
+                    .filter { !generatedMoves.contains($0.move) }
+                    .sorted(by: sourceMoveSort)
+                extraGeneratedMoves = generatedMoves
+                    .subtracting(parsedMoveIDs)
+                    .sorted()
                 if missingGeneratedMoves.isEmpty && extraGeneratedMoves.isEmpty {
                     status = .matching
                     matchingSpeciesCount += 1
@@ -634,39 +728,42 @@ enum ExpansionAllLearnablesCoverageBuilder {
                     status = .moveMismatch
                     moveMismatchSpeciesCount += 1
                 }
-                missingGeneratedMoveCount = missingGeneratedMoves.count
-                extraGeneratedMoveCount = extraGeneratedMoves.count
-            } else {
+            } else if generatedSpecies.contains(speciesID) {
                 status = .generatedOnly
-                missingGeneratedMoveCount = 0
-                extraGeneratedMoveCount = generatedMoves.count
+                missingGeneratedMoves = []
+                extraGeneratedMoves = generatedMoves.sorted()
+            } else {
+                status = .sourceOnly
+                missingGeneratedMoves = parsedMoves.sorted(by: sourceMoveSort)
+                extraGeneratedMoves = []
             }
 
             speciesCoverage[speciesID] = ExpansionAllLearnablesSpeciesCoverage(
                 speciesID: speciesID,
                 status: status,
                 generatedMoveCount: generatedMoves.count,
-                parsedSourceMoveCount: parsedMoves?.count ?? 0,
-                missingGeneratedMoveCount: missingGeneratedMoveCount,
-                extraGeneratedMoveCount: extraGeneratedMoveCount
+                parsedSourceMoveCount: parsedMoveIDs.count,
+                missingGeneratedMoveCount: Set(missingGeneratedMoves.map(\.move)).count,
+                extraGeneratedMoveCount: extraGeneratedMoves.count,
+                missingGeneratedMoves: missingGeneratedMoves,
+                extraGeneratedMoves: extraGeneratedMoves
             )
-        }
-
-        for speciesID in parsedSpecies.subtracting(generatedSpecies).sorted() {
-            let parsedMoves = parsedMoveSets[speciesID] ?? []
-            speciesCoverage[speciesID] = ExpansionAllLearnablesSpeciesCoverage(
-                speciesID: speciesID,
-                status: .sourceOnly,
-                generatedMoveCount: 0,
-                parsedSourceMoveCount: parsedMoves.count,
-                missingGeneratedMoveCount: parsedMoves.count,
-                extraGeneratedMoveCount: 0
-            )
+            if status != .matching {
+                disagreements.append(
+                    PokemonLearnablesCoverageDisagreement(
+                        speciesID: speciesID,
+                        status: PokemonLearnablesCoverageDisagreementStatus(rawValue: status.rawValue) ?? .moveMismatch,
+                        generatedOnlyMoves: extraGeneratedMoves,
+                        sourceOnlyMoves: missingGeneratedMoves,
+                        contributingSourcePaths: contributingSourcePaths(for: missingGeneratedMoves)
+                    )
+                )
+            }
         }
 
         let generatedOnlySpeciesCount = generatedSpecies.subtracting(parsedSpecies).count
         let sourceOnlySpeciesCount = parsedSpecies.subtracting(generatedSpecies).count
-        let staleSource = staleSourceSummary(root: root, fileManager: fileManager)
+        let staleSourcePaths = staleSourcePaths(root: root, fileManager: fileManager)
         let mismatchSpeciesCount = generatedOnlySpeciesCount + sourceOnlySpeciesCount + moveMismatchSpeciesCount
         let summary = PokemonLearnablesCoverage(
             generatedSpeciesCount: generatedSpecies.count,
@@ -676,8 +773,10 @@ enum ExpansionAllLearnablesCoverageBuilder {
             generatedOnlySpeciesCount: generatedOnlySpeciesCount,
             sourceOnlySpeciesCount: sourceOnlySpeciesCount,
             moveMismatchSpeciesCount: moveMismatchSpeciesCount,
-            staleSourceFileCount: staleSource.count,
-            newestStaleSourcePath: staleSource.newestPath
+            staleSourceFileCount: staleSourcePaths.count,
+            newestStaleSourcePath: staleSourcePaths.first,
+            staleSourcePaths: staleSourcePaths,
+            disagreements: disagreements
         )
 
         return ExpansionAllLearnablesCoverageReport(summary: summary, species: speciesCoverage)
@@ -700,14 +799,14 @@ enum ExpansionAllLearnablesCoverageBuilder {
         return result
     }
 
-    private static func parsedMoveSets(from catalog: ProjectSpeciesCatalog) -> [String: Set<String>] {
-        var result: [String: Set<String>] = [:]
+    private static func parsedMoveSets(from catalog: ProjectSpeciesCatalog) -> [String: [PokemonLearnablesSourceMove]] {
+        var result: [String: [PokemonLearnablesSourceMove]] = [:]
         for species in catalog.species {
-            var moves = Set<String>()
-            moves.formUnion(species.learnsets.levelUp.map { normalizedMoveID($0.move) }.filter { !$0.isEmpty })
-            moves.formUnion(species.learnsets.tmhm.map { normalizedMoveID($0.move) }.filter { !$0.isEmpty })
-            moves.formUnion(species.learnsets.egg.map { normalizedMoveID($0.move) }.filter { !$0.isEmpty })
-            moves.formUnion(species.learnsets.tutor.map { normalizedMoveID($0.move) }.filter { !$0.isEmpty })
+            var moves: [PokemonLearnablesSourceMove] = []
+            moves.append(contentsOf: species.learnsets.levelUp.compactMap { sourceMove(move: $0.move, bucket: "levelUp", span: $0.sourceSpan) })
+            moves.append(contentsOf: species.learnsets.tmhm.compactMap { sourceMove(move: $0.move, bucket: "tmhm", span: $0.sourceSpan) })
+            moves.append(contentsOf: species.learnsets.tutor.compactMap { sourceMove(move: $0.move, bucket: "tutor", span: $0.sourceSpan) })
+            moves.append(contentsOf: species.learnsets.egg.compactMap { sourceMove(move: $0.move, bucket: "egg", span: $0.sourceSpan) })
             if !moves.isEmpty {
                 result[species.speciesID] = moves
             }
@@ -715,12 +814,50 @@ enum ExpansionAllLearnablesCoverageBuilder {
         return result
     }
 
-    private static func staleSourceSummary(
+    private static func sourceMove(move: String, bucket: String, span: SourceSpan) -> PokemonLearnablesSourceMove? {
+        let normalized = normalizedMoveID(move)
+        guard !normalized.isEmpty else { return nil }
+        return PokemonLearnablesSourceMove(move: normalized, bucket: bucket, sourceSpan: span)
+    }
+
+    private static func sourceMoveSort(
+        lhs: PokemonLearnablesSourceMove,
+        rhs: PokemonLearnablesSourceMove
+    ) -> Bool {
+        if lhs.move != rhs.move {
+            return lhs.move < rhs.move
+        }
+        let lhsBucket = bucketSortIndex(lhs.bucket)
+        let rhsBucket = bucketSortIndex(rhs.bucket)
+        if lhsBucket != rhsBucket {
+            return lhsBucket < rhsBucket
+        }
+        if lhs.sourceSpan.relativePath != rhs.sourceSpan.relativePath {
+            return lhs.sourceSpan.relativePath < rhs.sourceSpan.relativePath
+        }
+        return lhs.sourceSpan.startLine < rhs.sourceSpan.startLine
+    }
+
+    private static func bucketSortIndex(_ bucket: String) -> Int {
+        switch bucket {
+        case "levelUp": return 0
+        case "tmhm": return 1
+        case "tutor": return 2
+        case "egg": return 3
+        default: return 4
+        }
+    }
+
+    private static func contributingSourcePaths(for moves: [PokemonLearnablesSourceMove]) -> [String] {
+        Array(Set(moves.map { $0.sourceSpan.relativePath })).sorted()
+    }
+
+    private static func staleSourcePaths(
         root: URL,
         fileManager: FileManager
-    ) -> (count: Int, newestPath: String?) {
+    ) -> [String] {
         guard let generatedModifiedAt = modificationDate(for: generatedPath, root: root, fileManager: fileManager) else {
-            return (0, nil)
+            return []
         }
         let staleSources = learnsetSourcePaths(root: root, fileManager: fileManager)
             .compactMap { path -> (path: String, modifiedAt: Date)? in
@@ -737,7 +874,7 @@ enum ExpansionAllLearnablesCoverageBuilder {
                 }
                 return lhs.modifiedAt > rhs.modifiedAt
             }
-        return (staleSources.count, staleSources.first?.path)
+        return staleSources.map(\.path)
     }
 
     private static func learnsetSourcePaths(root: URL, fileManager: FileManager) -> [String] {
@@ -787,6 +924,13 @@ enum ExpansionAllLearnablesCoverageBuilder {
             facts.append(SourceIndexFact(label: "Parsed Source Moves", value: "\(speciesCoverage.parsedSourceMoveCount)"))
             facts.append(SourceIndexFact(label: "Missing Generated Moves", value: "\(speciesCoverage.missingGeneratedMoveCount)"))
             facts.append(SourceIndexFact(label: "Extra Generated Moves", value: "\(speciesCoverage.extraGeneratedMoveCount)"))
+            let missingMoveIDs = Array(Set(speciesCoverage.missingGeneratedMoves.map(\.move))).sorted()
+            if !missingMoveIDs.isEmpty {
+                facts.append(SourceIndexFact(label: "Missing Generated Move IDs", value: missingMoveIDs.joined(separator: ", ")))
+            }
+            if !speciesCoverage.extraGeneratedMoves.isEmpty {
+                facts.append(SourceIndexFact(label: "Extra Generated Move IDs", value: speciesCoverage.extraGeneratedMoves.joined(separator: ", ")))
+            }
         }
         facts.append(SourceIndexFact(label: "Generated Species", value: "\(summary.generatedSpeciesCount)"))
         facts.append(SourceIndexFact(label: "Parsed Source Species", value: "\(summary.parsedSourceSpeciesCount)"))

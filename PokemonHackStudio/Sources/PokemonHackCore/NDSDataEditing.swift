@@ -174,6 +174,72 @@ public struct NDSDataTextLineOperationPlan: Codable, Equatable {
     }
 }
 
+public enum NDSDataItemCSVRowOperationKind: String, Codable, Equatable {
+    case insert
+    case delete
+    case reorder
+}
+
+public struct NDSDataItemCSVRowOperation: Codable, Equatable {
+    public let kind: NDSDataItemCSVRowOperationKind
+    public let index: Int?
+    public let rowText: String?
+    public let fromIndex: Int?
+    public let toIndex: Int?
+
+    public init(kind: NDSDataItemCSVRowOperationKind, index: Int? = nil, rowText: String? = nil, fromIndex: Int? = nil, toIndex: Int? = nil) {
+        self.kind = kind
+        self.index = index
+        self.rowText = rowText
+        self.fromIndex = fromIndex
+        self.toIndex = toIndex
+    }
+
+    public static func insert(index: Int, rowText: String) -> NDSDataItemCSVRowOperation {
+        NDSDataItemCSVRowOperation(kind: .insert, index: index, rowText: rowText)
+    }
+
+    public static func delete(index: Int) -> NDSDataItemCSVRowOperation {
+        NDSDataItemCSVRowOperation(kind: .delete, index: index)
+    }
+
+    public static func reorder(fromIndex: Int, toIndex: Int) -> NDSDataItemCSVRowOperation {
+        NDSDataItemCSVRowOperation(kind: .reorder, fromIndex: fromIndex, toIndex: toIndex)
+    }
+}
+
+public struct NDSDataItemCSVRowOperationDraft: Codable, Equatable {
+    public let recordID: String
+    public let operations: [NDSDataItemCSVRowOperation]
+
+    public init(recordID: String, operations: [NDSDataItemCSVRowOperation]) {
+        self.recordID = recordID
+        self.operations = operations
+    }
+}
+
+public struct NDSDataItemCSVRowOperationPlan: Codable, Equatable {
+    public let draft: NDSDataItemCSVRowOperationDraft
+    public let beforeRowCount: Int
+    public let afterRowCount: Int
+    public let diagnostics: [Diagnostic]
+    public let editPlan: NDSDataEditPlan
+
+    public init(
+        draft: NDSDataItemCSVRowOperationDraft,
+        beforeRowCount: Int,
+        afterRowCount: Int,
+        diagnostics: [Diagnostic],
+        editPlan: NDSDataEditPlan
+    ) {
+        self.draft = draft
+        self.beforeRowCount = beforeRowCount
+        self.afterRowCount = afterRowCount
+        self.diagnostics = diagnostics
+        self.editPlan = editPlan
+    }
+}
+
 public struct NDSDataEditFileChange: Codable, Equatable, Identifiable {
     public let id: String
     public let path: String
@@ -599,7 +665,7 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event/area-data JSON rows, the Diamond/Pearl move C anchor, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event/land-data/area-data JSON rows, the Diamond/Pearl move C anchor, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
@@ -608,7 +674,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct zone-event JSON rows under files/fielddata/eventdata/zone_event, and map header integer scalars in src/data/map_headers.h; NARC, generated, script binary, inventory-only map matrix/map table relationship rows, nested map directories, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, direct area-data JSON rows under files/fielddata/areadata, move scalars in arm9/src/waza.c, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, direct land-data JSON rows under files/fielddata/land_data, direct area-data JSON rows under files/fielddata/areadata, move scalars in arm9/src/waza.c, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .moves, !isSemanticMoveDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves and Diamond/Pearl move scalars in arm9/src/waza.c; nested move tables, HeartGold/SoulSilver move containers, generated/reference rows, ROM/export/rebuild paths, row insert/remove/reorder, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -623,7 +689,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; slot insert/delete/reorder, nested object reshaping, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .maps, !isSemanticMapDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata or files/fielddata/areadata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table/land-data rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata, files/fielddata/land_data, or files/fielddata/areadata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, land-data, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table/root rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .scripts, !isSemanticScriptDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -769,6 +835,7 @@ public enum NDSDataSemanticEditor {
             return relativePath == heartGoldSoulSilverMapHeaderCAnchorPath
         case .pokediamond:
             return isDiamondPearlFieldEventDataPath(relativePath)
+                || isDiamondPearlLandDataPath(relativePath)
                 || isDiamondPearlAreaDataPath(relativePath)
                 || relativePath == diamondPearlMapHeaderCAnchorPath
         default:
@@ -786,6 +853,14 @@ public enum NDSDataSemanticEditor {
 
     private static func isDiamondPearlAreaDataPath(_ relativePath: String) -> Bool {
         let prefix = "files/fielddata/areadata/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func isDiamondPearlLandDataPath(_ relativePath: String) -> Bool {
+        let prefix = "files/fielddata/land_data/"
         let lower = relativePath.lowercased()
         guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
         let remainder = lower.dropFirst(prefix.count)
@@ -875,6 +950,7 @@ public enum NDSDataSemanticEditor {
             return isDiamondPearlEncounterDataPath(record.relativePath) && record.format == .json
         case .maps:
             return (isDiamondPearlFieldEventDataPath(record.relativePath) && record.format == .json)
+                || (isDiamondPearlLandDataPath(record.relativePath) && record.format == .json)
                 || (isDiamondPearlAreaDataPath(record.relativePath) && record.format == .json)
                 || isDiamondPearlMapHeaderCAnchorRecord(record)
         default:
@@ -3239,6 +3315,433 @@ public enum NDSDataTextLineOperationPlanner {
             mutationPlan: mutationPlan,
             backupRelativeRoot: ".pokemonhackstudio/backups/text-line-operations-blocked"
         )
+    }
+
+    private static func normalizeLineEndings(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    }
+}
+
+public enum NDSDataItemCSVRowOperationPlanner {
+    private struct ParsedCSVTable {
+        let headerLine: String
+        let rowLines: [String]
+        let headerColumnCount: Int
+        let hadTrailingNewline: Bool
+        let diagnostics: [Diagnostic]
+    }
+
+    private struct ParsedCSVLine {
+        let cells: [String]
+        let diagnostics: [Diagnostic]
+    }
+
+    public static func plan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataItemCSVRowOperationDraft,
+        fileManager: FileManager = .default
+    ) -> NDSDataItemCSVRowOperationPlan {
+        let record = catalog.records.first(where: { $0.id == draft.recordID })
+        let sourceText = NDSDataMutationPlanner.sourceText(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        ) ?? ""
+        var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        )
+
+        if let record, !isEligibleHeartGoldSoulSilverItemCSVRecord(record, profile: catalog.profile) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ITEM_CSV_ROWS_PATH_BLOCKED",
+                    message: "Only local HeartGold/SoulSilver source-tree files/itemtool/itemdata/*.csv item rows support CSV row operations; nested CSV, JSON item rows, binary rows, containers, generated/reference rows, BMG/message banks, ROM rebuild/export, build/playtest execution, and binary paths remain blocked.",
+                    span: record.sourceSpan
+                )
+            )
+        }
+
+        let parsed = parseCSVTable(sourceText: sourceText, record: record)
+        diagnostics.append(contentsOf: parsed.diagnostics)
+        let beforeRowCount = parsed.rowLines.count
+
+        guard !draft.operations.isEmpty else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ITEM_CSV_ROWS_OPERATION_REQUIRED",
+                    message: "At least one item CSV row insert, delete, or reorder operation is required."
+                )
+            )
+            let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: sourceText)
+            let editPlan = blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+            return NDSDataItemCSVRowOperationPlan(
+                draft: draft,
+                beforeRowCount: beforeRowCount,
+                afterRowCount: beforeRowCount,
+                diagnostics: editPlan.diagnostics,
+                editPlan: editPlan
+            )
+        }
+
+        var editedRows = parsed.rowLines
+        if diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(
+                contentsOf: applyOperations(
+                    draft.operations,
+                    to: &editedRows,
+                    headerColumnCount: parsed.headerColumnCount,
+                    record: record
+                )
+            )
+        }
+
+        let hasErrors = diagnostics.contains { $0.severity == .error }
+        let editedText = hasErrors
+            ? sourceText
+            : renderCSVTable(headerLine: parsed.headerLine, rowLines: editedRows, hadTrailingNewline: parsed.hadTrailingNewline)
+        let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editedText)
+        let editPlan = hasErrors
+            ? blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+            : NDSDataMutationPlanner.plan(catalog: catalog, draft: editDraft, fileManager: fileManager)
+        let allDiagnostics = diagnostics + editPlan.diagnostics.filter { editDiagnostic in
+            !diagnostics.contains(editDiagnostic)
+        }
+
+        return NDSDataItemCSVRowOperationPlan(
+            draft: draft,
+            beforeRowCount: beforeRowCount,
+            afterRowCount: hasErrors ? beforeRowCount : editedRows.count,
+            diagnostics: allDiagnostics,
+            editPlan: editPlan
+        )
+    }
+
+    private static func isEligibleHeartGoldSoulSilverItemCSVRecord(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
+        guard profile == .pokeheartgold,
+              record.domain == .items,
+              record.role == .sourceTree,
+              record.format == .csv
+        else {
+            return false
+        }
+        let prefix = "files/itemtool/itemdata/"
+        let lower = record.relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".csv") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func parseCSVTable(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedCSVTable {
+        let normalized = normalizeLineEndings(sourceText)
+        let hadTrailingNewline = normalized.hasSuffix("\n")
+        var lines = normalized.components(separatedBy: "\n")
+        if hadTrailingNewline {
+            lines.removeLast()
+        }
+
+        var diagnostics: [Diagnostic] = []
+        guard let headerLine = lines.first else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ITEM_CSV_ROWS_HEADER_REQUIRED",
+                    message: "HeartGold/SoulSilver item CSV row operations require a nonempty header row.",
+                    span: record?.sourceSpan
+                )
+            )
+            return ParsedCSVTable(headerLine: "", rowLines: [], headerColumnCount: 0, hadTrailingNewline: hadTrailingNewline, diagnostics: diagnostics)
+        }
+
+        let header = parseCSVLine(headerLine, record: record, rowDescription: "header", lineNumber: 1)
+        diagnostics.append(contentsOf: header.diagnostics)
+        var seenHeaders = Set<String>()
+        var duplicateHeaders = Set<String>()
+        for cell in header.cells {
+            let name = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ITEM_CSV_ROWS_HEADER_EMPTY",
+                        message: "HeartGold/SoulSilver item CSV row operations require nonempty header names.",
+                        span: span(record: record, line: 1)
+                    )
+                )
+            } else if !seenHeaders.insert(name).inserted {
+                duplicateHeaders.insert(name)
+            }
+        }
+        for headerName in duplicateHeaders.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ITEM_CSV_ROWS_HEADER_DUPLICATE",
+                    message: "HeartGold/SoulSilver item CSV header \(headerName) appears more than once; duplicate headers must be resolved before row operations are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+        guard !header.cells.isEmpty else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ITEM_CSV_ROWS_HEADER_REQUIRED",
+                    message: "HeartGold/SoulSilver item CSV row operations require at least one header column.",
+                    span: record?.sourceSpan
+                )
+            )
+            return ParsedCSVTable(headerLine: headerLine, rowLines: Array(lines.dropFirst()), headerColumnCount: 0, hadTrailingNewline: hadTrailingNewline, diagnostics: diagnostics)
+        }
+
+        let rowLines = Array(lines.dropFirst())
+        for (rowIndex, rowLine) in rowLines.enumerated() {
+            let parsed = parseCSVLine(rowLine, record: record, rowDescription: "row \(rowIndex + 1)", lineNumber: rowIndex + 2)
+            diagnostics.append(contentsOf: parsed.diagnostics)
+            if parsed.cells.count != header.cells.count {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ITEM_CSV_ROWS_ROW_BAD_SHAPE",
+                        message: "HeartGold/SoulSilver item CSV row \(rowIndex + 1) has \(parsed.cells.count) cell(s), but the header has \(header.cells.count); fix the table before row operations are planned.",
+                        span: span(record: record, line: rowIndex + 2)
+                    )
+                )
+            }
+        }
+
+        return ParsedCSVTable(
+            headerLine: headerLine,
+            rowLines: rowLines,
+            headerColumnCount: header.cells.count,
+            hadTrailingNewline: hadTrailingNewline,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func applyOperations(
+        _ operations: [NDSDataItemCSVRowOperation],
+        to rows: inout [String],
+        headerColumnCount: Int,
+        record: NDSDataCatalogRecord?
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        for (operationIndex, operation) in operations.enumerated() {
+            switch operation.kind {
+            case .insert:
+                guard let index = operation.index, let rowText = operation.rowText else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "insert requires an index and CSV row text."))
+                    return diagnostics
+                }
+                guard !rowText.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_ITEM_CSV_ROWS_NEWLINE_BLOCKED",
+                            message: "Item CSV row insert operation \(operationIndex + 1) contains a newline; multiline CSV row operations remain blocked."
+                        )
+                    )
+                    return diagnostics
+                }
+                guard (0...rows.count).contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "insert index \(index)", rowCount: rows.count, allowsEnd: true))
+                    return diagnostics
+                }
+                let parsed = parseCSVLine(rowText, record: record, rowDescription: "insert row", lineNumber: nil)
+                diagnostics.append(contentsOf: parsed.diagnostics)
+                guard parsed.diagnostics.allSatisfy({ $0.severity != .error }) else {
+                    return diagnostics
+                }
+                guard parsed.cells.count == headerColumnCount else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_ITEM_CSV_ROWS_INSERT_ROW_BAD_SHAPE",
+                            message: "Item CSV row insert operation \(operationIndex + 1) has \(parsed.cells.count) cell(s), but the header has \(headerColumnCount)."
+                        )
+                    )
+                    return diagnostics
+                }
+                rows.insert(rowText, at: index)
+
+            case .delete:
+                guard let index = operation.index else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "delete requires an index."))
+                    return diagnostics
+                }
+                guard rows.indices.contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "delete index \(index)", rowCount: rows.count, allowsEnd: false))
+                    return diagnostics
+                }
+                rows.remove(at: index)
+
+            case .reorder:
+                guard let fromIndex = operation.fromIndex, let toIndex = operation.toIndex else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "reorder requires from-index and to-index values."))
+                    return diagnostics
+                }
+                guard rows.indices.contains(fromIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder source index \(fromIndex)", rowCount: rows.count, allowsEnd: false))
+                    return diagnostics
+                }
+                let row = rows.remove(at: fromIndex)
+                guard (0...rows.count).contains(toIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder destination index \(toIndex)", rowCount: rows.count, allowsEnd: true))
+                    return diagnostics
+                }
+                rows.insert(row, at: toIndex)
+            }
+        }
+        return diagnostics
+    }
+
+    private static func parseCSVLine(
+        _ line: String,
+        record: NDSDataCatalogRecord?,
+        rowDescription: String,
+        lineNumber: Int?
+    ) -> ParsedCSVLine {
+        var cells: [String] = []
+        var diagnostics: [Diagnostic] = []
+        var index = line.startIndex
+        while true {
+            if index < line.endIndex, line[index] == "\"" {
+                let quoted = parseQuotedCSVCell(line, start: index, record: record, rowDescription: rowDescription, lineNumber: lineNumber)
+                diagnostics.append(contentsOf: quoted.diagnostics)
+                if let cell = quoted.cell {
+                    cells.append(cell)
+                }
+                index = quoted.end
+            } else {
+                let cellStart = index
+                while index < line.endIndex, line[index] != "," {
+                    index = line.index(after: index)
+                }
+                cells.append(String(line[cellStart..<index]))
+            }
+
+            if index < line.endIndex, line[index] == "," {
+                index = line.index(after: index)
+                continue
+            }
+            break
+        }
+        return ParsedCSVLine(cells: cells, diagnostics: diagnostics)
+    }
+
+    private static func parseQuotedCSVCell(
+        _ line: String,
+        start: String.Index,
+        record: NDSDataCatalogRecord?,
+        rowDescription: String,
+        lineNumber: Int?
+    ) -> (cell: String?, end: String.Index, diagnostics: [Diagnostic]) {
+        var diagnostics: [Diagnostic] = []
+        var value = ""
+        var index = line.index(after: start)
+        while index < line.endIndex {
+            if line[index] == "\"" {
+                let next = line.index(after: index)
+                if next < line.endIndex, line[next] == "\"" {
+                    value.append("\"")
+                    index = line.index(after: next)
+                    continue
+                }
+
+                var cellEnd = next
+                while cellEnd < line.endIndex, line[cellEnd] != "," {
+                    if !line[cellEnd].isWhitespace {
+                        diagnostics.append(
+                            Diagnostic(
+                                severity: .error,
+                                code: "NDS_DATA_ITEM_CSV_ROWS_QUOTED_TRAILING_TEXT",
+                                message: "HeartGold/SoulSilver item CSV \(rowDescription) has non-whitespace text after a quoted cell; this row remains blocked.",
+                                span: span(record: record, line: lineNumber)
+                            )
+                        )
+                    }
+                    cellEnd = line.index(after: cellEnd)
+                }
+                return (value, cellEnd, diagnostics)
+            }
+            value.append(line[index])
+            index = line.index(after: index)
+        }
+
+        diagnostics.append(
+            Diagnostic(
+                severity: .error,
+                code: "NDS_DATA_ITEM_CSV_ROWS_QUOTE_UNCLOSED",
+                message: "HeartGold/SoulSilver item CSV \(rowDescription) has an unterminated quoted cell; multiline CSV cells remain blocked.",
+                span: span(record: record, line: lineNumber)
+            )
+        )
+        return (nil, line.endIndex, diagnostics)
+    }
+
+    private static func renderCSVTable(
+        headerLine: String,
+        rowLines: [String],
+        hadTrailingNewline: Bool
+    ) -> String {
+        let rendered = ([headerLine] + rowLines).joined(separator: "\n")
+        return hadTrailingNewline ? rendered + "\n" : rendered
+    }
+
+    private static func invalidOperationDiagnostic(operationIndex: Int, detail: String) -> Diagnostic {
+        Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_ITEM_CSV_ROWS_OPERATION_INVALID",
+            message: "Item CSV row operation \(operationIndex + 1) is invalid: \(detail)"
+        )
+    }
+
+    private static func rangeDiagnostic(
+        operationIndex: Int,
+        indexDescription: String,
+        rowCount: Int,
+        allowsEnd: Bool
+    ) -> Diagnostic {
+        let validRange = allowsEnd ? "0...\(rowCount)" : "0..<\(rowCount)"
+        return Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_ITEM_CSV_ROWS_INDEX_OUT_OF_RANGE",
+            message: "Item CSV row operation \(operationIndex + 1) has \(indexDescription), but the valid data-row range at that step is \(validRange)."
+        )
+    }
+
+    private static func blockedEditPlan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataEditDraft,
+        diagnostics: [Diagnostic]
+    ) -> NDSDataEditPlan {
+        let mutationPlan = MutationPlan(
+            title: "NDS item CSV row operations blocked",
+            summary: "No NDS item CSV source files are applyable until operation diagnostics are resolved.",
+            diagnostics: diagnostics,
+            requiresExplicitApply: true
+        )
+        return NDSDataEditPlan(
+            rootPath: catalog.root.path,
+            recordID: draft.recordID,
+            draft: draft,
+            changes: [],
+            diagnostics: diagnostics,
+            mutationPlan: mutationPlan,
+            backupRelativeRoot: ".pokemonhackstudio/backups/item-csv-row-operations-blocked"
+        )
+    }
+
+    private static func span(record: NDSDataCatalogRecord?, line: Int?) -> SourceSpan? {
+        guard let record else { return nil }
+        guard let line else { return record.sourceSpan }
+        return SourceSpan(relativePath: record.relativePath, startLine: line)
     }
 
     private static func normalizeLineEndings(_ text: String) -> String {

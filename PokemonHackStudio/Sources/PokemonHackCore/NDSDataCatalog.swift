@@ -569,7 +569,7 @@ public enum NDSDataCatalogBuilder {
         }
 
         let records = enrichGenVReadiness(
-            records: enrichDiamondPearlEncounterCAnchorLoaderOnlyReadiness(
+            records: enrichDiamondPearlCAnchorLoaderOnlyReadiness(
                 records: enrichDiamondPearlMoveCAnchorReadiness(
                     records: enrichDiamondPearlMapInventory(
                         records: enrichHeartGoldSoulSilverScriptSequenceInventory(
@@ -1738,9 +1738,26 @@ public enum NDSDataCatalogBuilder {
         "binary write"
     ]
 
-    private static let diamondPearlMapInventoryActionState = "Diamond/Pearl map matrix, map table, land data, and unsupported area-data rows are inventory-only map metadata; no raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
+    private static let diamondPearlLandDataSemanticBlockedActions = [
+        "nested land-data edit",
+        "missing field insertion",
+        "row add/remove/reorder",
+        "area-data write",
+        "map table write",
+        "map matrix write",
+        "NARC/container work",
+        "generated output write",
+        "reference write",
+        "ROM rebuild",
+        "ROM export",
+        "playtest",
+        "binary write"
+    ]
+
+    private static let diamondPearlMapInventoryActionState = "Diamond/Pearl map matrix, map table, unsupported land-data rows, and unsupported area-data rows are inventory-only map metadata; no raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
     private static let diamondPearlMapHeaderActionState = "Diamond/Pearl map header rows expose existing integer-literal sMapHeaders scalars through the semantic mutation-plan gate; map table, map matrix, land data, unsupported area data, scripts, compilers, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
     private static let diamondPearlAreaDataSemanticActionState = "Diamond/Pearl area-data JSON rows expose existing top-level scalar fields through the semantic mutation-plan gate; nested area data, land data, map table/matrix rows, NARC/container work, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
+    private static let diamondPearlLandDataSemanticActionState = "Diamond/Pearl land-data JSON rows expose existing top-level scalar fields through the semantic mutation-plan gate; nested land data, area data, map table/matrix rows, NARC/container work, generated/reference writes, ROM rebuild/export/playtest, and binary writes remain blocked."
 
     private static func enrichDiamondPearlMapInventory(
         records: [NDSDataCatalogRecord],
@@ -1788,6 +1805,9 @@ public enum NDSDataCatalogBuilder {
         }
         if lower == "files/fielddata/land_data" {
             return "dpLandDataInventory"
+        }
+        if isDiamondPearlLandDataSemanticRecord(record) {
+            return "dpLandDataSemanticScalars"
         }
         if lower.hasPrefix("files/fielddata/land_data/") {
             return "dpLandDataMember"
@@ -1837,9 +1857,21 @@ public enum NDSDataCatalogBuilder {
         return !remainder.isEmpty && !remainder.contains("/")
     }
 
+    private static func isDiamondPearlLandDataSemanticRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        guard record.domain == .maps, record.format == .json else { return false }
+        let prefix = "files/fielddata/land_data/"
+        let lower = record.relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
     private static func diamondPearlMapReadiness(for record: NDSDataCatalogRecord) -> String {
         if isDiamondPearlMapHeaderRecord(record) {
             return "semanticIntegerScalars"
+        }
+        if isDiamondPearlLandDataSemanticRecord(record) {
+            return "semanticJSONScalars"
         }
         if isDiamondPearlAreaDataSemanticRecord(record) {
             return "semanticJSONScalars"
@@ -1851,6 +1883,9 @@ public enum NDSDataCatalogBuilder {
         if isDiamondPearlMapHeaderRecord(record) {
             return diamondPearlMapHeaderBlockedActions
         }
+        if isDiamondPearlLandDataSemanticRecord(record) {
+            return diamondPearlLandDataSemanticBlockedActions
+        }
         if isDiamondPearlAreaDataSemanticRecord(record) {
             return diamondPearlAreaDataSemanticBlockedActions
         }
@@ -1860,6 +1895,9 @@ public enum NDSDataCatalogBuilder {
     private static func diamondPearlMapActionState(for record: NDSDataCatalogRecord) -> String {
         if isDiamondPearlMapHeaderRecord(record) {
             return diamondPearlMapHeaderActionState
+        }
+        if isDiamondPearlLandDataSemanticRecord(record) {
+            return diamondPearlLandDataSemanticActionState
         }
         if isDiamondPearlAreaDataSemanticRecord(record) {
             return diamondPearlAreaDataSemanticActionState
@@ -1896,6 +1934,22 @@ public enum NDSDataCatalogBuilder {
                     severity: .warning,
                     code: "NDS_DATA_DP_AREA_DATA_WRITE_LIMITED",
                     message: "Diamond/Pearl area-data writes are limited to existing top-level JSON scalar replacements; blocked actions: \(diamondPearlAreaDataSemanticBlockedActions.joined(separator: ", ")).",
+                    span: record.sourceSpan
+                )
+            ]
+        }
+        if isDiamondPearlLandDataSemanticRecord(record) {
+            return [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_DATA_DP_LAND_DATA_SEMANTIC_SCALARS",
+                    message: "Diamond/Pearl land-data JSON row \(record.relativePath) exposes existing top-level scalar fields through the semantic mutation-plan gate.",
+                    span: record.sourceSpan
+                ),
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_DATA_DP_LAND_DATA_WRITE_LIMITED",
+                    message: "Diamond/Pearl land-data writes are limited to existing top-level JSON scalar replacements; blocked actions: \(diamondPearlLandDataSemanticBlockedActions.joined(separator: ", ")).",
                     span: record.sourceSpan
                 )
             ]
@@ -1994,20 +2048,31 @@ public enum NDSDataCatalogBuilder {
         let domainLabel: String
         let cAnchorShape: String
         let diagnosticCode: String
+        let extraBlockedActions: [String]
     }
 
     private static let diamondPearlCAnchorLoaderOnlySpecs = [
+        DiamondPearlCAnchorLoaderOnlySpec(
+            domain: .scripts,
+            relativePath: "arm9/src/script.c",
+            sourceRole: "dpScriptCAnchorLoaderOnly",
+            domainLabel: "script",
+            cAnchorShape: "loaderTaskFlow",
+            diagnosticCode: "NDS_DATA_DP_SCRIPT_C_ANCHOR_LOADER_ONLY",
+            extraBlockedActions: ["script parser", "script compiler", "mutation apply"]
+        ),
         DiamondPearlCAnchorLoaderOnlySpec(
             domain: .encounters,
             relativePath: "arm9/src/encounter.c",
             sourceRole: "dpEncounterCAnchorLoaderOnly",
             domainLabel: "encounter",
             cAnchorShape: "loaderTaskFlow",
-            diagnosticCode: "NDS_DATA_DP_ENCOUNTER_C_ANCHOR_LOADER_ONLY"
+            diagnosticCode: "NDS_DATA_DP_ENCOUNTER_C_ANCHOR_LOADER_ONLY",
+            extraBlockedActions: []
         )
     ]
 
-    private static func enrichDiamondPearlEncounterCAnchorLoaderOnlyReadiness(
+    private static func enrichDiamondPearlCAnchorLoaderOnlyReadiness(
         records: [NDSDataCatalogRecord],
         profile: GameProfile
     ) -> [NDSDataCatalogRecord] {
@@ -2027,7 +2092,11 @@ public enum NDSDataCatalogBuilder {
                 SourceIndexFact(label: "Gen IV Action State", value: diamondPearlCAnchorLoaderOnlyActionState(for: spec))
             ]
             return record.copy(
-                facts: record.facts + facts,
+                facts: diamondPearlCAnchorLoaderOnlyBaseFacts(
+                    for: record,
+                    readiness: readiness,
+                    blockedActions: blockedActions
+                ) + facts,
                 readiness: .some(readiness),
                 diagnostics: record.diagnostics + diamondPearlCAnchorLoaderOnlyDiagnostics(
                     for: record,
@@ -2038,6 +2107,22 @@ public enum NDSDataCatalogBuilder {
         }
     }
 
+    private static func diamondPearlCAnchorLoaderOnlyBaseFacts(
+        for record: NDSDataCatalogRecord,
+        readiness: NDSDataReadinessSummary,
+        blockedActions: [String]
+    ) -> [SourceIndexFact] {
+        var facts = record.facts
+        let genericReadinessLabels = Set(["Readiness", "Blocked Actions"])
+        guard facts.contains(where: { genericReadinessLabels.contains($0.label) }) else {
+            return facts
+        }
+        facts.removeAll { genericReadinessLabels.contains($0.label) }
+        facts.append(SourceIndexFact(label: "Readiness", value: readiness.status.rawValue))
+        facts.append(SourceIndexFact(label: "Blocked Actions", value: blockedActions.joined(separator: ", ")))
+        return facts
+    }
+
     private static func diamondPearlCAnchorLoaderOnlySpec(for record: NDSDataCatalogRecord) -> DiamondPearlCAnchorLoaderOnlySpec? {
         let lower = record.relativePath.lowercased()
         return diamondPearlCAnchorLoaderOnlySpecs.first { spec in
@@ -2046,8 +2131,9 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static func diamondPearlCAnchorLoaderOnlyBlockedActions(for spec: DiamondPearlCAnchorLoaderOnlySpec) -> [String] {
-        [
-            "semantic editing",
+        var actions = ["semantic editing"]
+        actions.append(contentsOf: spec.extraBlockedActions)
+        actions.append(contentsOf: [
             "\(spec.domainLabel) C-anchor writer",
             "raw scalar writer",
             "row insert/remove/reorder",
@@ -2057,11 +2143,13 @@ public enum NDSDataCatalogBuilder {
             "ROM rebuild",
             "ROM export",
             "binary write"
-        ]
+        ])
+        return actions
     }
 
     private static func diamondPearlCAnchorLoaderOnlyActionState(for spec: DiamondPearlCAnchorLoaderOnlySpec) -> String {
-        "Diamond/Pearl \(spec.domainLabel) C anchor \(spec.relativePath) is loader/task source without an exact scalar table; semantic editing, \(spec.domainLabel) C-anchor writers, raw scalar writers, row insert/remove/reorder, NARC/container work, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
+        let blockedActions = diamondPearlCAnchorLoaderOnlyBlockedActions(for: spec).joined(separator: ", ")
+        return "Diamond/Pearl \(spec.domainLabel) C anchor \(spec.relativePath) is loader/task source without an exact scalar table; blocked actions: \(blockedActions)."
     }
 
     private static func diamondPearlCAnchorLoaderOnlyReadiness(
@@ -2127,7 +2215,7 @@ public enum NDSDataCatalogBuilder {
         facts.append(contentsOf: genVBuildMetadataFacts(for: record, existingRelativePaths: existingRelativePaths))
         facts.append(contentsOf: genVMessageCandidateFacts(for: record, existingRelativePaths: existingRelativePaths))
         facts.append(contentsOf: genVEncounterRecordFacts(for: record))
-        facts.append(contentsOf: genVSourceDataDomainFacts(for: record))
+        facts.append(contentsOf: genVSourceDataDomainFacts(for: record, existingRelativePaths: existingRelativePaths))
         facts.append(contentsOf: genVVariantFacts(for: record))
         return facts
     }
@@ -2156,7 +2244,10 @@ public enum NDSDataCatalogBuilder {
         return facts
     }
 
-    private static func genVSourceDataDomainFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
+    private static func genVSourceDataDomainFacts(
+        for record: NDSDataCatalogRecord,
+        existingRelativePaths: Set<String>
+    ) -> [SourceIndexFact] {
         guard let spec = genVSourceDataDomainSpec(for: record.relativePath),
               spec.domain == record.domain
         else { return [] }
@@ -2188,9 +2279,33 @@ public enum NDSDataCatalogBuilder {
             if let byteCount = record.byteCount {
                 facts.append(SourceIndexFact(label: "Gen V Source Data Bytes", value: "\(byteCount)"))
             }
+        } else {
+            facts.append(contentsOf: genVSourceDataVariantCoverageFacts(existingRelativePaths: existingRelativePaths))
         }
 
         return facts
+    }
+
+    private static func genVSourceDataVariantCoverageFacts(
+        existingRelativePaths: Set<String>
+    ) -> [SourceIndexFact] {
+        let presentVariants = genVTitleCoverageSpecs
+            .filter { spec in
+                spec.sourceMarkerPaths.contains { marker in
+                    existingRelativePaths.contains(marker.lowercased())
+                }
+            }
+            .map(\.id)
+        let missingVariants = genVTitleCoverageSpecs
+            .map(\.id)
+            .filter { !presentVariants.contains($0) }
+
+        return [
+            SourceIndexFact(label: "Gen V Source Data Variant Coverage", value: "\(presentVariants.count)/\(genVTitleCoverageSpecs.count)"),
+            SourceIndexFact(label: "Gen V Source Data Variant Present", value: presentVariants.isEmpty ? "none" : presentVariants.joined(separator: ", ")),
+            SourceIndexFact(label: "Gen V Source Data Variant Missing", value: missingVariants.isEmpty ? "none" : missingVariants.joined(separator: ", ")),
+            SourceIndexFact(label: "Gen V Source Data Variant Basis", value: "sourceMarkersAndRootPresenceOnly")
+        ]
     }
 
     private static func genVMessageCandidateFacts(
@@ -2383,6 +2498,12 @@ public enum NDSDataCatalogBuilder {
         }
         let factLabelPrefix: String
         switch relativePath.lowercased() {
+        case "src":
+            factLabelPrefix = "Gen V Source Root"
+        case "asm":
+            factLabelPrefix = "Gen V Assembly Root"
+        case "include":
+            factLabelPrefix = "Gen V Header Root"
         case "files/fielddata/script":
             factLabelPrefix = "Gen V Script"
         case "overlays":

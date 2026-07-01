@@ -385,7 +385,23 @@ final class SourceIndexTests: XCTestCase {
         try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
         try write("const struct SpeciesInfo gSpeciesInfo[] = { [SPECIES_TREECKO] = { .baseHP = 40 }, };\n", to: root.appendingPathComponent("src/data/pokemon/species_info.h"))
         try write("const struct ItemInfo gItemsInfo[] = { [ITEM_POTION] = { .name = _(\"POTION\"), .price = 300 }, };\n", to: root.appendingPathComponent("src/data/items.h"))
-        try write("const struct MoveInfo gMovesInfo[] = { [MOVE_POUND] = { .power = 40, .type = TYPE_NORMAL, .pp = 35 }, };\n", to: root.appendingPathComponent("src/data/moves_info.h"))
+        try write(
+            """
+            const struct MoveInfo gMovesInfo[] = {
+                [MOVE_POUND] = {
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .pp = 35,
+                    .contestCategory = CONTEST_CATEGORY_TOUGH,
+                    .contestAppeal = 2,
+                    .contestJam = 1,
+                    .contestComboStarterId = COMBO_STARTER_POUND,
+                    .contestComboMoves = { MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH },
+                },
+            };
+            """,
+            to: root.appendingPathComponent("src/data/moves_info.h")
+        )
         try write(
             """
             static const struct LevelUpMove sTreeckoLevelUpLearnset[] = {
@@ -446,7 +462,15 @@ final class SourceIndexTests: XCTestCase {
         XCTAssertEqual(projectIndex.profile, .pokeemeraldExpansion)
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .pokemon && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/species_info.h" })
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .items && $0.title == "ITEM_POTION" && $0.sourceSpan.relativePath == "src/data/items.h" })
-        XCTAssertTrue(sourceIndex.records.contains { $0.module == .moves && $0.title == "MOVE_POUND" && $0.sourceSpan.relativePath == "src/data/moves_info.h" })
+        let moveRecord = try XCTUnwrap(sourceIndex.records.first { $0.module == .moves && $0.title == "MOVE_POUND" && $0.sourceSpan.relativePath == "src/data/moves_info.h" })
+        XCTAssertEqual(moveRecord.facts.first { $0.label == "contestAppeal" }?.value, "2")
+        XCTAssertEqual(moveRecord.facts.first { $0.label == "contestJam" }?.value, "1")
+        XCTAssertEqual(moveRecord.facts.first { $0.label == "contestComboStarterId" }?.value, "COMBO_STARTER_POUND")
+        XCTAssertEqual(moveRecord.facts.first { $0.label == "contestComboMoves" }?.value, "{ MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }")
+        let moveReadiness = try XCTUnwrap(moveRecord.facts.first { $0.label == "Expansion Contest Resource Facts" }?.value)
+        XCTAssertTrue(moveReadiness.contains("preview-only facts"))
+        XCTAssertTrue(moveReadiness.contains("generated all_learnables.json writes"))
+        XCTAssertTrue(moveReadiness.contains("ROM/build/export paths"))
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .learnsets && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/level_up_learnsets/gen_3.h" })
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .learnsets && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/all_learnables.json" })
         XCTAssertTrue(sourceIndex.records.contains { $0.module == .evolutions && $0.title == "SPECIES_TREECKO" && $0.sourceSpan.relativePath == "src/data/pokemon/species_info/gen_3_families.h" })

@@ -588,7 +588,12 @@ final class MapEditorStoreTests: XCTestCase {
             row.path == "src"
                 && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "sourceCodeInventory" }
         })
+        XCTAssertEqual(sourceRootRow.sizeSummary, "92 bytes")
         XCTAssertTrue(sourceRootRow.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
+        XCTAssertEqual(factValue("Gen V Source Root Members", in: sourceRootRow.facts), "5")
+        XCTAssertEqual(factValue("Gen V Source Root Bytes", in: sourceRootRow.facts), "92")
+        XCTAssertTrue(factValue("Gen V Source Root Sample Paths", in: sourceRootRow.facts)?.contains("src/init.c") == true)
+        XCTAssertTrue(factValue("Gen V Source Root Sample Paths", in: sourceRootRow.facts)?.contains("src/data/pokemon/source_pokemon.inc") == true)
         XCTAssertTrue(sourceRootRow.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
         XCTAssertFalse(sourceRootRow.facts.contains { $0.label == "Migration Status" })
 
@@ -596,7 +601,22 @@ final class MapEditorStoreTests: XCTestCase {
             row.path == "asm"
                 && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "assemblyInventory" }
         })
+        XCTAssertEqual(assemblyRootRow.sizeSummary, "5 bytes")
+        XCTAssertEqual(factValue("Gen V Assembly Root Members", in: assemblyRootRow.facts), "1")
+        XCTAssertEqual(factValue("Gen V Assembly Root Bytes", in: assemblyRootRow.facts), "5")
+        XCTAssertEqual(factValue("Gen V Assembly Root Sample Paths", in: assemblyRootRow.facts), "asm/arm9_remaining.s")
         XCTAssertTrue(assemblyRootRow.facts.contains { $0.label == "Gen V Blocked Actions" && $0.value.contains("mutation apply") })
+        XCTAssertFalse(assemblyRootRow.facts.contains { $0.label == "Migration Status" })
+
+        let headerRootRow = try XCTUnwrap(assetCatalog.rows.first { row in
+            row.path == "include"
+                && row.facts.contains { $0.label == "Gen V Source Role" && $0.value == "headerInventory" }
+        })
+        XCTAssertEqual(headerRootRow.sizeSummary, "16 bytes")
+        XCTAssertEqual(factValue("Gen V Header Root Members", in: headerRootRow.facts), "1")
+        XCTAssertEqual(factValue("Gen V Header Root Bytes", in: headerRootRow.facts), "16")
+        XCTAssertEqual(factValue("Gen V Header Root Sample Paths", in: headerRootRow.facts), "include/globals.h")
+        XCTAssertFalse(headerRootRow.facts.contains { $0.label == "Migration Status" })
 
         let blackMarkerRow = try XCTUnwrap(assetCatalog.rows.first { row in
             row.path == "black.us"
@@ -772,6 +792,53 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
         XCTAssertEqual(
             try String(contentsOf: root.appendingPathComponent(selectedPath), encoding: .utf8),
+            originalContents
+        )
+    }
+
+    @MainActor
+    func testGenVSourceDataVariantCoverageStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let rootRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "data/pokemon" && $0.category == "species" })
+        XCTAssertEqual(factValue("Gen V Source Data Variant Coverage", in: rootRow.facts), "3/4")
+        XCTAssertEqual(factValue("Gen V Source Data Variant Present", in: rootRow.facts), "black.us, white.us, black2.us")
+        XCTAssertEqual(factValue("Gen V Source Data Variant Missing", in: rootRow.facts), "white2.us")
+        XCTAssertEqual(factValue("Gen V Source Data Variant Basis", in: rootRow.facts), "sourceMarkersAndRootPresenceOnly")
+
+        let childRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "data/pokemon/source_pokemon.txt" && $0.category == "species" })
+        XCTAssertNil(factValue("Gen V Source Data Variant Coverage", in: childRow.facts))
+        XCTAssertNil(factValue("Gen V Source Data Variant Present", in: childRow.facts))
+        XCTAssertNil(factValue("Gen V Source Data Variant Missing", in: childRow.facts))
+        XCTAssertNil(factValue("Gen V Source Data Variant Basis", in: childRow.facts))
+
+        let originalContents = try String(contentsOf: root.appendingPathComponent("data/pokemon/source_pokemon.txt"), encoding: .utf8)
+        store.requestResourceAssetSelection(rootRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "species:data/pokemon")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed root\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent("data/pokemon/source_pokemon.txt"), encoding: .utf8),
             originalContents
         )
     }
@@ -2787,6 +2854,79 @@ final class MapEditorStoreTests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8),
             "event_id=12\n"
         )
+    }
+
+    @MainActor
+    func testDiamondPearlLandDataSemanticFieldEditsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSSourceProject()
+        let landDataPath = "files/fielddata/land_data/land_0002.json"
+        let nestedPath = "files/fielddata/land_data/sinnoh/land_0003.json"
+        try write(
+            """
+            {"land_id": 10, "name": "Route 202 Land", "enabled": true, "weather": null, "tiles": [{"terrain":"grass"}], "metadata": {"map":"ROUTE_202"}}
+
+            """,
+            to: root.appendingPathComponent(landDataPath)
+        )
+        try write("{\"land_id\":11}\n", to: root.appendingPathComponent(nestedPath))
+        let binaryLandPath = "files/fielddata/land_data/land_0001.bin"
+        let binaryLandData = try Data(contentsOf: root.appendingPathComponent(binaryLandPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let landDataRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == landDataPath })
+        store.requestResourceAssetSelection(landDataRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "maps:\(landDataPath)")
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "land_id" && $0.value == "10" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "name" && $0.value == "Route 202 Land" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "enabled" && $0.value == "true" })
+        XCTAssertTrue(editor.semanticFields.contains { $0.key == "weather" && $0.value == "null" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "tiles" })
+        XCTAssertFalse(editor.semanticFields.contains { $0.key == "metadata" })
+
+        store.updateSelectedNDSDataSemanticField(key: "land_id", value: "15")
+        store.updateSelectedNDSDataSemanticField(key: "name", value: "Route 202 North Land")
+        store.updateSelectedNDSDataSemanticField(key: "enabled", value: "false")
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(landDataPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"land_id\": 15"))
+        XCTAssertTrue(updated.contains("\"name\": \"Route 202 North Land\""))
+        XCTAssertTrue(updated.contains("\"enabled\": false"))
+        XCTAssertTrue(updated.contains("\"tiles\": [{\"terrain\":\"grass\"}]"))
+
+        let nestedRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedRow.id)
+        let nestedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(nestedEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "land_id", value: "20")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8),
+            "{\"land_id\":11}\n"
+        )
+
+        let binaryRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == binaryLandPath })
+        store.requestResourceAssetSelection(binaryRow.id)
+        let binaryEditor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertTrue(binaryEditor.semanticFields.isEmpty)
+        store.updateSelectedNDSDataSemanticField(key: "land_id", value: "20")
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(binaryLandPath)), binaryLandData)
     }
 
     @MainActor
@@ -5111,6 +5251,77 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(source.contains("TM01_POUND"))
         let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
         XCTAssertTrue(reloaded.learnsets.tmhm.isEmpty)
+    }
+
+    @MainActor
+    func testRubySapphireMoveCompatibilityTutorBatchPreviewApplyAndReloadsThroughMovesStore() async throws {
+        let root = try makeRubyPokemonProject()
+        try writeRubyBattleMoveTable(to: root)
+        let tutorPath = root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        try write(
+            """
+            #define TUTOR_MEGA_PUNCH 0
+            #define TUTOR_SWORD_DANCE 1
+            #define TUTOR_FURY_CUTTER 2
+
+            const u16 sTutorLearnsets[] =
+            {
+                [SPECIES_TREECKO] = (TUTOR(MEGA_PUNCH) | TUTOR(SWORD_DANCE)),
+            };
+
+            """,
+            to: tutorPath
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selection = .moves
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(treecko.learnsets.tutorSourceSpan?.relativePath, "src/data/pokemon/tutor_learnsets.h")
+        XCTAssertEqual(treecko.learnsets.tutor.map(\.move).sorted(), ["MOVE_MEGA_PUNCH", "MOVE_SWORD_DANCE"])
+        XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_MEGA_PUNCH", bucket: .tutor))
+        XCTAssertFalse(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_FURY_CUTTER", bucket: .tutor))
+
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_MEGA_PUNCH", bucket: .tutor, isEnabled: false)
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_FURY_CUTTER", bucket: .tutor, isEnabled: true)
+
+        XCTAssertEqual(store.dirtySpeciesBatchDrafts.map(\.speciesID), ["SPECIES_TREECKO"])
+        XCTAssertEqual(store.toolbarMutationState.target, .pokemonBatch)
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+
+        store.previewToolbarMutationTarget()
+
+        let plan = try XCTUnwrap(store.latestSpeciesBatchEditPlans.first)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertEqual(store.latestSpeciesBatchEditPlans.count, 1)
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/tutor_learnsets.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("TUTOR(FURY_CUTTER)") == true)
+        XCTAssertFalse(plan.changes.first?.textPreview?.contains("TUTOR(MEGA_PUNCH)") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TUTOR_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+
+        store.applyToolbarMutationTarget()
+
+        let result = try XCTUnwrap(store.latestSpeciesBatchApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/tutor_learnsets.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertTrue(store.dirtySpeciesBatchDrafts.isEmpty)
+
+        let source = try String(contentsOf: tutorPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("TUTOR(FURY_CUTTER)"))
+        XCTAssertFalse(source.contains("TUTOR(MEGA_PUNCH)"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.learnsets.tutor.map(\.move).sorted(), ["MOVE_FURY_CUTTER", "MOVE_SWORD_DANCE"])
+        XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_FURY_CUTTER", bucket: .tutor))
+        XCTAssertFalse(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_MEGA_PUNCH", bucket: .tutor))
     }
 
     @MainActor

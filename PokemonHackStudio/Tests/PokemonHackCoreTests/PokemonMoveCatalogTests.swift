@@ -715,6 +715,35 @@ final class PokemonMoveCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.diagnostics.contains { $0.code == "MOVE_CATALOG_TUTOR_TABLE_MISSING" })
     }
 
+    func testExpansionMoveCatalogSurfacesTutorCompatibilityMemberships() throws {
+        let root = try temporaryRoot()
+        try makeExpansionMovesInfoProject(at: root)
+        try write(
+            """
+            static const u16 gTutorMoves[] = {
+                MOVE_POUND,
+            };
+
+            const u16 gTutorLearnsets[] =
+            {
+                [SPECIES_TREECKO] = TUTOR(POUND),
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        )
+
+        let catalog = try liveMoveCatalog(root: root, profile: .pokeemeraldExpansion)
+
+        let pound = try XCTUnwrap(catalog.moves.first { $0.moveID == "MOVE_POUND" })
+        let tutor = try XCTUnwrap(pound.tutorMemberships.first)
+        XCTAssertEqual(tutor.moveID, "MOVE_POUND")
+        XCTAssertEqual(tutor.tutorSymbol, "TUTOR_MOVE_POUND")
+        XCTAssertEqual(tutor.sourceSpan.relativePath, "src/data/pokemon/tutor_learnsets.h")
+        XCTAssertEqual(tutor.eligibleSpeciesIDs, ["SPECIES_TREECKO"])
+        XCTAssertEqual(tutor.learnsetSourceSpans.first?.relativePath, "src/data/pokemon/tutor_learnsets.h")
+    }
+
     func testExpansionMovesInfoRowsPlanApplyAndReloadThroughDescriptor() throws {
         let root = try temporaryRoot()
         try makeExpansionMovesInfoProject(at: root)

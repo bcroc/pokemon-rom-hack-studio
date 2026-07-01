@@ -329,6 +329,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 contestMoveFactCount: contestMoveFactCount,
                 rubyTMHMIndexedCount: rubyTMHMIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 rubyTMHMEditableCount: rubyTMHMEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                rubyTutorIndexedCount: rubyTutorIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                rubyTutorEditableCount: rubyTutorEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 moveConstantsReadiness: rubyMoveConstantsReadiness
             )
         )
@@ -1038,6 +1040,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         contestMoveFactCount: Int,
         rubyTMHMIndexedCount: Int,
         rubyTMHMEditableCount: Int,
+        rubyTutorIndexedCount: Int,
+        rubyTutorEditableCount: Int,
         moveConstantsReadiness: MoveConstantsReadiness?
     ) -> [PokemonDataCompatibilitySourceTable]? {
         let sourceStatus: PokemonDataCompatibilityStatus
@@ -1068,6 +1072,14 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tmhmStatus = .readOnly
             } else {
                 tmhmStatus = .blocked
+            }
+            let tutorStatus: PokemonDataCompatibilityStatus
+            if rubyTutorEditableCount > 0 {
+                tutorStatus = .editable
+            } else if rubyTutorIndexedCount > 0 {
+                tutorStatus = .readOnly
+            } else {
+                tutorStatus = .blocked
             }
             let contestMoveNote: String
             if contestScalarsEditableCount > 0 && contestComboMovesEditableCount > 0 {
@@ -1186,10 +1198,22 @@ public enum PokemonDataCompatibilityReportBuilder {
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/pokemon/tutor_learnsets.h",
-                    tableSymbol: "gTutorLearnsets",
-                    indexedCount: 0,
-                    status: .blocked,
-                    note: "Tutor compatibility edits remain blocked from move row plans."
+                    tableSymbol: "sTutorLearnsets/gTutorLearnsets",
+                    indexedCount: rubyTutorIndexedCount,
+                    status: tutorStatus,
+                    note: "Existing local Ruby/Sapphire tutor rows are editable from move-centric compatibility drafts through the species mutation-plan gate.",
+                    sourceRole: "editableTutorLearnsets",
+                    readiness: rubyTutorEditableCount > 0 ? "editable existing sTutorLearnsets/gTutorLearnsets rows" : "no editable existing sTutorLearnsets/gTutorLearnsets rows indexed",
+                    blockedActions: [
+                        "move constant creation",
+                        "tutor constant creation",
+                        "missing tutor row insertion",
+                        "row insertion/removal/reorder",
+                        "generated writes",
+                        "reference writes",
+                        "ROM writes",
+                        "binary writes"
+                    ]
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "generated",
@@ -1844,6 +1868,25 @@ public enum PokemonDataCompatibilityReportBuilder {
     ) -> Int {
         let indexed = rubyTMHMIndexedCount(profile: profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex)
         return supportsLearnsetMutationEditing(surface: .tmhmLearnsets, profile: profile) && indexed > 0 ? indexed : 0
+    }
+
+    private static func rubyTutorIndexedCount(
+        profile: GameProfile,
+        speciesCatalog: ProjectSpeciesCatalog?,
+        sourceIndex: ProjectSourceIndex
+    ) -> Int {
+        guard profile == .pokeruby else { return 0 }
+        return speciesCatalog?.species.filter { $0.learnsets.tutorSourceSpan?.relativePath == "src/data/pokemon/tutor_learnsets.h" }.count
+            ?? learnsetRecordCount(in: sourceIndex, matching: ["tutor"])
+    }
+
+    private static func rubyTutorEditableCount(
+        profile: GameProfile,
+        speciesCatalog: ProjectSpeciesCatalog?,
+        sourceIndex: ProjectSourceIndex
+    ) -> Int {
+        let indexed = rubyTutorIndexedCount(profile: profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex)
+        return supportsLearnsetMutationEditing(surface: .tutorLearnsets, profile: profile) && indexed > 0 ? indexed : 0
     }
 
     private static func rubyEggIndexedCount(
@@ -2650,10 +2693,11 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
     }
     if profile == .pokeruby {
         fields.append(contentsOf: [
-            "tutor compatibility edits",
             "TM/HM item mapping edits",
             "machine constant creation",
-            "missing TM/HM row insertion"
+            "missing TM/HM row insertion",
+            "tutor constant creation",
+            "missing tutor row insertion"
         ])
     } else if !supportsClassicSpeciesMutationEditing(profile) {
         fields.append("TM/HM/tutor compatibility edits")
