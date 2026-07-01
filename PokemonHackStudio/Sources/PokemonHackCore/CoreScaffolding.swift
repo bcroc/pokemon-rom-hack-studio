@@ -1673,11 +1673,14 @@ public enum BinaryROMGraphBuilder {
 
 public enum ByteCursorError: Error, Equatable, LocalizedError {
     case unexpectedEOF(offset: Int, requested: Int, size: Int)
+    case valueOverflow(offset: Int, kind: String)
 
     public var errorDescription: String? {
         switch self {
         case .unexpectedEOF(let offset, let requested, let size):
             return "Unexpected EOF at \(offset); requested \(requested) bytes from \(size)-byte buffer."
+        case .valueOverflow(let offset, let kind):
+            return "\(kind) overflow while decoding at \(offset)."
         }
     }
 }
@@ -1730,22 +1733,38 @@ public struct ByteCursor {
     public mutating func readVariableLengthQuantity() throws -> UInt64 {
         var value: UInt64 = 0
         var shift: UInt64 = 1
+        let startOffset = offset
 
         while true {
             let byte = UInt64(try readUInt8())
-            value += (byte & 0x7F) * shift
+            let component = (byte & 0x7F).multipliedReportingOverflow(by: shift)
+            guard !component.overflow else {
+                throw ByteCursorError.valueOverflow(offset: startOffset, kind: "Variable-length quantity")
+            }
+            let updated = value.addingReportingOverflow(component.partialValue)
+            guard !updated.overflow else {
+                throw ByteCursorError.valueOverflow(offset: startOffset, kind: "Variable-length quantity")
+            }
+            value = updated.partialValue
             if byte & 0x80 != 0 {
                 break
             }
+            guard shift <= UInt64.max >> 7 else {
+                throw ByteCursorError.valueOverflow(offset: startOffset, kind: "Variable-length quantity")
+            }
             shift <<= 7
-            value += shift
+            let biased = value.addingReportingOverflow(shift)
+            guard !biased.overflow else {
+                throw ByteCursorError.valueOverflow(offset: startOffset, kind: "Variable-length quantity")
+            }
+            value = biased.partialValue
         }
 
         return value
     }
 
     private func require(count: Int) throws {
-        guard offset + count <= data.count else {
+        guard count >= 0, offset <= data.count, count <= data.count - offset else {
             throw ByteCursorError.unexpectedEOF(offset: offset, requested: count, size: data.count)
         }
     }
@@ -1871,6 +1890,9 @@ public enum PatchParser {
         let targetSize = try cursor.readVariableLengthQuantity()
         let metadataSize = try cursor.readVariableLengthQuantity()
         if metadataSize > 0 {
+            guard metadataSize <= UInt64(Int.max) else {
+                throw ByteCursorError.valueOverflow(offset: cursor.offset, kind: "BPS metadata size")
+            }
             _ = try cursor.readBytes(count: Int(metadataSize))
         }
 

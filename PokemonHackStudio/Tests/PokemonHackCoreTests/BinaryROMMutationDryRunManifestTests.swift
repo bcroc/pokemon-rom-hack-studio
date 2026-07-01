@@ -136,6 +136,57 @@ final class BinaryROMMutationDryRunManifestTests: XCTestCase {
         XCTAssertEqual(audit.artifactReviews.first { $0.kind == .applyManifest }?.path, applyManifestPath)
     }
 
+    func testApplyRestoresOriginalROMWhenApplyManifestWriteFails() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                expectedSHA1: pokemonHackSHA1Hex(originalData),
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+        let manifestData = try Data(contentsOf: manifestURL)
+
+        let fileManager = FileManager.default
+        let live = BinaryROMMutationApplyFileCoordinator.live(fileManager: fileManager)
+        let coordinator = BinaryROMMutationApplyFileCoordinator(
+            createDirectory: live.createDirectory,
+            copyItem: live.copyItem,
+            removeItem: live.removeItem,
+            writeData: { data, url, options in
+                if url.lastPathComponent == "apply-manifest.json" {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try data.write(to: url, options: options)
+            }
+        )
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            dryRunManifest: manifest,
+            dryRunManifestPath: manifestURL.path,
+            dryRunManifestData: manifestData,
+            workspaceRoot: temp.url.path,
+            confirmationToken: token,
+            fileManager: fileManager,
+            fileCoordinator: coordinator
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_WRITE_FAILED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_RESTORED_ORIGINAL" })
+        XCTAssertFalse(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_RESTORE_FAILED" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+    }
+
     func testApplyAuditReportsReadyArtifactReviewWithoutWriting() throws {
         let temp = try makeTemporaryDirectory()
         let rom = try makeSyntheticGBA(in: temp.url)

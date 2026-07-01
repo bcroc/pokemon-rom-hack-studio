@@ -313,6 +313,8 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         let bps = Data("BPS1".utf8) + Data([0x85, 0x86, 0x80])
         let ups = Data("UPS1".utf8) + Data([0x85, 0x86])
         let aps = Data("APS1".utf8)
+        let overlongBPS = Data("BPS1".utf8) + Data(repeating: 0x7F, count: 32) + Data([0x80])
+        let overlongUPS = Data("UPS1".utf8) + Data(repeating: 0x7F, count: 32) + Data([0x80])
 
         let valid = PatchValidationReportBuilder.validate(data: ips)
         let validBPS = PatchValidationReportBuilder.validate(data: bps)
@@ -320,6 +322,8 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         let validAPS = PatchValidationReportBuilder.validate(data: aps)
         let unknown = PatchValidationReportBuilder.validate(data: Data("not a patch".utf8))
         let malformed = PatchValidationReportBuilder.validate(data: Data("BPS1".utf8))
+        let malformedOverlongBPS = PatchValidationReportBuilder.validate(data: overlongBPS)
+        let malformedOverlongUPS = PatchValidationReportBuilder.validate(data: overlongUPS)
 
         XCTAssertTrue(valid.isValid)
         XCTAssertEqual(valid.summary?.format, .ips)
@@ -341,6 +345,12 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(malformed.isValid)
         XCTAssertEqual(malformed.summary?.format, .bps)
         XCTAssertTrue(malformed.diagnostics.contains { $0.code == "PATCH_MALFORMED" })
+        XCTAssertFalse(malformedOverlongBPS.isValid)
+        XCTAssertEqual(malformedOverlongBPS.summary?.format, .bps)
+        XCTAssertTrue(malformedOverlongBPS.diagnostics.contains { $0.code == "PATCH_MALFORMED" })
+        XCTAssertFalse(malformedOverlongUPS.isValid)
+        XCTAssertEqual(malformedOverlongUPS.summary?.format, .ups)
+        XCTAssertTrue(malformedOverlongUPS.diagnostics.contains { $0.code == "PATCH_MALFORMED" })
     }
 
     func testPatchManifestReportModelsBaseCandidatesAndDryRunPlans() throws {
@@ -692,6 +702,66 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
     }
 
+    func testPatchArtifactLibraryDoesNotHashManifestInputsOutsideProjectRoot() throws {
+        let root = try makePatchCreationProjectRoot()
+        let outside = try makeTemporaryRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let outsideBaseROM = outside.appendingPathComponent("clean-base.gba")
+        let outsideBuiltOutput = outside.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: outsideBaseROM)
+        try write(builtData, to: outsideBuiltOutput)
+
+        let patchData = makeBPSPatch(source: baseData, target: builtData)
+        let patch = root.appendingPathComponent(".pokemonhackstudio/patches/out-of-root.bps")
+        try write(patchData, to: patch)
+        let manifest = PatchCreationArtifactManifest(
+            schemaVersion: 1,
+            action: "patch-create",
+            projectRoot: root.path,
+            baseROMPath: outsideBaseROM.path,
+            baseROMSHA1: pokemonHackSHA1Hex(baseData),
+            baseROMCRC32: pokemonHackCRC32Hex(baseData),
+            baseROMSizeBytes: UInt64(baseData.count),
+            matchedBaseROMCandidate: "",
+            builtOutputPath: outsideBuiltOutput.path,
+            builtOutputRelativePath: "pokeemerald.gba",
+            builtOutputTargetID: "gba",
+            builtOutputSHA1: pokemonHackSHA1Hex(builtData),
+            builtOutputCRC32: pokemonHackCRC32Hex(builtData),
+            builtOutputSizeBytes: UInt64(builtData.count),
+            patchPath: patch.path,
+            patchSHA1: pokemonHackSHA1Hex(patchData),
+            patchCRC32: pokemonHackCRC32Hex(patchData),
+            patchSizeBytes: UInt64(patchData.count),
+            patchFormat: .bps,
+            headerPolicy: PatchArtifactHeaderPolicy(mode: "no-header-rewrite", detail: "test", shouldRewriteHeader: false),
+            diagnostics: []
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(to: URL(fileURLWithPath: patch.path + ".manifest.json"))
+
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .warning)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .unavailable)
+        XCTAssertEqual(item.builtOutputStatus, .unavailable)
+        XCTAssertEqual(item.baseROMIdentity?.path, outsideBaseROM.path)
+        XCTAssertEqual(item.baseROMIdentity?.exists, false)
+        XCTAssertNil(item.baseROMIdentity?.sha1)
+        XCTAssertEqual(item.builtOutputIdentity?.path, outsideBuiltOutput.path)
+        XCTAssertEqual(item.builtOutputIdentity?.exists, false)
+        XCTAssertNil(item.builtOutputIdentity?.sha1)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_BASE_ROM_PATH_OUTSIDE_PROJECT" })
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_BUILT_OUTPUT_PATH_OUTSIDE_PROJECT" })
+        XCTAssertEqual(try Data(contentsOf: outsideBaseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: outsideBuiltOutput), builtData)
+    }
+
     func testPatchArtifactLibraryReportsManifestProblemsWithoutWriting() throws {
         let root = try makePatchCreationProjectRoot()
         let baseData = Data("abc".utf8)
@@ -867,6 +937,145 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(second.status, .exported)
         XCTAssertNotNil(second.backupPath)
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.backupPath ?? ""))
+    }
+
+    func testPatchApplyExportDoesNotReplaceExistingOutputWhenPatchBodyFails() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        let baseData = Data("abc".utf8)
+        let existingOutput = Data("previous-output".utf8)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("bad-body.bps")
+        let outputURL = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-bad-body.gba")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(
+            Data("BPS1".utf8)
+                + Data(encodeBPSVariableLength(UInt64(baseData.count)))
+                + Data(encodeBPSVariableLength(UInt64(baseData.count)))
+                + Data(encodeBPSVariableLength(0)),
+            to: patch
+        )
+        try write(existingOutput, to: outputURL)
+
+        let result = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertNil(result.backupPath)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_APPLY_FAILED" })
+        XCTAssertEqual(try Data(contentsOf: outputURL), existingOutput)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
+    }
+
+    func testPatchApplyExportRestoresExistingOutputWhenManifestCommitFails() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abd".utf8)
+        let existingOutput = Data("previous-output".utf8)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let outputURL = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        let manifestURL = URL(fileURLWithPath: outputURL.path + ".manifest.json")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+        try write(existingOutput, to: outputURL)
+
+        let fileManager = FileManager.default
+        let live = PatchExportWriteCoordinator.live(fileManager: fileManager)
+        let coordinator = PatchExportWriteCoordinator(
+            createDirectory: live.createDirectory,
+            copyItem: live.copyItem,
+            removeItem: live.removeItem,
+            moveItem: { source, destination in
+                if destination.path == manifestURL.path {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try fileManager.moveItem(at: source, to: destination)
+            },
+            writeData: live.writeData
+        )
+
+        let result = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true,
+            fileCoordinator: coordinator
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertNotNil(result.backupPath)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_WRITE_FAILED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_RESTORED" })
+        XCTAssertEqual(try Data(contentsOf: outputURL), existingOutput)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manifestURL.path))
+    }
+
+    func testPatchApplyExportRestoresExistingOutputWhenOutputMoveFailsAfterRemoval() throws {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abd".utf8)
+        let existingOutput = Data("previous-output".utf8)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let outputURL = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+        try write(existingOutput, to: outputURL)
+
+        let fileManager = FileManager.default
+        let live = PatchExportWriteCoordinator.live(fileManager: fileManager)
+        let coordinator = PatchExportWriteCoordinator(
+            createDirectory: live.createDirectory,
+            copyItem: live.copyItem,
+            removeItem: live.removeItem,
+            moveItem: { source, destination in
+                if destination.path == outputURL.path {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try fileManager.moveItem(at: source, to: destination)
+            },
+            writeData: live.writeData
+        )
+
+        let result = try PatchManifestBuilder.applyExport(
+            patchPath: patch.path,
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            overwrite: true,
+            fileCoordinator: coordinator
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertNotNil(result.backupPath)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_WRITE_FAILED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_RESTORED" })
+        XCTAssertEqual(try Data(contentsOf: outputURL), existingOutput)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputURL.path.appending(".manifest.json")))
     }
 
     func testPatchApplyExportBlocksSymlinkEscapedArtifactDirectory() throws {

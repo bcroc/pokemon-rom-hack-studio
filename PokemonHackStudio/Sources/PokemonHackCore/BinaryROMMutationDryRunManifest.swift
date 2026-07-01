@@ -1061,6 +1061,30 @@ public enum BinaryROMMutationDryRunManifestBuilder {
     }
 }
 
+struct BinaryROMMutationApplyFileCoordinator {
+    var createDirectory: (URL) throws -> Void
+    var copyItem: (URL, URL) throws -> Void
+    var removeItem: (URL) throws -> Void
+    var writeData: (Data, URL, Data.WritingOptions) throws -> Void
+
+    static func live(fileManager: FileManager) -> BinaryROMMutationApplyFileCoordinator {
+        BinaryROMMutationApplyFileCoordinator(
+            createDirectory: { url in
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            },
+            copyItem: { source, destination in
+                try fileManager.copyItem(at: source, to: destination)
+            },
+            removeItem: { url in
+                try fileManager.removeItem(at: url)
+            },
+            writeData: { data, url, options in
+                try data.write(to: url, options: options)
+            }
+        )
+    }
+}
+
 public enum BinaryROMMutationApplier {
     public static func audit(
         path: String,
@@ -1421,6 +1445,28 @@ public enum BinaryROMMutationApplier {
         confirmationToken: String?,
         fileManager: FileManager = .default
     ) -> BinaryROMMutationApplyResult {
+        apply(
+            path: path,
+            dryRunManifest: manifest,
+            dryRunManifestPath: dryRunManifestPath,
+            dryRunManifestData: dryRunManifestData,
+            workspaceRoot: workspaceRoot,
+            confirmationToken: confirmationToken,
+            fileManager: fileManager,
+            fileCoordinator: .live(fileManager: fileManager)
+        )
+    }
+
+    static func apply(
+        path: String,
+        dryRunManifest manifest: BinaryROMMutationDryRunManifest,
+        dryRunManifestPath: String,
+        dryRunManifestData: Data,
+        workspaceRoot: String?,
+        confirmationToken: String?,
+        fileManager: FileManager = .default,
+        fileCoordinator: BinaryROMMutationApplyFileCoordinator
+    ) -> BinaryROMMutationApplyResult {
         let inputURL = URL(fileURLWithPath: path).standardizedFileURL
         var diagnostics: [Diagnostic] = []
         let trimmedWorkspaceRoot = workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1660,22 +1706,60 @@ public enum BinaryROMMutationApplier {
             confirmation: confirmation,
             diagnostics: successDiagnostics
         )
-
+        let applyManifestData: Data
         do {
-            try fileManager.createDirectory(at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.copyItem(at: inputURL, to: backupURL)
-            try mutatedData.write(to: inputURL, options: .atomic)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(applyManifest).write(to: applyManifestURL, options: .atomic)
+            applyManifestData = try encoder.encode(applyManifest)
         } catch {
             let failureDiagnostics = diagnostics + [
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_ENCODE_FAILED",
+                    message: "Binary ROM mutation apply manifest could not be encoded before writing: \(error.localizedDescription)"
+                )
+            ]
+            return blocked(inputPath: inputURL.path, baseBefore: freshBase, diagnostics: failureDiagnostics)
+        }
+
+        var romWasWritten = false
+        do {
+            try fileCoordinator.createDirectory(backupURL.deletingLastPathComponent())
+            try fileCoordinator.copyItem(inputURL, backupURL)
+            try fileCoordinator.writeData(mutatedData, inputURL, .atomic)
+            romWasWritten = true
+            try fileCoordinator.writeData(applyManifestData, applyManifestURL, .atomic)
+        } catch {
+            var failureDiagnostics = diagnostics + [
                 Diagnostic(
                     severity: .error,
                     code: "BINARY_ROM_MUTATION_APPLY_WRITE_FAILED",
                     message: "Binary ROM mutation apply failed while writing backup, ROM bytes, or manifest: \(error.localizedDescription)"
                 )
             ]
+            if romWasWritten {
+                do {
+                    if fileManager.fileExists(atPath: inputURL.path) {
+                        try fileCoordinator.removeItem(inputURL)
+                    }
+                    try fileCoordinator.copyItem(backupURL, inputURL)
+                    failureDiagnostics.append(
+                        Diagnostic(
+                            severity: .warning,
+                            code: "BINARY_ROM_MUTATION_APPLY_RESTORED_ORIGINAL",
+                            message: "Original ROM was restored from backup after the apply manifest write failed."
+                        )
+                    )
+                } catch {
+                    failureDiagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "BINARY_ROM_MUTATION_APPLY_RESTORE_FAILED",
+                            message: "Original ROM could not be restored from backup \(backupURL.path): \(error.localizedDescription)"
+                        )
+                    )
+                }
+            }
             return blocked(inputPath: inputURL.path, baseBefore: freshBase, diagnostics: failureDiagnostics)
         }
 

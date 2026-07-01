@@ -10,6 +10,7 @@ private struct ResourceAssetRowsCache {
     let category: String
     let workflowFacet: ResourceAssetWorkflowFacet
     let sortMode: ResourceAssetSortMode
+    let hiddenDraftRecordIDs: [String]
     let rows: [ResourceAssetRowViewState]
 }
 
@@ -1848,6 +1849,8 @@ final class WorkbenchStore: ObservableObject {
 
     var filteredResourceAssetRows: [ResourceAssetRowViewState] {
         guard let selectedIndexedProject, let selectedAssetCatalog else { return [] }
+        let hiddenDraftRecordIDs = selectedNDSDataDraftRecordIDs
+        let hiddenDraftRecordIDsKey = hiddenDraftRecordIDs.sorted()
         if
             let cache = resourceAssetRowsCache,
             cache.projectID == selectedIndexedProject.id,
@@ -1855,7 +1858,8 @@ final class WorkbenchStore: ObservableObject {
             cache.searchText == searchText,
             cache.category == resourceAssetCategory,
             cache.workflowFacet == resourceAssetWorkflowFacet,
-            cache.sortMode == resourceAssetSortMode
+            cache.sortMode == resourceAssetSortMode,
+            cache.hiddenDraftRecordIDs == hiddenDraftRecordIDsKey
         {
             return cache.rows
         }
@@ -1866,7 +1870,14 @@ final class WorkbenchStore: ObservableObject {
             searchText: searchText,
             sortMode: resourceAssetSortMode
         )
-        let rows = baseRows.filter { resourceAsset($0, matches: resourceAssetWorkflowFacet) }
+        let rows = baseRows.filter {
+            Self.resourceAsset(
+                $0,
+                matches: resourceAssetWorkflowFacet,
+                hiddenDraftRecordIDs: hiddenDraftRecordIDs,
+                ndsEditableRecordIDs: []
+            )
+        }
         resourceAssetRowsCache = ResourceAssetRowsCache(
             projectID: selectedIndexedProject.id,
             rowCount: selectedAssetCatalog.rows.count,
@@ -1874,6 +1885,7 @@ final class WorkbenchStore: ObservableObject {
             category: resourceAssetCategory,
             workflowFacet: resourceAssetWorkflowFacet,
             sortMode: resourceAssetSortMode,
+            hiddenDraftRecordIDs: hiddenDraftRecordIDsKey,
             rows: rows
         )
         return rows
@@ -3114,6 +3126,7 @@ final class WorkbenchStore: ObservableObject {
         itemDraftsByKey = itemDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "item")) }
         graphicsDraftsByKey = graphicsDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "graphics")) }
         ndsDataDraftsByKey = ndsDataDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
+        resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
     }
 
@@ -4243,7 +4256,6 @@ final class WorkbenchStore: ObservableObject {
                 patchPath: selectedPatchPath,
                 projectPath: selectedIndexedProject?.rootPath,
                 baseROMPath: selectedBaseROMPath,
-                overwrite: true,
                 fileManager: fileManager,
                 toolResolver: toolResolver
             )
@@ -4397,6 +4409,7 @@ final class WorkbenchStore: ObservableObject {
         let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
         guard selectedNDSDataCanEditSourceText else {
             ndsDataDraftsByKey.removeValue(forKey: key)
+            resourceAssetRowsCache = nil
             latestNDSDataEditPlan = nil
             latestNDSDataApplyResult = nil
             scheduleDraftAutosaveIfNeeded()
@@ -4407,6 +4420,7 @@ final class WorkbenchStore: ObservableObject {
         } else {
             ndsDataDraftsByKey[key] = PokemonHackCore.NDSDataEditDraft(recordID: recordID, editedText: text)
         }
+        resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
         latestNDSDataApplyResult = nil
         scheduleDraftAutosaveIfNeeded()
@@ -4440,6 +4454,7 @@ final class WorkbenchStore: ObservableObject {
             return
         }
         ndsDataDraftsByKey.removeValue(forKey: ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID))
+        resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
         latestNDSDataApplyResult = nil
         scheduleDraftAutosaveIfNeeded()
@@ -4472,6 +4487,7 @@ final class WorkbenchStore: ObservableObject {
                 ndsDataDraftsByKey.removeValue(
                     forKey: ndsDataDraftKey(projectID: projectIDBeforeApply, recordID: recordIDBeforeApply)
                 )
+                resourceAssetRowsCache = nil
             }
             ndsDataCatalogsByID.removeValue(forKey: projectIDBeforeApply)
             ndsDataCatalogFingerprintsByID.removeValue(forKey: projectIDBeforeApply)
@@ -4744,6 +4760,7 @@ final class WorkbenchStore: ObservableObject {
         removeDrafts(from: &itemDraftsByKey, withPrefix: itemPrefix)
         removeDrafts(from: &graphicsDraftsByKey, withPrefix: graphicsPrefix)
         removeDrafts(from: &ndsDataDraftsByKey, withPrefix: ndsDataPrefix)
+        resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
         if selectedProjectID == projectID {
             mapEditorSession.discardChanges()
@@ -6343,6 +6360,7 @@ final class WorkbenchStore: ObservableObject {
         for draft in workspace.drafts.ndsDataDrafts {
             ndsDataDraftsByKey[ndsDataDraftKey(projectID: projectID, recordID: draft.recordID)] = draft
         }
+        resourceAssetRowsCache = nil
         savedMapDraftsByProjectID[projectID] = workspace.drafts.mapDrafts
         restoreSelectedMapDraftIfAvailable(projectID: projectID)
     }

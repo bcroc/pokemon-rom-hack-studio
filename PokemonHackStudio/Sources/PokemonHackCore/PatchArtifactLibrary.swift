@@ -276,21 +276,34 @@ public enum PatchArtifactLibraryScanner {
         let baseIdentity: PatchArtifactLibraryFileIdentity?
         let baseStatus: PatchArtifactLibraryCheckStatus
         if let manifest = manifestRead.manifest {
-            baseIdentity = fileIdentity(path: manifest.baseROMPath, fileManager: fileManager)
-            baseStatus = checkStatus(
-                actual: baseIdentity,
-                expectedSHA1: manifest.baseROMSHA1,
-                expectedCRC32: manifest.baseROMCRC32,
-                expectedSizeBytes: manifest.baseROMSizeBytes
-            )
-            appendInputDiagnostics(
-                status: baseStatus,
+            let result = containedManifestInputIdentity(
+                path: manifest.baseROMPath,
+                projectRoot: projectRoot,
+                relativePatchPath: relativePatchPath,
                 codePrefix: "PATCH_ARTIFACT_LIBRARY_BASE_ROM",
                 label: "Base ROM",
-                path: manifest.baseROMPath,
-                relativePatchPath: relativePatchPath,
-                diagnostics: &diagnostics
+                fileManager: fileManager
             )
+            diagnostics.append(contentsOf: result.diagnostics)
+            baseIdentity = result.identity
+            if let status = result.status {
+                baseStatus = status
+            } else {
+                baseStatus = checkStatus(
+                    actual: baseIdentity,
+                    expectedSHA1: manifest.baseROMSHA1,
+                    expectedCRC32: manifest.baseROMCRC32,
+                    expectedSizeBytes: manifest.baseROMSizeBytes
+                )
+                appendInputDiagnostics(
+                    status: baseStatus,
+                    codePrefix: "PATCH_ARTIFACT_LIBRARY_BASE_ROM",
+                    label: "Base ROM",
+                    path: manifest.baseROMPath,
+                    relativePatchPath: relativePatchPath,
+                    diagnostics: &diagnostics
+                )
+            }
         } else {
             baseIdentity = nil
             baseStatus = .unavailable
@@ -299,21 +312,34 @@ public enum PatchArtifactLibraryScanner {
         let builtOutputIdentity: PatchArtifactLibraryFileIdentity?
         let builtOutputStatus: PatchArtifactLibraryCheckStatus
         if let manifest = manifestRead.manifest {
-            builtOutputIdentity = fileIdentity(path: manifest.builtOutputPath, fileManager: fileManager)
-            builtOutputStatus = checkStatus(
-                actual: builtOutputIdentity,
-                expectedSHA1: manifest.builtOutputSHA1,
-                expectedCRC32: manifest.builtOutputCRC32,
-                expectedSizeBytes: manifest.builtOutputSizeBytes
-            )
-            appendInputDiagnostics(
-                status: builtOutputStatus,
+            let result = containedManifestInputIdentity(
+                path: manifest.builtOutputPath,
+                projectRoot: projectRoot,
+                relativePatchPath: relativePatchPath,
                 codePrefix: "PATCH_ARTIFACT_LIBRARY_BUILT_OUTPUT",
                 label: "Built output",
-                path: manifest.builtOutputPath,
-                relativePatchPath: relativePatchPath,
-                diagnostics: &diagnostics
+                fileManager: fileManager
             )
+            diagnostics.append(contentsOf: result.diagnostics)
+            builtOutputIdentity = result.identity
+            if let status = result.status {
+                builtOutputStatus = status
+            } else {
+                builtOutputStatus = checkStatus(
+                    actual: builtOutputIdentity,
+                    expectedSHA1: manifest.builtOutputSHA1,
+                    expectedCRC32: manifest.builtOutputCRC32,
+                    expectedSizeBytes: manifest.builtOutputSizeBytes
+                )
+                appendInputDiagnostics(
+                    status: builtOutputStatus,
+                    codePrefix: "PATCH_ARTIFACT_LIBRARY_BUILT_OUTPUT",
+                    label: "Built output",
+                    path: manifest.builtOutputPath,
+                    relativePatchPath: relativePatchPath,
+                    diagnostics: &diagnostics
+                )
+            }
         } else {
             builtOutputIdentity = nil
             builtOutputStatus = .unavailable
@@ -355,6 +381,47 @@ public enum PatchArtifactLibraryScanner {
             verificationSummary: summary,
             status: status,
             diagnostics: diagnostics
+        )
+    }
+
+    private struct ManifestInputIdentityResult {
+        let identity: PatchArtifactLibraryFileIdentity?
+        let status: PatchArtifactLibraryCheckStatus?
+        let diagnostics: [Diagnostic]
+    }
+
+    private static func containedManifestInputIdentity(
+        path: String,
+        projectRoot: URL,
+        relativePatchPath: String,
+        codePrefix: String,
+        label: String,
+        fileManager: FileManager
+    ) -> ManifestInputIdentityResult {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let standardizedRoot = projectRoot.standardizedFileURL
+        let resolvedRoot = standardizedRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+        guard isContained(url, in: standardizedRoot),
+              isContained(resolvedURL, in: resolvedRoot) else {
+            return ManifestInputIdentityResult(
+                identity: PatchArtifactLibraryFileIdentity(path: url.path, exists: false),
+                status: .unavailable,
+                diagnostics: [
+                    diagnostic(
+                        .warning,
+                        "\(codePrefix)_PATH_OUTSIDE_PROJECT",
+                        "\(label) recorded in the creation manifest is outside the selected project root or resolves through a symlink outside it; Patch Library did not read \(url.path).",
+                        relativePatchPath
+                    )
+                ]
+            )
+        }
+
+        return ManifestInputIdentityResult(
+            identity: fileIdentity(path: url.path, fileManager: fileManager),
+            status: nil,
+            diagnostics: []
         )
     }
 
@@ -578,6 +645,12 @@ public enum PatchArtifactLibraryScanner {
             return path
         }
         return String(path.dropFirst(rootPath.count + 1))
+    }
+
+    private static func isContained(_ url: URL, in root: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        return path == rootPath || path.hasPrefix(rootPath + "/")
     }
 
     private static func fileSize(from attributes: [FileAttributeKey: Any]?) -> UInt64? {

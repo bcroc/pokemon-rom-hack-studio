@@ -1063,57 +1063,68 @@ public enum BPSPatchCodec {
         let targetSize = try cursor.readVariableLengthQuantity()
         let metadataSize = try cursor.readVariableLengthQuantity()
         if metadataSize > 0 {
-            _ = try cursor.readBytes(count: Int(metadataSize))
+            _ = try cursor.readBytes(count: try intValue(metadataSize, label: "BPS metadata size"))
         }
         guard sourceSize == UInt64(baseData.count) else {
             throw BPSPatchCodecError.checksumMismatch("BPS source size \(sourceSize) does not match selected base ROM size \(baseData.count).")
         }
+        let targetByteCount = try intValue(targetSize, label: "BPS target size")
 
         var output: [UInt8] = []
-        output.reserveCapacity(Int(targetSize))
+        output.reserveCapacity(min(targetByteCount, baseData.count))
         let source = Array(baseData)
         var sourceRelativeOffset = 0
         var targetRelativeOffset = 0
 
-        while output.count < Int(targetSize), !cursor.isAtEnd {
+        while output.count < targetByteCount, !cursor.isAtEnd {
             let data = try cursor.readVariableLengthQuantity()
             let command = Int(data & 0x03)
-            let length = Int((data >> 2) + 1)
+            let length = try commandLength(data)
             switch command {
             case 0:
                 let offset = output.count
-                guard offset + length <= source.count else {
+                let end = try checkedEnd(start: offset, length: length, label: "BPS SourceRead")
+                guard end <= source.count else {
                     throw BPSPatchCodecError.malformed("BPS SourceRead exceeds source ROM size.")
                 }
-                output.append(contentsOf: source[offset..<(offset + length)])
+                output.append(contentsOf: source[offset..<end])
             case 1:
                 output.append(contentsOf: try cursor.readBytes(count: length))
             case 2:
-                sourceRelativeOffset += try readSignedOffset(cursor: &cursor)
-                guard sourceRelativeOffset >= 0, sourceRelativeOffset + length <= source.count else {
+                sourceRelativeOffset = try checkedAdd(
+                    sourceRelativeOffset,
+                    try readSignedOffset(cursor: &cursor),
+                    label: "BPS SourceCopy offset"
+                )
+                let end = try checkedEnd(start: sourceRelativeOffset, length: length, label: "BPS SourceCopy")
+                guard sourceRelativeOffset >= 0, end <= source.count else {
                     throw BPSPatchCodecError.malformed("BPS SourceCopy exceeds source ROM size.")
                 }
-                output.append(contentsOf: source[sourceRelativeOffset..<(sourceRelativeOffset + length)])
-                sourceRelativeOffset += length
+                output.append(contentsOf: source[sourceRelativeOffset..<end])
+                sourceRelativeOffset = try checkedAdd(sourceRelativeOffset, length, label: "BPS SourceCopy offset")
             case 3:
-                targetRelativeOffset += try readSignedOffset(cursor: &cursor)
+                targetRelativeOffset = try checkedAdd(
+                    targetRelativeOffset,
+                    try readSignedOffset(cursor: &cursor),
+                    label: "BPS TargetCopy offset"
+                )
                 guard targetRelativeOffset >= 0 else {
                     throw BPSPatchCodecError.malformed("BPS TargetCopy has a negative target offset.")
                 }
                 for index in 0..<length {
-                    let sourceIndex = targetRelativeOffset + index
+                    let sourceIndex = try checkedAdd(targetRelativeOffset, index, label: "BPS TargetCopy offset")
                     guard sourceIndex < output.count else {
                         throw BPSPatchCodecError.malformed("BPS TargetCopy references bytes that have not been written.")
                     }
                     output.append(output[sourceIndex])
                 }
-                targetRelativeOffset += length
+                targetRelativeOffset = try checkedAdd(targetRelativeOffset, length, label: "BPS TargetCopy offset")
             default:
                 throw BPSPatchCodecError.malformed("BPS command is invalid.")
             }
         }
 
-        guard output.count == Int(targetSize) else {
+        guard output.count == targetByteCount else {
             throw BPSPatchCodecError.malformed("BPS output size \(output.count) does not match target size \(targetSize).")
         }
         let outputData = Data(output)
@@ -1163,8 +1174,36 @@ public enum BPSPatchCodec {
 
     private static func readSignedOffset(cursor: inout ByteCursor) throws -> Int {
         let value = try cursor.readVariableLengthQuantity()
-        let magnitude = Int(value >> 1)
+        let rawMagnitude = value >> 1
+        let magnitude = try intValue(rawMagnitude, label: "BPS signed offset")
         return value & 1 == 0 ? magnitude : -magnitude
+    }
+
+    private static func commandLength(_ data: UInt64) throws -> Int {
+        let rawLength = (data >> 2).addingReportingOverflow(1)
+        guard !rawLength.overflow else {
+            throw BPSPatchCodecError.malformed("BPS command length is too large.")
+        }
+        return try intValue(rawLength.partialValue, label: "BPS command length")
+    }
+
+    private static func intValue(_ value: UInt64, label: String) throws -> Int {
+        guard let converted = Int(exactly: value) else {
+            throw BPSPatchCodecError.malformed("\(label) is too large.")
+        }
+        return converted
+    }
+
+    private static func checkedAdd(_ lhs: Int, _ rhs: Int, label: String) throws -> Int {
+        let result = lhs.addingReportingOverflow(rhs)
+        guard !result.overflow else {
+            throw BPSPatchCodecError.malformed("\(label) is too large.")
+        }
+        return result.partialValue
+    }
+
+    private static func checkedEnd(start: Int, length: Int, label: String) throws -> Int {
+        try checkedAdd(start, length, label: label)
     }
 
     private static func readUInt32LE(_ bytes: [UInt8], offset: Int) -> UInt32 {
@@ -1534,6 +1573,34 @@ public enum PatchCreationBuilder {
     }
 }
 
+struct PatchExportWriteCoordinator {
+    var createDirectory: (URL) throws -> Void
+    var copyItem: (URL, URL) throws -> Void
+    var removeItem: (URL) throws -> Void
+    var moveItem: (URL, URL) throws -> Void
+    var writeData: (Data, URL, Data.WritingOptions) throws -> Void
+
+    static func live(fileManager: FileManager) -> PatchExportWriteCoordinator {
+        PatchExportWriteCoordinator(
+            createDirectory: { url in
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            },
+            copyItem: { source, destination in
+                try fileManager.copyItem(at: source, to: destination)
+            },
+            removeItem: { url in
+                try fileManager.removeItem(at: url)
+            },
+            moveItem: { source, destination in
+                try fileManager.moveItem(at: source, to: destination)
+            },
+            writeData: { data, url, options in
+                try data.write(to: url, options: options)
+            }
+        )
+    }
+}
+
 public enum PatchManifestBuilder {
     public static func build(
         patchPath: String,
@@ -1836,6 +1903,26 @@ public enum PatchManifestBuilder {
         fileManager: FileManager = .default,
         toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
     ) throws -> PatchApplyExportResult {
+        try applyExport(
+            patchPath: patchPath,
+            projectPath: projectPath,
+            baseROMPath: baseROMPath,
+            overwrite: overwrite,
+            fileManager: fileManager,
+            toolResolver: toolResolver,
+            fileCoordinator: .live(fileManager: fileManager)
+        )
+    }
+
+    static func applyExport(
+        patchPath: String,
+        projectPath: String? = nil,
+        baseROMPath: String,
+        overwrite: Bool = false,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment(),
+        fileCoordinator: PatchExportWriteCoordinator
+    ) throws -> PatchApplyExportResult {
         let report = try build(
             patchPath: patchPath,
             projectPath: projectPath,
@@ -1905,21 +1992,6 @@ public enum PatchManifestBuilder {
             )
         }
 
-        try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-        if fileManager.fileExists(atPath: outputURL.path) {
-            let backupRelativePath = backupRelativePath ?? uniqueBackupRelativePathForExistingOutput(
-                outputFileName: outputURL.lastPathComponent,
-                root: artifactRoot,
-                fileManager: fileManager
-            )
-            let backupURL = artifactRoot.appendingPathComponent(backupRelativePath).standardizedFileURL
-            try fileManager.createDirectory(at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.copyItem(at: outputURL, to: backupURL)
-            backupPath = backupURL.path
-            try fileManager.removeItem(at: outputURL)
-        }
-
         let baseData = try Data(contentsOf: URL(fileURLWithPath: selectedBaseROM.absolutePath))
         let patchData = try Data(contentsOf: URL(fileURLWithPath: patchPath))
         let patchedData: Data
@@ -1948,10 +2020,21 @@ public enum PatchManifestBuilder {
             )
         }
 
-        try patchedData.write(to: outputURL, options: .atomic)
         let outputSHA1 = pokemonHackSHA1Hex(patchedData)
         let outputCRC = crc32Hex(patchedData)
         let manifestURL = artifactRoot.appendingPathComponent(manifestRelativePath).standardizedFileURL
+        let backupURL: URL?
+        if fileManager.fileExists(atPath: outputURL.path) {
+            let backupRelativePath = backupRelativePath ?? uniqueBackupRelativePathForExistingOutput(
+                outputFileName: outputURL.lastPathComponent,
+                root: artifactRoot,
+                fileManager: fileManager
+            )
+            backupURL = artifactRoot.appendingPathComponent(backupRelativePath).standardizedFileURL
+            backupPath = backupURL?.path
+        } else {
+            backupURL = nil
+        }
         let manifest = PatchApplyExportManifest(
             schemaVersion: 1,
             action: "patch-apply-export",
@@ -1971,7 +2054,104 @@ public enum PatchManifestBuilder {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        let manifestData = try encoder.encode(manifest)
+
+        let transactionID = UUID().uuidString
+        let outputTempURL = outputURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(outputURL.lastPathComponent).\(transactionID).tmp")
+            .standardizedFileURL
+        let manifestTempURL = manifestURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(manifestURL.lastPathComponent).\(transactionID).tmp")
+            .standardizedFileURL
+        var outputNeedsRollback = false
+        do {
+            try fileCoordinator.createDirectory(outputURL.deletingLastPathComponent())
+            try fileCoordinator.createDirectory(manifestURL.deletingLastPathComponent())
+            if let backupURL {
+                try fileCoordinator.createDirectory(backupURL.deletingLastPathComponent())
+                try fileCoordinator.copyItem(outputURL, backupURL)
+            }
+            try fileCoordinator.writeData(patchedData, outputTempURL, .atomic)
+            try fileCoordinator.writeData(manifestData, manifestTempURL, .atomic)
+            if fileManager.fileExists(atPath: outputURL.path) {
+                try fileCoordinator.removeItem(outputURL)
+                outputNeedsRollback = true
+            }
+            try fileCoordinator.moveItem(outputTempURL, outputURL)
+            outputNeedsRollback = true
+            if fileManager.fileExists(atPath: manifestURL.path) {
+                try fileCoordinator.removeItem(manifestURL)
+            }
+            try fileCoordinator.moveItem(manifestTempURL, manifestURL)
+        } catch {
+            try? fileCoordinator.removeItem(outputTempURL)
+            try? fileCoordinator.removeItem(manifestTempURL)
+
+            var failureDiagnostics = diagnostics + [
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_EXPORT_WRITE_FAILED",
+                    message: "Patch apply/export failed while committing the patched ROM or manifest: \(error.localizedDescription)"
+                )
+            ]
+            if outputNeedsRollback {
+                if let backupURL, fileManager.fileExists(atPath: backupURL.path) {
+                    do {
+                        if fileManager.fileExists(atPath: outputURL.path) {
+                            try fileCoordinator.removeItem(outputURL)
+                        }
+                        try fileCoordinator.copyItem(backupURL, outputURL)
+                        failureDiagnostics.append(
+                            Diagnostic(
+                                severity: .warning,
+                                code: "PATCH_EXPORT_OUTPUT_RESTORED",
+                                message: "Patched ROM output was restored from backup after manifest commit failed."
+                            )
+                        )
+                    } catch {
+                        failureDiagnostics.append(
+                            Diagnostic(
+                                severity: .error,
+                                code: "PATCH_EXPORT_OUTPUT_RESTORE_FAILED",
+                                message: "Patched ROM output could not be restored from backup \(backupURL.path): \(error.localizedDescription)"
+                            )
+                        )
+                    }
+                } else {
+                    do {
+                        if fileManager.fileExists(atPath: outputURL.path) {
+                            try fileCoordinator.removeItem(outputURL)
+                        }
+                        failureDiagnostics.append(
+                            Diagnostic(
+                                severity: .warning,
+                                code: "PATCH_EXPORT_OUTPUT_REMOVED",
+                                message: "New patched ROM output was removed after manifest commit failed."
+                            )
+                        )
+                    } catch {
+                        failureDiagnostics.append(
+                            Diagnostic(
+                                severity: .error,
+                                code: "PATCH_EXPORT_OUTPUT_RESTORE_FAILED",
+                                message: "New patched ROM output could not be removed after manifest commit failed: \(error.localizedDescription)"
+                            )
+                        )
+                    }
+                }
+            }
+            return PatchApplyExportResult(
+                status: .blocked,
+                outputPath: outputURL.path,
+                manifestPath: manifestURL.path,
+                backupPath: backupPath,
+                outputROMSHA1: nil,
+                diagnostics: failureDiagnostics,
+                manifest: nil
+            )
+        }
 
         diagnostics.append(
             Diagnostic(

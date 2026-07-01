@@ -89,6 +89,20 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackStudioTests
         GENERATE_INFOPLIST_FILE: YES
+  PokemonHackCLITests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PokemonHackCLITests
+      - path: Sources/pokemonhack-cli
+    dependencies:
+      - target: pokemonhack-cli
+      - target: PokemonHackCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pokemonhack.PokemonHackCLITests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) POKEMONHACK_CLI_TESTING"
 schemes:
   PokemonHackStudio:
     build:
@@ -103,6 +117,7 @@ schemes:
       targets:
         - PokemonHackCoreTests
         - PokemonHackStudioTests
+        - PokemonHackCLITests
   PokemonHackCore:
     build:
       targets:
@@ -112,3 +127,4 @@ schemes:
       config: Debug
       targets:
         - PokemonHackCoreTests
+        - PokemonHackCLITests

@@ -1,5 +1,7 @@
 import XCTest
+#if !POKEMONHACK_CLI_TESTING
 @testable import pokemonhack_cli
+#endif
 
 final class PokemonHackCLITests: XCTestCase {
     private var temporaryDirectories: [URL] = []
@@ -106,6 +108,36 @@ final class PokemonHackCLITests: XCTestCase {
             ),
             0
         )
+    }
+
+    func testJSONErrorReportUsesMachineReadableShapeAndExitCodes() throws {
+        let usage = try decodeJSON(
+            PokemonHackCLI.renderJSONError(arguments: ["--json"], error: CLIError.usage)
+        )
+        XCTAssertEqual(usage["status"] as? String, "error")
+        XCTAssertEqual(usage["errorCode"] as? String, "CLI_USAGE")
+        XCTAssertEqual(usage["command"] as? String, "--json")
+        XCTAssertTrue((usage["message"] as? String)?.contains("pokemonhack-cli") == true)
+        XCTAssertTrue((usage["usage"] as? String)?.contains("help --json") == true)
+        XCTAssertEqual(PokemonHackCLI.jsonErrorExitCode(error: CLIError.usage), 2)
+
+        let unknown = try decodeJSON(
+            PokemonHackCLI.renderJSONError(arguments: ["bogus", "--json"], error: CLIError.unknownCommand("bogus"))
+        )
+        XCTAssertEqual(unknown["status"] as? String, "error")
+        XCTAssertEqual(unknown["errorCode"] as? String, "CLI_UNKNOWN_COMMAND")
+        XCTAssertEqual(unknown["message"] as? String, "Unknown command: bogus")
+        XCTAssertEqual(unknown["command"] as? String, "bogus")
+        XCTAssertTrue((unknown["usage"] as? String)?.contains("validation-tiers --json") == true)
+        XCTAssertEqual(PokemonHackCLI.jsonErrorExitCode(error: CLIError.unknownCommand("bogus")), 2)
+
+        let unexpected = try decodeJSON(
+            PokemonHackCLI.renderJSONError(arguments: ["validate", "--json"], error: CocoaError(.fileReadNoSuchFile))
+        )
+        XCTAssertEqual(unexpected["status"] as? String, "error")
+        XCTAssertEqual(unexpected["errorCode"] as? String, "CLI_ERROR")
+        XCTAssertEqual(unexpected["command"] as? String, "validate")
+        XCTAssertEqual(PokemonHackCLI.jsonErrorExitCode(error: CocoaError(.fileReadNoSuchFile)), 1)
     }
 
     func testPlaytestHeadlessAndLaunchEmitJSONWithoutApplyingSideEffects() throws {

@@ -129,11 +129,21 @@ private struct CLIHelpReport: Codable, Equatable {
     let commands: [CLICommandMetadata]
 }
 
+private struct CLIErrorReport: Codable, Equatable {
+    let status: String
+    let errorCode: String
+    let message: String
+    let command: String
+    let usage: String?
+}
+
+#if !POKEMONHACK_CLI_TESTING
 @main
+#endif
 struct PokemonHackCLI {
     static func main() {
+        let arguments = Array(CommandLine.arguments.dropFirst())
         do {
-            let arguments = Array(CommandLine.arguments.dropFirst())
             let output = try run(arguments: arguments)
             print(output)
             let code = exitCode(arguments: arguments, output: output)
@@ -141,8 +151,17 @@ struct PokemonHackCLI {
                 Foundation.exit(code)
             }
         } catch {
-            FileHandle.standardError.write(Data((render(error: error) + "\n").utf8))
-            Foundation.exit(1)
+            if arguments.contains("--json") {
+                do {
+                    FileHandle.standardError.write(Data((try renderJSONError(arguments: arguments, error: error) + "\n").utf8))
+                } catch {
+                    FileHandle.standardError.write(Data((render(error: error) + "\n").utf8))
+                }
+                Foundation.exit(jsonErrorExitCode(error: error))
+            } else {
+                FileHandle.standardError.write(Data((render(error: error) + "\n").utf8))
+                Foundation.exit(1)
+            }
         }
     }
 
@@ -1334,6 +1353,45 @@ struct PokemonHackCLI {
             return description
         }
         return String(describing: error)
+    }
+
+    static func renderJSONError(arguments: [String], error: Error) throws -> String {
+        try encode(errorReport(arguments: arguments, error: error))
+    }
+
+    static func jsonErrorExitCode(error: Error) -> Int32 {
+        if let cliError = error as? CLIError {
+            switch cliError {
+            case .usage, .unknownCommand:
+                return 2
+            }
+        }
+        return 1
+    }
+
+    private static func errorReport(arguments: [String], error: Error) -> CLIErrorReport {
+        let errorCode: String
+        let usage: String?
+        if let cliError = error as? CLIError {
+            switch cliError {
+            case .usage:
+                errorCode = "CLI_USAGE"
+                usage = helpText
+            case .unknownCommand:
+                errorCode = "CLI_UNKNOWN_COMMAND"
+                usage = helpText
+            }
+        } else {
+            errorCode = "CLI_ERROR"
+            usage = nil
+        }
+        return CLIErrorReport(
+            status: "error",
+            errorCode: errorCode,
+            message: render(error: error),
+            command: arguments.first ?? "",
+            usage: usage
+        )
     }
 }
 

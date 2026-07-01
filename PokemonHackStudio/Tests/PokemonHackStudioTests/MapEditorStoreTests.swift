@@ -2490,6 +2490,34 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testHiddenNDSDraftFacetInvalidatesCachedResourceRowsWhenDraftChanges() async throws {
+        let root = try makeNDSSourceProject()
+        let personalPath = "files/poketool/personal/turtwig.json"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let personalRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == personalPath })
+
+        store.resourceAssetWorkflowFacet = .hiddenDrafts
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == personalRow.id })
+
+        store.requestResourceAssetSelection(personalRow.id)
+        store.updateSelectedNDSDataSemanticField(key: "species", value: "GROTLE")
+
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        XCTAssertTrue(store.filteredResourceAssetRows.contains { $0.id == personalRow.id })
+
+        store.discardNDSDataEdits()
+
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == personalRow.id })
+    }
+
+    @MainActor
     func testDiamondPearlItemMappingSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSSourceProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -4798,6 +4826,15 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(result.manifest?.patchFormat, .bps)
         XCTAssertEqual(try Data(contentsOf: outputURL), targetData)
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path.appending(".manifest.json")))
+
+        store.applyExportSelectedPatchROM()
+
+        let blocked = try XCTUnwrap(store.latestPatchApplyExportResult)
+        XCTAssertEqual(blocked.status, .blocked)
+        XCTAssertNil(blocked.backupPath)
+        XCTAssertTrue(blocked.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_EXISTS" })
+        XCTAssertEqual(try Data(contentsOf: outputURL), targetData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
     }
 
     @MainActor
