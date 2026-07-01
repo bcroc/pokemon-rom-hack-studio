@@ -688,8 +688,76 @@ public enum ItemMutationPlanner {
         if draft.descriptionText != item.descriptionText, !item.isDescriptionEditable {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_NOT_EDITABLE", message: "\(item.itemID) does not have a simple editable item description source.", span: item.sourceSpan))
         }
+        appendBehaviorScalarDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         appendEffectIconDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         return diagnostics
+    }
+
+    private static func appendBehaviorScalarDiagnostics(
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard descriptor.supportsBehaviorScalarEditing else { return }
+        let functionFields = [
+            ("fieldUseFunc", item.fieldUseFunc, draft.fieldUseFunc),
+            ("battleUseFunc", item.battleUseFunc, draft.battleUseFunc)
+        ]
+        for (label, current, draftValue) in functionFields where current != draftValue {
+            appendBehaviorScalarDiagnostic(
+                label: label,
+                current: current,
+                draftValue: draftValue,
+                item: item,
+                isValid: isSimpleItemSymbol
+            ) {
+                "\(label) must be a single C identifier or NULL."
+            } diagnostics: { diagnostic in
+                diagnostics.append(diagnostic)
+            }
+        }
+
+        let scalarFields = [
+            ("battleUsage", item.battleUsage, draft.battleUsage),
+            ("secondaryId", item.secondaryId, draft.secondaryId)
+        ]
+        for (label, current, draftValue) in scalarFields where current != draftValue {
+            appendBehaviorScalarDiagnostic(
+                label: label,
+                current: current,
+                draftValue: draftValue,
+                item: item,
+                isValid: isSimpleItemSymbolOrIntegerLiteral
+            ) {
+                "\(label) must be a single C identifier or integer literal."
+            } diagnostics: { diagnostic in
+                diagnostics.append(diagnostic)
+            }
+        }
+    }
+
+    private static func appendBehaviorScalarDiagnostic(
+        label: String,
+        current: String?,
+        draftValue: String?,
+        item: ItemDetail,
+        isValid: (String) -> Bool,
+        invalidMessage: () -> String,
+        diagnostics append: (Diagnostic) -> Void
+    ) {
+        guard current != nil else {
+            append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_NOT_EDITABLE", message: "\(label) edits require an existing local Expansion gItemsInfo field; missing-field insertion is blocked.", span: item.sourceSpan))
+            return
+        }
+        guard let draftValue, !draftValue.isEmpty else {
+            append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_REQUIRED", message: "\(label) cannot be removed from an existing Expansion gItemsInfo row.", span: item.sourceSpan))
+            return
+        }
+        guard isValid(draftValue) else {
+            append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_INVALID", message: invalidMessage(), span: item.sourceSpan))
+            return
+        }
     }
 
     private static func appendEffectIconDiagnostics(
@@ -991,6 +1059,10 @@ private struct ItemCatalogDescriptor {
     }
 
     var supportsEffectIconEditing: Bool {
+        profile == .pokeemeraldExpansion
+    }
+
+    var supportsBehaviorScalarEditing: Bool {
         profile == .pokeemeraldExpansion
     }
 
@@ -1323,6 +1395,11 @@ private func inlineCompoundStringDescription(_ value: String) -> String? {
 
 private func isSimpleItemSymbol(_ value: String) -> Bool {
     value.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
+}
+
+private func isSimpleItemSymbolOrIntegerLiteral(_ value: String) -> Bool {
+    isSimpleItemSymbol(value)
+        || value.range(of: #"^(?:0[xX][0-9A-Fa-f]+|[0-9]+)$"#, options: .regularExpression) != nil
 }
 
 private func displayName(for itemID: String) -> String {

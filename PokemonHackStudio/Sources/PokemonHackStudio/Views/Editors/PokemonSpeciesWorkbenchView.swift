@@ -149,9 +149,9 @@ struct PokemonSpeciesWorkbenchView: View {
                     speciesTextField("Catch Rate", text: draftStringBinding(\.catchRate))
                     speciesTextField("EXP Yield", text: draftStringBinding(\.expYield))
                     speciesTextField("Safari Flee", text: draftStringBinding(\.safariZoneFleeRate))
-                    speciesTextField("Gender", text: draftStringBinding(\.genderRatio))
+                    SpeciesPresetPicker(title: "Gender", selection: draftStringBinding(\.genderRatio), options: genderRatioOptions)
                     speciesTextField("Egg Cycles", text: draftStringBinding(\.eggCycles))
-                    speciesTextField("Friendship", text: draftStringBinding(\.friendship))
+                    SpeciesPresetPicker(title: "Friendship", selection: draftStringBinding(\.friendship), options: friendshipOptions)
                 }
                 SpeciesConstantPicker(title: "Growth Rate", selection: draftStringBinding(\.growthRate), constants: constants(.growthRates))
 
@@ -662,6 +662,42 @@ struct PokemonSpeciesWorkbenchView: View {
 
     private func constants(_ group: PokemonHackCore.SpeciesConstantGroup) -> [PokemonHackCore.SpeciesConstant] {
         catalog?.constants[group] ?? []
+    }
+
+    private var genderRatioOptions: [SpeciesPresetOption] {
+        [
+            SpeciesPresetOption(label: "Male Only", value: "MON_MALE"),
+            SpeciesPresetOption(label: "12.5% Female", value: "PERCENT_FEMALE(12.5)"),
+            SpeciesPresetOption(label: "25% Female", value: "PERCENT_FEMALE(25)"),
+            SpeciesPresetOption(label: "50% Female", value: "PERCENT_FEMALE(50)"),
+            SpeciesPresetOption(label: "75% Female", value: "PERCENT_FEMALE(75)"),
+            SpeciesPresetOption(label: "Female Only", value: "MON_FEMALE"),
+            SpeciesPresetOption(label: "Genderless", value: "MON_GENDERLESS")
+        ]
+    }
+
+    private var friendshipOptions: [SpeciesPresetOption] {
+        var options = [
+            SpeciesPresetOption(label: "0", value: "0"),
+            SpeciesPresetOption(label: "35", value: "35"),
+            SpeciesPresetOption(label: "70", value: "70"),
+            SpeciesPresetOption(label: "90", value: "90"),
+            SpeciesPresetOption(label: "100", value: "100"),
+            SpeciesPresetOption(label: "140", value: "140")
+        ]
+        if usesStandardFriendshipPreset {
+            options.insert(SpeciesPresetOption(label: "Standard (70)", value: "STANDARD_FRIENDSHIP"), at: 0)
+        }
+        return options
+    }
+
+    private var usesStandardFriendshipPreset: Bool {
+        switch catalog?.profile {
+        case .pokeemerald, .pokeemeraldExpansion:
+            return true
+        default:
+            return false
+        }
     }
 
     private var supportsClassicSpeciesMutationEditing: Bool {
@@ -1390,6 +1426,38 @@ private struct SpeciesEVYieldGrid: View {
             Fact(label: "Sp. Defense", value: "\(evYield.spDefense)"),
             Fact(label: "Total", value: "\(evYield.total)")
         ])
+    }
+}
+
+private struct SpeciesPresetOption: Identifiable {
+    var id: String { value }
+
+    let label: String
+    let value: String
+}
+
+private struct SpeciesPresetPicker: View {
+    let title: String
+    @Binding var selection: String
+    let options: [SpeciesPresetOption]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Picker(title, selection: $selection) {
+                if !selection.isEmpty && !options.contains(where: { $0.value == selection }) {
+                    Text(displayConstant(selection)).tag(selection)
+                }
+                ForEach(options) { option in
+                    Text(option.label).tag(option.value)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .help(selection)
+        }
     }
 }
 

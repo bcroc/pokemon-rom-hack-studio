@@ -8,20 +8,13 @@
 
 ## Validation
 
-- `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalogTests/testNDSDataTextLineOperationPlanner|PokemonHackCLITests/testNDSDataTextLineOperationCommands'`
-  - Blocked before selected tests ran.
-  - SwiftPM compiled `NDSDataEditing.swift`, then failed in unrelated dirty-tree files:
-    - `PokemonHackStudio/Sources/PokemonHackCore/PokemonMoveCatalog.swift`: cannot find `rubyContestScalarFieldState` in scope.
-    - `PokemonHackStudio/Sources/PokemonHackCore/BinaryROMMutationDryRunManifest.swift`: cannot find `binaryROMMutationReviewToken` in scope.
-    - SwiftPM also reported `PokemonMoveCatalog.swift` was modified during the build.
 - `swift test --package-path PokemonHackStudio --scratch-path /tmp/PokemonHackStudio-PHS-T98AG-swiftpm --filter 'NDSDataCatalogTests/testNDSDataTextLineOperationPlanner|PokemonHackCLITests/testNDSDataTextLineOperationCommands'`
   - Passed.
   - 2 selected tests, 0 failures.
   - Covers safe insert/delete/reorder planning/apply/backups, redacted CLI plan output, ordered operation application, BMG/JSON/container/generated/reference blocks, newline insert refusal, and invalid range refusal.
   - Only unrelated `PatchManifest.swift` warnings appeared during compilation.
 - `make validate-nds`
-  - Blocked after compiling core/CLI and part of the selected NDS suite.
-  - SwiftPM reported unrelated `PokemonHackStudio/Tests/PokemonHackCoreTests/BuildPatchPlaytestValidationTests.swift` was modified during the build before tests completed.
+  - Current rerun on 2026-07-01 passed with 111 selected tests and 0 failures.
 - `git diff --check`
   - Passed.
 

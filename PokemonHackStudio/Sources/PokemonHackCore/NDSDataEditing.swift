@@ -448,7 +448,7 @@ public enum NDSDataSemanticEditor {
         var fields: [NDSDataSemanticField] = []
         if diagnostics.allSatisfy({ $0.severity != .error }),
            let sourceText = NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: recordID, fileManager: fileManager) {
-            let parsed = parseSemanticFields(sourceText: sourceText, record: record)
+            let parsed = parseSemanticFields(sourceText: sourceText, record: record, profile: catalog.profile)
             fields = parsed.fields.map(\.semanticField)
             diagnostics.append(contentsOf: parsed.diagnostics)
             if fields.isEmpty, parsed.diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -475,7 +475,7 @@ public enum NDSDataSemanticEditor {
         let sourceText = NDSDataMutationPlanner.sourceText(catalog: catalog, recordID: draft.recordID, fileManager: fileManager) ?? ""
         let record = catalog.records.first(where: { $0.id == draft.recordID })
         let editResult = snapshot.canEdit
-            ? updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID, record: record)
+            ? updateSourceText(sourceText, fieldEdits: draft.fieldEdits, recordID: draft.recordID, record: record, profile: catalog.profile)
             : (text: sourceText, diagnostics: [])
         let textDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editResult.text)
         let semanticDiagnostics = snapshot.diagnostics + editResult.diagnostics
@@ -535,9 +535,10 @@ public enum NDSDataSemanticEditor {
         _ sourceText: String,
         fieldEdits: [NDSDataSemanticFieldEdit],
         recordID: String,
-        record: NDSDataCatalogRecord?
+        record: NDSDataCatalogRecord?,
+        profile: GameProfile? = nil
     ) -> (text: String, diagnostics: [Diagnostic]) {
-        let parsed = parseSemanticFields(sourceText: sourceText, record: record, recordID: recordID)
+        let parsed = parseSemanticFields(sourceText: sourceText, record: record, recordID: recordID, profile: profile)
         var diagnostics = parsed.diagnostics
         var text = sourceText
         var fieldsByKey: [String: ParsedSemanticField] = [:]
@@ -572,6 +573,9 @@ public enum NDSDataSemanticEditor {
                     diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED", message: "Semantic NDS field \(edit.key) targets nested JSON that remains raw-source only on \(recordID)."))
                 } else {
                     diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_FIELD_MISSING", message: "Semantic NDS field \(edit.key) is not available on \(recordID)."))
+                    if rootKey == "slots", edit.key.contains(".") {
+                        diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED", message: "Semantic NDS field \(edit.key) targets an unavailable encounter slot path on \(recordID)."))
+                    }
                 }
                 continue
             }
@@ -961,6 +965,13 @@ public enum NDSDataSemanticEditor {
             && lower.hasSuffix(".json")
     }
 
+    private static func isDiamondPearlEncounterRecord(_ record: NDSDataCatalogRecord, profile: GameProfile?) -> Bool {
+        profile == .pokediamond
+            && record.domain == .encounters
+            && record.format == .json
+            && isDiamondPearlEncounterDataPath(record.relativePath)
+    }
+
     private static func isHeartGoldSoulSilverTrainerDataPath(_ relativePath: String) -> Bool {
         relativePath.hasPrefix("files/poketool/trainer/") && relativePath.lowercased().hasSuffix(".json")
     }
@@ -991,6 +1002,13 @@ public enum NDSDataSemanticEditor {
         relativePath.hasPrefix("files/fielddata/encountdata/") && relativePath.lowercased().hasSuffix(".json")
     }
 
+    private static func isHeartGoldSoulSilverEncounterRecord(_ record: NDSDataCatalogRecord, profile: GameProfile?) -> Bool {
+        profile == .pokeheartgold
+            && record.domain == .encounters
+            && record.format == .json
+            && isHeartGoldSoulSilverEncounterDataPath(record.relativePath)
+    }
+
     private struct ParsedSemanticField {
         let semanticField: NDSDataSemanticField
         let valueRange: Range<String.Index>
@@ -1017,7 +1035,8 @@ public enum NDSDataSemanticEditor {
     private static func parseSemanticFields(
         sourceText: String,
         record: NDSDataCatalogRecord?,
-        recordID: String? = nil
+        recordID: String? = nil,
+        profile: GameProfile? = nil
     ) -> ParsedSemanticFields {
         if let record, isDiamondPearlMoveCAnchorRecord(record) {
             return parseDiamondPearlMoveCAnchorFields(sourceText: sourceText, record: record)
@@ -1053,10 +1072,16 @@ public enum NDSDataSemanticEditor {
             return parseHeartGoldSoulSilverItemCSVFields(sourceText: sourceText, record: record)
         }
         if let record, isPlatinumEncounterRecord(record) {
-            return parsePlatinumEncounterJSONFields(sourceText: sourceText, record: record)
+            return parseEncounterSlotJSONFields(sourceText: sourceText, record: record, gameLabel: "Platinum")
         }
         if record == nil, isPlatinumEncounterRecordID(recordID) {
-            return parsePlatinumEncounterJSONFields(sourceText: sourceText, record: nil)
+            return parseEncounterSlotJSONFields(sourceText: sourceText, record: nil, gameLabel: "Platinum")
+        }
+        if let record, isHeartGoldSoulSilverEncounterRecord(record, profile: profile) {
+            return parseEncounterSlotJSONFields(sourceText: sourceText, record: record, gameLabel: "HeartGold/SoulSilver")
+        }
+        if let record, isDiamondPearlEncounterRecord(record, profile: profile) {
+            return parseEncounterSlotJSONFields(sourceText: sourceText, record: record, gameLabel: "Diamond/Pearl")
         }
         if let record, isPlatinumSourceTextLineRecord(record) {
             return parsePlatinumSourceTextLineFields(sourceText: sourceText, record: record)
@@ -1976,19 +2001,20 @@ public enum NDSDataSemanticEditor {
         }
     }
 
-    private static func parsePlatinumEncounterJSONFields(
+    private static func parseEncounterSlotJSONFields(
         sourceText: String,
-        record: NDSDataCatalogRecord?
+        record: NDSDataCatalogRecord?,
+        gameLabel: String
     ) -> ParsedSemanticFields {
         var diagnostics: [Diagnostic] = []
         let trimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("{") else {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Platinum encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "\(gameLabel) encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
             return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
         }
         if let data = sourceText.data(using: .utf8),
            (try? JSONSerialization.jsonObject(with: data)) == nil {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_MALFORMED", message: "Platinum encounter semantic editing requires parseable JSON before slot field edits are planned.", span: record?.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_MALFORMED", message: "\(gameLabel) encounter semantic editing requires parseable JSON before slot field edits are planned.", span: record?.sourceSpan))
             return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
         }
 
@@ -1998,7 +2024,7 @@ public enum NDSDataSemanticEditor {
         var unsupportedNestedKeys: Set<String> = []
         var index = sourceText.startIndex
         guard let objectStart = sourceText[index...].firstIndex(of: "{") else {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Platinum encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "\(gameLabel) encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
             return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
         }
         index = sourceText.index(after: objectStart)
@@ -2021,9 +2047,9 @@ public enum NDSDataSemanticEditor {
             let valueStart = index
             if let value = parseJSONScalarValue(sourceText, start: valueStart) {
                 index = value.end
-                fields.append(platinumEncounterField(key: keyToken.value, label: semanticLabel(for: keyToken.value), value: value, sourceText: sourceText, record: record, valueStart: valueStart))
+                fields.append(encounterSlotField(key: keyToken.value, label: semanticLabel(for: keyToken.value), value: value, sourceText: sourceText, record: record, valueStart: valueStart))
             } else if valueStart < sourceText.endIndex, sourceText[valueStart] == "[" {
-                parsePlatinumEncounterArrayFields(
+                parseEncounterSlotArrayFields(
                     sourceText: sourceText,
                     arrayKey: keyToken.value,
                     start: valueStart,
@@ -2039,7 +2065,7 @@ public enum NDSDataSemanticEditor {
                         Diagnostic(
                             severity: .info,
                             code: "NDS_DATA_SEMANTIC_NESTED_VALUE_UNSUPPORTED",
-                            message: "Platinum encounter field \(keyToken.value) is nested and remains raw-source only in this slice.",
+                            message: "\(gameLabel) encounter field \(keyToken.value) is nested and remains raw-source only in this slice.",
                             span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
                         )
                     )
@@ -2048,7 +2074,7 @@ public enum NDSDataSemanticEditor {
                         Diagnostic(
                             severity: .error,
                             code: "NDS_DATA_SEMANTIC_SCALAR_INVALID",
-                            message: "Platinum encounter field \(keyToken.value) has an invalid scalar JSON value.",
+                            message: "\(gameLabel) encounter field \(keyToken.value) has an invalid scalar JSON value.",
                             span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
                         )
                     )
@@ -2061,7 +2087,7 @@ public enum NDSDataSemanticEditor {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
-                    message: "Platinum encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    message: "\(gameLabel) encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
                     span: record?.sourceSpan
                 )
             )
@@ -2071,18 +2097,18 @@ public enum NDSDataSemanticEditor {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
-                    message: "Platinum encounter slot field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    message: "\(gameLabel) encounter slot field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
                     span: record?.sourceSpan
                 )
             )
         }
         if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
-            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_SCALAR_FIELDS", message: "No top-level or slot scalar JSON fields were found for Platinum encounter semantic editing.", span: record?.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_SCALAR_FIELDS", message: "No top-level or slot scalar JSON fields were found for \(gameLabel) encounter semantic editing.", span: record?.sourceSpan))
         }
         return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: unsupportedNestedKeys)
     }
 
-    private static func parsePlatinumEncounterArrayFields(
+    private static func parseEncounterSlotArrayFields(
         sourceText: String,
         arrayKey: String,
         start: String.Index,
@@ -2111,7 +2137,7 @@ public enum NDSDataSemanticEditor {
             }
             if let value = parseJSONScalarValue(sourceText, start: cursor) {
                 fields.append(
-                    platinumEncounterField(
+                    encounterSlotField(
                         key: "\(arrayKey).\(elementIndex)",
                         label: "\(semanticLabel(for: arrayKey)) #\(elementIndex + 1)",
                         value: value,
@@ -2122,7 +2148,7 @@ public enum NDSDataSemanticEditor {
                 )
                 cursor = value.end
             } else if sourceText[cursor] == "{" {
-                cursor = parsePlatinumEncounterSlotObjectFields(
+                cursor = parseEncounterSlotObjectFields(
                     sourceText: sourceText,
                     arrayKey: arrayKey,
                     slotIndex: elementIndex,
@@ -2142,7 +2168,7 @@ public enum NDSDataSemanticEditor {
         }
     }
 
-    private static func parsePlatinumEncounterSlotObjectFields(
+    private static func parseEncounterSlotObjectFields(
         sourceText: String,
         arrayKey: String,
         slotIndex: Int,
@@ -2176,7 +2202,7 @@ public enum NDSDataSemanticEditor {
             let valueStart = cursor
             if let value = parseJSONScalarValue(sourceText, start: valueStart) {
                 fields.append(
-                    platinumEncounterField(
+                    encounterSlotField(
                         key: "\(arrayKey).\(slotIndex).\(keyToken.value)",
                         label: "\(semanticLabel(for: arrayKey)) #\(slotIndex + 1) \(semanticLabel(for: keyToken.value))",
                         value: value,
@@ -2193,7 +2219,7 @@ public enum NDSDataSemanticEditor {
         return objectEnd
     }
 
-    private static func platinumEncounterField(
+    private static func encounterSlotField(
         key: String,
         label: String,
         value: (displayValue: String, kind: NDSDataSemanticFieldValueKind, end: String.Index),

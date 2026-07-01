@@ -1250,6 +1250,14 @@ public enum NDSDataCatalogBuilder {
 
     private static let relationshipDomains: Set<NDSDataDomain> = [.maps, .scripts, .text]
     private static let genVContextRelationshipRootPaths: Set<String> = [
+        "data/pokemon",
+        "data/moves",
+        "data/items",
+        "data/trainers",
+        "src/data/pokemon",
+        "src/data/moves",
+        "src/data/items",
+        "src/data/trainers",
         "files/fielddata",
         "files/fielddata/mapmatrix",
         "files/fielddata/maptable",
@@ -2092,15 +2100,25 @@ public enum NDSDataCatalogBuilder {
         else { return [] }
 
         let isRoot = record.relativePath.lowercased() == spec.rootPath
+        let rootRecordID = "\(spec.domain.rawValue):\(spec.rootPath)"
+        let readinessAudit = record.readiness?.status.rawValue ?? "missing"
         var facts = [
             SourceIndexFact(label: "Gen V Source Data Domain", value: spec.domainValue),
             SourceIndexFact(label: "Gen V Source Data Root", value: spec.rootPath),
             SourceIndexFact(label: "Gen V Source Data Basis", value: "pathFilenameCountBytesOnly"),
-            SourceIndexFact(label: "Gen V Source Data Posture", value: "previewOnlyNoParser")
+            SourceIndexFact(label: "Gen V Source Data Posture", value: "previewOnlyNoParser"),
+            SourceIndexFact(
+                label: "Gen V Source Data Relationship Audit",
+                value: isRoot
+                    ? (record.relatedRecords.isEmpty ? "rootRelatedRecordsMissing" : "rootRelatedRecordsPresent")
+                    : "memberRootContextOnly"
+            ),
+            SourceIndexFact(label: "Gen V Source Data Readiness Audit", value: readinessAudit)
         ]
 
         if !isRoot {
             let url = URL(fileURLWithPath: record.relativePath)
+            facts.append(SourceIndexFact(label: "Gen V Source Data Root Record", value: rootRecordID))
             facts.append(SourceIndexFact(label: "Gen V Source Data Filename", value: url.lastPathComponent))
             facts.append(SourceIndexFact(label: "Gen V Source Data Extension", value: url.pathExtension.isEmpty ? "none" : url.pathExtension.lowercased()))
             if let byteCount = record.byteCount {

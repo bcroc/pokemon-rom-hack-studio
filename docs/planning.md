@@ -23,13 +23,13 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 
 4. **Build, Patch, And Playtest Pipeline**
    - Promote build previews into non-mutating validation reports.
-   - Expand patch parsing, checksum workflows, and explicit BPS creation from selected base ROM plus existing built output while keeping patched-ROM export separate.
+   - Expand patch parsing, checksum workflows, explicit BPS creation from selected base ROM plus existing built output, and read-only Patch Library review for ignored `.pokemonhackstudio/patches/*.bps` artifacts plus sibling manifests; created BPS artifacts must be re-read and verified in memory before schema v2 manifests are written, while patched-ROM export stays separate.
    - Prepare mGBA-compatible interactive and headless playtest handoff.
 
 5. **Cross-Media Resource Library**
-   - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface; the only opened direct-write lane is the `PHS-T79C` CLI-only, reviewed, in-place byte replacement path for explicit local `.gba` inputs.
+   - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface; the only opened direct-write lanes are `PHS-T79C` CLI-reviewed and `PHS-T79D` app-reviewed in-place byte replacement paths for explicit local `.gba` inputs, with `PHS-T79E` adding read-only app audit/review diagnostics before apply.
    - Treat NDS ROMs, containers, and generated/reference rows as read-only preview/catalog inputs; eligible local source-backed Gen IV text/JSON rows may write only through explicit mutation-plan gates opened by dedicated rows.
-   - Keep binary-only GBA mutation behind the `PHS-T79` safety policy: source-tree-first refusal, dry-run mutation plans, base-hash drift refusal, ignored backups/artifacts/manifests, and explicit user confirmation remain mandatory. `PHS-T79C` opens only CLI replace-byte apply; broader direct ROM writers remain blocked.
+   - Keep binary-only GBA mutation behind the `PHS-T79` safety policy: source-tree-first refusal, dry-run mutation plans, base-hash drift refusal, ignored backups/artifacts/manifests, and explicit user confirmation remain mandatory. `PHS-T79C` opens CLI replace-byte apply, `PHS-T79D` opens the matching app review/apply surface, and `PHS-T79E` surfaces read-only pre-apply audit/drift status; broader direct ROM writers remain blocked.
    - Keep GameCube `.iso`/`.gcm` media as direct parser inputs for `resource-index`, not auto-loaded Resources rows, until the GBA asset workflow is mature.
    - Parse GameCube headers, FST entries, DOL ranges, FSYS archives, and LZSS members before any future export workflow.
    - Show missing Colosseum, XD, Box, and Channel inputs as diagnostics instead of silently omitting them.
@@ -43,5 +43,5 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 - Treat NDS build/playtest as manual guidance only until a future row explicitly adds runnable NDS execution.
 - Keep all writes preview-first through mutation plans and diffs.
 - Back up source files under ignored `.pokemonhackstudio/backups/` before explicit apply operations.
-- Keep binary ROM writes disabled except for explicit guarded rows; today that means only `PHS-T79C` CLI replace-byte apply, while pointer repoint apply, free-space allocation apply, checksum repair, app apply UI, emulator launch, and ROM export remain blocked.
+- Keep binary ROM writes disabled except for explicit guarded rows; today that means `PHS-T79C` CLI and `PHS-T79D` app-reviewed replace-byte apply plus `PHS-T79E` read-only app audit/review status, while pointer repoint apply, free-space allocation apply, checksum repair, app auto-apply, emulator launch, and ROM export remain blocked.
 - Use local `pokeemerald` and `pokefirered` as smoke targets, not hard unit-test dependencies.

@@ -233,7 +233,7 @@ public enum PokemonDataCompatibilityReportBuilder {
 
         var entries: [PokemonDataCompatibilityEntry] = []
         entries.append(speciesEntry(index: index, catalog: speciesCatalog, sourceIndex: sourceIndex))
-        entries.append(movesEntry(index: index, catalog: moveCatalog, sourceIndex: sourceIndex))
+        entries.append(movesEntry(index: index, catalog: moveCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
         entries.append(itemsEntry(index: index, catalog: itemCatalog, sourceIndex: sourceIndex))
         entries.append(learnsetEntry(surface: .levelUpLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
         entries.append(learnsetEntry(surface: .tmhmLearnsets, index: index, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex, fileManager: fileManager))
@@ -291,7 +291,8 @@ public enum PokemonDataCompatibilityReportBuilder {
     private static func movesEntry(
         index: ProjectIndex,
         catalog: ProjectMoveCatalog?,
-        sourceIndex: ProjectSourceIndex
+        sourceIndex: ProjectSourceIndex,
+        fileManager: FileManager
     ) -> PokemonDataCompatibilityEntry {
         let descriptor = descriptor(for: .moves, profile: index.profile)
         let indexed = catalog?.summary.moveCount ?? recordCount(.moves, in: sourceIndex)
@@ -300,7 +301,13 @@ public enum PokemonDataCompatibilityReportBuilder {
         let contestEffectEditable = catalog?.moves.filter(\.isContestEffectEditable).count ?? 0
         let contestScalarsEditable = catalog?.moves.filter(\.isContestScalarsEditable).count ?? 0
         let contestComboMovesEditable = catalog?.moves.filter(\.isContestComboMovesEditable).count ?? 0
+        let expansionFlagsEditable = index.profile == .pokeemeraldExpansion ? editable : 0
         let contestMoveFactCount = rubyContestMoveRecordCount(profile: index.profile, in: sourceIndex)
+        let rubyMoveConstantsReadiness = moveConstantsReadiness(
+            profile: index.profile,
+            root: URL(fileURLWithPath: index.root.path).standardizedFileURL,
+            fileManager: fileManager
+        )
         return entry(
             surface: .moves,
             index: index,
@@ -317,9 +324,49 @@ public enum PokemonDataCompatibilityReportBuilder {
                 contestEffectEditableCount: contestEffectEditable,
                 contestScalarsEditableCount: contestScalarsEditable,
                 contestComboMovesEditableCount: contestComboMovesEditable,
-                contestMoveFactCount: contestMoveFactCount
+                expansionFlagsEditableCount: expansionFlagsEditable,
+                contestMoveFactCount: contestMoveFactCount,
+                moveConstantsReadiness: rubyMoveConstantsReadiness
             )
         )
+    }
+
+    private struct MoveConstantsReadiness {
+        let indexedCount: Int
+        let status: PokemonDataCompatibilityStatus
+        let note: String
+        let readiness: String
+    }
+
+    private static func moveConstantsReadiness(
+        profile: GameProfile,
+        root: URL,
+        fileManager: FileManager
+    ) -> MoveConstantsReadiness? {
+        guard profile == .pokeruby else { return nil }
+        do {
+            let constants = try moveConstantDefinitions(root: root, fileManager: fileManager)
+            return MoveConstantsReadiness(
+                indexedCount: constants.count,
+                status: .readOnly,
+                note: "Move constants are indexed for row identity guidance only; constant creation, identity changes, and row creation/reordering remain blocked.",
+                readiness: "read-only \(constants.count) MOVE_* constants indexed"
+            )
+        } catch MoveConstantDefinitionError.missing {
+            return MoveConstantsReadiness(
+                indexedCount: 0,
+                status: .blocked,
+                note: "Local include/constants/moves.h is missing; move row identity guidance is limited to table symbols, and constant creation remains blocked.",
+                readiness: "missing local move constants header"
+            )
+        } catch {
+            return MoveConstantsReadiness(
+                indexedCount: 0,
+                status: .blocked,
+                note: "Local include/constants/moves.h could not be read; move row identity guidance is limited to table symbols, and constant creation remains blocked.",
+                readiness: "unreadable local move constants header"
+            )
+        }
     }
 
     private static func itemsEntry(
@@ -334,6 +381,12 @@ public enum PokemonDataCompatibilityReportBuilder {
         let metadataFactCount = catalog?.items.filter {
             $0.effect != nil || $0.iconPic != nil || $0.iconPalette != nil
         }.count ?? itemMetadataFactCount(in: sourceIndex)
+        let behaviorScalarFactCount = catalog?.items.filter {
+            $0.fieldUseFunc != nil
+                || $0.battleUsage != nil
+                || $0.battleUseFunc != nil
+                || $0.secondaryId != nil
+        }.count ?? itemBehaviorScalarFactCount(in: sourceIndex)
         return entry(
             surface: .items,
             index: index,
@@ -346,7 +399,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 profile: index.profile,
                 indexedCount: indexed,
                 editableCount: editable,
-                metadataFactCount: metadataFactCount
+                metadataFactCount: metadataFactCount,
+                behaviorScalarFactCount: behaviorScalarFactCount
             )
         )
     }
@@ -806,7 +860,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         profile: GameProfile,
         indexedCount: Int,
         editableCount: Int,
-        metadataFactCount: Int
+        metadataFactCount: Int,
+        behaviorScalarFactCount: Int
     ) -> [PokemonDataCompatibilitySourceTable]? {
         guard profile == .pokeemeraldExpansion else { return nil }
         let sourceStatus: PokemonDataCompatibilityStatus
@@ -839,6 +894,25 @@ public enum PokemonDataCompatibilityReportBuilder {
                     "Modern Emerald writes",
                     "ROM/build/export paths",
                     "identity edits"
+                ]
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/items.h",
+                tableSymbol: "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId",
+                indexedCount: behaviorScalarFactCount,
+                status: behaviorScalarFactCount > 0 ? .editable : .blocked,
+                note: "Expansion ItemInfo behavior/function scalars are editable only as existing simple local source fields through the item mutation-plan gate.",
+                sourceRole: "editableBehaviorScalars",
+                readiness: behaviorScalarFactCount > 0 ? "editable existing behavior/function scalar fields" : "no existing behavior/function scalar fields indexed",
+                blockedActions: [
+                    "constants-file edits/creation",
+                    "missing-field insertion",
+                    "row insertion/removal/reorder",
+                    "generated outputs",
+                    "reference writes",
+                    "ROM/build/export paths",
+                    "binary writes",
+                    "broad schema rewrites"
                 ]
             ),
             PokemonDataCompatibilitySourceTable(
@@ -903,7 +977,9 @@ public enum PokemonDataCompatibilityReportBuilder {
         contestEffectEditableCount: Int,
         contestScalarsEditableCount: Int,
         contestComboMovesEditableCount: Int,
-        contestMoveFactCount: Int
+        expansionFlagsEditableCount: Int,
+        contestMoveFactCount: Int,
+        moveConstantsReadiness: MoveConstantsReadiness?
     ) -> [PokemonDataCompatibilitySourceTable]? {
         let sourceStatus: PokemonDataCompatibilityStatus
         if editableCount > 0 {
@@ -922,10 +998,56 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptionStatus = .blocked
         }
         let contestEffectStatus: PokemonDataCompatibilityStatus = contestEffectEditableCount > 0 ? .editable : .blocked
-        let contestMoveStatus: PokemonDataCompatibilityStatus = contestScalarsEditableCount > 0
+        let contestMoveStatus: PokemonDataCompatibilityStatus = (contestScalarsEditableCount > 0 || contestComboMovesEditableCount > 0)
             ? .editable
             : (contestMoveFactCount > 0 ? .readOnly : .blocked)
         if profile == .pokeruby {
+            let contestMoveNote: String
+            if contestScalarsEditableCount > 0 && contestComboMovesEditableCount > 0 {
+                contestMoveNote = "Existing simple Ruby/Sapphire contest move effect, contestCategory, comboStarterId scalar fields, and comboMoves arrays are editable through move drafts."
+            } else if contestScalarsEditableCount > 0 {
+                contestMoveNote = "Existing simple Ruby/Sapphire contest move effect, contestCategory, and comboStarterId scalar fields are editable through move drafts; non-simple or missing comboMoves arrays remain blocked."
+            } else if contestComboMovesEditableCount > 0 {
+                contestMoveNote = "Existing simple Ruby/Sapphire contest move comboMoves arrays are editable through move drafts; contest scalar writers remain blocked for missing or non-simple scalar fields."
+            } else {
+                contestMoveNote = "Ruby/Sapphire contest move metadata is surfaced as read-only facts linked back to move IDs; contest scalar writers and combo edits remain blocked."
+            }
+            let contestMoveSourceRole: String
+            switch (contestScalarsEditableCount > 0, contestComboMovesEditableCount > 0) {
+            case (true, true):
+                contestMoveSourceRole = "editableContestScalarsAndComboMoves"
+            case (true, false):
+                contestMoveSourceRole = "editableContestScalars"
+            case (false, true):
+                contestMoveSourceRole = "editableContestComboMoves"
+            case (false, false):
+                contestMoveSourceRole = "readOnlyContestMetadata"
+            }
+            let contestMoveReadiness: String?
+            switch (contestScalarsEditableCount > 0, contestComboMovesEditableCount > 0, contestMoveFactCount > 0) {
+            case (true, true, _):
+                contestMoveReadiness = "editable existing simple scalar fields and combo arrays"
+            case (true, false, _):
+                contestMoveReadiness = "editable existing simple scalar fields"
+            case (false, true, _):
+                contestMoveReadiness = "editable existing simple combo arrays"
+            case (false, false, true):
+                contestMoveReadiness = "factsOnly"
+            default:
+                contestMoveReadiness = nil
+            }
+            var contestMoveBlockedActions = [
+                "constants",
+                "missing-field insertion",
+                "row insertion/removal/reorder",
+                "generated writes",
+                "reference writes",
+                "ROM writes",
+                "binary writes"
+            ]
+            if contestComboMovesEditableCount <= 0 {
+                contestMoveBlockedActions.insert("combo array editing", at: 0)
+            }
             return [
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/battle_moves.c",
@@ -943,10 +1065,21 @@ public enum PokemonDataCompatibilityReportBuilder {
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "include/constants/moves.h",
-                    tableSymbol: nil,
-                    indexedCount: 0,
-                    status: .blocked,
-                    note: "Move constants, identity changes, and row creation/reordering remain blocked."
+                    tableSymbol: "MOVE_*",
+                    indexedCount: moveConstantsReadiness?.indexedCount ?? 0,
+                    status: moveConstantsReadiness?.status ?? .blocked,
+                    note: moveConstantsReadiness?.note ?? "Move constants, identity changes, and row creation/reordering remain blocked.",
+                    sourceRole: "readOnlyMoveConstants",
+                    readiness: moveConstantsReadiness?.readiness,
+                    blockedActions: [
+                        "constant creation",
+                        "constant rename",
+                        "row insertion/removal/reorder",
+                        "generated writes",
+                        "reference writes",
+                        "ROM writes",
+                        "binary writes"
+                    ]
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/battle_moves.c",
@@ -960,22 +1093,10 @@ public enum PokemonDataCompatibilityReportBuilder {
                     tableSymbol: "gContestMoves",
                     indexedCount: contestMoveFactCount,
                     status: contestMoveStatus,
-                    note: contestScalarsEditableCount > 0
-                        ? "Existing simple Ruby/Sapphire contest move effect, contestCategory, and comboStarterId scalar fields are editable through move drafts; comboMoves arrays remain blocked."
-                        : "Ruby/Sapphire contest move metadata is surfaced as read-only facts linked back to move IDs; contest scalar writers and combo edits remain blocked.",
-                    sourceRole: contestScalarsEditableCount > 0 ? "editableContestScalars" : "readOnlyContestMetadata",
-                    readiness: contestScalarsEditableCount > 0
-                        ? "editable existing simple scalar fields"
-                        : (contestMoveFactCount > 0 ? "factsOnly" : nil),
-                    blockedActions: [
-                        "combo array editing",
-                        "constants",
-                        "row insertion/removal/reorder",
-                        "generated writes",
-                        "reference writes",
-                        "ROM writes",
-                        "binary writes"
-                    ]
+                    note: contestMoveNote,
+                    sourceRole: contestMoveSourceRole,
+                    readiness: contestMoveReadiness,
+                    blockedActions: contestMoveBlockedActions
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/pokemon/tmhm_learnsets.h",
@@ -1036,6 +1157,24 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: descriptionEditableCount,
                 status: descriptionStatus,
                 note: "Local source-backed Expansion move description declarations are editable through move drafts."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/moves_info.h",
+                tableSymbol: "gMovesInfo flags",
+                indexedCount: expansionFlagsEditableCount,
+                status: expansionFlagsEditableCount > 0 ? .editable : (indexedCount > 0 ? .readOnly : .blocked),
+                note: "Existing simple Expansion flags fields and missing flags fields on existing rows are editable through move drafts with local FLAG_* validation.",
+                sourceRole: "editableFlags",
+                readiness: expansionFlagsEditableCount > 0 ? "editable existing or missing simple FLAG_* field values" : "no editable flags rows indexed",
+                blockedActions: [
+                    "constant creation",
+                    "non-simple flags expressions",
+                    "row insertion/removal/reorder",
+                    "generated outputs",
+                    "reference writes",
+                    "ROM/build/export paths",
+                    "binary writes"
+                ]
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/moves_info.h",
@@ -1824,6 +1963,17 @@ public enum PokemonDataCompatibilityReportBuilder {
         }.count
     }
 
+    private static func itemBehaviorScalarFactCount(in sourceIndex: ProjectSourceIndex) -> Int {
+        sourceIndex.records.filter { record in
+            guard record.module == .items else { return false }
+            let labels = Set(record.facts.map(\.label))
+            return labels.contains("fieldUseFunc")
+                || labels.contains("battleUsage")
+                || labels.contains("battleUseFunc")
+                || labels.contains("secondaryId")
+        }.count
+    }
+
     private static func learnsetRecordCount(in sourceIndex: ProjectSourceIndex, matching tokens: [String]) -> Int {
         sourceIndex.records.filter { record in
             guard record.module == .learnsets else { return false }
@@ -2385,7 +2535,7 @@ private func pokedexUnsupportedFields(profile: GameProfile, editableCount: Int) 
 private func movesUnsupportedFields(profile: GameProfile) -> [String] {
     var fields = ["new/reordered move constants"]
     if profile == .pokeruby {
-        fields.append("contest combo arrays and non-simple contest scalar expressions")
+        fields.append("missing or non-simple contest combo arrays and non-simple contest scalar expressions")
     } else if profile == .pokeemeraldExpansion {
         fields.append(contentsOf: [
             "gMovesInfo non-simple contest scalar expressions",

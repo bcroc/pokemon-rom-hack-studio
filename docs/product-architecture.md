@@ -30,7 +30,7 @@ Reference review is captured in `docs/reference-synthesis.md`. The implementatio
 - Decomp project graph: source-tree adapters index maps, layouts, scripts, constants, C initializer tables, trainer data, graphics, generated files, and build targets.
 - NDS resource graph: read-only NDS ROM/source adapters index NitroFS, overlays, NARC/member rows, Gen IV data catalogs, source markers, and manual build/playtest readiness without enabling writes.
 - Binary ROM graph: ROM adapters index local `.gba` inputs as semantic byte ranges, pointers, anchors, checksums, metadata, diffs, and patch plans.
-- Build and patch pipeline: build targets, generated-data checks, patch parsing, checksum validation, patch manifests, and export plans stay in `PokemonHackCore`.
+- Build and patch pipeline: build targets, generated-data checks, patch parsing, checksum validation, patch creation verification, read-only patch artifact libraries, patch manifests, and export plans stay in `PokemonHackCore`.
 - Emulator and playtest bridge: interactive run and headless validation use mGBA-compatible boundaries, with Swift owning the product state and any emulator bridge kept isolated.
 
 Adapters declare supported files, generated outputs, write policy, modules, capabilities, and validators. They should be read-heavy first; write paths must go through mutation plans.
@@ -49,7 +49,11 @@ The app should make the source location visible for each editable object. For ex
 
 ## Binary ROM Mutation Safety
 
-Direct ROM mutation stays policy/proof-first. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract, and `PHS-T79C` opens only a CLI-reviewed in-place byte replacement writer for user-supplied local `.gba` inputs with no source-tree edit path; repoint apply, allocation apply, checksum repair, export, emulator launch, app apply UI, and patched-copy output remain blocked.
+Direct ROM mutation stays policy/proof-first. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract, `PHS-T79C` opens a CLI-reviewed in-place byte replacement writer, `PHS-T79D` opens the matching app-reviewed Build/Patch/Playtest surface for user-supplied local `.gba` inputs with no source-tree edit path, and `PHS-T79E` adds read-only pre-apply audit status for manifest identity, drift, backup/apply-manifest review, and artifact containment; repoint apply, allocation apply, checksum repair, export, emulator launch, app auto-apply, and patched-copy output remain blocked.
+
+Patch creation is artifact verification, not patched-ROM export: `patch-create` may write ignored `.bps` plus `.bps.manifest.json` artifacts, then re-read the BPS and apply it in memory to compare SHA1, CRC32, size, and no-header-rewrite policy against the existing built output. It must not write a patched ROM, repair headers, auto-apply the patch, run a build/playtest, or change overwrite policy.
+
+Patch artifact libraries are read-only review surfaces: they may scan existing direct-child ignored `.pokemonhackstudio/patches/*.bps` artifacts and sibling manifests for hash, size, BPS metadata, and manifest/base/output status, but must not create directories, apply/export patches, write patched ROMs, overwrite artifacts, run builds/playtests, mutate source, or rewrite headers.
 
 Binary-only writers must:
 
@@ -85,7 +89,7 @@ Durable source changes should be represented as source-tree diffs, patch manifes
 - Parser layer: read structured source data without ad hoc text replacement where a safer parser or table model exists.
 - Mutation planner: produce reviewable edits and diagnostics before writing files.
 - Build runner: invoke project build commands and capture logs without embedding build assumptions in SwiftUI views.
-- Patch runner: create and verify distributable patches from known base ROMs and built outputs.
+- Patch runner: create and verify distributable patches from known base ROMs and built outputs, and scan existing ignored patch artifacts into read-only library summaries.
 - Emulator bridge: launch or hand off built ROMs to an emulator for smoke testing.
 
 Each service should be testable without launching the SwiftUI app.

@@ -432,6 +432,31 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testResourceAssetSelectionSurvivesWorkflowFiltersThatHideTheRow() async throws {
+        let root = try makeSourceIndexProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let itemRow = try XCTUnwrap(assetCatalog.rows.first { $0.title == "ITEM_POTION" && $0.category == "items" })
+
+        store.requestResourceAssetSelection(itemRow.id)
+        XCTAssertEqual(store.selectedResourceAsset?.id, itemRow.id)
+
+        store.resourceAssetWorkflowFacet = .related
+
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == itemRow.id })
+        XCTAssertEqual(store.selectedResourceAsset?.id, itemRow.id)
+
+        store.resourceAssetCategory = "maps"
+
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == itemRow.id })
+        XCTAssertEqual(store.selectedResourceAsset?.id, itemRow.id)
+    }
+
+    @MainActor
     func testResourceEntrySelectionHydratesStandaloneGBAAndNDSDetails() async throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -664,6 +689,8 @@ final class MapEditorStoreTests: XCTestCase {
             ("item", "src/data/items", "src/data/items/source_items.inc", "itemDataInventory", "itemDataMember", "items", "items-source-inc\n"),
             ("trainer", "src/data/trainers", "src/data/trainers/source_trainers.inc", "trainerDataInventory", "trainerDataMember", "trainers", "trainers-source-inc\n")
         ]
+        let expectedRelatedRows = "20"
+        let allGenVContextDomains = "encounters, items, maps, moves, resources, scripts, species, text, trainers"
 
         for sample in samples {
             let byteCount = sample.contents.utf8.count
@@ -678,6 +705,9 @@ final class MapEditorStoreTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Sample Paths", in: rootRow.facts), sample.child)
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: rootRow.facts), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: rootRow.facts), "previewOnlyNoParser")
+            XCTAssertEqual(factValue("Related Rows", in: rootRow.facts), expectedRelatedRows)
+            XCTAssertEqual(factValue("Related Domains", in: rootRow.facts), allGenVContextDomains)
+            XCTAssertEqual(factValue("Readiness", in: rootRow.facts), "partial")
             XCTAssertNil(factValue("Migration Status", in: rootRow.facts))
             XCTAssertNil(factValue("Text Bank Preview", in: rootRow.facts))
             assertNoGenVSourceDataSemanticFacts(rootRow.facts)
@@ -692,17 +722,39 @@ final class MapEditorStoreTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Bytes", in: childRow.facts), "\(byteCount)")
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: childRow.facts), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: childRow.facts), "previewOnlyNoParser")
+            XCTAssertNil(factValue("Related Rows", in: childRow.facts))
+            XCTAssertNil(factValue("Related Domains", in: childRow.facts))
             XCTAssertNil(factValue("Migration Status", in: childRow.facts))
             XCTAssertNil(factValue("Text Bank Preview", in: childRow.facts))
             assertNoGenVSourceDataSemanticFacts(childRow.facts)
         }
 
         let selectedPath = "data/pokemon/source_pokemon.txt"
+        let selectedRootRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "data/pokemon" && $0.category == "species" })
         let selectedRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == selectedPath && $0.category == "species" })
         let originalContents = try String(contentsOf: root.appendingPathComponent(selectedPath), encoding: .utf8)
+
+        store.requestResourceAssetSelection(selectedRootRow.id)
+
+        var editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "species:data/pokemon")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed root\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(selectedPath), encoding: .utf8),
+            originalContents
+        )
+
         store.requestResourceAssetSelection(selectedRow.id)
 
-        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
         XCTAssertEqual(editor.recordID, "species:data/pokemon/source_pokemon.txt")
         XCTAssertFalse(editor.canEdit)
         XCTAssertFalse(editor.canPreview)
@@ -1243,6 +1295,8 @@ final class MapEditorStoreTests: XCTestCase {
         let sourceRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "arm9/src/pokemon.c" })
 
         store.requestResourceAssetSelection(sourceRow.id)
+        store.resourceAssetWorkflowFacet = .editableSource
+        XCTAssertTrue(store.filteredResourceAssetRows.contains { $0.id == sourceRow.id })
 
         let editor = try XCTUnwrap(store.selectedNDSDataEditor)
         XCTAssertEqual(editor.recordID, "species:arm9/src/pokemon.c")
@@ -1266,6 +1320,7 @@ final class MapEditorStoreTests: XCTestCase {
         )
 
         let binaryRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "files/fielddata/mapmatrix/matrix.bin" })
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == binaryRow.id })
         store.requestResourceAssetSelection(binaryRow.id)
 
         let blockedEditor = try XCTUnwrap(store.selectedNDSDataEditor)
@@ -1304,6 +1359,15 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(hiddenEditor.assetID, sourceRow.id)
         XCTAssertTrue(hiddenEditor.hiddenDraftSummary?.contains("hidden") == true)
         XCTAssertGreaterThan(hiddenEditor.draftByteCount, hiddenEditor.sourceByteCount)
+
+        store.searchText = ""
+        store.resourceAssetWorkflowFacet = .hiddenDrafts
+        XCTAssertEqual(store.filteredResourceAssetRows.map(\.id), [sourceRow.id])
+        XCTAssertFalse(try XCTUnwrap(store.selectedNDSDataEditor).isHiddenByFilters)
+
+        store.resourceAssetCategory = "NDS Data maps"
+        XCTAssertFalse(store.filteredResourceAssetRows.contains { $0.id == sourceRow.id })
+        XCTAssertTrue(try XCTUnwrap(store.selectedNDSDataEditor).isHiddenByFilters)
 
         store.previewSelectedNDSDataMutationPlan()
         let context = try XCTUnwrap(MutationPlanPanelContext.ndsData(
@@ -2945,6 +3009,48 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRelatedResourceWorkflowFacetKeepsRelatedRowNavigation() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        let relatedAsset = Self.makeAssetRow(
+            id: "related-script",
+            title: "Related Script",
+            path: "data/scripts/test.inc",
+            category: "scripts",
+            facts: [
+                Fact(label: "Related Rows", value: "3"),
+                Fact(label: "Related Domains", value: "maps, text"),
+            ],
+            targetModule: .graphics,
+            targetID: "graphics/tilesets/primary/test"
+        )
+        let unrelatedAsset = Self.makeAssetRow(
+            id: "unrelated-script",
+            title: "Unrelated Script",
+            path: "data/scripts/other.inc",
+            category: "scripts",
+            targetModule: .graphics,
+            targetID: "graphics/tilesets/primary/other"
+        )
+
+        let filtered = WorkbenchStore.filterAndSort(
+            assetRows: [unrelatedAsset, relatedAsset],
+            category: WorkbenchStore.allResourceAssetCategories,
+            searchText: "",
+            sortMode: .title,
+            workflowFacet: .related
+        )
+
+        XCTAssertEqual(filtered.map(\.id), [relatedAsset.id])
+
+        store.navigateToAsset(relatedAsset)
+
+        XCTAssertEqual(store.selection, .graphics)
+        XCTAssertEqual(store.selectedResourceAssetID, relatedAsset.id)
+        XCTAssertEqual(store.searchText, "graphics/tilesets/primary/test")
+    }
+
+    @MainActor
     func testGuidedFlowsRouteToModulesAndPreserveResourceBacklinks() async throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -3234,7 +3340,7 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testRubySapphireContestMoveScalarsDraftPreviewApplyAndReloadsThroughStore() async throws {
+    func testRubySapphireContestMoveScalarsAndComboMovesDraftPreviewApplyAndReloadsThroughStore() async throws {
         let root = try makeRubyPokemonProject()
         try writeRubyBattleMoveTable(to: root)
         try writeRubyContestMoveTable(to: root)
@@ -3255,10 +3361,11 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(draft.contestMoveEffect, "CONTEST_EFFECT_HIGHLY_APPEALING")
         XCTAssertEqual(draft.contestCategory, "CONTEST_CATEGORY_TOUGH")
         XCTAssertEqual(draft.contestComboStarterId, "COMBO_STARTER_POUND")
-        XCTAssertNil(draft.contestComboMoves)
+        XCTAssertEqual(draft.contestComboMoves, ["COMBO_STARTER_GROWL"])
         draft.contestMoveEffect = "CONTEST_EFFECT_STARTLE_PREVENTION"
         draft.contestCategory = "CONTEST_CATEGORY_COOL"
         draft.contestComboStarterId = "COMBO_STARTER_NONE"
+        draft.contestComboMoves = ["COMBO_STARTER_POUND", "COMBO_STARTER_GROWL"]
         store.updateSelectedMoveDraft(draft)
 
         XCTAssertTrue(store.selectedMoveIsDirty)
@@ -3271,7 +3378,7 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".effect = CONTEST_EFFECT_STARTLE_PREVENTION") == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".contestCategory = CONTEST_CATEGORY_COOL") == true)
         XCTAssertTrue(plan.changes.first?.textPreview?.contains(".comboStarterId = COMBO_STARTER_NONE") == true)
-        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".comboMoves = { COMBO_STARTER_GROWL }") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".comboMoves = { COMBO_STARTER_POUND, COMBO_STARTER_GROWL }") == true)
         XCTAssertTrue(store.canApplySelectedMoveMutationPlan)
 
         store.applySelectedMoveMutationPlan()
@@ -3284,7 +3391,7 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(editedDraft.contestMoveEffect, "CONTEST_EFFECT_STARTLE_PREVENTION")
         XCTAssertEqual(editedDraft.contestCategory, "CONTEST_CATEGORY_COOL")
         XCTAssertEqual(editedDraft.contestComboStarterId, "COMBO_STARTER_NONE")
-        XCTAssertNil(editedDraft.contestComboMoves)
+        XCTAssertEqual(editedDraft.contestComboMoves, ["COMBO_STARTER_POUND", "COMBO_STARTER_GROWL"])
     }
 
     @MainActor
@@ -3323,6 +3430,54 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedMoveID, "MOVE_POUND")
         let editedDraft = try XCTUnwrap(store.selectedMoveDraft)
         XCTAssertEqual(editedDraft.contestComboMoves, ["MOVE_MEGA_PUNCH", "MOVE_POUND", "MOVE_ABSORB"])
+    }
+
+    @MainActor
+    func testExpansionMoveMissingFlagsDraftPreviewApplyAndReloadsThroughMovesEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        try writeExpansionMoveInfoTable(to: root)
+        let movesInfoURL = root.appendingPathComponent("src/data/moves_info.h")
+        var movesInfo = try String(contentsOf: movesInfoURL, encoding: .utf8)
+        let movesInfoWithFlags = movesInfo
+        movesInfo = movesInfo
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.contains(".flags = FLAG_MAKES_CONTACT,") }
+            .joined(separator: "\n")
+        XCTAssertNotEqual(movesInfo, movesInfoWithFlags)
+        XCTAssertFalse(movesInfo.contains(".flags = FLAG_MAKES_CONTACT,"))
+        try movesInfo.write(to: movesInfoURL, atomically: true, encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.moves, search: .replace("pound"))
+        let catalog = try await waitForSelectedMoveCatalog(store)
+        XCTAssertEqual(catalog.profile, "pokeemeraldExpansion")
+        XCTAssertTrue(store.focusMove("MOVE_POUND"))
+        XCTAssertEqual(store.selectedMoveDetail?.source.path, "src/data/moves_info.h")
+
+        var draft = try XCTUnwrap(store.selectedMoveDraft)
+        XCTAssertEqual(draft.flags, [])
+        draft.flags = ["FLAG_PROTECT_AFFECTED", "FLAG_MAKES_CONTACT"]
+        store.updateSelectedMoveDraft(draft)
+
+        XCTAssertTrue(store.selectedMoveIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedMoveMutationPlan)
+        store.previewSelectedMoveMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestMoveEditPlan)
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/moves_info.h"])
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".flags = FLAG_MAKES_CONTACT | FLAG_PROTECT_AFFECTED") == true)
+        XCTAssertTrue(store.canApplySelectedMoveMutationPlan)
+
+        store.applySelectedMoveMutationPlan()
+
+        XCTAssertEqual(store.latestMoveApplyResult?.appliedChanges.map(\.path), ["src/data/moves_info.h"])
+        XCTAssertFalse(store.selectedMoveIsDirty)
+        XCTAssertEqual(store.selectedMoveID, "MOVE_POUND")
+        let editedDraft = try XCTUnwrap(store.selectedMoveDraft)
+        XCTAssertEqual(editedDraft.flags, ["FLAG_MAKES_CONTACT", "FLAG_PROTECT_AFFECTED"])
     }
 
     @MainActor
@@ -3747,6 +3902,142 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testResourceAssetWorkflowFacetFilteringAndGrouping() {
+        let hiddenRecordID = "species:arm9/src/pokemon.c"
+        let hiddenAssetID = "resource:project:nds-data:\(hiddenRecordID)"
+        let rows = [
+            Self.makeAssetRow(
+                id: "editable-source",
+                title: "Editable Source",
+                path: "src/data/items.h",
+                category: "items"
+            ),
+            Self.makeAssetRow(
+                id: "resource:project:nds-data:messages:files/msgdata/root",
+                title: "Preview Only",
+                path: "files/msgdata/root",
+                category: "NDS Data resources",
+                facts: [Fact(label: "Gen V Readiness", value: "previewOnly")]
+            ),
+            Self.makeAssetRow(
+                id: "resource:project:nds-data:encounters:arm9/src/encounter.c",
+                title: "Blocked Row",
+                path: "arm9/src/encounter.c",
+                category: "NDS Data encounters",
+                status: .error,
+                availability: "parserError",
+                facts: [Fact(label: "Gen IV Readiness", value: "loaderOnlyBlocked")]
+            ),
+            Self.makeAssetRow(
+                id: "resource:project:nds-data:maps:files/fielddata/mapmatrix",
+                title: "Related Row",
+                path: "files/fielddata/mapmatrix",
+                category: "NDS Data maps",
+                facts: [
+                    Fact(label: "Related Rows", value: "2"),
+                    Fact(label: "Related Domains", value: "maps"),
+                ]
+            ),
+            Self.makeAssetRow(
+                id: "generated-row",
+                title: "Generated Row",
+                path: "build/pokeplatinum.us.nds",
+                category: "generated",
+                role: "generated",
+                availability: "availableGenerated",
+                tags: ["generated"]
+            ),
+            Self.makeAssetRow(
+                id: hiddenAssetID,
+                title: "Hidden Draft",
+                path: "arm9/src/pokemon.c",
+                category: "NDS Data species"
+            ),
+        ]
+
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .editableSource,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            ["editable-source", hiddenAssetID]
+        )
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .previewOnly,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            ["resource:project:nds-data:messages:files/msgdata/root"]
+        )
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .blocked,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            ["resource:project:nds-data:encounters:arm9/src/encounter.c"]
+        )
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .related,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            ["resource:project:nds-data:maps:files/fielddata/mapmatrix"]
+        )
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .generatedReference,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            ["generated-row"]
+        )
+        XCTAssertEqual(
+            WorkbenchStore.filterAndSort(
+                assetRows: rows,
+                category: WorkbenchStore.allResourceAssetCategories,
+                searchText: "",
+                sortMode: .title,
+                workflowFacet: .hiddenDrafts,
+                hiddenDraftRecordIDs: [hiddenRecordID],
+                ndsEditableRecordIDs: [hiddenRecordID]
+            ).map(\.id),
+            [hiddenAssetID]
+        )
+
+        let groups = WorkbenchStore.workflowGroups(
+            for: rows,
+            hiddenDraftRecordIDs: [hiddenRecordID],
+            ndsEditableRecordIDs: [hiddenRecordID]
+        )
+        XCTAssertEqual(groups.map(\.facet), [.hiddenDrafts, .editableSource, .previewOnly, .blocked, .related, .generatedReference])
+        XCTAssertEqual(groups.first?.rows.map(\.id), [hiddenAssetID])
+    }
+
+    @MainActor
     func testResourceAssetIndexExactLookupPrecedence() {
         let rows = [
             Self.makeAssetRow(
@@ -4003,8 +4294,11 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(result.status, .created)
         XCTAssertEqual(result.patchPath, patchURL.path)
         XCTAssertEqual(result.manifestPath, manifestURL.path)
+        XCTAssertEqual(result.verification?.status, .passed)
+        XCTAssertEqual(result.verification?.expectedBuiltOutputSHA1, result.verification?.appliedOutputSHA1)
         XCTAssertEqual(report.status, .valid)
         XCTAssertTrue(store.filteredPatchCreationResultRows.contains { $0.title == "BPS patch creation" && $0.subtitle == "created" })
+        XCTAssertTrue(store.filteredPatchCreationResultRows.contains { $0.title == "Patch verification" && $0.subtitle == "passed" })
         XCTAssertTrue(store.filteredPatchCreationResultRows.contains { $0.title == "Patch creation manifest" })
         XCTAssertEqual(try BPSPatchCodec.apply(patchData: Data(contentsOf: patchURL), baseData: baseData), targetData)
         XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
@@ -4019,8 +4313,117 @@ final class MapEditorStoreTests: XCTestCase {
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let rawResult = try XCTUnwrap(object?["patchCreationResult"] as? [String: Any])
         XCTAssertEqual(rawResult["status"] as? String, "created")
+        let rawVerification = try XCTUnwrap(rawResult["verification"] as? [String: Any])
+        XCTAssertEqual(rawVerification["status"] as? String, "passed")
+        XCTAssertEqual(rawVerification["sha1Matches"] as? Bool, true)
+        XCTAssertEqual(rawVerification["crc32Matches"] as? Bool, true)
+        XCTAssertEqual(rawVerification["sizeMatches"] as? Bool, true)
         XCTAssertNotNil(rawResult["manifest"] as? [String: Any])
         XCTAssertNil(object?["patchManifest"])
+    }
+
+    @MainActor
+    func testPatchCreationRefreshesPatchLibraryAndSelectsCreatedBPSArtifact() throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(targetData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+        store.requestBaseROMPath(baseROM.path)
+        store.loadSelectedPatchCreationPreview()
+        store.createSelectedBPSPatch()
+
+        let patchURL = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        let manifestURL = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps.manifest.json")
+        let library = try XCTUnwrap(store.selectedPatchArtifactLibrary)
+        XCTAssertEqual(store.patchArtifactLibraryLoadStatus, .loaded(count: 1, status: .valid))
+        XCTAssertEqual(library.items.count, 1)
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.patchPath, patchURL.path)
+        XCTAssertEqual(item.manifestPath, manifestURL.path)
+        XCTAssertEqual(item.manifestStatus, PatchArtifactLibraryManifestStatus.matched.rawValue)
+        XCTAssertEqual(item.patchChecksumStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.baseROMStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.builtOutputStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(store.selectedPatchArtifactLibraryItemID, patchURL.path)
+        XCTAssertTrue(store.filteredPatchArtifactLibraryRows.contains { $0.title == "BPS patch artifact" })
+        XCTAssertTrue(store.filteredPatchArtifactLibraryRows.contains { $0.title == "Creation manifest" })
+        XCTAssertTrue(store.filteredPatchArtifactLibraryRows.contains { $0.title == "Base ROM status" })
+        XCTAssertTrue(store.filteredPatchArtifactLibraryRows.contains { $0.title == "Built output status" })
+        XCTAssertEqual(store.selectedPatchPath, "")
+        XCTAssertNil(store.latestPatchApplyExportResult)
+        XCTAssertFalse(store.canApplyExportSelectedPatch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+
+        NSPasteboard.general.clearContents()
+        store.copyPatchArtifactLibraryJSONToPasteboard()
+
+        let libraryJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let libraryData = try XCTUnwrap(libraryJSON.data(using: .utf8))
+        let libraryObject = try JSONSerialization.jsonObject(with: libraryData) as? [String: Any]
+        let rawItems = try XCTUnwrap(libraryObject?["items"] as? [[String: Any]])
+        XCTAssertEqual(rawItems.count, 1)
+        XCTAssertEqual(rawItems.first?["patchPath"] as? String, patchURL.path)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        XCTAssertNotNil(reportObject?["patchCreationResult"] as? [String: Any])
+        XCTAssertNotNil(reportObject?["patchArtifactLibrary"] as? [String: Any])
+        XCTAssertNil(reportObject?["patchManifest"])
+    }
+
+    @MainActor
+    func testPatchLibraryRowsIncludeResourcesWorkflowFacetContextWithoutChangingPatchAuthority() async throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(targetData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        XCTAssertTrue(assetCatalog.rows.contains { $0.availability == "availableSource" })
+        XCTAssertTrue(assetCatalog.rows.contains { $0.role == "generated" || $0.role == "artifact" })
+
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+        store.requestBaseROMPath(baseROM.path)
+        store.loadSelectedPatchCreationPreview()
+        store.createSelectedBPSPatch()
+
+        let patchURL = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        let patchedROMURL = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba")
+        let rows = store.filteredPatchArtifactLibraryRows
+        let patchRowIndex = try XCTUnwrap(rows.firstIndex { $0.title == "BPS patch artifact" })
+        let resourcesSummaryIndex = try XCTUnwrap(rows.firstIndex { $0.title == "Resources workflow facets" })
+
+        XCTAssertLessThan(patchRowIndex, resourcesSummaryIndex)
+        XCTAssertTrue(rows.contains { $0.title == "Resources: Editable Source" && $0.detail.contains("Sample:") })
+        XCTAssertTrue(rows.contains { $0.title == "Resources: Generated/Reference" && $0.detail.contains("Existing Resources facet only") })
+        XCTAssertTrue(rows.contains { $0.title == "Resources workflow facets" && $0.detail.contains("no parser") })
+        XCTAssertEqual(store.selectedPatchArtifactLibraryItemID, patchURL.path)
+        XCTAssertEqual(store.selectedPatchPath, "")
+        XCTAssertNil(store.latestPatchApplyExportResult)
+        XCTAssertFalse(store.canApplyExportSelectedPatch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: patchedROMURL.path))
     }
 
     @MainActor
@@ -4100,6 +4503,213 @@ final class MapEditorStoreTests: XCTestCase {
             XCTFail("Expected blocked binary ROM mutation dry-run status")
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    @MainActor
+    func testBinaryROMMutationApplyReviewAppliesSelectedManifestWithToken() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("phs-t79d.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("phs-t79d-dry-run.json")
+        try writeBinaryMutationManifest(manifest, to: manifestURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.requestBinaryROMMutationDryRunManifestPath(manifestURL.path)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = token
+
+        XCTAssertTrue(store.canApplySelectedBinaryROMMutationReview)
+        XCTAssertTrue(store.filteredBinaryROMMutationDryRunRows.contains { $0.title == "Apply review token" })
+        XCTAssertTrue(store.filteredBinaryROMMutationDryRunRows.contains { $0.title == "Blocked broader binary actions" && $0.detail.contains("app auto-apply") })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Apply audit" && $0.subtitle == "ready" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Original ROM backup audit" && $0.subtitle == "pending explicit apply" })
+
+        store.applySelectedBinaryROMMutationReview()
+
+        let result = try XCTUnwrap(store.latestBinaryROMMutationApplyResult)
+        XCTAssertEqual(result.status, .applied)
+        XCTAssertEqual(result.appliedReplacements.count, 1)
+        XCTAssertEqual(Array(try Data(contentsOf: rom)[0x120 ..< 0x122]), [0xAA, 0xBB])
+        let backupPath = try XCTUnwrap(result.backupPath)
+        let applyManifestPath = try XCTUnwrap(result.manifestPath)
+        XCTAssertTrue(backupPath.contains(".pokemonhackstudio/rom-mutations/phs-t79d/"))
+        XCTAssertTrue(applyManifestPath.contains(".pokemonhackstudio/rom-mutations/phs-t79d/"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: backupPath)), originalData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: applyManifestPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio/rom-mutations/phs-t79d/phs-t79d-patched.gba").path))
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyResultRows.contains { $0.title == "Apply manifest" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Original ROM backup audit" && $0.subtitle == "written after apply" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Apply manifest audit" && $0.subtitle == "written after apply" })
+
+        NSPasteboard.general.clearContents()
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        let rawResult = try XCTUnwrap(reportObject?["binaryROMMutationApplyResult"] as? [String: Any])
+        XCTAssertEqual(rawResult["status"] as? String, "applied")
+        let rawAudit = try XCTUnwrap(reportObject?["binaryROMMutationApplyAudit"] as? [String: Any])
+        XCTAssertEqual(rawAudit["status"] as? String, "ready")
+        let artifactReviews = try XCTUnwrap(rawAudit["artifactReviews"] as? [[String: Any]])
+        XCTAssertTrue(artifactReviews.contains { $0["kind"] as? String == "originalROMBackup" && $0["status"] as? String == "writtenAfterApply" })
+    }
+
+    @MainActor
+    func testBinaryROMMutationApplyReviewBlocksWrongTokenWithoutWriting() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("phs-t79d.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let manifestURL = temp.url.appendingPathComponent("phs-t79d-dry-run.json")
+        try writeBinaryMutationManifest(manifest, to: manifestURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.requestBinaryROMMutationDryRunManifestPath(manifestURL.path)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = "romreplace-wrong"
+
+        XCTAssertTrue(store.canApplySelectedBinaryROMMutationReview)
+        store.applySelectedBinaryROMMutationReview()
+
+        let result = try XCTUnwrap(store.latestBinaryROMMutationApplyResult)
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_CONFIRMATION_MISMATCH" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyResultRows.contains { $0.title == "Binary ROM replacement apply" && $0.subtitle == "blocked" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Original ROM backup audit" && $0.subtitle == "blocked before write" })
+    }
+
+    @MainActor
+    func testBinaryROMMutationApplyReviewRefusesSourceTreeCandidateAndDrift() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("phs-t79d.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("phs-t79d-dry-run.json")
+        try writeBinaryMutationManifest(manifest, to: manifestURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.requestBinaryROMMutationDryRunManifestPath(manifestURL.path)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = token
+
+        let sourceRoot = temp.url.appendingPathComponent("pokeemerald")
+        try writeMinimalEmeraldSourceTree(at: sourceRoot)
+        store.applySelectedBinaryROMMutationReview()
+
+        var result = try XCTUnwrap(store.latestBinaryROMMutationApplyResult)
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_SOURCE_TREE_AVAILABLE_REFUSED" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+
+        try FileManager.default.removeItem(at: sourceRoot)
+        var drifted = originalData
+        drifted[0x130] = 0x44
+        try drifted.write(to: rom)
+        store.applySelectedBinaryROMMutationReview()
+
+        result = try XCTUnwrap(store.latestBinaryROMMutationApplyResult)
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_BASE_SHA1_DRIFT" })
+        XCTAssertEqual(try Data(contentsOf: rom), drifted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    @MainActor
+    func testBinaryROMMutationApplyAuditRowsDisableApplyWhenCurrentStateDrifts() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let rom = temp.url.appendingPathComponent("phs-t79e.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("phs-t79e-dry-run.json")
+        try writeBinaryMutationManifest(manifest, to: manifestURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.requestBinaryROMMutationDryRunManifestPath(manifestURL.path)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = token
+
+        XCTAssertTrue(store.canApplySelectedBinaryROMMutationReview)
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Apply audit" && $0.subtitle == "ready" })
+
+        let sourceRoot = temp.url.appendingPathComponent("pokeemerald")
+        try writeMinimalEmeraldSourceTree(at: sourceRoot)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = token
+
+        XCTAssertFalse(store.canApplySelectedBinaryROMMutationReview)
+        XCTAssertTrue(store.binaryROMMutationApplyDisabledReason?.contains("audit is blocked") == true)
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Apply audit" && $0.subtitle == "blocked" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.title == "Original ROM backup audit" && $0.subtitle == "blocked before write" })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.tags.contains("BINARY_ROM_MUTATION_AUDIT_SOURCE_TREE_AVAILABLE_REFUSED") })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+
+        try FileManager.default.removeItem(at: sourceRoot)
+        var drifted = originalData
+        drifted[0x120] = 0x99
+        try drifted.write(to: rom)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+        store.binaryROMMutationApplyConfirmationToken = token
+
+        XCTAssertFalse(store.canApplySelectedBinaryROMMutationReview)
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.tags.contains("BINARY_ROM_MUTATION_APPLY_BASE_SHA1_DRIFT") })
+        XCTAssertTrue(store.filteredBinaryROMMutationApplyAuditRows.contains { $0.tags.contains("BINARY_ROM_MUTATION_APPLY_ORIGINAL_BYTES_MISMATCH") })
+        XCTAssertEqual(try Data(contentsOf: rom), drifted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
     }
 
     @MainActor
@@ -5732,9 +6342,11 @@ final class MapEditorStoreTests: XCTestCase {
         let rootEntry = try XCTUnwrap(store.resourceLibrary?.entries.first { $0.path == root.path })
 
         store.selectedResourceLibraryMode = .entries
+        store.resourceAssetWorkflowFacet = .generatedReference
         XCTAssertTrue(store.focusResourceAsset(scriptAsset.id))
         XCTAssertEqual(store.selection, .resources)
         XCTAssertEqual(store.selectedResourceLibraryMode, .assets)
+        XCTAssertEqual(store.resourceAssetWorkflowFacet, .all)
         XCTAssertEqual(store.selectedResourceAssetID, scriptAsset.id)
 
         store.selectedResourceLibraryMode = .assets
@@ -6441,6 +7053,11 @@ final class MapEditorStoreTests: XCTestCase {
         try write("{\"zone\":1}\n", to: root.appendingPathComponent("files/fielddata/eventdata/zone_event/zone_001.json"))
         try write(Data("SDAT".utf8), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
         try write("Route 1 hello\n", to: root.appendingPathComponent("files/msgdata/story/message_bank.txt"))
+        try write("Trainer message candidate\n", to: root.appendingPathComponent("files/msgdata/battle/trainer_messages.gmm"))
+        try write(Data([0x10, 0x00, 0x00, 0x00]), to: root.appendingPathComponent("files/msgdata/msg/0001.bin"))
+        try write("Alpha\nBeta\n", to: root.appendingPathComponent("files/msgdata/system/help.str"))
+        try write(Data([0x30, 0x31, 0x32]), to: root.appendingPathComponent("files/msgdata/msg/msg_0099.msg"))
+        try write(Data([0x20, 0x00, 0x00, 0x00]), to: root.appendingPathComponent("files/msgdata/system/msg_0002.dat"))
         try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
         try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
     }
@@ -7161,6 +7778,7 @@ final class MapEditorStoreTests: XCTestCase {
             #define MOVE_POUND 1
             #define MOVE_ABSORB 2
             #define MOVE_EMBER 3
+            #define MOVE_GROWL 4
             """,
             to: root.appendingPathComponent("include/constants/moves.h")
         )
@@ -7219,6 +7837,8 @@ final class MapEditorStoreTests: XCTestCase {
             #define EVO_ITEM 7
             #define FORM_CHANGE_BATTLE_MEGA_EVOLUTION 1
             #define FORM_CHANGE_ITEM_HOLD 2
+            #define FLAG_MAKES_CONTACT (1 << 0)
+            #define FLAG_PROTECT_AFFECTED (1 << 1)
             """,
             to: root.appendingPathComponent("include/constants/pokemon.h")
         )
@@ -7243,6 +7863,7 @@ final class MapEditorStoreTests: XCTestCase {
             #define MOVE_FURY_CUTTER 8
             #define MOVE_MEGA_PUNCH 9
             #define MOVE_SWORD_DANCE 10
+            #define MOVE_GROWL 11
             """,
             to: root.appendingPathComponent("include/constants/moves.h")
         )
@@ -7550,6 +8171,21 @@ final class MapEditorStoreTests: XCTestCase {
         try write(Data(bytes), to: rom)
     }
 
+    private func writeBinaryMutationManifest(_ manifest: BinaryROMMutationDryRunManifest, to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try write(encoder.encode(manifest), to: url)
+    }
+
+    private func writeMinimalEmeraldSourceTree(at root: URL) throws {
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics/pokenav"), withIntermediateDirectories: true)
+        try write("{\"group_order\":[]}\n", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: root.appendingPathComponent("data/layouts/layouts.json"))
+    }
+
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -7725,6 +8361,8 @@ final class MapEditorStoreTests: XCTestCase {
         affectsResourceAvailability: Bool = false,
         sourcePath: String? = nil,
         tags: [String] = [],
+        facts: [Fact] = [],
+        diagnostics: [IndexedDiagnosticRow] = [],
         targetModule: WorkbenchModule? = .maps,
         targetID: String? = nil
     ) -> ResourceAssetRowViewState {
@@ -7744,11 +8382,16 @@ final class MapEditorStoreTests: XCTestCase {
             checksumSummary: "Not checked",
             source: SourceLocation(path: sourcePath ?? path, symbol: title, line: 1),
             tags: tags,
-            facts: [],
-            diagnostics: [],
+            facts: facts,
+            diagnostics: diagnostics,
             targetModule: targetModule,
             targetID: targetID,
-            searchBlob: ([title, path, category, kind, role, targetID ?? ""] + tags)
+            searchBlob: (
+                [title, path, category, kind, role, availability, targetID ?? ""]
+                    + tags
+                    + facts.flatMap { [$0.label, $0.value] }
+                    + diagnostics.flatMap { [$0.title, $0.message] }
+            )
                 .joined(separator: " ")
                 .lowercased()
         )

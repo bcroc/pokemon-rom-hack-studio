@@ -233,7 +233,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("description text rewrites"))
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data"))
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data beyond existing .contestEffect"))
-        XCTAssertTrue(rubyMoves.unsupportedFields.contains("contest combo arrays and non-simple contest scalar expressions"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("missing or non-simple contest combo arrays and non-simple contest scalar expressions"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("generated move output writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("reference-only move source writes"))
@@ -243,16 +243,29 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         let rubyMoveSources = try XCTUnwrap(rubyMoves.sourceTables)
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == "gBattleMoves" && $0.status == .editable && $0.indexedCount == 1 })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == "gMoveDescription_*" && $0.status == .editable && $0.indexedCount == 1 })
-        XCTAssertTrue(rubyMoveSources.contains { $0.path == "include/constants/moves.h" && $0.status == .blocked })
+        let rubyMoveConstants = try XCTUnwrap(rubyMoveSources.first { $0.path == "include/constants/moves.h" && $0.tableSymbol == "MOVE_*" })
+        XCTAssertEqual(rubyMoveConstants.status, .readOnly)
+        XCTAssertEqual(rubyMoveConstants.indexedCount, 4)
+        XCTAssertEqual(rubyMoveConstants.sourceRole, "readOnlyMoveConstants")
+        XCTAssertEqual(rubyMoveConstants.readiness, "read-only 4 MOVE_* constants indexed")
+        XCTAssertEqual(rubyMoveConstants.blockedActions, [
+            "constant creation",
+            "constant rename",
+            "row insertion/removal/reorder",
+            "generated writes",
+            "reference writes",
+            "ROM writes",
+            "binary writes"
+        ])
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == ".contestEffect" && $0.status == .editable && $0.indexedCount == 1 })
         let rubyContestMoves = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/contest_moves.h" && $0.tableSymbol == "gContestMoves" })
         XCTAssertEqual(rubyContestMoves.status, .editable)
         XCTAssertEqual(rubyContestMoves.indexedCount, 1)
-        XCTAssertEqual(rubyContestMoves.sourceRole, "editableContestScalars")
-        XCTAssertEqual(rubyContestMoves.readiness, "editable existing simple scalar fields")
+        XCTAssertEqual(rubyContestMoves.sourceRole, "editableContestScalarsAndComboMoves")
+        XCTAssertEqual(rubyContestMoves.readiness, "editable existing simple scalar fields and combo arrays")
         XCTAssertEqual(rubyContestMoves.blockedActions, [
-            "combo array editing",
             "constants",
+            "missing-field insertion",
             "row insertion/removal/reorder",
             "generated writes",
             "reference writes",
@@ -267,8 +280,22 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         let rubyJSON = String(data: try JSONEncoder().encode(rubyMovesReport), encoding: .utf8) ?? ""
         XCTAssertTrue(rubyJSON.contains(#""gLevelUpLearnsets""#))
         XCTAssertTrue(rubyJSON.contains(#""gContestMoves""#))
-        XCTAssertTrue(rubyJSON.contains(#""editableContestScalars""#))
+        XCTAssertTrue(rubyJSON.contains(#""editableContestScalarsAndComboMoves""#))
+        XCTAssertTrue(rubyJSON.contains(#""readOnlyMoveConstants""#))
         XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
+
+        try FileManager.default.removeItem(at: rubyRoot.appendingPathComponent("include/constants/moves.h"))
+        let missingConstantsIndex = projectIndex(root: rubyRoot, profile: .pokeruby)
+        let missingConstantsReport = try PokemonDataCompatibilityReportBuilder.build(
+            index: missingConstantsIndex,
+            sourceIndex: try ProjectSourceIndexLoader.load(from: missingConstantsIndex)
+        )
+        let missingConstantsMoves = entry(.moves, in: missingConstantsReport)
+        let missingConstantsSources = try XCTUnwrap(missingConstantsMoves.sourceTables)
+        let missingConstants = try XCTUnwrap(missingConstantsSources.first { $0.path == "include/constants/moves.h" && $0.tableSymbol == "MOVE_*" })
+        XCTAssertEqual(missingConstants.status, .blocked)
+        XCTAssertEqual(missingConstants.indexedCount, 0)
+        XCTAssertEqual(missingConstants.readiness, "missing local move constants header")
 
         let expansionItems = entry(.items, in: expansion)
         XCTAssertEqual(expansionItems.status, .editable)
@@ -308,6 +335,25 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(metadataJSON.contains(#""blockedActions""#))
         XCTAssertTrue(metadataJSON.contains("effect"))
         XCTAssertTrue(metadataJSON.contains("Modern Emerald writes"))
+        let behaviorSource = try XCTUnwrap(expansionItemSources.first {
+            $0.path == "src/data/items.h"
+                && $0.tableSymbol == "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId"
+        })
+        XCTAssertEqual(behaviorSource.status, .editable)
+        XCTAssertEqual(behaviorSource.indexedCount, 1)
+        XCTAssertEqual(behaviorSource.sourceRole, "editableBehaviorScalars")
+        XCTAssertEqual(behaviorSource.readiness, "editable existing behavior/function scalar fields")
+        XCTAssertEqual(behaviorSource.blockedActions, [
+            "constants-file edits/creation",
+            "missing-field insertion",
+            "row insertion/removal/reorder",
+            "generated outputs",
+            "reference writes",
+            "ROM/build/export paths",
+            "binary writes",
+            "broad schema rewrites"
+        ])
+        XCTAssertTrue(behaviorSource.note?.contains("existing simple local source fields") == true)
         XCTAssertTrue(expansionItemSources.contains { $0.path == "include/config/item.h" && $0.status == .blocked })
         XCTAssertTrue(expansionItemSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(expansionItemSources.contains { $0.path == "references/pokeemerald-expansion/src/data/items.h" && $0.status == .blocked })
@@ -418,6 +464,18 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/moves_info.h" && ($0.note?.contains("move description declarations") == true) })
         XCTAssertTrue(sourceTables.contains { $0.path == "include/constants/moves.h" && $0.status == .blocked })
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/text/move_descriptions.h" && $0.status == .editable })
+        let flags = try XCTUnwrap(sourceTables.first { $0.path == "src/data/moves_info.h" && $0.tableSymbol == "gMovesInfo flags" })
+        XCTAssertEqual(flags.status, .editable)
+        XCTAssertEqual(flags.indexedCount, 1)
+        XCTAssertEqual(flags.sourceRole, "editableFlags")
+        XCTAssertEqual(flags.readiness, "editable existing or missing simple FLAG_* field values")
+        XCTAssertTrue(flags.blockedActions?.contains("constant creation") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("non-simple flags expressions") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("row insertion/removal/reorder") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("generated outputs") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("reference writes") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("ROM/build/export paths") == true)
+        XCTAssertTrue(flags.blockedActions?.contains("binary writes") == true)
         let contestMetadata = try XCTUnwrap(sourceTables.first { $0.path == "src/data/moves_info.h" && $0.tableSymbol == "gMovesInfo contest scalars" })
         XCTAssertEqual(contestMetadata.status, .editable)
         XCTAssertEqual(contestMetadata.sourceRole, "editableContestScalars")
@@ -478,6 +536,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/moves_info.h""#))
         XCTAssertTrue(json.contains(#""references\/modern-emerald\/src\/data\/battle_moves.h""#))
         XCTAssertTrue(json.contains(#""sourceRole":"referenceOnly""#))
+        XCTAssertTrue(json.contains(#""sourceRole":"editableFlags""#))
+        XCTAssertTrue(json.contains(#""readiness":"editable existing or missing simple FLAG_* field values""#))
         XCTAssertTrue(json.contains(#""sourceRole":"editableContestScalars""#))
         XCTAssertTrue(json.contains(#""readiness":"editable existing simple scalar fields""#))
         XCTAssertTrue(json.contains(#""recommendedFutureRow":"PHS-T78""#))

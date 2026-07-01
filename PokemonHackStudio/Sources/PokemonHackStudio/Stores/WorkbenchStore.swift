@@ -8,6 +8,7 @@ private struct ResourceAssetRowsCache {
     let rowCount: Int
     let searchText: String
     let category: String
+    let workflowFacet: ResourceAssetWorkflowFacet
     let sortMode: ResourceAssetSortMode
     let rows: [ResourceAssetRowViewState]
 }
@@ -84,7 +85,10 @@ private struct BuildPatchPlaytestReportExportPayload: Codable {
     let patchManifest: PokemonHackCore.PatchManifestReport?
     let patchCreationPreview: PokemonHackCore.PatchCreationPreviewReport?
     let patchCreationResult: PokemonHackCore.PatchCreationResult?
+    let patchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
     let binaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
+    let binaryROMMutationApplyAudit: PokemonHackCore.BinaryROMMutationApplyAuditReport?
+    let binaryROMMutationApplyResult: PokemonHackCore.BinaryROMMutationApplyResult?
     let playtest: PlaytestReportExportPayload?
 }
 
@@ -241,6 +245,8 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedPatchPath: String = ""
     @Published var selectedBaseROMPath: String = ""
     @Published var selectedBinaryROMMutationDryRunPath: String = ""
+    @Published var selectedBinaryROMMutationDryRunManifestPath: String = ""
+    @Published var binaryROMMutationApplyConfirmationToken: String = ""
     @Published var selectedDecompBuildTargetID: String = "" {
         didSet { resetPatchCreationPreviewForInputChange() }
     }
@@ -284,6 +290,8 @@ final class WorkbenchStore: ObservableObject {
     }
 
     @Published var resourceAssetCategory = WorkbenchStore.allResourceAssetCategories
+    @Published var resourceAssetWorkflowFacet: ResourceAssetWorkflowFacet = .all
+    @Published var resourceAssetGroupingMode: ResourceAssetGroupingMode = .none
     @Published var resourceAssetSortMode: ResourceAssetSortMode = .category
     @Published var pendingMapNavigation: PendingMapNavigation?
     @Published private(set) var recentModules: [WorkbenchModule] = [] {
@@ -321,10 +329,17 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var patchCreationPreviewLoadStatus: PatchCreationPreviewLoadStatus = .idle
     @Published private(set) var selectedPatchCreationPreviewReport: PatchCreationPreviewReportViewState?
     @Published private(set) var selectedPatchCreationResultReport: PatchCreationResultViewState?
+    @Published private(set) var patchArtifactLibraryLoadStatus: PatchArtifactLibraryLoadStatus = .idle
+    @Published private(set) var selectedPatchArtifactLibrary: PatchArtifactLibraryViewState?
+    @Published var selectedPatchArtifactLibraryItemID: String?
     @Published private(set) var binaryROMMutationDryRunLoadStatus: BinaryROMMutationDryRunLoadStatus = .idle
     @Published private(set) var selectedBinaryROMMutationDryRunReport: BinaryROMMutationDryRunReportViewState?
+    @Published private(set) var selectedBinaryROMMutationApplyAuditReport: BinaryROMMutationApplyAuditReportViewState?
+    @Published private(set) var selectedBinaryROMMutationApplyResultReport: BinaryROMMutationApplyResultViewState?
     @Published private(set) var latestPatchCreationResult: PokemonHackCore.PatchCreationResult?
     @Published private(set) var latestPatchApplyExportResult: PokemonHackCore.PatchApplyExportResult?
+    @Published private(set) var rawBinaryROMMutationApplyAuditReport: PokemonHackCore.BinaryROMMutationApplyAuditReport?
+    @Published private(set) var latestBinaryROMMutationApplyResult: PokemonHackCore.BinaryROMMutationApplyResult?
     @Published private(set) var graphicsImportPackagePlanStatus: GraphicsImportPackagePlanLoadStatus = .idle
     @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
     @Published private(set) var latestSpeciesEditPlan: PokemonHackCore.SpeciesEditPlan?
@@ -369,6 +384,7 @@ final class WorkbenchStore: ObservableObject {
     private var buildReportsByID: [String: BuildPatchPlaytestReportViewState] = [:]
     private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
     private var rawPatchCreationPreviewReport: PokemonHackCore.PatchCreationPreviewReport?
+    private var rawPatchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
     private var rawBinaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
@@ -1376,7 +1392,11 @@ final class WorkbenchStore: ObservableObject {
         let patchDiagnostics = selectedPatchManifestReport?.diagnostics ?? []
         let patchCreationDiagnostics = selectedPatchCreationPreviewReport?.diagnostics ?? []
         let patchCreationResultDiagnostics = selectedPatchCreationResultReport?.diagnostics ?? []
+        let patchArtifactLibraryDiagnostics = selectedPatchArtifactLibrary?.diagnostics ?? []
+            + (selectedPatchArtifactLibrary?.items.flatMap(\.diagnostics) ?? [])
         let binaryROMMutationDryRunDiagnostics = selectedBinaryROMMutationDryRunReport?.diagnostics ?? []
+        let binaryROMMutationApplyAuditDiagnostics = selectedBinaryROMMutationApplyAuditReport?.diagnostics ?? []
+        let binaryROMMutationApplyDiagnostics = selectedBinaryROMMutationApplyResultReport?.diagnostics ?? []
         let scriptReadinessDiagnostics = selectedScriptReadinessReport?.diagnostics ?? []
         let graphicsDiagnostics = selectedGraphicsReport?.diagnostics ?? []
         let speciesDiagnostics = selectedSpeciesCatalog?.diagnostics.map {
@@ -1398,7 +1418,10 @@ final class WorkbenchStore: ObservableObject {
             + patchDiagnostics
             + patchCreationDiagnostics
             + patchCreationResultDiagnostics
+            + patchArtifactLibraryDiagnostics
             + binaryROMMutationDryRunDiagnostics
+            + binaryROMMutationApplyAuditDiagnostics
+            + binaryROMMutationApplyDiagnostics
             + scriptReadinessDiagnostics
             + graphicsDiagnostics
             + speciesDiagnostics
@@ -1748,9 +1771,64 @@ final class WorkbenchStore: ObservableObject {
         return filter(buildRows: selectedPatchCreationResultReport.rows)
     }
 
+    var selectedPatchArtifactLibraryItem: PatchArtifactLibraryItemViewState? {
+        guard let library = selectedPatchArtifactLibrary else { return nil }
+        if let selectedPatchArtifactLibraryItemID,
+           let selected = library.items.first(where: { $0.id == selectedPatchArtifactLibraryItemID }) {
+            return selected
+        }
+        return library.items.first
+    }
+
+    var filteredPatchArtifactLibraryRows: [BuildReportRow] {
+        let reviewRows = resourceWorkflowPatchReviewRows
+        if let selectedPatchArtifactLibraryItem {
+            return filter(buildRows: selectedPatchArtifactLibraryItem.rows + reviewRows)
+        }
+        guard let selectedPatchArtifactLibrary else { return [] }
+        return filter(buildRows: selectedPatchArtifactLibrary.rows + reviewRows)
+    }
+
     var filteredBinaryROMMutationDryRunRows: [BuildReportRow] {
         guard let selectedBinaryROMMutationDryRunReport else { return [] }
         return filter(buildRows: selectedBinaryROMMutationDryRunReport.rows)
+    }
+
+    var filteredBinaryROMMutationApplyAuditRows: [BuildReportRow] {
+        guard let selectedBinaryROMMutationApplyAuditReport else { return [] }
+        return filter(buildRows: selectedBinaryROMMutationApplyAuditReport.rows)
+    }
+
+    var filteredBinaryROMMutationApplyResultRows: [BuildReportRow] {
+        guard let selectedBinaryROMMutationApplyResultReport else { return [] }
+        return filter(buildRows: selectedBinaryROMMutationApplyResultReport.rows)
+    }
+
+    var canApplySelectedBinaryROMMutationReview: Bool {
+        binaryROMMutationApplyDisabledReason == nil
+    }
+
+    var binaryROMMutationApplyDisabledReason: String? {
+        let romPath = selectedBinaryROMMutationDryRunPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let manifestPath = selectedBinaryROMMutationDryRunManifestPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = binaryROMMutationApplyConfirmationToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !romPath.isEmpty else { return "Select a local .gba ROM input before applying a reviewed replacement." }
+        guard !manifestPath.isEmpty else { return "Select a dry-run manifest JSON generated for the reviewed replacement." }
+        guard let manifest = rawBinaryROMMutationDryRunManifest else { return "Load the dry-run manifest JSON before applying." }
+        guard manifest.inputPath == URL(fileURLWithPath: romPath).standardizedFileURL.path else {
+            return "The loaded manifest was created for \(manifest.inputPath), not the selected ROM."
+        }
+        guard let review = manifest.applyReview, review.isReviewable, review.reviewToken != nil else {
+            return "The loaded manifest is not reviewable for replace-only apply."
+        }
+        guard manifest.sourceTreeFirst.canUseBinaryOnlyPlan else {
+            return "Source-tree-first policy blocks this manifest; use the source project instead."
+        }
+        if let audit = rawBinaryROMMutationApplyAuditReport, audit.status == .blocked {
+            return "Current ROM/source/artifact audit is blocked; reload the dry-run manifest after resolving diagnostics."
+        }
+        guard !token.isEmpty else { return "Type the review token from the loaded dry-run manifest." }
+        return nil
     }
 
     var filteredScriptReadinessRows: [ScriptReadinessReportRow] {
@@ -1775,26 +1853,102 @@ final class WorkbenchStore: ObservableObject {
             cache.rowCount == selectedAssetCatalog.rows.count,
             cache.searchText == searchText,
             cache.category == resourceAssetCategory,
+            cache.workflowFacet == resourceAssetWorkflowFacet,
             cache.sortMode == resourceAssetSortMode
         {
             return cache.rows
         }
 
-        let rows = selectedAssetCatalog.index.filteredRows(
+        let baseRows = selectedAssetCatalog.index.filteredRows(
             category: resourceAssetCategory,
             allCategory: Self.allResourceAssetCategories,
             searchText: searchText,
             sortMode: resourceAssetSortMode
         )
+        let rows = baseRows.filter { resourceAsset($0, matches: resourceAssetWorkflowFacet) }
         resourceAssetRowsCache = ResourceAssetRowsCache(
             projectID: selectedIndexedProject.id,
             rowCount: selectedAssetCatalog.rows.count,
             searchText: searchText,
             category: resourceAssetCategory,
+            workflowFacet: resourceAssetWorkflowFacet,
             sortMode: resourceAssetSortMode,
             rows: rows
         )
         return rows
+    }
+
+    var resourceAssetWorkflowGroups: [ResourceAssetWorkflowGroup] {
+        let rows = filteredResourceAssetRows
+        guard !rows.isEmpty else { return [] }
+        let grouped = Dictionary(grouping: rows, by: primaryResourceWorkflowFacet(for:))
+        return ResourceAssetWorkflowFacet.groupingOrder.compactMap { facet in
+            guard let groupRows = grouped[facet], !groupRows.isEmpty else { return nil }
+            return ResourceAssetWorkflowGroup(facet: facet, rows: groupRows)
+        }
+    }
+
+    private var resourceWorkflowPatchReviewRows: [BuildReportRow] {
+        guard let selectedIndexedProject, let selectedAssetCatalog else { return [] }
+        let assetRows = selectedAssetCatalog.rows
+        guard !assetRows.isEmpty else { return [] }
+
+        let grouped = Dictionary(grouping: assetRows, by: primaryResourceWorkflowFacet(for:))
+        let groups = ResourceAssetWorkflowFacet.groupingOrder.compactMap { facet -> ResourceAssetWorkflowGroup? in
+            guard facet != .all, let rows = grouped[facet], !rows.isEmpty else { return nil }
+            return ResourceAssetWorkflowGroup(facet: facet, rows: rows)
+        }
+        guard !groups.isEmpty else { return [] }
+
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-library:resources-workflow:summary",
+                section: .patchManifest,
+                title: "Resources workflow facets",
+                subtitle: "\(assetRows.count) resource row\(assetRows.count == 1 ? "" : "s"); \(groups.count) workflow facet\(groups.count == 1 ? "" : "s")",
+                detail: "App-only review context from existing Resources classifications; no parser, patch/apply/export, build/playtest, source-write, ROM-write, or NDS apply gate is changed.",
+                status: .valid,
+                source: SourceLocation(path: selectedIndexedProject.rootPath, symbol: "resources-workflow-facets", line: 1),
+                tags: ["resources-workflow", "app-only", selectedAssetCatalog.profile]
+                    + groups.map { "\($0.facet.rawValue):\($0.rows.count)" }
+            )
+        ]
+
+        rows.append(contentsOf: groups.map { group in
+            BuildReportRow(
+                id: "patch-library:resources-workflow:\(group.facet.id)",
+                section: .patchManifest,
+                title: "Resources: \(group.title)",
+                subtitle: "\(group.rows.count) row\(group.rows.count == 1 ? "" : "s")",
+                detail: "Sample: \(Self.resourceWorkflowSamplePaths(from: group.rows)). Existing Resources facet only; this review row adds no actions.",
+                status: Self.resourceWorkflowReviewStatus(for: group.facet),
+                source: group.rows.first?.source ?? SourceLocation(path: selectedIndexedProject.rootPath, symbol: group.facet.rawValue, line: 1),
+                tags: ["resources-workflow", group.facet.rawValue] + group.rows.prefix(3).map(\.path)
+            )
+        })
+
+        return rows
+    }
+
+    private static func resourceWorkflowSamplePaths(
+        from rows: [ResourceAssetRowViewState],
+        limit: Int = 3
+    ) -> String {
+        let samples = rows.prefix(limit).map(\.path)
+        guard !samples.isEmpty else { return "No resource paths" }
+        let suffix = rows.count > samples.count ? " (+\(rows.count - samples.count) more)" : ""
+        return samples.joined(separator: ", ") + suffix
+    }
+
+    private static func resourceWorkflowReviewStatus(
+        for facet: ResourceAssetWorkflowFacet
+    ) -> ValidationState {
+        switch facet {
+        case .blocked, .hiddenDrafts:
+            .warning
+        case .all, .editableSource, .previewOnly, .related, .generatedReference:
+            .valid
+        }
     }
 
     var filteredScriptOutlineSources: [PokemonHackCore.ScriptOutlineSource] {
@@ -1883,6 +2037,9 @@ final class WorkbenchStore: ObservableObject {
             return filteredBuildReportRows.filter { $0.section != .diagnostics && $0.section != .patchManifest }
         case .patch:
             return filteredPatchManifestRows
+                + filteredPatchCreationPreviewRows
+                + filteredPatchCreationResultRows
+                + filteredPatchArtifactLibraryRows
         case .playtest:
             guard let selectedBuildReport else { return [] }
             return [BuildReportRow(playtest: selectedBuildReport.playtest)]
@@ -2491,14 +2648,245 @@ final class WorkbenchStore: ObservableObject {
         assetRows: [ResourceAssetRowViewState],
         category: String,
         searchText: String,
-        sortMode: ResourceAssetSortMode
+        sortMode: ResourceAssetSortMode,
+        workflowFacet: ResourceAssetWorkflowFacet = .all,
+        hiddenDraftRecordIDs: Set<String> = [],
+        ndsEditableRecordIDs: Set<String> = []
     ) -> [ResourceAssetRowViewState] {
-        ResourceAssetCatalogIndex(rows: assetRows).filteredRows(
+        let rows = ResourceAssetCatalogIndex(rows: assetRows).filteredRows(
             category: category,
             allCategory: allResourceAssetCategories,
             searchText: searchText,
             sortMode: sortMode
         )
+        return rows.filter {
+            resourceAsset(
+                $0,
+                matches: workflowFacet,
+                hiddenDraftRecordIDs: hiddenDraftRecordIDs,
+                ndsEditableRecordIDs: ndsEditableRecordIDs
+            )
+        }
+    }
+
+    static func workflowGroups(
+        for assetRows: [ResourceAssetRowViewState],
+        hiddenDraftRecordIDs: Set<String> = [],
+        ndsEditableRecordIDs: Set<String> = []
+    ) -> [ResourceAssetWorkflowGroup] {
+        let grouped = Dictionary(grouping: assetRows) { row in
+            primaryWorkflowFacet(
+                for: row,
+                hiddenDraftRecordIDs: hiddenDraftRecordIDs,
+                ndsEditableRecordIDs: ndsEditableRecordIDs
+            )
+        }
+        return ResourceAssetWorkflowFacet.groupingOrder.compactMap { facet in
+            guard let rows = grouped[facet], !rows.isEmpty else { return nil }
+            return ResourceAssetWorkflowGroup(facet: facet, rows: rows)
+        }
+    }
+
+    private func resourceAsset(
+        _ row: ResourceAssetRowViewState,
+        matches facet: ResourceAssetWorkflowFacet
+    ) -> Bool {
+        if facet == .editableSource {
+            return resourceAssetIsEditableSourceBacked(row)
+        }
+        return Self.resourceAsset(
+            row,
+            matches: facet,
+            hiddenDraftRecordIDs: selectedNDSDataDraftRecordIDs,
+            ndsEditableRecordIDs: []
+        )
+    }
+
+    private func primaryResourceWorkflowFacet(for row: ResourceAssetRowViewState) -> ResourceAssetWorkflowFacet {
+        if resourceAsset(row, matches: .hiddenDrafts) {
+            return .hiddenDrafts
+        }
+        if resourceAsset(row, matches: .editableSource) {
+            return .editableSource
+        }
+        if resourceAsset(row, matches: .previewOnly) {
+            return .previewOnly
+        }
+        if resourceAsset(row, matches: .blocked) {
+            return .blocked
+        }
+        if resourceAsset(row, matches: .related) {
+            return .related
+        }
+        if resourceAsset(row, matches: .generatedReference) {
+            return .generatedReference
+        }
+        return .all
+    }
+
+    private static func primaryWorkflowFacet(
+        for row: ResourceAssetRowViewState,
+        hiddenDraftRecordIDs: Set<String>,
+        ndsEditableRecordIDs: Set<String>
+    ) -> ResourceAssetWorkflowFacet {
+        for facet in ResourceAssetWorkflowFacet.groupingOrder where facet != .all {
+            if resourceAsset(
+                row,
+                matches: facet,
+                hiddenDraftRecordIDs: hiddenDraftRecordIDs,
+                ndsEditableRecordIDs: ndsEditableRecordIDs
+            ) {
+                return facet
+            }
+        }
+        return .all
+    }
+
+    private static func resourceAsset(
+        _ row: ResourceAssetRowViewState,
+        matches facet: ResourceAssetWorkflowFacet,
+        hiddenDraftRecordIDs: Set<String>,
+        ndsEditableRecordIDs: Set<String>
+    ) -> Bool {
+        switch facet {
+        case .all:
+            return true
+        case .editableSource:
+            return resourceAssetIsEditableSourceBacked(row, ndsEditableRecordIDs: ndsEditableRecordIDs)
+        case .previewOnly:
+            return resourceAssetIsPreviewOnly(row)
+        case .blocked:
+            return resourceAssetIsBlocked(row)
+        case .related:
+            return resourceAssetHasRelatedRecords(row)
+        case .generatedReference:
+            return resourceAssetIsGeneratedOrReference(row)
+        case .hiddenDrafts:
+            return resourceAssetHasHiddenDraft(row, hiddenDraftRecordIDs: hiddenDraftRecordIDs)
+        }
+    }
+
+    private func resourceAssetIsEditableSourceBacked(_ row: ResourceAssetRowViewState) -> Bool {
+        if let recordID = Self.resourceAssetNDSDataRecordID(from: row.id) {
+            guard let catalog = selectedNDSDataCatalog else { return false }
+            let diagnostics = PokemonHackCore.NDSDataMutationPlanner.editabilityDiagnostics(
+                catalog: catalog,
+                recordID: recordID,
+                fileManager: fileManager
+            )
+            return diagnostics.allSatisfy { $0.severity != .error }
+        }
+
+        return Self.resourceAssetIsSourceBacked(row) && !Self.resourceAssetIsGeneratedOrReference(row)
+    }
+
+    private static func resourceAssetIsEditableSourceBacked(
+        _ row: ResourceAssetRowViewState,
+        ndsEditableRecordIDs: Set<String>
+    ) -> Bool {
+        if let recordID = resourceAssetNDSDataRecordID(from: row.id) {
+            return ndsEditableRecordIDs.contains(recordID)
+        }
+
+        return resourceAssetIsSourceBacked(row) && !resourceAssetIsGeneratedOrReference(row)
+    }
+
+    private static func resourceAssetIsSourceBacked(_ row: ResourceAssetRowViewState) -> Bool {
+        guard row.availability == "availableSource" else { return false }
+        let role = row.role.lowercased()
+        return role == "source" || role == "localinput" || role == "editablesource"
+    }
+
+    private static func resourceAssetIsPreviewOnly(_ row: ResourceAssetRowViewState) -> Bool {
+        let blob = resourceAssetFactBlob(row)
+        return blob.contains("previewonly") || blob.contains("preview-only")
+    }
+
+    private static func resourceAssetIsBlocked(_ row: ResourceAssetRowViewState) -> Bool {
+        if row.status == .error { return true }
+        if row.diagnostics.contains(where: { $0.severity == .error }) { return true }
+        if ["missingRequiredSource", "parserError", "unsupported"].contains(row.availability) {
+            return true
+        }
+        if row.diagnostics.contains(where: {
+            let text = "\($0.title) \($0.message)".lowercased()
+            return text.contains("blocked") || text.contains("unavailable")
+        }) {
+            return true
+        }
+        return row.facts.contains { fact in
+            let label = fact.label.lowercased()
+            guard label.contains("readiness") || label.contains("blocker") || label.contains("action state") else {
+                return false
+            }
+            let value = fact.value.lowercased()
+            return value.contains("blocked") || value.contains("unavailable")
+        }
+    }
+
+    private static func resourceAssetHasRelatedRecords(_ row: ResourceAssetRowViewState) -> Bool {
+        row.facts.contains { fact in
+            if fact.label == "Related Rows" {
+                return Int(fact.value.trimmingCharacters(in: .whitespacesAndNewlines)).map { $0 > 0 } ?? false
+            }
+            if fact.label == "Related Domains" {
+                return !fact.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return false
+        }
+    }
+
+    private static func resourceAssetIsGeneratedOrReference(_ row: ResourceAssetRowViewState) -> Bool {
+        let role = row.role.lowercased()
+        if role == "generated" || role == "artifact" || role == "reference" || role == "referencesource" || role == "generatedartifact" {
+            return true
+        }
+        if row.category == "generated" || row.availability.lowercased().contains("generated") {
+            return true
+        }
+        let blob = resourceAssetFactBlob(row)
+        return blob.contains("generatedreference") || blob.contains("referenceonly")
+    }
+
+    private static func resourceAssetHasHiddenDraft(
+        _ row: ResourceAssetRowViewState,
+        hiddenDraftRecordIDs: Set<String>
+    ) -> Bool {
+        guard let recordID = resourceAssetNDSDataRecordID(from: row.id) else { return false }
+        return hiddenDraftRecordIDs.contains(recordID)
+    }
+
+    private static func resourceAssetFactBlob(_ row: ResourceAssetRowViewState) -> String {
+        (
+            [
+                row.title,
+                row.subtitle,
+                row.path,
+                row.category,
+                row.kind,
+                row.role,
+                row.availability,
+                row.availabilitySummary,
+            ]
+                + row.tags
+                + row.facts.flatMap { [$0.label, $0.value] }
+        )
+        .joined(separator: " ")
+        .lowercased()
+    }
+
+    private var selectedNDSDataDraftRecordIDs: Set<String> {
+        guard let selectedIndexedProject else { return [] }
+        let prefix = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: "")
+        return Set(ndsDataDraftsByKey.keys.compactMap { key in
+            guard key.hasPrefix(prefix) else { return nil }
+            return String(key.dropFirst(prefix.count))
+        })
+    }
+
+    private static func resourceAssetNDSDataRecordID(from assetID: String) -> String? {
+        guard let range = assetID.range(of: ":nds-data:") else { return nil }
+        return String(assetID[range.upperBound...])
     }
 
     private static func speciesSearchBlob(_ species: PokemonHackCore.SpeciesDetail) -> String {
@@ -2625,8 +3013,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func ndsDataRecordID(fromAssetID assetID: String) -> String? {
-        guard let range = assetID.range(of: ":nds-data:") else { return nil }
-        return String(assetID[range.upperBound...])
+        Self.resourceAssetNDSDataRecordID(from: assetID)
     }
 
     private static let ndsBuildPreviewOnlyProfiles: Set<String> = [
@@ -3106,6 +3493,7 @@ final class WorkbenchStore: ObservableObject {
         selectWorkbenchModule(.resources, search: search == .replaceTargetIdentifier ? .replace(trimmed) : search)
         selectedResourceLibraryMode = .assets
         resourceAssetCategory = Self.allResourceAssetCategories
+        resourceAssetWorkflowFacet = .all
         if selectResourceAsset(matching: trimmed) {
             recordRecentTarget(recentResourceAssetTarget(for: selectedResourceAssetID ?? trimmed))
         } else {
@@ -3252,6 +3640,8 @@ final class WorkbenchStore: ObservableObject {
         resetGraphicsImportPackagePlanForProjectChange()
         resetSidebarSelectionsForProjectChange()
         resourceAssetCategory = Self.allResourceAssetCategories
+        resourceAssetWorkflowFacet = .all
+        resourceAssetGroupingMode = .none
         selectedResourceAssetID = nil
         pendingRelatedMapTargetID = nil
         pendingResourceAssetFocus = nil
@@ -3413,6 +3803,10 @@ final class WorkbenchStore: ObservableObject {
         patchManifestLoadStatus = selectedPatchPath.isEmpty ? .idle : .idle
     }
 
+    func requestPatchArtifactLibraryItemSelection(_ itemID: String?) {
+        selectedPatchArtifactLibraryItemID = itemID
+    }
+
     func requestBaseROMPath(_ path: String) {
         let shouldReloadPatchCreationPreview = selectedPatchCreationPreviewReport != nil
         selectedBaseROMPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3429,23 +3823,50 @@ final class WorkbenchStore: ObservableObject {
         selectedBinaryROMMutationDryRunPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         rawBinaryROMMutationDryRunManifest = nil
         selectedBinaryROMMutationDryRunReport = nil
+        rawBinaryROMMutationApplyAuditReport = nil
+        selectedBinaryROMMutationApplyAuditReport = nil
+        binaryROMMutationApplyConfirmationToken = ""
+        latestBinaryROMMutationApplyResult = nil
+        selectedBinaryROMMutationApplyResultReport = nil
         binaryROMMutationDryRunLoadStatus = selectedBinaryROMMutationDryRunPath.isEmpty ? .idle : .idle
+    }
+
+    func requestBinaryROMMutationDryRunManifestPath(_ path: String) {
+        selectedBinaryROMMutationDryRunManifestPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        rawBinaryROMMutationDryRunManifest = nil
+        selectedBinaryROMMutationDryRunReport = nil
+        rawBinaryROMMutationApplyAuditReport = nil
+        selectedBinaryROMMutationApplyAuditReport = nil
+        binaryROMMutationApplyConfirmationToken = ""
+        latestBinaryROMMutationApplyResult = nil
+        selectedBinaryROMMutationApplyResultReport = nil
+        binaryROMMutationDryRunLoadStatus = selectedBinaryROMMutationDryRunManifestPath.isEmpty ? .idle : .idle
     }
 
     private func resetPatchManifestReportForProjectChange() {
         selectedBaseROMPath = ""
         selectedBinaryROMMutationDryRunPath = ""
+        selectedBinaryROMMutationDryRunManifestPath = ""
+        binaryROMMutationApplyConfirmationToken = ""
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
         rawPatchCreationPreviewReport = nil
         selectedPatchCreationPreviewReport = nil
         latestPatchCreationResult = nil
         selectedPatchCreationResultReport = nil
+        rawPatchArtifactLibrary = nil
+        selectedPatchArtifactLibrary = nil
+        selectedPatchArtifactLibraryItemID = nil
         rawBinaryROMMutationDryRunManifest = nil
         selectedBinaryROMMutationDryRunReport = nil
+        rawBinaryROMMutationApplyAuditReport = nil
+        selectedBinaryROMMutationApplyAuditReport = nil
+        latestBinaryROMMutationApplyResult = nil
+        selectedBinaryROMMutationApplyResultReport = nil
         latestPatchApplyExportResult = nil
         patchManifestLoadStatus = .idle
         patchCreationPreviewLoadStatus = .idle
+        patchArtifactLibraryLoadStatus = .idle
         binaryROMMutationDryRunLoadStatus = .idle
     }
 
@@ -3561,6 +3982,44 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func recheckPatchArtifactLibrary() {
+        loadSelectedPatchArtifactLibrary(selectingPatchPath: selectedPatchArtifactLibraryItemID)
+    }
+
+    func loadSelectedPatchArtifactLibrary(selectingPatchPath: String? = nil) {
+        guard let projectRoot = selectedIndexedProject?.rootPath else {
+            rawPatchArtifactLibrary = nil
+            selectedPatchArtifactLibrary = nil
+            selectedPatchArtifactLibraryItemID = nil
+            patchArtifactLibraryLoadStatus = .idle
+            return
+        }
+
+        patchArtifactLibraryLoadStatus = .loading
+
+        let library = PatchArtifactLibraryScanner.scan(
+            projectPath: projectRoot,
+            fileManager: fileManager
+        )
+        rawPatchArtifactLibrary = library
+        selectedPatchArtifactLibrary = Self.patchArtifactLibraryViewState(
+            from: library,
+            rootPath: projectRoot
+        )
+
+        let selectedID = selectingPatchPath.flatMap { requested in
+            selectedPatchArtifactLibrary?.items.first { item in
+                item.id == requested || item.patchPath == requested
+            }?.id
+        } ?? selectedPatchArtifactLibrary?.items.first?.id
+        selectedPatchArtifactLibraryItemID = selectedID
+
+        patchArtifactLibraryLoadStatus = .loaded(
+            count: library.items.count,
+            status: selectedPatchArtifactLibrary?.status ?? .valid
+        )
+    }
+
     func createSelectedBPSPatch() {
         guard !selectedBaseROMPath.isEmpty,
               let projectRoot = selectedIndexedProject?.rootPath
@@ -3581,6 +4040,9 @@ final class WorkbenchStore: ObservableObject {
                 from: result,
                 rootPath: projectRoot
             )
+            if result.status == .created, let patchPath = result.patchPath {
+                loadSelectedPatchArtifactLibrary(selectingPatchPath: patchPath)
+            }
         } catch {
             let result = PatchCreationResult(
                 status: .blocked,
@@ -3608,13 +4070,21 @@ final class WorkbenchStore: ObservableObject {
         guard !selectedBinaryROMMutationDryRunPath.isEmpty else {
             rawBinaryROMMutationDryRunManifest = nil
             selectedBinaryROMMutationDryRunReport = nil
+            rawBinaryROMMutationApplyAuditReport = nil
+            selectedBinaryROMMutationApplyAuditReport = nil
+            latestBinaryROMMutationApplyResult = nil
+            selectedBinaryROMMutationApplyResultReport = nil
             binaryROMMutationDryRunLoadStatus = .idle
             return
         }
 
         binaryROMMutationDryRunLoadStatus = .loading
+        rawBinaryROMMutationApplyAuditReport = nil
+        selectedBinaryROMMutationApplyAuditReport = nil
+        latestBinaryROMMutationApplyResult = nil
+        selectedBinaryROMMutationApplyResultReport = nil
 
-        let request = BinaryROMMutationDryRunRequest(workspaceRoot: selectedIndexedProject?.rootPath)
+        let request = BinaryROMMutationDryRunRequest(workspaceRoot: binaryROMMutationApplyWorkspaceRoot().path)
         let manifest = BinaryROMMutationDryRunManifestBuilder.build(
             path: selectedBinaryROMMutationDryRunPath,
             request: request,
@@ -3623,12 +4093,141 @@ final class WorkbenchStore: ObservableObject {
         rawBinaryROMMutationDryRunManifest = manifest
         selectedBinaryROMMutationDryRunReport = Self.binaryROMMutationDryRunReportViewState(
             from: manifest,
-            rootPath: selectedIndexedProject?.rootPath ?? workspaceRoot.path
+            rootPath: binaryROMMutationApplyWorkspaceRoot().path
         )
         binaryROMMutationDryRunLoadStatus = .loaded(
             manifest.sourceTreeFirst.canUseBinaryOnlyPlan ? "Dry Run" : "Blocked",
             selectedBinaryROMMutationDryRunReport?.status ?? .warning
         )
+    }
+
+    func loadSelectedBinaryROMMutationDryRunManifestFromJSON() {
+        guard !selectedBinaryROMMutationDryRunManifestPath.isEmpty else {
+            rawBinaryROMMutationDryRunManifest = nil
+            selectedBinaryROMMutationDryRunReport = nil
+            rawBinaryROMMutationApplyAuditReport = nil
+            selectedBinaryROMMutationApplyAuditReport = nil
+            latestBinaryROMMutationApplyResult = nil
+            selectedBinaryROMMutationApplyResultReport = nil
+            binaryROMMutationDryRunLoadStatus = .idle
+            return
+        }
+
+        binaryROMMutationDryRunLoadStatus = .loading
+        rawBinaryROMMutationApplyAuditReport = nil
+        selectedBinaryROMMutationApplyAuditReport = nil
+        latestBinaryROMMutationApplyResult = nil
+        selectedBinaryROMMutationApplyResultReport = nil
+
+        let manifestURL = URL(fileURLWithPath: selectedBinaryROMMutationDryRunManifestPath).standardizedFileURL
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let manifest = try JSONDecoder().decode(PokemonHackCore.BinaryROMMutationDryRunManifest.self, from: data)
+            if selectedBinaryROMMutationDryRunPath.isEmpty {
+                selectedBinaryROMMutationDryRunPath = manifest.inputPath
+            }
+            rawBinaryROMMutationDryRunManifest = manifest
+            selectedBinaryROMMutationDryRunReport = Self.binaryROMMutationDryRunReportViewState(
+                from: manifest,
+                rootPath: binaryROMMutationApplyWorkspaceRoot().path
+            )
+            refreshSelectedBinaryROMMutationApplyAudit()
+            let isReviewable = manifest.applyReview?.isReviewable == true
+                && manifest.applyReview?.reviewToken != nil
+                && manifest.sourceTreeFirst.canUseBinaryOnlyPlan
+            binaryROMMutationDryRunLoadStatus = .loaded(
+                isReviewable ? "Apply Review" : "Blocked",
+                selectedBinaryROMMutationDryRunReport?.status ?? .warning
+            )
+        } catch {
+            rawBinaryROMMutationDryRunManifest = nil
+            selectedBinaryROMMutationDryRunReport = nil
+            rawBinaryROMMutationApplyAuditReport = nil
+            selectedBinaryROMMutationApplyAuditReport = nil
+            binaryROMMutationDryRunLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func applySelectedBinaryROMMutationReview() {
+        let workspace = binaryROMMutationApplyWorkspaceRoot()
+        let romPath = URL(fileURLWithPath: selectedBinaryROMMutationDryRunPath).standardizedFileURL.path
+        let result: PokemonHackCore.BinaryROMMutationApplyResult
+        if let disabledReason = binaryROMMutationApplyDisabledReason {
+            result = PokemonHackCore.BinaryROMMutationApplyResult(
+                status: .blocked,
+                inputPath: romPath,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APP_APPLY_REVIEW_INCOMPLETE",
+                        message: disabledReason
+                    ),
+                ]
+            )
+        } else {
+            result = BinaryROMMutationApplier.apply(
+                path: romPath,
+                manifestPath: selectedBinaryROMMutationDryRunManifestPath,
+                workspaceRoot: workspace.path,
+                confirmationToken: binaryROMMutationApplyConfirmationToken.trimmingCharacters(in: .whitespacesAndNewlines),
+                fileManager: fileManager
+            )
+        }
+        latestBinaryROMMutationApplyResult = result
+        if let audit = rawBinaryROMMutationApplyAuditReport {
+            let reviewedAudit = BinaryROMMutationApplier.auditReport(audit, reviewing: result)
+            rawBinaryROMMutationApplyAuditReport = reviewedAudit
+            selectedBinaryROMMutationApplyAuditReport = Self.binaryROMMutationApplyAuditReportViewState(
+                from: reviewedAudit,
+                rootPath: workspace.path
+            )
+        }
+        selectedBinaryROMMutationApplyResultReport = Self.binaryROMMutationApplyResultViewState(
+            from: result,
+            rootPath: workspace.path
+        )
+    }
+
+    private func refreshSelectedBinaryROMMutationApplyAudit() {
+        guard !selectedBinaryROMMutationDryRunPath.isEmpty,
+              !selectedBinaryROMMutationDryRunManifestPath.isEmpty
+        else {
+            rawBinaryROMMutationApplyAuditReport = nil
+            selectedBinaryROMMutationApplyAuditReport = nil
+            return
+        }
+
+        let workspace = binaryROMMutationApplyWorkspaceRoot()
+        let audit = BinaryROMMutationApplier.audit(
+            path: selectedBinaryROMMutationDryRunPath,
+            manifestPath: selectedBinaryROMMutationDryRunManifestPath,
+            workspaceRoot: workspace.path,
+            applyResult: latestBinaryROMMutationApplyResult,
+            fileManager: fileManager
+        )
+        rawBinaryROMMutationApplyAuditReport = audit
+        selectedBinaryROMMutationApplyAuditReport = Self.binaryROMMutationApplyAuditReportViewState(
+            from: audit,
+            rootPath: workspace.path
+        )
+    }
+
+    private func binaryROMMutationApplyWorkspaceRoot() -> URL {
+        if let projectRootPath = selectedIndexedProject?.rootPath {
+            var isDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: projectRootPath, isDirectory: &isDirectory),
+               isDirectory.boolValue
+            {
+                return URL(fileURLWithPath: projectRootPath).standardizedFileURL
+            }
+        }
+
+        let romPath = selectedBinaryROMMutationDryRunPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !romPath.isEmpty {
+            return URL(fileURLWithPath: romPath).standardizedFileURL.deletingLastPathComponent()
+        }
+
+        return workspaceRoot.standardizedFileURL
     }
 
     func applyExportSelectedPatchROM() {
@@ -3925,6 +4524,7 @@ final class WorkbenchStore: ObservableObject {
         selectWorkbenchModule(.resources, search: .preserve)
         selectedResourceLibraryMode = .assets
         resourceAssetCategory = Self.allResourceAssetCategories
+        resourceAssetWorkflowFacet = .all
         applySearchBehavior(.replace(trimmed), for: .resources)
         if !selectResourceAsset(matching: trimmed) {
             pendingResourceAssetFocus = trimmed
@@ -6007,6 +6607,11 @@ final class WorkbenchStore: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: absolutePath)])
     }
 
+    func revealPatchArtifactLibraryItem(_ item: PatchArtifactLibraryItemViewState) {
+        guard item.canReveal else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.patchPath)])
+    }
+
     private func appendBuildRunLog(_ event: PokemonHackCore.DecompBuildLogEvent, projectID: String) {
         var lines = buildRunLogLinesByID[projectID] ?? []
         lines.append(
@@ -6036,7 +6641,10 @@ final class WorkbenchStore: ObservableObject {
             patchManifest: rawPatchManifestReport,
             patchCreationPreview: rawPatchCreationPreviewReport,
             patchCreationResult: latestPatchCreationResult,
+            patchArtifactLibrary: rawPatchArtifactLibrary,
             binaryROMMutationDryRunManifest: rawBinaryROMMutationDryRunManifest,
+            binaryROMMutationApplyAudit: rawBinaryROMMutationApplyAuditReport,
+            binaryROMMutationApplyResult: latestBinaryROMMutationApplyResult,
             playtest: report.map(Self.exportPayload(fromPlaytest:))
         )
         let encoder = JSONEncoder()
@@ -6063,6 +6671,16 @@ final class WorkbenchStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(rawBinaryROMMutationDryRunManifest), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copyPatchArtifactLibraryJSONToPasteboard() {
+        guard let rawPatchArtifactLibrary else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawPatchArtifactLibrary), let json = String(data: data, encoding: .utf8) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
@@ -8392,6 +9010,31 @@ final class WorkbenchStore: ObservableObject {
                 )
             )
         }
+        if let verification = result.verification {
+            let appliedSHA1 = verification.appliedOutputSHA1 ?? "unavailable"
+            let appliedCRC32 = verification.appliedOutputCRC32 ?? "unavailable"
+            let appliedSize = verification.appliedOutputSizeBytes.map { "\($0)" } ?? "unavailable"
+            let status: ValidationState = verification.status == .passed ? .valid : .error
+            rows.append(
+                BuildReportRow(
+                    id: "patch-creation-result:verification",
+                    section: .patchManifest,
+                    title: "Patch verification",
+                    subtitle: verification.status.rawValue,
+                    detail: "Re-read BPS patch applied in memory. SHA1 \(verification.sha1Matches ? "matches" : "mismatch"): \(appliedSHA1) vs \(verification.expectedBuiltOutputSHA1); CRC32 \(verification.crc32Matches ? "matches" : "mismatch"): \(appliedCRC32) vs \(verification.expectedBuiltOutputCRC32); size \(verification.sizeMatches ? "matches" : "mismatch"): \(appliedSize) vs \(verification.expectedBuiltOutputSizeBytes); header policy \(verification.headerPolicyMatches ? "matches" : "mismatch"): \(verification.headerPolicy.mode).",
+                    status: status,
+                    source: SourceLocation(path: patchPath, symbol: "patch-create-verify", line: 1),
+                    tags: [
+                        verification.status.rawValue,
+                        verification.appliedOutputSHA1 ?? "",
+                        verification.expectedBuiltOutputSHA1,
+                        verification.appliedOutputCRC32 ?? "",
+                        verification.expectedBuiltOutputCRC32,
+                        verification.headerPolicy.mode
+                    ]
+                )
+            )
+        }
         if let manifestPath = result.manifestPath {
             rows.append(
                 BuildReportRow(
@@ -8421,6 +9064,213 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func patchArtifactLibraryViewState(
+        from library: PokemonHackCore.PatchArtifactLibrary,
+        rootPath: String
+    ) -> PatchArtifactLibraryViewState {
+        let diagnostics = library.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let items = library.items.map { patchArtifactLibraryItemViewState(from: $0, rootPath: rootPath) }
+        let status = validationStatus(for: diagnostics.map(\.severity) + items.map(\.status))
+        let count = items.count
+        let rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-artifact-library:summary",
+                section: .patchManifest,
+                title: "Patch artifact library",
+                subtitle: "\(count) BPS artifact\(count == 1 ? "" : "s")",
+                detail: "Read-only scan of \(library.relativeArtifactRoot); no patch apply/export, ROM write, build, playtest, overwrite, source mutation, or header rewrite is performed.",
+                status: status,
+                source: SourceLocation(path: library.artifactRoot, symbol: "patch-library", line: 1),
+                tags: [library.artifactRoot, library.relativeArtifactRoot, "read-only"]
+            ),
+        ] + diagnostics.map(BuildReportRow.init(diagnostic:))
+
+        return PatchArtifactLibraryViewState(
+            id: "patch-artifact-library:\(library.artifactRoot)",
+            title: "Patch Library",
+            subtitle: "\(count) BPS artifact\(count == 1 ? "" : "s")",
+            detail: "Read-only ignored artifact scan.",
+            status: status,
+            artifactRoot: library.artifactRoot,
+            items: items,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func patchArtifactLibraryItemViewState(
+        from item: PokemonHackCore.PatchArtifactLibraryItem,
+        rootPath: String
+    ) -> PatchArtifactLibraryItemViewState {
+        let diagnostics = item.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = validationState(for: item.status)
+        let patchFormat = item.patchSummary?.format.rawValue.uppercased() ?? "unknown"
+        let sourceSize = item.patchSummary?.sourceSize.map { "\($0) bytes source" } ?? "source size unavailable"
+        let targetSize = item.patchSummary?.targetSize.map { "\($0) bytes target" } ?? "target size unavailable"
+        let patchSHA1 = patchCreationSHA1Summary(item.patchIdentity.sha1)
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-library:item:\(item.id):summary",
+                section: .patchManifest,
+                title: item.fileName,
+                subtitle: "\(patchFormat) · \(item.status.rawValue)",
+                detail: item.verificationSummary,
+                status: status,
+                source: SourceLocation(path: item.patchPath, symbol: "patch-library-item", line: 1),
+                tags: [item.relativePatchPath, item.patchPath, item.status.rawValue, item.verificationSummary]
+            ),
+            BuildReportRow(
+                id: "patch-library:item:\(item.id):patch",
+                section: .patchManifest,
+                title: "BPS patch artifact",
+                subtitle: "\(patchFileSizeSummary(item.patchIdentity.sizeBytes)); \(patchSHA1)",
+                detail: "\(sourceSize); \(targetSize); CRC32 \(item.patchIdentity.crc32 ?? "unavailable"); manifest checksum \(item.patchChecksumStatus.rawValue).",
+                status: validationState(for: item.patchChecksumStatus),
+                source: SourceLocation(path: item.patchPath, symbol: "bps-patch", line: 1),
+                tags: [
+                    item.relativePatchPath,
+                    item.patchPath,
+                    item.patchIdentity.sha1 ?? "",
+                    item.patchIdentity.crc32 ?? "",
+                    item.patchChecksumStatus.rawValue
+                ],
+                actions: [
+                    BuildReportRowAction(
+                        id: "patch-library-copy-patch:\(item.id)",
+                        kind: .copyPath,
+                        title: "Patch path",
+                        detail: "Copy the ignored BPS patch artifact path.",
+                        command: nil,
+                        payload: item.patchPath
+                    )
+                ]
+            ),
+            BuildReportRow(
+                id: "patch-library:item:\(item.id):manifest",
+                section: .patchManifest,
+                title: "Creation manifest",
+                subtitle: item.manifestStatus.rawValue,
+                detail: item.manifest == nil
+                    ? "Sibling creation manifest is not available at \(item.manifestPath)."
+                    : "Manifest records base ROM, built output, patch checksums, and no-header-rewrite policy.",
+                status: validationState(for: item.manifestStatus),
+                source: SourceLocation(path: item.manifestPath, symbol: "patch-create-manifest", line: 1),
+                tags: [item.relativeManifestPath, item.manifestPath, item.manifestStatus.rawValue],
+                actions: [
+                    BuildReportRowAction(
+                        id: "patch-library-copy-manifest:\(item.id)",
+                        kind: .copyPath,
+                        title: "Manifest path",
+                        detail: "Copy the sibling creation manifest path.",
+                        command: nil,
+                        payload: item.manifestPath
+                    )
+                ]
+            ),
+        ]
+
+        if let base = item.baseROMIdentity {
+            rows.append(
+                patchArtifactIdentityRow(
+                    id: "patch-library:item:\(item.id):base",
+                    title: "Base ROM status",
+                    identity: base,
+                    expectedSHA1: item.manifest?.baseROMSHA1,
+                    status: item.baseROMStatus
+                )
+            )
+        }
+        if let output = item.builtOutputIdentity {
+            rows.append(
+                patchArtifactIdentityRow(
+                    id: "patch-library:item:\(item.id):built-output",
+                    title: "Built output status",
+                    identity: output,
+                    expectedSHA1: item.manifest?.builtOutputSHA1,
+                    status: item.builtOutputStatus
+                )
+            )
+        }
+
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return PatchArtifactLibraryItemViewState(
+            id: item.id,
+            title: item.fileName,
+            subtitle: "\(patchFormat) · \(item.status.rawValue)",
+            detail: item.verificationSummary,
+            status: status,
+            patchPath: item.patchPath,
+            manifestPath: item.manifestPath,
+            manifestStatus: item.manifestStatus.rawValue,
+            patchChecksumStatus: item.patchChecksumStatus.rawValue,
+            baseROMStatus: item.baseROMStatus.rawValue,
+            builtOutputStatus: item.builtOutputStatus.rawValue,
+            verificationSummary: item.verificationSummary,
+            canReveal: item.patchIdentity.exists,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func patchArtifactIdentityRow(
+        id: String,
+        title: String,
+        identity: PokemonHackCore.PatchArtifactLibraryFileIdentity,
+        expectedSHA1: String?,
+        status: PokemonHackCore.PatchArtifactLibraryCheckStatus
+    ) -> BuildReportRow {
+        BuildReportRow(
+            id: id,
+            section: .patchManifest,
+            title: title,
+            subtitle: "\(status.rawValue); \(patchFileSizeSummary(identity.sizeBytes)); \(patchCreationSHA1Summary(identity.sha1))",
+            detail: "Expected SHA1 \(expectedSHA1 ?? "unavailable"); CRC32 \(identity.crc32 ?? "unavailable").",
+            status: validationState(for: status),
+            source: SourceLocation(path: identity.path, symbol: title, line: 1),
+            tags: [identity.path, identity.sha1 ?? "", identity.crc32 ?? "", expectedSHA1 ?? "", status.rawValue]
+        )
+    }
+
+    private static func patchFileSizeSummary(_ sizeBytes: UInt64?) -> String {
+        sizeBytes.map { "\($0) bytes" } ?? "size unavailable"
+    }
+
+    private static func validationState(
+        for status: PokemonHackCore.PatchArtifactLibraryItemStatus
+    ) -> ValidationState {
+        switch status {
+        case .valid:
+            .valid
+        case .warning:
+            .warning
+        case .error:
+            .error
+        }
+    }
+
+    private static func validationState(
+        for status: PokemonHackCore.PatchArtifactLibraryManifestStatus
+    ) -> ValidationState {
+        switch status {
+        case .matched:
+            .valid
+        case .missing, .unreadable, .mismatched:
+            .warning
+        }
+    }
+
+    private static func validationState(
+        for status: PokemonHackCore.PatchArtifactLibraryCheckStatus
+    ) -> ValidationState {
+        switch status {
+        case .matched, .unavailable:
+            .valid
+        case .missing, .unreadable, .mismatched:
+            .warning
+        }
+    }
+
     private static func patchCreationByteSummary(_ sizeBytes: UInt64?) -> String {
         sizeBytes.map { "\($0) bytes" } ?? "size unavailable"
     }
@@ -8447,6 +9297,9 @@ final class WorkbenchStore: ObservableObject {
         let sourceStatus = manifest.sourceTreeFirst.canUseBinaryOnlyPlan ? ValidationState.valid : .warning
         let sourceCandidates = manifest.sourceTreeFirst.sourceCandidates.map(\.path)
         let sourceCandidateDetail = sourceCandidates.isEmpty ? "" : " Candidates: \(sourceCandidates.joined(separator: ", "))."
+        let applyReview = manifest.applyReview
+        let isReviewable = applyReview?.isReviewable == true
+        let reviewStatus: ValidationState = isReviewable ? .valid : .warning
         let ignored = BinaryROMMutationIgnoredOutputGuidanceViewState(
             id: manifest.ignoredOutputGuidance.relativeRoot,
             relativeRoot: manifest.ignoredOutputGuidance.relativeRoot,
@@ -8492,11 +9345,18 @@ final class WorkbenchStore: ObservableObject {
             )
             let offset = preview.offset.map { String(format: "0x%06X", $0) } ?? "offset unavailable"
             let length = preview.length.map { "\($0) byte(s)" } ?? "length unavailable"
+            let identityDetail = [
+                preview.originalSpanSHA1.map { "original span sha1 \($0)" },
+                preview.replacementSHA1.map { "replacement sha1 \($0)" },
+            ]
+            .compactMap(\.self)
+            .joined(separator: "; ")
+            let detail = identityDetail.isEmpty ? preview.summary : "\(preview.summary) \(identityDetail)."
             return BinaryROMMutationOperationPreviewViewState(
                 id: preview.id,
                 title: preview.kind.rawValue,
                 subtitle: "\(preview.status.rawValue) · \(offset) · \(length)",
-                detail: preview.summary,
+                detail: detail,
                 status: operationStatus,
                 canApply: preview.canApply,
                 diagnostics: operationDiagnostics
@@ -8524,7 +9384,36 @@ final class WorkbenchStore: ObservableObject {
                 source: SourceLocation(path: manifest.inputPath, symbol: "source-tree-first", line: 1),
                 tags: [manifest.sourceTreeFirst.status.rawValue, manifest.sourceTreeFirst.rationale] + sourceCandidates
             ),
+            BuildReportRow(
+                id: "binary-rom-mutation:apply-review",
+                section: .patchManifest,
+                title: "Apply review token",
+                subtitle: isReviewable ? "reviewable" : "not reviewable",
+                detail: applyReview?.rationale ?? "No replace-only apply review metadata is present in this manifest.",
+                status: reviewStatus,
+                source: SourceLocation(path: manifest.inputPath, symbol: "apply-review", line: 1),
+                tags: [
+                    applyReview?.reviewToken ?? "",
+                    applyReview?.confirmationArgument ?? "",
+                    "\(applyReview?.operationCount ?? 0)",
+                ]
+            ),
         ]
+
+        if let blockedActions = applyReview?.blockedApplyActions, !blockedActions.isEmpty {
+            rows.append(
+                BuildReportRow(
+                    id: "binary-rom-mutation:blocked-apply-actions",
+                    section: .patchManifest,
+                    title: "Blocked broader binary actions",
+                    subtitle: "\(blockedActions.count) blocked",
+                    detail: blockedActions.joined(separator: ", "),
+                    status: .valid,
+                    source: SourceLocation(path: manifest.inputPath, symbol: "blocked-apply-actions", line: 1),
+                    tags: blockedActions
+                )
+            )
+        }
 
         if let baseIdentity {
             rows.append(
@@ -8586,9 +9475,245 @@ final class WorkbenchStore: ObservableObject {
             sourceTreeStatus: manifest.sourceTreeFirst.status.rawValue,
             sourceTreeDetail: manifest.sourceTreeFirst.rationale,
             sourceCandidates: sourceCandidates,
+            applyReviewIsReviewable: isReviewable,
+            applyReviewToken: applyReview?.reviewToken,
+            applyReviewConfirmationArgument: applyReview?.confirmationArgument,
+            blockedApplyActions: applyReview?.blockedApplyActions ?? [],
             baseIdentity: baseIdentity,
             ignoredOutputGuidance: ignored,
             operationPreviews: operations,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func binaryROMMutationApplyAuditReportViewState(
+        from report: PokemonHackCore.BinaryROMMutationApplyAuditReport,
+        rootPath: String
+    ) -> BinaryROMMutationApplyAuditReportViewState {
+        let diagnostics = report.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status: ValidationState = report.status == .ready
+            ? validationStatus(for: diagnostics.map(\.severity))
+            : .error
+        let artifactReviews = report.artifactReviews.map { artifact -> BinaryROMMutationApplyArtifactReviewViewState in
+            BinaryROMMutationApplyArtifactReviewViewState(
+                id: artifact.id,
+                title: binaryROMMutationArtifactTitle(artifact.kind),
+                subtitle: binaryROMMutationArtifactStatusLabel(artifact.status),
+                detail: artifact.path ?? "\(artifact.detail) Pattern: \(artifact.relativePathPattern).",
+                status: binaryROMMutationArtifactValidationState(artifact.status),
+                path: artifact.path,
+                relativePathPattern: artifact.relativePathPattern
+            )
+        }
+
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:summary",
+                section: .patchManifest,
+                title: "Apply audit",
+                subtitle: report.status.rawValue,
+                detail: report.status == .ready
+                    ? "Current ROM, source-tree, review-token, and artifact containment checks are ready for explicit reviewed apply."
+                    : "Current ROM, source-tree, review-token, or artifact containment checks block apply before any write.",
+                status: status,
+                source: SourceLocation(path: report.inputPath, symbol: "binary-rom-apply-audit", line: 1),
+                tags: [report.status.rawValue, report.inputPath, report.destinationRootPattern]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:manifest",
+                section: .patchManifest,
+                title: "Review manifest identity",
+                subtitle: report.dryRunManifestSHA1.map { "sha1 \($0.prefix(8))" } ?? "manifest unavailable",
+                detail: "Manifest: \(report.dryRunManifestPath ?? "not loaded"); review token stale: \(report.isReviewTokenStale).",
+                status: report.isReviewTokenStale ? .error : .valid,
+                source: SourceLocation(path: report.dryRunManifestPath ?? report.inputPath, symbol: "review-manifest", line: 1),
+                tags: [
+                    report.dryRunManifestPath ?? "",
+                    report.dryRunManifestSHA1 ?? "",
+                    report.reviewToken ?? "",
+                    report.expectedReviewToken ?? "",
+                    "\(report.isReviewTokenStale)",
+                ]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:artifact-root",
+                section: .patchManifest,
+                title: "Ignored artifact destination",
+                subtitle: report.destinationRootPattern,
+                detail: "Audit checks this ignored destination pattern only; exact timestamped paths are produced by explicit apply.",
+                status: report.status == .ready ? .valid : .warning,
+                source: SourceLocation(path: report.destinationRootPattern, symbol: "artifact-destination-pattern", line: 1),
+                tags: [
+                    report.destinationRootPattern,
+                    report.backupPathPattern,
+                    report.applyManifestPathPattern,
+                ]
+            ),
+        ]
+
+        rows.append(contentsOf: artifactReviews.map { artifact in
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:artifact:\(artifact.id)",
+                section: .patchManifest,
+                title: artifact.title,
+                subtitle: artifact.subtitle,
+                detail: artifact.detail,
+                status: artifact.status,
+                source: SourceLocation(path: artifact.path ?? artifact.relativePathPattern, symbol: artifact.id, line: 1),
+                tags: [artifact.subtitle, artifact.path ?? "", artifact.relativePathPattern]
+            )
+        })
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return BinaryROMMutationApplyAuditReportViewState(
+            id: "binary-rom-mutation-apply-audit:\(report.inputPath):\(report.status.rawValue)",
+            status: status,
+            statusLabel: report.status.rawValue,
+            inputPath: report.inputPath,
+            manifestPath: report.dryRunManifestPath,
+            manifestSHA1: report.dryRunManifestSHA1,
+            reviewToken: report.reviewToken,
+            expectedReviewToken: report.expectedReviewToken,
+            isReviewTokenStale: report.isReviewTokenStale,
+            destinationRootPattern: report.destinationRootPattern,
+            artifactReviews: artifactReviews,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func binaryROMMutationArtifactTitle(_ kind: PokemonHackCore.BinaryROMMutationApplyArtifactKind) -> String {
+        switch kind {
+        case .originalROMBackup:
+            return "Original ROM backup audit"
+        case .applyManifest:
+            return "Apply manifest audit"
+        }
+    }
+
+    private static func binaryROMMutationArtifactStatusLabel(_ status: PokemonHackCore.BinaryROMMutationApplyArtifactStatus) -> String {
+        switch status {
+        case .pendingExplicitApply:
+            return "pending explicit apply"
+        case .blockedBeforeWrite:
+            return "blocked before write"
+        case .writtenAfterApply:
+            return "written after apply"
+        }
+    }
+
+    private static func binaryROMMutationArtifactValidationState(_ status: PokemonHackCore.BinaryROMMutationApplyArtifactStatus) -> ValidationState {
+        switch status {
+        case .pendingExplicitApply:
+            return .valid
+        case .blockedBeforeWrite:
+            return .warning
+        case .writtenAfterApply:
+            return .valid
+        }
+    }
+
+    private static func binaryROMMutationApplyResultViewState(
+        from result: PokemonHackCore.BinaryROMMutationApplyResult,
+        rootPath: String
+    ) -> BinaryROMMutationApplyResultViewState {
+        let diagnostics = result.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status: ValidationState = result.status == .applied
+            ? validationStatus(for: diagnostics.map(\.severity))
+            : .error
+        let statusLabel = result.status.rawValue
+        let inputPath = result.inputPath
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "binary-rom-mutation-apply:summary",
+                section: .patchManifest,
+                title: "Binary ROM replacement apply",
+                subtitle: statusLabel,
+                detail: result.status == .applied
+                    ? "Applied \(result.appliedReplacements.count) reviewed replacement(s) in place with ignored backup and manifest artifacts."
+                    : "Binary ROM replacement apply was blocked before writing ROM bytes.",
+                status: status,
+                source: SourceLocation(path: inputPath, symbol: "binary-rom-apply", line: 1),
+                tags: [statusLabel, inputPath, result.backupPath ?? "", result.manifestPath ?? ""]
+            ),
+        ]
+
+        if let backupPath = result.backupPath {
+            rows.append(
+                BuildReportRow(
+                    id: "binary-rom-mutation-apply:backup",
+                    section: .patchManifest,
+                    title: "Original ROM backup",
+                    subtitle: result.status == .applied ? "written" : "not written",
+                    detail: backupPath,
+                    status: result.status == .applied ? .valid : .warning,
+                    source: SourceLocation(path: backupPath, symbol: "original-rom-backup", line: 1),
+                    tags: [backupPath]
+                )
+            )
+        }
+
+        if let manifestPath = result.manifestPath {
+            rows.append(
+                BuildReportRow(
+                    id: "binary-rom-mutation-apply:manifest",
+                    section: .patchManifest,
+                    title: "Apply manifest",
+                    subtitle: result.manifest == nil ? "not written" : "schema \(result.manifest?.schemaVersion ?? 1)",
+                    detail: manifestPath,
+                    status: result.manifest == nil ? .warning : .valid,
+                    source: SourceLocation(path: manifestPath, symbol: "apply-manifest", line: 1),
+                    tags: [manifestPath, result.manifest?.confirmation.reviewToken ?? ""]
+                )
+            )
+        }
+
+        if let baseBefore = result.baseBefore {
+            let afterSHA1 = result.baseAfter?.sha1 ?? "not applied"
+            rows.append(
+                BuildReportRow(
+                    id: "binary-rom-mutation-apply:base-identity",
+                    section: .patchManifest,
+                    title: "Base identity recheck",
+                    subtitle: "before \(baseBefore.sha1.prefix(8)) · after \(afterSHA1.prefix(8))",
+                    detail: "CRC32 \(baseBefore.crc32); size \(baseBefore.sizeBytes) byte(s); title \(baseBefore.title ?? "unknown"); game code \(baseBefore.gameCode ?? "unknown").",
+                    status: result.status == .applied ? .valid : .warning,
+                    source: SourceLocation(path: inputPath, symbol: "base-identity-recheck", line: 1),
+                    tags: [baseBefore.sha1, afterSHA1, baseBefore.crc32, "\(baseBefore.sizeBytes)"]
+                )
+            )
+        }
+
+        rows.append(contentsOf: result.appliedReplacements.map { replacement in
+            let offset = String(format: "0x%06X", replacement.offset)
+            return BuildReportRow(
+                id: "binary-rom-mutation-apply:replacement:\(replacement.id)",
+                section: .patchManifest,
+                title: "Applied byte replacement",
+                subtitle: "\(offset) · \(replacement.length) byte(s)",
+                detail: "Original span sha1 \(replacement.originalSpanSHA1 ?? "unknown"); replacement sha1 \(replacement.replacementSHA1 ?? "unknown").",
+                status: .valid,
+                source: SourceLocation(path: inputPath, symbol: replacement.id, line: 1),
+                tags: [
+                    offset,
+                    "\(replacement.length)",
+                    replacement.originalPreviewHex ?? "",
+                    replacement.originalSpanSHA1 ?? "",
+                    replacement.replacementPreviewHex ?? "",
+                    replacement.replacementSHA1 ?? "",
+                ]
+            )
+        })
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+
+        return BinaryROMMutationApplyResultViewState(
+            id: "binary-rom-mutation-apply:\(inputPath):\(statusLabel)",
+            status: status,
+            statusLabel: statusLabel,
+            inputPath: inputPath,
+            backupPath: result.backupPath,
+            manifestPath: result.manifestPath,
             diagnostics: diagnostics,
             rows: rows
         )

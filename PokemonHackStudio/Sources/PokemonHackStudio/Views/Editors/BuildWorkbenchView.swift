@@ -283,7 +283,12 @@ struct BuildWorkbenchView: View {
                 rows: store.filteredPatchCreationPreviewRows,
                 resultRows: store.filteredPatchCreationResultRows
             )
-            binaryROMMutationDryRunSection(rows: store.filteredBinaryROMMutationDryRunRows)
+            patchArtifactLibrarySection(rows: store.filteredPatchArtifactLibraryRows)
+            binaryROMMutationDryRunSection(
+                rows: store.filteredBinaryROMMutationDryRunRows,
+                auditRows: store.filteredBinaryROMMutationApplyAuditRows,
+                resultRows: store.filteredBinaryROMMutationApplyResultRows
+            )
 
             if !store.baseROMOptions.isEmpty {
                 EditorSection(title: "Base ROM Options") {
@@ -339,8 +344,12 @@ struct BuildWorkbenchView: View {
         }
     }
 
-    private func binaryROMMutationDryRunSection(rows: [BuildReportRow]) -> some View {
-        EditorSection(title: "Binary ROM Mutation Dry Run") {
+    private func binaryROMMutationDryRunSection(
+        rows: [BuildReportRow],
+        auditRows: [BuildReportRow],
+        resultRows: [BuildReportRow]
+    ) -> some View {
+        EditorSection(title: "Binary ROM Mutation Review") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     TextField(
@@ -363,6 +372,35 @@ struct BuildWorkbenchView: View {
                         store.copyBinaryROMMutationDryRunManifestJSONToPasteboard()
                     }
                     .disabled(store.selectedBinaryROMMutationDryRunReport == nil)
+                }
+
+                HStack(spacing: 8) {
+                    TextField(
+                        "Dry-run manifest JSON path",
+                        text: Binding(
+                            get: { store.selectedBinaryROMMutationDryRunManifestPath },
+                            set: { store.requestBinaryROMMutationDryRunManifestPath($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+
+                    Button("Choose JSON", systemImage: "folder") {
+                        chooseBinaryROMMutationDryRunManifestJSON()
+                    }
+                    Button("Load Review", systemImage: "doc.text.magnifyingglass") {
+                        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+                    }
+                    .disabled(store.selectedBinaryROMMutationDryRunManifestPath.isEmpty)
+                }
+
+                HStack(spacing: 8) {
+                    TextField("Review token", text: $store.binaryROMMutationApplyConfirmationToken)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Apply Reviewed Replacement", systemImage: "checkmark.seal") {
+                        store.applySelectedBinaryROMMutationReview()
+                    }
+                    .disabled(!store.canApplySelectedBinaryROMMutationReview)
+                    .help(store.binaryROMMutationApplyDisabledReason ?? "Apply reviewed replace-only byte changes in place")
                 }
 
                 HStack(spacing: 8) {
@@ -394,7 +432,99 @@ struct BuildWorkbenchView: View {
                         )
                     }
                 }
+
+                if !auditRows.isEmpty {
+                    Divider()
+                    ForEach(auditRows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+
+                if !resultRows.isEmpty {
+                    Divider()
+                    ForEach(resultRows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
             }
+        }
+    }
+
+    private func patchArtifactLibrarySection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Patch Library") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.patchArtifactLibraryLoadStatus.validationState)
+                    Text(store.patchArtifactLibraryLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Re-check", systemImage: "arrow.clockwise") {
+                        store.recheckPatchArtifactLibrary()
+                    }
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyPatchArtifactLibraryJSONToPasteboard()
+                    }
+                    .disabled(store.selectedPatchArtifactLibrary == nil)
+                    Button("Reveal", systemImage: "folder") {
+                        if let item = store.selectedPatchArtifactLibraryItem {
+                            store.revealPatchArtifactLibraryItem(item)
+                        }
+                    }
+                    .disabled(store.selectedPatchArtifactLibraryItem?.canReveal != true)
+                }
+
+                if let library = store.selectedPatchArtifactLibrary, !library.items.isEmpty {
+                    Picker(
+                        "Artifact",
+                        selection: Binding(
+                            get: { store.selectedPatchArtifactLibraryItemID ?? library.items.first?.id ?? "" },
+                            set: { store.requestPatchArtifactLibraryItemSelection($0.isEmpty ? nil : $0) }
+                        )
+                    ) {
+                        ForEach(library.items) { item in
+                            Text("\(item.title) - \(item.subtitle)").tag(item.id)
+                        }
+                    }
+                    .frame(minWidth: 320)
+
+                    if let selected = store.selectedPatchArtifactLibraryItem {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checklist")
+                            Text(selected.verificationSummary)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No BPS Patch Artifacts",
+                        systemImage: "tray",
+                        description: Text("Ignored .pokemonhackstudio/patches/*.bps artifacts will appear here after re-check.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if store.patchArtifactLibraryLoadStatus == .idle {
+                store.recheckPatchArtifactLibrary()
+            }
+            store.loadSelectedAssetCatalogIfNeeded()
         }
     }
 
@@ -770,6 +900,18 @@ struct BuildWorkbenchView: View {
         if panel.runModal() == .OK, let url = panel.url {
             store.requestBinaryROMMutationDryRunPath(url.path)
             store.loadSelectedBinaryROMMutationDryRunManifest()
+        }
+    }
+
+    private func chooseBinaryROMMutationDryRunManifestJSON() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = Self.contentTypes(for: ["json"])
+        if panel.runModal() == .OK, let url = panel.url {
+            store.requestBinaryROMMutationDryRunManifestPath(url.path)
+            store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
         }
     }
 

@@ -417,6 +417,91 @@ public struct BinaryROMMutationApplyResult: Codable, Equatable {
     }
 }
 
+public enum BinaryROMMutationApplyAuditStatus: String, Codable, Equatable {
+    case ready
+    case blocked
+}
+
+public enum BinaryROMMutationApplyArtifactKind: String, Codable, Equatable {
+    case originalROMBackup
+    case applyManifest
+}
+
+public enum BinaryROMMutationApplyArtifactStatus: String, Codable, Equatable {
+    case pendingExplicitApply
+    case blockedBeforeWrite
+    case writtenAfterApply
+}
+
+public struct BinaryROMMutationApplyArtifactReview: Codable, Equatable, Identifiable {
+    public var id: String { kind.rawValue }
+
+    public let kind: BinaryROMMutationApplyArtifactKind
+    public let status: BinaryROMMutationApplyArtifactStatus
+    public let path: String?
+    public let relativePathPattern: String
+    public let detail: String
+
+    public init(
+        kind: BinaryROMMutationApplyArtifactKind,
+        status: BinaryROMMutationApplyArtifactStatus,
+        path: String?,
+        relativePathPattern: String,
+        detail: String
+    ) {
+        self.kind = kind
+        self.status = status
+        self.path = path
+        self.relativePathPattern = relativePathPattern
+        self.detail = detail
+    }
+}
+
+public struct BinaryROMMutationApplyAuditReport: Codable, Equatable {
+    public let schemaVersion: Int
+    public let status: BinaryROMMutationApplyAuditStatus
+    public let inputPath: String
+    public let dryRunManifestPath: String?
+    public let dryRunManifestSHA1: String?
+    public let reviewToken: String?
+    public let expectedReviewToken: String?
+    public let isReviewTokenStale: Bool
+    public let destinationRootPattern: String
+    public let backupPathPattern: String
+    public let applyManifestPathPattern: String
+    public let artifactReviews: [BinaryROMMutationApplyArtifactReview]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: BinaryROMMutationApplyAuditStatus,
+        inputPath: String,
+        dryRunManifestPath: String?,
+        dryRunManifestSHA1: String?,
+        reviewToken: String?,
+        expectedReviewToken: String?,
+        isReviewTokenStale: Bool,
+        destinationRootPattern: String,
+        backupPathPattern: String,
+        applyManifestPathPattern: String,
+        artifactReviews: [BinaryROMMutationApplyArtifactReview],
+        diagnostics: [Diagnostic]
+    ) {
+        schemaVersion = 1
+        self.status = status
+        self.inputPath = inputPath
+        self.dryRunManifestPath = dryRunManifestPath
+        self.dryRunManifestSHA1 = dryRunManifestSHA1
+        self.reviewToken = reviewToken
+        self.expectedReviewToken = expectedReviewToken
+        self.isReviewTokenStale = isReviewTokenStale
+        self.destinationRootPattern = destinationRootPattern
+        self.backupPathPattern = backupPathPattern
+        self.applyManifestPathPattern = applyManifestPathPattern
+        self.artifactReviews = artifactReviews
+        self.diagnostics = diagnostics
+    }
+}
+
 public enum BinaryROMMutationDryRunManifestBuilder {
     public static func build(
         path: String,
@@ -924,7 +1009,7 @@ public enum BinaryROMMutationDryRunManifestBuilder {
                 "free-space allocation apply",
                 "checksum repair",
                 "emulator launch",
-                "app apply UI",
+                "app auto-apply",
                 "source mutation",
                 "ROM export",
                 "patched-copy output"
@@ -977,6 +1062,293 @@ public enum BinaryROMMutationDryRunManifestBuilder {
 }
 
 public enum BinaryROMMutationApplier {
+    public static func audit(
+        path: String,
+        manifestPath: String?,
+        workspaceRoot: String?,
+        applyResult: BinaryROMMutationApplyResult? = nil,
+        fileManager: FileManager = .default
+    ) -> BinaryROMMutationApplyAuditReport {
+        let inputURL = URL(fileURLWithPath: path).standardizedFileURL
+        guard let manifestPath, !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return auditReport(
+                inputURL: inputURL,
+                dryRunManifestPath: nil,
+                dryRunManifestSHA1: nil,
+                reviewToken: nil,
+                expectedReviewToken: nil,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_AUDIT_MANIFEST_REQUIRED",
+                        message: "Binary ROM mutation apply audit requires a dry-run manifest JSON path."
+                    )
+                ],
+                applyResult: applyResult
+            )
+        }
+
+        let manifestURL = URL(fileURLWithPath: manifestPath).standardizedFileURL
+        let manifestData: Data
+        do {
+            manifestData = try Data(contentsOf: manifestURL)
+        } catch {
+            return auditReport(
+                inputURL: inputURL,
+                dryRunManifestPath: manifestURL.path,
+                dryRunManifestSHA1: nil,
+                reviewToken: nil,
+                expectedReviewToken: nil,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_AUDIT_MANIFEST_UNREADABLE",
+                        message: "Could not read dry-run manifest at \(manifestURL.path): \(error.localizedDescription)"
+                    )
+                ],
+                applyResult: applyResult
+            )
+        }
+
+        let manifest: BinaryROMMutationDryRunManifest
+        do {
+            manifest = try JSONDecoder().decode(BinaryROMMutationDryRunManifest.self, from: manifestData)
+        } catch {
+            return auditReport(
+                inputURL: inputURL,
+                dryRunManifestPath: manifestURL.path,
+                dryRunManifestSHA1: pokemonHackSHA1Hex(manifestData),
+                reviewToken: nil,
+                expectedReviewToken: nil,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_AUDIT_MANIFEST_DECODE_FAILED",
+                        message: "Could not decode binary ROM mutation dry-run manifest at \(manifestURL.path): \(error.localizedDescription)"
+                    )
+                ],
+                applyResult: applyResult
+            )
+        }
+
+        return audit(
+            path: inputURL.path,
+            dryRunManifest: manifest,
+            dryRunManifestPath: manifestURL.path,
+            dryRunManifestData: manifestData,
+            workspaceRoot: workspaceRoot,
+            applyResult: applyResult,
+            fileManager: fileManager
+        )
+    }
+
+    public static func audit(
+        path: String,
+        dryRunManifest manifest: BinaryROMMutationDryRunManifest,
+        dryRunManifestPath: String,
+        dryRunManifestData: Data,
+        workspaceRoot: String?,
+        applyResult: BinaryROMMutationApplyResult? = nil,
+        fileManager: FileManager = .default
+    ) -> BinaryROMMutationApplyAuditReport {
+        let inputURL = URL(fileURLWithPath: path).standardizedFileURL
+        var diagnostics: [Diagnostic] = []
+        let manifestSHA1 = pokemonHackSHA1Hex(dryRunManifestData)
+        let trimmedWorkspaceRoot = workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let workspaceURL: URL?
+        if trimmedWorkspaceRoot.isEmpty {
+            workspaceURL = nil
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_WORKSPACE_ROOT_REQUIRED",
+                    message: "Binary ROM mutation apply audit requires a workspace root so source-tree-first refusal and artifact containment can be checked."
+                )
+            )
+        } else {
+            workspaceURL = URL(fileURLWithPath: trimmedWorkspaceRoot).standardizedFileURL
+        }
+
+        guard let baseBeforeReview = manifest.baseROM else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_BASE_IDENTITY_MISSING",
+                    message: "Dry-run manifest does not contain base ROM identity."
+                )
+            )
+            return auditReport(
+                inputURL: inputURL,
+                dryRunManifestPath: dryRunManifestPath,
+                dryRunManifestSHA1: manifestSHA1,
+                reviewToken: manifest.applyReview?.reviewToken,
+                expectedReviewToken: nil,
+                diagnostics: diagnostics,
+                applyResult: applyResult
+            )
+        }
+
+        let manifestErrors = manifest.diagnostics.filter { $0.severity == .error }
+            + manifest.operationPreviews.flatMap(\.diagnostics).filter { $0.severity == .error }
+        if !manifestErrors.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_MANIFEST_ERRORS",
+                    message: "Dry-run manifest still contains error diagnostics; review and regenerate the manifest before applying."
+                )
+            )
+            diagnostics.append(contentsOf: manifestErrors)
+        }
+
+        if manifest.inputPath != inputURL.path {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_INPUT_PATH_MISMATCH",
+                    message: "Dry-run manifest was created for \(manifest.inputPath), not \(inputURL.path)."
+                )
+            )
+        }
+
+        let replacementPreviews = manifest.operationPreviews.filter { $0.kind == .replaceBytes }
+        if replacementPreviews.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_NO_REPLACEMENTS",
+                    message: "Binary ROM mutation apply audit requires at least one explicit byte replacement."
+                )
+            )
+        }
+        if replacementPreviews.count != manifest.operationPreviews.count {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_NON_REPLACEMENT_BLOCKED",
+                    message: "This apply path only supports replaceBytes operations; pointer repoint and free-space allocation apply remain blocked."
+                )
+            )
+        }
+        if replacementPreviews.contains(where: { $0.status != .previewOnly }) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_BLOCKED_PREVIEW",
+                    message: "One or more replacement previews are blocked and cannot be applied."
+                )
+            )
+        }
+        diagnostics.append(contentsOf: overlapDiagnostics(for: replacementPreviews))
+
+        let replacements = replacementPreviews.compactMap(Self.replacementRequest(from:))
+        if replacements.count != replacementPreviews.count {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_REPLACEMENT_IDENTITY_MISSING",
+                    message: "One or more replacement previews are missing offset, length, or full replacement hex identity."
+                )
+            )
+        }
+
+        let expectedReviewToken = binaryROMMutationReviewToken(base: baseBeforeReview, replacements: replacementPreviews)
+        let manifestReviewToken = manifest.applyReview?.reviewToken
+        if manifest.applyReview?.isReviewable != true || manifestReviewToken == nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_MANIFEST_NOT_REVIEWABLE",
+                    message: "Dry-run manifest does not include reviewable replace-only apply metadata."
+                )
+            )
+        } else if manifestReviewToken != expectedReviewToken {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_AUDIT_REVIEW_TOKEN_STALE",
+                    message: "Dry-run manifest review token no longer matches its base identity and replacement set."
+                )
+            )
+        }
+
+        if let workspaceURL, replacements.count == replacementPreviews.count {
+            let freshManifest = BinaryROMMutationDryRunManifestBuilder.build(
+                path: inputURL.path,
+                request: BinaryROMMutationDryRunRequest(
+                    expectedSHA1: baseBeforeReview.sha1,
+                    workspaceRoot: workspaceURL.path,
+                    replacements: replacements
+                ),
+                fileManager: fileManager
+            )
+            diagnostics.append(contentsOf: freshManifest.diagnostics)
+            if let freshBase = freshManifest.baseROM {
+                if !freshManifest.sourceTreeFirst.canUseBinaryOnlyPlan {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "BINARY_ROM_MUTATION_AUDIT_SOURCE_TREE_AVAILABLE_REFUSED",
+                            message: "Binary-only apply is refused because a source-tree edit path is available or the selected input is not a standalone binary ROM."
+                        )
+                    )
+                }
+                diagnostics.append(contentsOf: baseDriftDiagnostics(expected: baseBeforeReview, actual: freshBase))
+                diagnostics.append(contentsOf: originalByteDiagnostics(expected: replacementPreviews, actual: freshManifest.operationPreviews))
+                diagnostics.append(contentsOf: freshManifest.operationPreviews.flatMap(\.diagnostics).filter { $0.severity == .error })
+            } else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_AUDIT_FRESH_BASE_MISSING",
+                        message: "Could not re-read selected base ROM for apply audit."
+                    )
+                )
+            }
+
+            let patterns = artifactPathPatterns(inputURL: inputURL, reviewToken: manifestReviewToken)
+            diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+                patterns.backupPathPattern,
+                root: workspaceURL,
+                fileManager: fileManager,
+                codePrefix: "BINARY_ROM_MUTATION_AUDIT_BACKUP",
+                subject: "Binary ROM mutation backup path"
+            ))
+            diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+                patterns.applyManifestPathPattern,
+                root: workspaceURL,
+                fileManager: fileManager,
+                codePrefix: "BINARY_ROM_MUTATION_AUDIT_MANIFEST",
+                subject: "Binary ROM mutation apply manifest path"
+            ))
+        }
+
+        return auditReport(
+            inputURL: inputURL,
+            dryRunManifestPath: dryRunManifestPath,
+            dryRunManifestSHA1: manifestSHA1,
+            reviewToken: manifestReviewToken,
+            expectedReviewToken: expectedReviewToken,
+            diagnostics: diagnostics,
+            applyResult: applyResult
+        )
+    }
+
+    public static func auditReport(
+        _ report: BinaryROMMutationApplyAuditReport,
+        reviewing applyResult: BinaryROMMutationApplyResult?
+    ) -> BinaryROMMutationApplyAuditReport {
+        auditReport(
+            inputURL: URL(fileURLWithPath: report.inputPath).standardizedFileURL,
+            dryRunManifestPath: report.dryRunManifestPath,
+            dryRunManifestSHA1: report.dryRunManifestSHA1,
+            reviewToken: report.reviewToken,
+            expectedReviewToken: report.expectedReviewToken,
+            diagnostics: report.diagnostics,
+            applyResult: applyResult
+        )
+    }
+
     public static func apply(
         path: String,
         manifestPath: String?,
@@ -1326,6 +1698,113 @@ public enum BinaryROMMutationApplier {
         diagnostics: [Diagnostic]
     ) -> BinaryROMMutationApplyResult {
         BinaryROMMutationApplyResult(status: .blocked, inputPath: inputPath, baseBefore: baseBefore, diagnostics: diagnostics)
+    }
+
+    private static func auditReport(
+        inputURL: URL,
+        dryRunManifestPath: String?,
+        dryRunManifestSHA1: String?,
+        reviewToken: String?,
+        expectedReviewToken: String?,
+        diagnostics: [Diagnostic],
+        applyResult: BinaryROMMutationApplyResult?
+    ) -> BinaryROMMutationApplyAuditReport {
+        let patterns = artifactPathPatterns(inputURL: inputURL, reviewToken: reviewToken)
+        let hasErrors = diagnostics.contains { $0.severity == .error }
+        return BinaryROMMutationApplyAuditReport(
+            status: hasErrors ? .blocked : .ready,
+            inputPath: inputURL.path,
+            dryRunManifestPath: dryRunManifestPath,
+            dryRunManifestSHA1: dryRunManifestSHA1,
+            reviewToken: reviewToken,
+            expectedReviewToken: expectedReviewToken,
+            isReviewTokenStale: reviewToken != nil && expectedReviewToken != nil && reviewToken != expectedReviewToken,
+            destinationRootPattern: patterns.destinationRootPattern,
+            backupPathPattern: patterns.backupPathPattern,
+            applyManifestPathPattern: patterns.applyManifestPathPattern,
+            artifactReviews: artifactReviews(
+                backupPathPattern: patterns.backupPathPattern,
+                applyManifestPathPattern: patterns.applyManifestPathPattern,
+                auditIsBlocked: hasErrors,
+                applyResult: applyResult
+            ),
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func artifactPathPatterns(
+        inputURL: URL,
+        reviewToken: String?
+    ) -> (destinationRootPattern: String, backupPathPattern: String, applyManifestPathPattern: String) {
+        let tokenSuffix = reviewToken.map(binaryROMMutationTokenSuffix) ?? "<review-token>"
+        let relativeRoot = ".pokemonhackstudio/rom-mutations/\(binaryROMMutationSanitizedStem(for: inputURL))/<timestamp-token>-\(tokenSuffix)"
+        let backupName = "\(inputURL.deletingPathExtension().lastPathComponent)-original.gba"
+        return (
+            destinationRootPattern: relativeRoot,
+            backupPathPattern: "\(relativeRoot)/\(backupName)",
+            applyManifestPathPattern: "\(relativeRoot)/apply-manifest.json"
+        )
+    }
+
+    private static func artifactReviews(
+        backupPathPattern: String,
+        applyManifestPathPattern: String,
+        auditIsBlocked: Bool,
+        applyResult: BinaryROMMutationApplyResult?
+    ) -> [BinaryROMMutationApplyArtifactReview] {
+        let backupStatus = artifactStatus(auditIsBlocked: auditIsBlocked, applyResult: applyResult, path: applyResult?.backupPath)
+        let manifestStatus = artifactStatus(auditIsBlocked: auditIsBlocked, applyResult: applyResult, path: applyResult?.manifestPath)
+        return [
+            BinaryROMMutationApplyArtifactReview(
+                kind: .originalROMBackup,
+                status: backupStatus,
+                path: backupStatus == .writtenAfterApply ? applyResult?.backupPath : nil,
+                relativePathPattern: backupPathPattern,
+                detail: artifactDetail(kind: .originalROMBackup, status: backupStatus)
+            ),
+            BinaryROMMutationApplyArtifactReview(
+                kind: .applyManifest,
+                status: manifestStatus,
+                path: manifestStatus == .writtenAfterApply ? applyResult?.manifestPath : nil,
+                relativePathPattern: applyManifestPathPattern,
+                detail: artifactDetail(kind: .applyManifest, status: manifestStatus)
+            )
+        ]
+    }
+
+    private static func artifactStatus(
+        auditIsBlocked: Bool,
+        applyResult: BinaryROMMutationApplyResult?,
+        path: String?
+    ) -> BinaryROMMutationApplyArtifactStatus {
+        if applyResult?.status == .applied, path != nil {
+            return .writtenAfterApply
+        }
+        if auditIsBlocked || applyResult?.status == .blocked {
+            return .blockedBeforeWrite
+        }
+        return .pendingExplicitApply
+    }
+
+    private static func artifactDetail(
+        kind: BinaryROMMutationApplyArtifactKind,
+        status: BinaryROMMutationApplyArtifactStatus
+    ) -> String {
+        let name: String
+        switch kind {
+        case .originalROMBackup:
+            name = "Original ROM backup"
+        case .applyManifest:
+            name = "Apply manifest"
+        }
+        switch status {
+        case .pendingExplicitApply:
+            return "\(name) is not written during audit and will be created only after explicit reviewed apply."
+        case .blockedBeforeWrite:
+            return "\(name) is blocked before write because audit or apply diagnostics are not clean."
+        case .writtenAfterApply:
+            return "\(name) was written by the explicit reviewed apply result."
+        }
     }
 
     private static func replacementRequest(

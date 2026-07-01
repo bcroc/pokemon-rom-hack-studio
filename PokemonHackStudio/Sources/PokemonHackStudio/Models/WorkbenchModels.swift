@@ -887,6 +887,37 @@ enum PatchCreationPreviewLoadStatus: Equatable {
     }
 }
 
+enum PatchArtifactLibraryLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(count: Int, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Patch library not checked"
+        case .loading:
+            "Checking patch library"
+        case let .loaded(count, _):
+            "\(count) BPS patch artifact\(count == 1 ? "" : "s") found"
+        case let .failed(message):
+            "Patch library failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
 enum BinaryROMMutationDryRunLoadStatus: Equatable {
     case idle
     case loading
@@ -973,6 +1004,36 @@ struct PatchCreationResultViewState: Identifiable {
     let rows: [BuildReportRow]
 }
 
+struct PatchArtifactLibraryItemViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let patchPath: String
+    let manifestPath: String
+    let manifestStatus: String
+    let patchChecksumStatus: String
+    let baseROMStatus: String
+    let builtOutputStatus: String
+    let verificationSummary: String
+    let canReveal: Bool
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchArtifactLibraryViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let artifactRoot: String
+    let items: [PatchArtifactLibraryItemViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
 struct BinaryROMMutationBaseIdentityViewState: Identifiable {
     let id: String
     let title: String
@@ -1001,6 +1062,32 @@ struct BinaryROMMutationOperationPreviewViewState: Identifiable {
     let diagnostics: [IndexedDiagnosticRow]
 }
 
+struct BinaryROMMutationApplyArtifactReviewViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let path: String?
+    let relativePathPattern: String
+}
+
+struct BinaryROMMutationApplyAuditReportViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let statusLabel: String
+    let inputPath: String
+    let manifestPath: String?
+    let manifestSHA1: String?
+    let reviewToken: String?
+    let expectedReviewToken: String?
+    let isReviewTokenStale: Bool
+    let destinationRootPattern: String
+    let artifactReviews: [BinaryROMMutationApplyArtifactReviewViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
 struct BinaryROMMutationDryRunReportViewState: Identifiable {
     let id: String
     let title: String
@@ -1013,9 +1100,24 @@ struct BinaryROMMutationDryRunReportViewState: Identifiable {
     let sourceTreeStatus: String
     let sourceTreeDetail: String
     let sourceCandidates: [String]
+    let applyReviewIsReviewable: Bool
+    let applyReviewToken: String?
+    let applyReviewConfirmationArgument: String?
+    let blockedApplyActions: [String]
     let baseIdentity: BinaryROMMutationBaseIdentityViewState?
     let ignoredOutputGuidance: BinaryROMMutationIgnoredOutputGuidanceViewState
     let operationPreviews: [BinaryROMMutationOperationPreviewViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct BinaryROMMutationApplyResultViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let statusLabel: String
+    let inputPath: String
+    let backupPath: String?
+    let manifestPath: String?
     let diagnostics: [IndexedDiagnosticRow]
     let rows: [BuildReportRow]
 }
@@ -2087,6 +2189,99 @@ enum ResourceAssetSortMode: String, CaseIterable, Identifiable {
         case .availability:
             "Availability"
         }
+    }
+}
+
+enum ResourceAssetWorkflowFacet: String, CaseIterable, Identifiable {
+    case all
+    case editableSource
+    case previewOnly
+    case blocked
+    case related
+    case generatedReference
+    case hiddenDrafts
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All"
+        case .editableSource:
+            "Editable Source"
+        case .previewOnly:
+            "Preview Only"
+        case .blocked:
+            "Blocked"
+        case .related:
+            "Related"
+        case .generatedReference:
+            "Generated/Reference"
+        case .hiddenDrafts:
+            "Hidden Drafts"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all:
+            "line.3.horizontal.decrease.circle"
+        case .editableSource:
+            "square.and.pencil"
+        case .previewOnly:
+            "eye"
+        case .blocked:
+            "lock"
+        case .related:
+            "link"
+        case .generatedReference:
+            "hammer"
+        case .hiddenDrafts:
+            "eye.slash"
+        }
+    }
+
+    static let groupingOrder: [ResourceAssetWorkflowFacet] = [
+        .hiddenDrafts,
+        .editableSource,
+        .previewOnly,
+        .blocked,
+        .related,
+        .generatedReference,
+        .all,
+    ]
+}
+
+enum ResourceAssetGroupingMode: String, CaseIterable, Identifiable {
+    case none
+    case workflow
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .none:
+            "None"
+        case .workflow:
+            "Workflow"
+        }
+    }
+}
+
+struct ResourceAssetWorkflowGroup: Identifiable {
+    let facet: ResourceAssetWorkflowFacet
+    let rows: [ResourceAssetRowViewState]
+
+    var id: String {
+        facet.id
+    }
+
+    var title: String {
+        facet.title
     }
 }
 

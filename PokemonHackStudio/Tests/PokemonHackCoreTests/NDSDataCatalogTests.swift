@@ -620,6 +620,9 @@ final class NDSDataCatalogTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Sample Paths", in: rootRecord), sample.child)
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: rootRecord), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: rootRecord), "previewOnlyNoParser")
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: rootRecord), "rootRelatedRecordsPresent")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: rootRecord), "partial")
+            XCTAssertNil(factValue("Gen V Source Data Root Record", in: rootRecord))
             XCTAssertNil(rootRecord.migrationPlan)
             XCTAssertNil(rootRecord.textBankPreview)
             XCTAssertNil(factValue("Migration Status", in: rootRecord))
@@ -640,6 +643,11 @@ final class NDSDataCatalogTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Bytes", in: childRecord), "\(byteCount)")
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: childRecord), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: childRecord), "previewOnlyNoParser")
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: childRecord), "memberRootContextOnly")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: childRecord), "partial")
+            XCTAssertEqual(factValue("Gen V Source Data Root Record", in: childRecord), "\(sample.domain.rawValue):\(sample.root)")
+            XCTAssertTrue(childRecord.relatedRecords.isEmpty)
+            XCTAssertNil(factValue("Related Rows", in: childRecord))
             XCTAssertNil(childRecord.migrationPlan)
             XCTAssertNil(childRecord.textBankPreview)
             XCTAssertNil(factValue("Migration Status", in: childRecord))
@@ -657,6 +665,9 @@ final class NDSDataCatalogTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Members", in: rootItem.facts), "1")
             XCTAssertEqual(factValue("Gen V Source Data Bytes", in: rootItem.facts), "\(byteCount)")
             XCTAssertEqual(factValue("Gen V Source Data Sample Paths", in: rootItem.facts), sample.child)
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: rootItem.facts), "rootRelatedRecordsPresent")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: rootItem.facts), "partial")
+            XCTAssertNil(factValue("Gen V Source Data Root Record", in: rootItem.facts))
             XCTAssertFalse(rootItem.facts.contains { $0.label == "Migration Status" })
             XCTAssertFalse(rootItem.facts.contains { $0.label == "Text Bank Preview" })
 
@@ -665,6 +676,10 @@ final class NDSDataCatalogTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Role", in: childItem.facts), sample.memberRole)
             XCTAssertEqual(factValue("Gen V Source Data Filename", in: childItem.facts), URL(fileURLWithPath: sample.child).lastPathComponent)
             XCTAssertEqual(factValue("Gen V Source Data Bytes", in: childItem.facts), "\(byteCount)")
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: childItem.facts), "memberRootContextOnly")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: childItem.facts), "partial")
+            XCTAssertEqual(factValue("Gen V Source Data Root Record", in: childItem.facts), "\(sample.domain.rawValue):\(sample.root)")
+            XCTAssertFalse(childItem.facts.contains { $0.label == "Related Rows" })
             XCTAssertFalse(childItem.facts.contains { $0.label == "Migration Status" })
             XCTAssertFalse(childItem.facts.contains { $0.label == "Text Bank Preview" })
         }
@@ -837,36 +852,38 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(zoneEventChild.relatedRecords.contains { $0.recordID == fielddataRoot.id })
 
         let genVContextIDs = genVEncounterFielddataMessageContextRecordIDs()
+        let expectedRelatedRows = "\(genVContextIDs.count - 1)"
+        let allGenVContextDomains = "encounters, items, maps, moves, resources, scripts, species, text, trainers"
         func assertFielddataRootRelationships(_ record: NDSDataCatalogRecord, relatedDomains: String) {
             XCTAssertEqual(Set(record.relatedRecords.map(\.recordID)), genVContextIDs.subtracting([record.id]))
-            XCTAssertEqual(factValue("Related Rows", in: record), "12")
+            XCTAssertEqual(factValue("Related Rows", in: record), expectedRelatedRows)
             XCTAssertEqual(factValue("Related Domains", in: record), relatedDomains)
         }
-        assertFielddataRootRelationships(fielddataRoot, relatedDomains: "encounters, maps, resources, scripts, text")
-        assertFielddataRootRelationships(mapMatrixRoot, relatedDomains: "encounters, maps, resources, scripts, text")
-        assertFielddataRootRelationships(mapTableRoot, relatedDomains: "encounters, maps, resources, scripts, text")
-        assertFielddataRootRelationships(scriptRoot, relatedDomains: "encounters, maps, resources, scripts, text")
-        assertFielddataRootRelationships(zoneEventRoot, relatedDomains: "encounters, maps, resources, scripts, text")
+        assertFielddataRootRelationships(fielddataRoot, relatedDomains: allGenVContextDomains)
+        assertFielddataRootRelationships(mapMatrixRoot, relatedDomains: allGenVContextDomains)
+        assertFielddataRootRelationships(mapTableRoot, relatedDomains: allGenVContextDomains)
+        assertFielddataRootRelationships(scriptRoot, relatedDomains: allGenVContextDomains)
+        assertFielddataRootRelationships(zoneEventRoot, relatedDomains: allGenVContextDomains)
 
         let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
         let fielddataResource = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "files/fielddata" })
         XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataInventory" })
         XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Gen V Readiness" && $0.value == "previewOnly" })
         XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Gen V Action State" && $0.value.contains("source inventory stays preview-only") })
-        XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Related Rows" && $0.value == "12" })
-        XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Related Domains" && $0.value == "encounters, maps, resources, scripts, text" })
+        XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Related Rows" && $0.value == expectedRelatedRows })
+        XCTAssertTrue(fielddataResource.facts.contains { $0.label == "Related Domains" && $0.value == allGenVContextDomains })
         XCTAssertFalse(fielddataResource.facts.contains { $0.label == "Migration Status" })
 
         let mapMatrixResource = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data maps" && $0.path == "files/fielddata/mapmatrix" })
         XCTAssertTrue(mapMatrixResource.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapMatrixInventory" })
-        XCTAssertTrue(mapMatrixResource.facts.contains { $0.label == "Related Rows" && $0.value == "12" })
-        XCTAssertTrue(mapMatrixResource.facts.contains { $0.label == "Related Domains" && $0.value == "encounters, maps, resources, scripts, text" })
+        XCTAssertTrue(mapMatrixResource.facts.contains { $0.label == "Related Rows" && $0.value == expectedRelatedRows })
+        XCTAssertTrue(mapMatrixResource.facts.contains { $0.label == "Related Domains" && $0.value == allGenVContextDomains })
         XCTAssertFalse(mapMatrixResource.facts.contains { $0.label == "Migration Status" })
 
         let mapTableResource = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data maps" && $0.path == "files/fielddata/maptable" })
         XCTAssertTrue(mapTableResource.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataMapTableInventory" })
-        XCTAssertTrue(mapTableResource.facts.contains { $0.label == "Related Rows" && $0.value == "12" })
-        XCTAssertTrue(mapTableResource.facts.contains { $0.label == "Related Domains" && $0.value == "encounters, maps, resources, scripts, text" })
+        XCTAssertTrue(mapTableResource.facts.contains { $0.label == "Related Rows" && $0.value == expectedRelatedRows })
+        XCTAssertTrue(mapTableResource.facts.contains { $0.label == "Related Domains" && $0.value == allGenVContextDomains })
         XCTAssertFalse(mapTableResource.facts.contains { $0.label == "Migration Status" })
 
         let scriptResource = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data scripts" && $0.path == "files/fielddata/script" })
@@ -874,14 +891,14 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(scriptResource.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataScriptInventory" })
         XCTAssertTrue(scriptResource.facts.contains { $0.label == "Gen V Script Members" && $0.value == "2" })
         XCTAssertTrue(scriptResource.facts.contains { $0.label == "Gen V Script Bytes" && $0.value == "4" })
-        XCTAssertTrue(scriptResource.facts.contains { $0.label == "Related Rows" && $0.value == "12" })
-        XCTAssertTrue(scriptResource.facts.contains { $0.label == "Related Domains" && $0.value == "encounters, maps, resources, scripts, text" })
+        XCTAssertTrue(scriptResource.facts.contains { $0.label == "Related Rows" && $0.value == expectedRelatedRows })
+        XCTAssertTrue(scriptResource.facts.contains { $0.label == "Related Domains" && $0.value == allGenVContextDomains })
         XCTAssertFalse(scriptResource.facts.contains { $0.label == "Migration Status" })
 
         let zoneEventResource = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data scripts" && $0.path == "files/fielddata/eventdata/zone_event" })
         XCTAssertTrue(zoneEventResource.facts.contains { $0.label == "Gen V Source Role" && $0.value == "fielddataZoneEventInventory" })
-        XCTAssertTrue(zoneEventResource.facts.contains { $0.label == "Related Rows" && $0.value == "12" })
-        XCTAssertTrue(zoneEventResource.facts.contains { $0.label == "Related Domains" && $0.value == "encounters, maps, resources, scripts, text" })
+        XCTAssertTrue(zoneEventResource.facts.contains { $0.label == "Related Rows" && $0.value == expectedRelatedRows })
+        XCTAssertTrue(zoneEventResource.facts.contains { $0.label == "Related Domains" && $0.value == allGenVContextDomains })
         XCTAssertFalse(zoneEventResource.facts.contains { $0.label == "Migration Status" })
 
         let plan = NDSDataMutationPlanner.plan(
@@ -899,41 +916,78 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(scriptPlan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
     }
 
-    func testPokeBlackCatalogLinksGenVEncounterFielddataAndMessageCandidates() throws {
+    func testPokeBlackCatalogLinksGenVSourceDataDomainInventoryRelatedRows() throws {
         let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
 
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)
         let recordsByID = Dictionary(uniqueKeysWithValues: catalog.records.map { ($0.id, $0) })
         let contextIDs = genVEncounterFielddataMessageContextRecordIDs()
+        let expectedRelatedRows = "\(contextIDs.count - 1)"
+        let allGenVContextDomains = "encounters, items, maps, moves, resources, scripts, species, text, trainers"
 
         for id in contextIDs {
             let record = try XCTUnwrap(recordsByID[id], "Missing Gen V context record \(id)")
             XCTAssertEqual(Set(record.relatedRecords.map(\.recordID)), contextIDs.subtracting([id]), "Unexpected related rows for \(id)")
-            XCTAssertEqual(factValue("Related Rows", in: record), "12", "Unexpected related-row fact for \(id)")
+            XCTAssertEqual(factValue("Related Rows", in: record), expectedRelatedRows, "Unexpected related-row fact for \(id)")
             XCTAssertEqual(factValue("Readiness", in: record), "partial", "Unexpected readiness fact for \(id)")
         }
 
         let encounter = try XCTUnwrap(recordsByID["encounters:data/encounters/route_1.txt"])
         XCTAssertEqual(factValue("Gen V Source Role", in: encounter), "encounterPreview")
         XCTAssertEqual(factValue("Gen V Encounter Record", in: encounter), "previewOnly")
-        XCTAssertEqual(factValue("Related Domains", in: encounter), "maps, resources, scripts, text")
+        XCTAssertEqual(factValue("Related Domains", in: encounter), "items, maps, moves, resources, scripts, species, text, trainers")
 
         let fielddataRoot = try XCTUnwrap(recordsByID["resources:files/fielddata"])
         XCTAssertEqual(factValue("Gen V Source Role", in: fielddataRoot), "fielddataInventory")
-        XCTAssertEqual(factValue("Related Domains", in: fielddataRoot), "encounters, maps, resources, scripts, text")
+        XCTAssertEqual(factValue("Related Domains", in: fielddataRoot), allGenVContextDomains)
 
         let messageBankRoot = try XCTUnwrap(recordsByID["text:files/msgdata"])
         XCTAssertEqual(factValue("Gen V Source Role", in: messageBankRoot), "messageBankInventory")
         XCTAssertEqual(factValue("Gen V Message Candidate Count", in: messageBankRoot), "6")
-        XCTAssertEqual(factValue("Related Domains", in: messageBankRoot), "encounters, maps, resources, scripts")
+        XCTAssertEqual(factValue("Related Domains", in: messageBankRoot), "encounters, items, maps, moves, resources, scripts, species, trainers")
 
         let numberedMessageCandidate = try XCTUnwrap(recordsByID["resources:files/msgdata/msg/0001.bin"])
         XCTAssertEqual(factValue("Gen V Source Role", in: numberedMessageCandidate), "messageBankMetadata")
         XCTAssertEqual(factValue("Gen V Message Decoded Preview", in: numberedMessageCandidate), "noDecodedPreview")
         XCTAssertEqual(factValue("Gen V Message Numeric Bank Hint", in: numberedMessageCandidate), "0001")
-        XCTAssertEqual(factValue("Related Domains", in: numberedMessageCandidate), "encounters, maps, resources, scripts, text")
+        XCTAssertEqual(factValue("Related Domains", in: numberedMessageCandidate), allGenVContextDomains)
         XCTAssertFalse(numberedMessageCandidate.relatedRecords.contains { $0.recordID == "maps:files/fielddata/mapmatrix/0001.bin" })
         XCTAssertFalse(numberedMessageCandidate.relatedRecords.contains { $0.recordID == "resources:files/fielddata/script/scr_seq/0001.bin" })
+
+        let sourceDataRows = [
+            ("species:data/pokemon", "species:data/pokemon/source_pokemon.txt", "pokemonDataInventory", "pokemonDataMember"),
+            ("moves:data/moves", "moves:data/moves/source_moves.txt", "moveDataInventory", "moveDataMember"),
+            ("items:data/items", "items:data/items/source_items.txt", "itemDataInventory", "itemDataMember"),
+            ("trainers:data/trainers", "trainers:data/trainers/source_trainers.txt", "trainerDataInventory", "trainerDataMember"),
+            ("species:src/data/pokemon", "species:src/data/pokemon/source_pokemon.inc", "pokemonDataInventory", "pokemonDataMember"),
+            ("moves:src/data/moves", "moves:src/data/moves/source_moves.inc", "moveDataInventory", "moveDataMember"),
+            ("items:src/data/items", "items:src/data/items/source_items.inc", "itemDataInventory", "itemDataMember"),
+            ("trainers:src/data/trainers", "trainers:src/data/trainers/source_trainers.inc", "trainerDataInventory", "trainerDataMember")
+        ]
+        for (rootID, memberID, rootRole, memberRole) in sourceDataRows {
+            let rootRecord = try XCTUnwrap(recordsByID[rootID], "Missing Gen V source data root \(rootID)")
+            XCTAssertEqual(factValue("Gen V Source Role", in: rootRecord), rootRole)
+            XCTAssertEqual(factValue("Related Rows", in: rootRecord), expectedRelatedRows)
+            XCTAssertEqual(factValue("Related Domains", in: rootRecord), allGenVContextDomains)
+            XCTAssertEqual(factValue("Readiness", in: rootRecord), "partial")
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: rootRecord), "rootRelatedRecordsPresent")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: rootRecord), "partial")
+            XCTAssertNil(factValue("Gen V Source Data Root Record", in: rootRecord))
+
+            let memberRecord = try XCTUnwrap(recordsByID[memberID], "Missing Gen V source data member \(memberID)")
+            XCTAssertEqual(factValue("Gen V Source Role", in: memberRecord), memberRole)
+            XCTAssertEqual(factValue("Gen V Source Data Relationship Audit", in: memberRecord), "memberRootContextOnly")
+            XCTAssertEqual(factValue("Gen V Source Data Readiness Audit", in: memberRecord), "partial")
+            XCTAssertEqual(factValue("Gen V Source Data Root Record", in: memberRecord), rootID)
+            XCTAssertTrue(memberRecord.relatedRecords.isEmpty)
+            XCTAssertNil(factValue("Related Rows", in: memberRecord))
+        }
+
+        let pokemonSourceMember = try XCTUnwrap(recordsByID["species:data/pokemon/source_pokemon.txt"])
+        XCTAssertEqual(factValue("Gen V Source Role", in: pokemonSourceMember), "pokemonDataMember")
+        XCTAssertEqual(factValue("Gen V Source Data Posture", in: pokemonSourceMember), "previewOnlyNoParser")
+        XCTAssertTrue(pokemonSourceMember.relatedRecords.isEmpty)
+        XCTAssertNil(factValue("Related Rows", in: pokemonSourceMember))
 
         let scriptChild = try XCTUnwrap(recordsByID["resources:files/fielddata/script/scr_seq/0001.bin"])
         XCTAssertEqual(factValue("Gen V Source Role", in: scriptChild), "fielddataScriptMember")
@@ -2650,7 +2704,7 @@ final class NDSDataCatalogTests: XCTestCase {
         let encounterPath = "files/fielddata/encountdata/johto/route29.json"
         try write(
             """
-            {"morning_rate": 20, "day_rate": 15, "night_rate": 10, "enabled": true, "slots": [{"species":"RATTATA","rate":30}], "metadata": {"map":"ROUTE_29"}}
+            {"morning_rate": 20, "day_rate": 15, "night_rate": 10, "enabled": true, "slots": [{"species":"RATTATA","rate":30,"enabled":true}], "swarms": ["PIDGEY","SENTRET"], "metadata": {"map":"ROUTE_29"}}
 
             """,
             to: root.appendingPathComponent(encounterPath)
@@ -2665,6 +2719,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(snapshot.fields.contains { $0.key == "day_rate" && $0.value == "15" && $0.valueKind == .number })
         XCTAssertTrue(snapshot.fields.contains { $0.key == "night_rate" && $0.value == "10" && $0.valueKind == .number })
         XCTAssertTrue(snapshot.fields.contains { $0.key == "enabled" && $0.value == "true" && $0.valueKind == .bool })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "slots.0.species" && $0.value == "RATTATA" && $0.valueKind == .string })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "slots.0.rate" && $0.value == "30" && $0.valueKind == .number })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "slots.0.enabled" && $0.value == "true" && $0.valueKind == .bool })
+        XCTAssertTrue(snapshot.fields.contains { $0.key == "swarms.1" && $0.value == "SENTRET" && $0.valueKind == .string })
         XCTAssertFalse(snapshot.fields.contains { $0.key == "slots" })
         XCTAssertFalse(snapshot.fields.contains { $0.key == "metadata" })
 
@@ -2672,12 +2730,23 @@ final class NDSDataCatalogTests: XCTestCase {
             catalog: catalog,
             draft: NDSDataSemanticEditDraft(
                 recordID: "encounters:\(encounterPath)",
-                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35")]
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "metadata.map", value: "ROUTE_30")]
             )
         )
         XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
         XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
         XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let missingSlotPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.99.rate", value: "35")]
+            )
+        )
+        XCTAssertTrue(missingSlotPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_MISSING" })
+        XCTAssertTrue(missingSlotPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(missingSlotPlan.editPlan.validateApplyability().isApplyable)
 
         let semanticPlan = NDSDataSemanticEditor.plan(
             catalog: catalog,
@@ -2685,7 +2754,10 @@ final class NDSDataCatalogTests: XCTestCase {
                 recordID: "encounters:\(encounterPath)",
                 fieldEdits: [
                     NDSDataSemanticFieldEdit(key: "morning_rate", value: "25"),
-                    NDSDataSemanticFieldEdit(key: "enabled", value: "false")
+                    NDSDataSemanticFieldEdit(key: "enabled", value: "false"),
+                    NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35"),
+                    NDSDataSemanticFieldEdit(key: "slots.0.species", value: "SENTRET"),
+                    NDSDataSemanticFieldEdit(key: "swarms.1", value: "HOOTHOOT")
                 ]
             )
         )
@@ -2693,7 +2765,8 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(semanticPlan.diagnostics.allSatisfy { $0.severity != .error }, semanticPlan.diagnostics.map(\.code).joined(separator: ","))
         XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"morning_rate\": 25"))
         XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"enabled\": false"))
-        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"slots\": [{\"species\":\"RATTATA\",\"rate\":30}]"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"slots\": [{\"species\":\"SENTRET\",\"rate\":35,\"enabled\":true}]"))
+        XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"swarms\": [\"PIDGEY\",\"HOOTHOOT\"]"))
         XCTAssertTrue(semanticPlan.textDraft.editedText.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
         XCTAssertEqual(semanticPlan.editPlan.changes.count, 1)
         XCTAssertTrue(semanticPlan.editPlan.validateApplyability().isApplyable)
@@ -2703,7 +2776,8 @@ final class NDSDataCatalogTests: XCTestCase {
         let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
         XCTAssertTrue(updated.contains("\"morning_rate\": 25"))
         XCTAssertTrue(updated.contains("\"enabled\": false"))
-        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"RATTATA\",\"rate\":30}]"))
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"SENTRET\",\"rate\":35,\"enabled\":true}]"))
+        XCTAssertTrue(updated.contains("\"swarms\": [\"PIDGEY\",\"HOOTHOOT\"]"))
         XCTAssertTrue(updated.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
 
@@ -3341,7 +3415,7 @@ final class NDSDataCatalogTests: XCTestCase {
         let duplicatePath = "files/fielddata/encountdata/duplicate.json"
         let malformedPath = "files/fielddata/encountdata/malformed.json"
         try write(
-            "{\"rate\":20,\"morning_rate\":10,\"enabled\":true,\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30}],\"metadata\":{\"map\":\"ROUTE_201\"}}\n",
+            "{\"rate\":20,\"morning_rate\":10,\"enabled\":true,\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"metadata\":{\"time\":\"morning\"}},{\"species\":\"STARLY\",\"rate\":20}],\"swarms\":[\"DODUO\",\"NIDORAN_F\"],\"metadata\":{\"map\":\"ROUTE_201\"}}\n",
             to: root.appendingPathComponent(encounterPath)
         )
         try write("rate=15\n", to: root.appendingPathComponent(textPath))
@@ -3360,18 +3434,38 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(fields["enabled"]?.value, "true")
         XCTAssertEqual(fields["enabled"]?.valueKind, .bool)
         XCTAssertNil(fields["slots"])
+        XCTAssertEqual(fields["slots.0.species"]?.value, "BIDOOF")
+        XCTAssertEqual(fields["slots.0.species"]?.valueKind, .string)
+        XCTAssertEqual(fields["slots.0.rate"]?.value, "30")
+        XCTAssertEqual(fields["slots.0.rate"]?.valueKind, .number)
+        XCTAssertEqual(fields["slots.1.species"]?.value, "STARLY")
+        XCTAssertEqual(fields["swarms.0"]?.value, "DODUO")
+        XCTAssertEqual(fields["swarms.0"]?.valueKind, .string)
         XCTAssertNil(fields["metadata"])
+        XCTAssertNil(fields["metadata.map"])
+        XCTAssertNil(fields["slots.0.metadata.time"])
 
         let nestedPlan = NDSDataSemanticEditor.plan(
             catalog: catalog,
             draft: NDSDataSemanticEditDraft(
                 recordID: "encounters:\(encounterPath)",
-                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35")]
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "metadata.map", value: "ROUTE_202")]
             )
         )
         XCTAssertTrue(nestedPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_NESTED_EDIT_UNSUPPORTED" })
         XCTAssertTrue(nestedPlan.editPlan.changes.isEmpty)
         XCTAssertFalse(nestedPlan.editPlan.validateApplyability().isApplyable)
+
+        let missingSlotPlan = NDSDataSemanticEditor.plan(
+            catalog: catalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:\(encounterPath)",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "slots.99.rate", value: "35")]
+            )
+        )
+        XCTAssertTrue(missingSlotPlan.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FIELD_MISSING" })
+        XCTAssertTrue(missingSlotPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(missingSlotPlan.editPlan.validateApplyability().isApplyable)
 
         let plan = NDSDataSemanticEditor.plan(
             catalog: catalog,
@@ -3379,7 +3473,10 @@ final class NDSDataCatalogTests: XCTestCase {
                 recordID: "encounters:\(encounterPath)",
                 fieldEdits: [
                     NDSDataSemanticFieldEdit(key: "morning_rate", value: "25"),
-                    NDSDataSemanticFieldEdit(key: "enabled", value: "false")
+                    NDSDataSemanticFieldEdit(key: "enabled", value: "false"),
+                    NDSDataSemanticFieldEdit(key: "slots.0.species", value: "KRICKETOT"),
+                    NDSDataSemanticFieldEdit(key: "slots.0.rate", value: "35"),
+                    NDSDataSemanticFieldEdit(key: "swarms.1", value: "NIDORAN_M")
                 ]
             )
         )
@@ -3387,7 +3484,9 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
         XCTAssertTrue(plan.textDraft.editedText.contains("\"morning_rate\":25"))
         XCTAssertTrue(plan.textDraft.editedText.contains("\"enabled\":false"))
-        XCTAssertTrue(plan.textDraft.editedText.contains("\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30}]"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"slots\":[{\"species\":\"KRICKETOT\",\"rate\":35,\"metadata\":{\"time\":\"morning\"}},{\"species\":\"STARLY\",\"rate\":20}]"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"swarms\":[\"DODUO\",\"NIDORAN_M\"]"))
+        XCTAssertTrue(plan.textDraft.editedText.contains("\"metadata\":{\"map\":\"ROUTE_201\"}"))
         XCTAssertEqual(plan.editPlan.changes.count, 1)
         XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
 
@@ -3396,6 +3495,8 @@ final class NDSDataCatalogTests: XCTestCase {
         let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
         XCTAssertTrue(updated.contains("\"morning_rate\":25"))
         XCTAssertTrue(updated.contains("\"enabled\":false"))
+        XCTAssertTrue(updated.contains("\"slots\":[{\"species\":\"KRICKETOT\",\"rate\":35,\"metadata\":{\"time\":\"morning\"}},{\"species\":\"STARLY\",\"rate\":20}]"))
+        XCTAssertTrue(updated.contains("\"swarms\":[\"DODUO\",\"NIDORAN_M\"]"))
         XCTAssertTrue(updated.contains("\"metadata\":{\"map\":\"ROUTE_201\"}"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
 
@@ -3413,6 +3514,7 @@ final class NDSDataCatalogTests: XCTestCase {
 
         let cAnchorSnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "encounters:arm9/src/encounter.c")
         XCTAssertFalse(cAnchorSnapshot.canEdit)
+        XCTAssertTrue(cAnchorSnapshot.fields.isEmpty)
         XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED" })
         XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED" })
         XCTAssertTrue(cAnchorSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_FORMAT_BLOCKED" })
@@ -4442,6 +4544,14 @@ final class NDSDataCatalogTests: XCTestCase {
             "scripts:files/fielddata/script",
             "scripts:files/fielddata/eventdata/zone_event",
             "text:files/msgdata",
+            "species:data/pokemon",
+            "moves:data/moves",
+            "items:data/items",
+            "trainers:data/trainers",
+            "species:src/data/pokemon",
+            "moves:src/data/moves",
+            "items:src/data/items",
+            "trainers:src/data/trainers",
             "resources:files/msgdata/story/message_bank.txt",
             "resources:files/msgdata/battle/trainer_messages.gmm",
             "resources:files/msgdata/msg/0001.bin",

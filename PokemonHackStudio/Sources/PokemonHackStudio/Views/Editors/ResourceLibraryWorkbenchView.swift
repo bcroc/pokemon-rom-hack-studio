@@ -10,11 +10,15 @@ struct ResourceLibraryWorkbenchView: View {
     let gameCubeLoadStatus: GameCubeResourceLoadStatus
     let loadingResourceEntryID: ResourceLibraryEntryViewState.ID?
     let assets: [ResourceAssetRowViewState]
+    let selectedAsset: ResourceAssetRowViewState?
+    let assetGroups: [ResourceAssetWorkflowGroup]
     let assetLoadStatus: ResourceAssetCatalogLoadStatus
     @Binding var gameCubeResourcePath: String
     @Binding var selectedAssetID: ResourceAssetRowViewState.ID?
     @Binding var mode: ResourceLibraryMode
     @Binding var selectedCategory: String
+    @Binding var workflowFacet: ResourceAssetWorkflowFacet
+    @Binding var groupingMode: ResourceAssetGroupingMode
     @Binding var sortMode: ResourceAssetSortMode
     @Binding var searchText: String
     let onChooseGameCubeResource: () -> Void
@@ -249,6 +253,8 @@ struct ResourceLibraryWorkbenchView: View {
                             onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
                             onDiscardNDSDataEdits: onDiscardNDSDataEdits
                         )
+
+                        assetRowsView
                     }
                     .padding(layoutMode.isCompact ? 14 : 24)
                 }
@@ -266,6 +272,7 @@ struct ResourceLibraryWorkbenchView: View {
                 Button("Show Draft", systemImage: "eye") {
                     mode = .assets
                     selectedCategory = Self.allCategories
+                    workflowFacet = .all
                     selectedAssetID = editor.assetID
                 }
                 .help("Select the draft and reset the category filter. Clear the search field if it is still hidden.")
@@ -291,6 +298,44 @@ struct ResourceLibraryWorkbenchView: View {
         }
         .padding(14)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var assetRowsView: some View {
+        if groupingMode == .workflow {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(assetGroups) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Label(group.title, systemImage: group.facet.systemImage)
+                                .font(.subheadline.weight(.semibold))
+                            ResourceTag(text: "\(group.rows.count)")
+                            Spacer()
+                        }
+
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(group.rows) { asset in
+                                selectableAssetRow(asset)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(assets) { asset in
+                    selectableAssetRow(asset)
+                }
+            }
+        }
+    }
+
+    private func selectableAssetRow(_ asset: ResourceAssetRowViewState) -> some View {
+        ResourceAssetRow(asset: asset, onNavigate: onNavigateToAsset)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedAssetID = asset.id
+            }
     }
 
     private var compactAssetList: some View {
@@ -324,13 +369,6 @@ struct ResourceLibraryWorkbenchView: View {
             }
             .padding(14)
         }
-    }
-
-    private var selectedAsset: ResourceAssetRowViewState? {
-        if let selectedAssetID, let asset = assets.first(where: { $0.id == selectedAssetID }) {
-            return asset
-        }
-        return assets.first
     }
 
     private var categoryOptions: [String] {
@@ -417,12 +455,15 @@ struct ResourceLibraryWorkbenchView: View {
     }
 
     private var hasActiveAssetFilters: Bool {
-        selectedCategory != Self.allCategories || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedCategory != Self.allCategories
+            || workflowFacet != .all
+            || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func handleEmptyAssetAction() {
         if case .loaded = assetLoadStatus, hasActiveAssetFilters {
             selectedCategory = Self.allCategories
+            workflowFacet = .all
             searchText = ""
             selectedAssetID = nil
             return

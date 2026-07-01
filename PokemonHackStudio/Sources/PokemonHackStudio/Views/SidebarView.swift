@@ -875,6 +875,19 @@ struct WorkbenchSidebarPanel: View {
                         }
                     }
 
+                    Picker("Workflow", selection: $store.resourceAssetWorkflowFacet) {
+                        ForEach(ResourceAssetWorkflowFacet.allCases) { facet in
+                            Label(facet.title, systemImage: facet.systemImage).tag(facet)
+                        }
+                    }
+
+                    Picker("Group", selection: $store.resourceAssetGroupingMode) {
+                        ForEach(ResourceAssetGroupingMode.allCases) { groupingMode in
+                            Text(groupingMode.title).tag(groupingMode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
                     Picker("Sort", selection: $store.resourceAssetSortMode) {
                         ForEach(ResourceAssetSortMode.allCases) { sort in
                             Text(sort.title).tag(sort)

@@ -178,6 +178,54 @@ public enum PatchCreationStatus: String, Codable, Equatable {
     case blocked
 }
 
+public enum PatchCreationVerificationStatus: String, Codable, Equatable {
+    case passed
+    case failed
+}
+
+public struct PatchCreationVerification: Codable, Equatable {
+    public let status: PatchCreationVerificationStatus
+    public let appliedOutputSHA1: String?
+    public let appliedOutputCRC32: String?
+    public let appliedOutputSizeBytes: UInt64?
+    public let expectedBuiltOutputSHA1: String
+    public let expectedBuiltOutputCRC32: String
+    public let expectedBuiltOutputSizeBytes: UInt64
+    public let sha1Matches: Bool
+    public let crc32Matches: Bool
+    public let sizeMatches: Bool
+    public let headerPolicyMatches: Bool
+    public let headerPolicy: PatchArtifactHeaderPolicy
+
+    public init(
+        status: PatchCreationVerificationStatus,
+        appliedOutputSHA1: String?,
+        appliedOutputCRC32: String?,
+        appliedOutputSizeBytes: UInt64?,
+        expectedBuiltOutputSHA1: String,
+        expectedBuiltOutputCRC32: String,
+        expectedBuiltOutputSizeBytes: UInt64,
+        sha1Matches: Bool,
+        crc32Matches: Bool,
+        sizeMatches: Bool,
+        headerPolicyMatches: Bool,
+        headerPolicy: PatchArtifactHeaderPolicy
+    ) {
+        self.status = status
+        self.appliedOutputSHA1 = appliedOutputSHA1
+        self.appliedOutputCRC32 = appliedOutputCRC32
+        self.appliedOutputSizeBytes = appliedOutputSizeBytes
+        self.expectedBuiltOutputSHA1 = expectedBuiltOutputSHA1
+        self.expectedBuiltOutputCRC32 = expectedBuiltOutputCRC32
+        self.expectedBuiltOutputSizeBytes = expectedBuiltOutputSizeBytes
+        self.sha1Matches = sha1Matches
+        self.crc32Matches = crc32Matches
+        self.sizeMatches = sizeMatches
+        self.headerPolicyMatches = headerPolicyMatches
+        self.headerPolicy = headerPolicy
+    }
+}
+
 public struct PatchCreationArtifactManifest: Codable, Equatable {
     public let schemaVersion: Int
     public let action: String
@@ -199,6 +247,7 @@ public struct PatchCreationArtifactManifest: Codable, Equatable {
     public let patchSizeBytes: UInt64
     public let patchFormat: PatchFormatID
     public let headerPolicy: PatchArtifactHeaderPolicy
+    public let verification: PatchCreationVerification?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -222,6 +271,7 @@ public struct PatchCreationArtifactManifest: Codable, Equatable {
         patchSizeBytes: UInt64,
         patchFormat: PatchFormatID,
         headerPolicy: PatchArtifactHeaderPolicy,
+        verification: PatchCreationVerification? = nil,
         diagnostics: [Diagnostic]
     ) {
         self.schemaVersion = schemaVersion
@@ -244,6 +294,7 @@ public struct PatchCreationArtifactManifest: Codable, Equatable {
         self.patchSizeBytes = patchSizeBytes
         self.patchFormat = patchFormat
         self.headerPolicy = headerPolicy
+        self.verification = verification
         self.diagnostics = diagnostics
     }
 }
@@ -254,6 +305,7 @@ public struct PatchCreationResult: Codable, Equatable {
     public let manifestPath: String?
     public let patchSHA1: String?
     public let diagnostics: [Diagnostic]
+    public let verification: PatchCreationVerification?
     public let manifest: PatchCreationArtifactManifest?
 
     public init(
@@ -262,6 +314,7 @@ public struct PatchCreationResult: Codable, Equatable {
         manifestPath: String?,
         patchSHA1: String?,
         diagnostics: [Diagnostic],
+        verification: PatchCreationVerification? = nil,
         manifest: PatchCreationArtifactManifest?
     ) {
         self.status = status
@@ -269,6 +322,7 @@ public struct PatchCreationResult: Codable, Equatable {
         self.manifestPath = manifestPath
         self.patchSHA1 = patchSHA1
         self.diagnostics = diagnostics
+        self.verification = verification
         self.manifest = manifest
     }
 }
@@ -1207,15 +1261,41 @@ public enum PatchCreationBuilder {
         }
 
         let patchData = BPSPatchCodec.encode(source: baseData, target: builtData)
-        let patchSHA1 = pokemonHackSHA1Hex(patchData)
+        if let writeFailure = writePatchArtifact(
+            patchData: patchData,
+            patchURL: patchURL,
+            fileManager: fileManager
+        ) {
+            return blockedResult(
+                patchURL: patchURL,
+                manifestURL: manifestURL,
+                diagnostics: diagnostics + [writeFailure]
+            )
+        }
+
+        let writtenPatchData = try? Data(contentsOf: patchURL)
+        let patchIdentityData = writtenPatchData ?? patchData
+        let patchSHA1 = pokemonHackSHA1Hex(patchIdentityData)
+        let verification = writtenPatchData.map {
+            verifyCreatedPatch(
+                patchData: $0,
+                baseData: baseData,
+                expectedBuiltData: builtData,
+                headerPolicy: preview.headerPolicy
+            )
+        } ?? unreadablePatchVerification(
+            expectedBuiltData: builtData,
+            headerPolicy: preview.headerPolicy
+        )
+        let verificationDiagnostic = diagnostic(for: verification, patchURL: patchURL)
         let writtenDiagnostic = Diagnostic(
             severity: .info,
             code: "PATCH_CREATION_WRITTEN",
             message: "BPS patch was written to \(patchURL.path); manifest written to \(manifestURL.path)."
         )
-        let resultDiagnostics = diagnostics + [writtenDiagnostic]
+        let resultDiagnostics = diagnostics + [verificationDiagnostic, writtenDiagnostic]
         let manifest = PatchCreationArtifactManifest(
-            schemaVersion: 1,
+            schemaVersion: 2,
             action: "patch-create",
             projectRoot: root.path,
             baseROMPath: preview.baseROM.absolutePath,
@@ -1231,18 +1311,18 @@ public enum PatchCreationBuilder {
             builtOutputSizeBytes: UInt64(builtData.count),
             patchPath: patchURL.path,
             patchSHA1: patchSHA1,
-            patchCRC32: pokemonHackCRC32Hex(patchData),
-            patchSizeBytes: UInt64(patchData.count),
+            patchCRC32: pokemonHackCRC32Hex(patchIdentityData),
+            patchSizeBytes: UInt64(patchIdentityData.count),
             patchFormat: .bps,
             headerPolicy: preview.headerPolicy,
+            verification: verification,
             diagnostics: resultDiagnostics
         )
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let manifestData = try encoder.encode(manifest)
-        if let writeFailure = writePatchArtifacts(
-            patchData: patchData,
+        if let writeFailure = writeManifestArtifact(
             manifestData: manifestData,
             patchURL: patchURL,
             manifestURL: manifestURL,
@@ -1261,8 +1341,103 @@ public enum PatchCreationBuilder {
             manifestPath: manifestURL.path,
             patchSHA1: patchSHA1,
             diagnostics: resultDiagnostics,
+            verification: verification,
             manifest: manifest
         )
+    }
+
+    static func verifyCreatedPatch(
+        patchData: Data,
+        baseData: Data,
+        expectedBuiltData: Data,
+        headerPolicy: PatchArtifactHeaderPolicy
+    ) -> PatchCreationVerification {
+        let expectedSHA1 = pokemonHackSHA1Hex(expectedBuiltData)
+        let expectedCRC32 = pokemonHackCRC32Hex(expectedBuiltData)
+        let expectedSize = UInt64(expectedBuiltData.count)
+        let headerPolicyMatches = headerPolicy.mode == "no-header-rewrite" && !headerPolicy.shouldRewriteHeader
+
+        guard let appliedData = try? BPSPatchCodec.apply(patchData: patchData, baseData: baseData) else {
+            return PatchCreationVerification(
+                status: .failed,
+                appliedOutputSHA1: nil,
+                appliedOutputCRC32: nil,
+                appliedOutputSizeBytes: nil,
+                expectedBuiltOutputSHA1: expectedSHA1,
+                expectedBuiltOutputCRC32: expectedCRC32,
+                expectedBuiltOutputSizeBytes: expectedSize,
+                sha1Matches: false,
+                crc32Matches: false,
+                sizeMatches: false,
+                headerPolicyMatches: headerPolicyMatches,
+                headerPolicy: headerPolicy
+            )
+        }
+
+        let appliedSHA1 = pokemonHackSHA1Hex(appliedData)
+        let appliedCRC32 = pokemonHackCRC32Hex(appliedData)
+        let appliedSize = UInt64(appliedData.count)
+        let sha1Matches = appliedSHA1.caseInsensitiveCompare(expectedSHA1) == .orderedSame
+        let crc32Matches = appliedCRC32.caseInsensitiveCompare(expectedCRC32) == .orderedSame
+        let sizeMatches = appliedSize == expectedSize
+        let status: PatchCreationVerificationStatus = sha1Matches && crc32Matches && sizeMatches && headerPolicyMatches
+            ? .passed
+            : .failed
+
+        return PatchCreationVerification(
+            status: status,
+            appliedOutputSHA1: appliedSHA1,
+            appliedOutputCRC32: appliedCRC32,
+            appliedOutputSizeBytes: appliedSize,
+            expectedBuiltOutputSHA1: expectedSHA1,
+            expectedBuiltOutputCRC32: expectedCRC32,
+            expectedBuiltOutputSizeBytes: expectedSize,
+            sha1Matches: sha1Matches,
+            crc32Matches: crc32Matches,
+            sizeMatches: sizeMatches,
+            headerPolicyMatches: headerPolicyMatches,
+            headerPolicy: headerPolicy
+        )
+    }
+
+    private static func unreadablePatchVerification(
+        expectedBuiltData: Data,
+        headerPolicy: PatchArtifactHeaderPolicy
+    ) -> PatchCreationVerification {
+        PatchCreationVerification(
+            status: .failed,
+            appliedOutputSHA1: nil,
+            appliedOutputCRC32: nil,
+            appliedOutputSizeBytes: nil,
+            expectedBuiltOutputSHA1: pokemonHackSHA1Hex(expectedBuiltData),
+            expectedBuiltOutputCRC32: pokemonHackCRC32Hex(expectedBuiltData),
+            expectedBuiltOutputSizeBytes: UInt64(expectedBuiltData.count),
+            sha1Matches: false,
+            crc32Matches: false,
+            sizeMatches: false,
+            headerPolicyMatches: headerPolicy.mode == "no-header-rewrite" && !headerPolicy.shouldRewriteHeader,
+            headerPolicy: headerPolicy
+        )
+    }
+
+    private static func diagnostic(
+        for verification: PatchCreationVerification,
+        patchURL: URL
+    ) -> Diagnostic {
+        switch verification.status {
+        case .passed:
+            return Diagnostic(
+                severity: .info,
+                code: "PATCH_CREATION_VERIFICATION_PASSED",
+                message: "Re-read BPS patch \(patchURL.path), applied it in memory to the selected base ROM, and verified SHA1, CRC32, size, and no-header-rewrite policy against the built output."
+            )
+        case .failed:
+            return Diagnostic(
+                severity: .error,
+                code: "PATCH_CREATION_VERIFICATION_FAILED",
+                message: "Re-read BPS patch \(patchURL.path), but in-memory verification did not match the built output SHA1, CRC32, size, or no-header-rewrite policy."
+            )
+        }
     }
 
     private static func matchingBaseCandidate(
@@ -1305,31 +1480,40 @@ public enum PatchCreationBuilder {
         return diagnostics
     }
 
-    private static func writePatchArtifacts(
+    private static func writePatchArtifact(
         patchData: Data,
+        patchURL: URL,
+        fileManager: FileManager
+    ) -> Diagnostic? {
+        let directory = patchURL.deletingLastPathComponent()
+        let patchTempURL = directory.appendingPathComponent(".\(patchURL.lastPathComponent).\(UUID().uuidString).tmp")
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try patchData.write(to: patchTempURL, options: .atomic)
+            try fileManager.moveItem(at: patchTempURL, to: patchURL)
+            return nil
+        } catch {
+            try? fileManager.removeItem(at: patchTempURL)
+            return Diagnostic(severity: .error, code: "PATCH_CREATION_WRITE_FAILED", message: "BPS patch creation failed while writing ignored artifacts: \(error.localizedDescription)")
+        }
+    }
+
+    private static func writeManifestArtifact(
         manifestData: Data,
         patchURL: URL,
         manifestURL: URL,
         fileManager: FileManager
     ) -> Diagnostic? {
-        let directory = patchURL.deletingLastPathComponent()
-        let patchTempURL = directory.appendingPathComponent(".\(patchURL.lastPathComponent).\(UUID().uuidString).tmp")
+        let directory = manifestURL.deletingLastPathComponent()
         let manifestTempURL = directory.appendingPathComponent(".\(manifestURL.lastPathComponent).\(UUID().uuidString).tmp")
-        var movedPatch = false
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try patchData.write(to: patchTempURL, options: .atomic)
             try manifestData.write(to: manifestTempURL, options: .atomic)
-            try fileManager.moveItem(at: patchTempURL, to: patchURL)
-            movedPatch = true
             try fileManager.moveItem(at: manifestTempURL, to: manifestURL)
             return nil
         } catch {
-            try? fileManager.removeItem(at: patchTempURL)
             try? fileManager.removeItem(at: manifestTempURL)
-            if movedPatch {
-                try? fileManager.removeItem(at: patchURL)
-            }
+            try? fileManager.removeItem(at: patchURL)
             return Diagnostic(severity: .error, code: "PATCH_CREATION_WRITE_FAILED", message: "BPS patch creation failed while writing ignored artifacts: \(error.localizedDescription)")
         }
     }

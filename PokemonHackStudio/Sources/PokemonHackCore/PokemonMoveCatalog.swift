@@ -355,7 +355,7 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
             contestJam: detail.isContestScalarsEditable ? detail.contestMetadata?.contestJam.flatMap { Int(compactMoveValue($0)) } : nil,
             contestComboStarterId: detail.isContestScalarsEditable ? detail.contestMetadata?.contestComboStarterId : nil,
             contestComboMoves: detail.isContestComboMovesEditable
-                ? detail.contestMetadata?.contestComboMoves.flatMap(simpleContestComboMoves)
+                ? detail.contestMetadata?.contestComboMoves.flatMap { contestComboMovesForDraft($0, detail: detail) }
                 : nil
         )
     }
@@ -541,6 +541,11 @@ public enum ProjectMoveCatalogBuilder {
         let tutorByMove = Dictionary(grouping: tutorScan.memberships, by: \.moveID)
         let learnedByMove = Dictionary(grouping: learnsetMemberships, by: \.moveID)
         let descriptionTexts = moveDescriptionTexts(root: root, profile: index.profile, fileManager: fileManager)
+        let rubyMoveConstantsBySymbol = moveConstantsBySymbol(
+            root: root,
+            profile: index.profile,
+            fileManager: fileManager
+        )
         let rubyContestRowsByMove = rubyContestRowsByMove(
             root: root,
             profile: index.profile,
@@ -569,7 +574,8 @@ public enum ProjectMoveCatalogBuilder {
             let isContestComboMovesEditable = moveContestComboMovesEditable(
                 profile: index.profile,
                 record: record,
-                fields: previewFields
+                fields: previewFields,
+                rubyContestRow: rubyContestRowsByMove[moveID]
             )
             let editDiagnostics = editabilityDiagnostics(record: record, profile: index.profile, preview: fullPreview)
             let moveDiagnostics = record.diagnostics + editDiagnostics + diagnostics.filter { $0.span == record.sourceSpan }
@@ -581,6 +587,9 @@ public enum ProjectMoveCatalogBuilder {
                 sourcePreview: fullPreview,
                 facts: facts(
                     record.facts,
+                    moveID: moveID,
+                    profile: index.profile,
+                    moveConstant: rubyMoveConstantsBySymbol[moveID],
                     contestMetadata: contestMetadata,
                     isContestScalarsEditable: isContestScalarsEditable,
                     isContestComboMovesEditable: isContestComboMovesEditable
@@ -858,14 +867,52 @@ public enum ProjectMoveCatalogBuilder {
         return simpleFlags(in: factValue ?? previewValue ?? "") ?? []
     }
 
+    private static func moveConstantsBySymbol(
+        root: URL,
+        profile: GameProfile,
+        fileManager: FileManager
+    ) -> [String: MoveConstantDefinition] {
+        guard profile == .pokeruby,
+              let definitions = try? moveConstantDefinitions(root: root, fileManager: fileManager)
+        else { return [:] }
+        var result: [String: MoveConstantDefinition] = [:]
+        for definition in definitions where result[definition.symbol] == nil {
+            result[definition.symbol] = definition
+        }
+        return result
+    }
+
     private static func facts(
         _ facts: [SourceIndexFact],
+        moveID: String,
+        profile: GameProfile,
+        moveConstant: MoveConstantDefinition?,
         contestMetadata: MoveContestMetadata?,
         isContestScalarsEditable: Bool,
         isContestComboMovesEditable: Bool
     ) -> [SourceIndexFact] {
-        guard let contestMetadata, !contestMetadata.isEmpty else { return facts }
         var result = facts
+        if profile == .pokeruby {
+            appendFact(
+                label: "Move Identity Readiness",
+                value: moveConstant == nil ? "constantMissing" : "constantMatched",
+                to: &result
+            )
+            appendFact(
+                label: "Move Identity Blocked Actions",
+                value: "constant creation; constant rename; row insertion/removal/reorder; generated outputs; reference writes; ROM/binary writes",
+                to: &result
+            )
+            if let moveConstant {
+                appendFact(label: "Move Constant Value", value: moveConstant.value, to: &result)
+                appendFact(
+                    label: "Move Constant Source",
+                    value: "\(moveConstant.span.relativePath):\(moveConstant.span.startLine)",
+                    to: &result
+                )
+            }
+        }
+        guard let contestMetadata, !contestMetadata.isEmpty else { return result }
         appendFact(label: "contestEffect", value: contestMetadata.contestEffect, to: &result)
         appendFact(label: "contestCategory", value: contestMetadata.contestCategory, to: &result)
         appendFact(label: "contestAppeal", value: contestMetadata.contestAppeal, to: &result)
@@ -1115,8 +1162,13 @@ public enum ProjectMoveCatalogBuilder {
     private static func moveContestComboMovesEditable(
         profile: GameProfile,
         record: SourceIndexRecord,
-        fields: [String: MoveFieldSlice]
+        fields: [String: MoveFieldSlice],
+        rubyContestRow: RubyContestMoveRow?
     ) -> Bool {
+        if profile == .pokeruby {
+            return record.sourceSpan.relativePath == editableMoveSourcePath(for: profile)
+                && rubyContestRow?.hasEditableSimpleComboMoves == true
+        }
         guard
             profile == .pokeemeraldExpansion,
             record.sourceSpan.relativePath == editableMoveSourcePath(for: profile)
@@ -1127,6 +1179,7 @@ public enum ProjectMoveCatalogBuilder {
     private struct RubyContestMoveRow {
         let metadata: MoveContestMetadata
         let hasEditableSimpleScalars: Bool
+        let hasEditableSimpleComboMoves: Bool
     }
 
     private static func rubyContestRowsByMove(
@@ -1152,9 +1205,11 @@ public enum ProjectMoveCatalogBuilder {
             let hasEditableSimpleScalars = rubyContestScalarFieldState(field: "effect", fields: fields) == .simple
                 && rubyContestScalarFieldState(field: "contestCategory", fields: fields) == .simple
                 && rubyContestScalarFieldState(field: "comboStarterId", fields: fields) == .simple
+            let hasEditableSimpleComboMoves = rubyContestComboMovesFieldState(fields: fields) == .simple
             rowsByMove[moveID] = RubyContestMoveRow(
                 metadata: metadata,
-                hasEditableSimpleScalars: hasEditableSimpleScalars
+                hasEditableSimpleScalars: hasEditableSimpleScalars,
+                hasEditableSimpleComboMoves: hasEditableSimpleComboMoves
             )
         }
         return rowsByMove
@@ -1299,6 +1354,7 @@ public enum MoveMutationPlanner {
         }
         appendRangeDiagnostics(move: move, draft: draft, diagnostics: &diagnostics)
         appendSymbolDiagnostics(move: move, draft: draft, diagnostics: &diagnostics)
+        appendExpansionFlagDiagnostics(root: root, fileManager: fileManager, profile: profile, move: move, draft: draft, diagnostics: &diagnostics)
         if let draftDescription = draft.descriptionText,
            draftDescription != move.descriptionText,
            !move.isDescriptionEditable
@@ -1309,6 +1365,46 @@ public enum MoveMutationPlanner {
         appendContestScalarDiagnostics(profile: profile, move: move, draft: draft, diagnostics: &diagnostics)
         appendContestComboMovesDiagnostics(root: root, fileManager: fileManager, profile: profile, move: move, draft: draft, diagnostics: &diagnostics)
         return diagnostics
+    }
+
+    private static func appendExpansionFlagDiagnostics(
+        root: URL,
+        fileManager: FileManager,
+        profile: GameProfile,
+        move: MoveDetail,
+        draft: MoveEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard let editedFlags = expansionFlagEdit(profile: profile, move: move, draft: draft) else { return }
+        guard editedFlags.allSatisfy(isFlagToken) else { return }
+
+        do {
+            let constants = Set(try moveFlagConstantDefinitions(root: root, fileManager: fileManager).map(\.symbol))
+            let unknown = editedFlags.filter { !constants.contains($0) }
+            diagnostics.append(contentsOf: unknown.map { token in
+                Diagnostic(severity: .error, code: "MOVE_FLAG_UNKNOWN", message: "\(token) is not defined in local move flag constants.", span: move.sourceSpan)
+            })
+        } catch MoveConstantDefinitionError.missing {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAG_CONSTANTS_MISSING", message: "A local move flag constants header is required before editing Expansion gMovesInfo flags.", span: move.sourceSpan))
+        } catch {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAG_CONSTANTS_UNREADABLE", message: "Local move flag constants could not be read before editing Expansion gMovesInfo flags.", span: move.sourceSpan))
+        }
+
+        guard profile == .pokeemeraldExpansion,
+              move.sourceSpan.relativePath == editableMoveSourcePath(for: profile),
+              let preview = move.sourcePreview
+        else {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAGS_NOT_EDITABLE", message: "\(move.moveID) is not backed by editable local Expansion gMovesInfo flags source.", span: move.sourceSpan))
+            return
+        }
+
+        let fields = MoveTopLevelFieldScanner.fields(in: preview)
+        if fields["flags"] == nil,
+           !editedFlags.isEmpty,
+           missingFlagsInsertionIndex(fields: fields, entryText: preview) == nil
+        {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_FLAGS_INSERTION_ANCHOR_MISSING", message: "\(move.moveID) is missing a safe .priority anchor for inserting .flags.", span: move.sourceSpan))
+        }
     }
 
     private static func appendRangeDiagnostics(move: MoveDetail, draft: MoveEditDraft, diagnostics: inout [Diagnostic]) {
@@ -1508,22 +1604,37 @@ public enum MoveMutationPlanner {
         draft: MoveEditDraft,
         diagnostics: inout [Diagnostic]
     ) {
-        guard let editedMoves = contestComboMovesEdit(move: move, draft: draft) else { return }
+        guard let editedMoves = contestComboMovesEdit(move: move, draft: draft, profile: profile) else { return }
 
-        for token in editedMoves where !isMoveConstantSymbol(token) {
-            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_MOVE_INVALID", message: "contestComboMoves entries must be simple MOVE_* constants.", span: move.sourceSpan))
+        if profile == .pokeruby {
+            for token in editedMoves where !isRubyContestComboSymbol(token) {
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_MOVE_INVALID", message: "Ruby/Sapphire comboMoves entries must be simple COMBO_STARTER_* constants.", span: move.sourceSpan))
+            }
+        } else {
+            for token in editedMoves where !isMoveConstantSymbol(token) {
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_MOVE_INVALID", message: "contestComboMoves entries must be simple MOVE_* constants.", span: move.sourceSpan))
+            }
         }
 
         do {
             let constants = Set(try moveConstantDefinitions(root: root, fileManager: fileManager).map(\.symbol))
-            let unknown = editedMoves.filter { !constants.contains($0) }
+            let unknown = editedMoves.compactMap { token -> (token: String, moveID: String)? in
+                let moveID = profile == .pokeruby ? rubyContestComboMoveID(for: token) : token
+                guard let moveID, !constants.contains(moveID) else { return nil }
+                return (token, moveID)
+            }
             diagnostics.append(contentsOf: unknown.map { token in
-                Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_MOVE_UNKNOWN", message: "\(token) is not defined in include/constants/moves.h.", span: move.sourceSpan)
+                Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_MOVE_UNKNOWN", message: "\(token.token) does not resolve to \(token.moveID) in include/constants/moves.h.", span: move.sourceSpan)
             })
         } catch MoveConstantDefinitionError.missing {
             diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_CONSTANTS_MISSING", message: "include/constants/moves.h is required before editing contestComboMoves.", span: move.sourceSpan))
         } catch {
             diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_CONSTANTS_UNREADABLE", message: "include/constants/moves.h could not be read before editing contestComboMoves.", span: move.sourceSpan))
+        }
+
+        if profile == .pokeruby {
+            appendRubyContestComboMovesSourceDiagnostics(root: root, fileManager: fileManager, move: move, diagnostics: &diagnostics)
+            return
         }
 
         guard profile == .pokeemeraldExpansion,
@@ -1547,11 +1658,64 @@ public enum MoveMutationPlanner {
         }
     }
 
-    private static func contestComboMovesEdit(move: MoveDetail, draft: MoveEditDraft) -> [String]? {
+    private static func appendRubyContestComboMovesSourceDiagnostics(
+        root: URL,
+        fileManager: FileManager,
+        move: MoveDetail,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard move.sourceSpan.relativePath == editableMoveSourcePath(for: .pokeruby) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_NOT_EDITABLE", message: "\(move.moveID) is not backed by editable Ruby/Sapphire gContestMoves source.", span: move.sourceSpan))
+            return
+        }
+        let path = rubyContestMoveSourcePath
+        let url = root.appendingPathComponent(path)
+        guard fileManager.fileExists(atPath: url.path), let originalText = try? moveReadText(at: url) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_SOURCE_MISSING", message: "Ruby/Sapphire contest move source file is missing or unreadable: \(path).", span: SourceSpan(relativePath: path, startLine: 1)))
+            return
+        }
+        let parsed = CInitializerParser.tableEntries(
+            in: originalText,
+            descriptor: rubyContestMovesDescriptor(path: path)
+        )
+        guard let entry = parsed.entries.first(where: { normalizedContestMoveID($0.symbol) == move.moveID }) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_ROW_MISSING", message: "\(move.moveID) does not have an existing gContestMoves row.", span: SourceSpan(relativePath: path, startLine: 1)))
+            return
+        }
+        let fields = MoveTopLevelFieldScanner.fields(in: entry.body)
+        switch rubyContestComboMovesFieldState(fields: fields) {
+        case .missing:
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_FIELD_MISSING", message: "\(move.moveID) is missing existing gContestMoves comboMoves field.", span: entry.span))
+        case .nonSimple:
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_UNSUPPORTED_EXPRESSION", message: "\(move.moveID) has a non-simple gContestMoves comboMoves expression.", span: entry.span))
+        case .simple:
+            if !move.isContestComboMovesEditable {
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_NOT_EDITABLE", message: "\(move.moveID) does not have editable simple Ruby/Sapphire comboMoves.", span: entry.span))
+            }
+        }
+    }
+
+    private static func contestComboMovesEdit(move: MoveDetail, draft: MoveEditDraft, profile: GameProfile) -> [String]? {
         guard let moves = draft.contestComboMoves else { return nil }
         let normalized = moves.map(compactMoveValue).filter { !$0.isEmpty }
-        let current = move.contestMetadata?.contestComboMoves.flatMap(simpleContestComboMoves)
+        let current = move.contestMetadata?.contestComboMoves.flatMap {
+            profile == .pokeruby ? simpleRubyContestComboMoves($0) : simpleContestComboMoves($0)
+        }
         return current == normalized ? nil : normalized
+    }
+
+    private static func expansionFlagEdit(profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> [String]? {
+        guard profile == .pokeemeraldExpansion else { return nil }
+        let normalized = normalizedFlags(draft.flags)
+        guard let preview = move.sourcePreview else {
+            return normalized.isEmpty ? nil : normalized
+        }
+        let fields = MoveTopLevelFieldScanner.fields(in: preview)
+        guard let slice = fields["flags"] else {
+            return normalized.isEmpty ? nil : normalized
+        }
+        guard let originalFlags = simpleFlags(in: slice.value) else { return nil }
+        return originalFlags == normalized ? nil : normalized
     }
 
     private struct MoveFileTextReplacement {
@@ -1660,6 +1824,7 @@ public enum MoveMutationPlanner {
         appendReplacement(field: "target", newValue: draft.target, fields: fields, replacements: &replacements)
         appendNumericReplacement(field: "priority", newValue: draft.priority, fields: fields, replacements: &replacements)
         appendFlagsReplacement(newFlags: draft.flags, fields: fields, replacements: &replacements)
+        appendExpansionMissingFlagsInsertion(profile: profile, newFlags: draft.flags, fields: fields, entryText: entryText, replacements: &replacements)
         appendOptionalSymbolReplacement(field: "contestEffect", newValue: draft.contestEffect, fields: fields, replacements: &replacements)
         appendOptionalScalarReplacement(field: "contestCategory", newValue: draft.contestCategory, fields: fields, replacements: &replacements)
         appendOptionalNumericReplacement(field: "contestAppeal", newValue: draft.contestAppeal, fields: fields, replacements: &replacements)
@@ -1681,8 +1846,9 @@ public enum MoveMutationPlanner {
 
     private static func contestMoveTextReplacement(root: URL, profile: GameProfile, move: MoveDetail, draft: MoveEditDraft) -> (path: String?, replacement: MoveFileTextReplacement?, diagnostics: [Diagnostic]) {
         guard profile == .pokeruby else { return (nil, nil, []) }
-        let edits = rubyContestScalarEdits(move: move, draft: draft)
-        guard !edits.isEmpty else { return (nil, nil, []) }
+        let scalarEdits = rubyContestScalarEdits(move: move, draft: draft)
+        let comboMovesEdit = contestComboMovesEdit(move: move, draft: draft, profile: profile)
+        guard !scalarEdits.isEmpty || comboMovesEdit != nil else { return (nil, nil, []) }
 
         let path = rubyContestMoveSourcePath
         let url = root.appendingPathComponent(path)
@@ -1696,15 +1862,7 @@ public enum MoveMutationPlanner {
 
         let parsed = CInitializerParser.tableEntries(
             in: originalText,
-            descriptor: CInitializerTableDescriptor(
-                module: .moves,
-                relativePath: path,
-                tableSymbol: "gContestMoves",
-                entryStyle: .bracketed,
-                knownFields: ["effect", "contestCategory", "comboStarterId", "comboMoves"],
-                warnsOnUnknownFields: true,
-                isOptional: true
-            )
+            descriptor: rubyContestMovesDescriptor(path: path)
         )
         guard let entry = parsed.entries.first(where: { normalizedContestMoveID($0.symbol) == move.moveID }) else {
             return (
@@ -1715,9 +1873,8 @@ public enum MoveMutationPlanner {
         }
 
         let fields = MoveTopLevelFieldScanner.fields(in: entry.body)
-        let requiredFields = ["effect", "contestCategory", "comboStarterId"]
         var diagnostics: [Diagnostic] = []
-        for field in requiredFields {
+        for field in scalarEdits.isEmpty ? [] : ["effect", "contestCategory", "comboStarterId"] {
             switch rubyContestScalarFieldState(field: field, fields: fields) {
             case .missing:
                 diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_FIELD_MISSING", message: "\(move.moveID) is missing existing gContestMoves scalar field \(field).", span: entry.span))
@@ -1727,13 +1884,26 @@ public enum MoveMutationPlanner {
                 continue
             }
         }
+        if comboMovesEdit != nil {
+            switch rubyContestComboMovesFieldState(fields: fields) {
+            case .missing:
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_FIELD_MISSING", message: "\(move.moveID) is missing existing gContestMoves comboMoves field.", span: entry.span))
+            case .nonSimple:
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_COMBO_UNSUPPORTED_EXPRESSION", message: "\(move.moveID) has a non-simple gContestMoves comboMoves expression.", span: entry.span))
+            case .simple:
+                break
+            }
+        }
         guard diagnostics.allSatisfy({ $0.severity != .error }) else {
             return (path, nil, diagnostics)
         }
 
         var replacements: [(field: MoveFieldSlice, value: String)] = []
-        for edit in edits {
+        for edit in scalarEdits {
             appendReplacement(field: edit.sourceField, newValue: edit.value, fields: fields, replacements: &replacements)
+        }
+        if let comboMovesEdit {
+            appendRubyContestComboMovesReplacement(newMoves: comboMovesEdit, fields: fields, replacements: &replacements)
         }
         guard !replacements.isEmpty else { return (nil, nil, []) }
 
@@ -1754,7 +1924,7 @@ public enum MoveMutationPlanner {
             MoveFileTextReplacement(
                 range: lineRange,
                 replacement: replacementEntry,
-                summary: "Update contest move scalar fields",
+                summary: scalarEdits.isEmpty ? "Update contest move comboMoves" : "Update contest move fields",
                 textPreview: replacementEntry
             ),
             []
@@ -1877,6 +2047,23 @@ public enum MoveMutationPlanner {
         }
     }
 
+    private static func appendExpansionMissingFlagsInsertion(
+        profile: GameProfile,
+        newFlags: [String],
+        fields: [String: MoveFieldSlice],
+        entryText: String,
+        replacements: inout [(field: MoveFieldSlice, value: String)]
+    ) {
+        guard profile == .pokeemeraldExpansion, fields["flags"] == nil else { return }
+        let normalized = normalizedFlags(newFlags)
+        guard !normalized.isEmpty,
+              let insertionIndex = missingFlagsInsertionIndex(fields: fields, entryText: entryText)
+        else { return }
+        let indentation = lineIndentation(containing: fields["priority"]?.valueRange.lowerBound, in: entryText)
+        let slice = MoveFieldSlice(name: "flags", value: "", valueRange: insertionIndex..<insertionIndex)
+        replacements.append((slice, "\(indentation).flags = \(renderFlags(normalized)),\n"))
+    }
+
     private static func appendOptionalSymbolReplacement(
         field: String,
         newValue: String?,
@@ -1916,6 +2103,21 @@ public enum MoveMutationPlanner {
             let newMoves,
             let slice = fields["contestComboMoves"],
             let originalMoves = simpleContestComboMoves(slice.value)
+        else { return }
+        let normalized = newMoves.map(compactMoveValue).filter { !$0.isEmpty }
+        if originalMoves != normalized {
+            replacements.append((slice, renderContestComboMoves(normalized)))
+        }
+    }
+
+    private static func appendRubyContestComboMovesReplacement(
+        newMoves: [String],
+        fields: [String: MoveFieldSlice],
+        replacements: inout [(field: MoveFieldSlice, value: String)]
+    ) {
+        guard
+            let slice = fields["comboMoves"],
+            let originalMoves = simpleRubyContestComboMoves(slice.value)
         else { return }
         let normalized = newMoves.map(compactMoveValue).filter { !$0.isEmpty }
         if originalMoves != normalized {
@@ -2040,6 +2242,18 @@ private func editableMoveSourcePath(for profile: GameProfile) -> String? {
 }
 
 private let rubyContestMoveSourcePath = "src/data/contest_moves.h"
+
+private func rubyContestMovesDescriptor(path: String = rubyContestMoveSourcePath) -> CInitializerTableDescriptor {
+    CInitializerTableDescriptor(
+        module: .moves,
+        relativePath: path,
+        tableSymbol: "gContestMoves",
+        entryStyle: .bracketed,
+        knownFields: ["effect", "contestCategory", "comboStarterId", "comboMoves"],
+        warnsOnUnknownFields: true,
+        isOptional: true
+    )
+}
 
 private func isPrimaryMoveRecord(profile: GameProfile, record: SourceIndexRecord) -> Bool {
     if profile == .pokeruby, record.sourceSpan.relativePath == rubyContestMoveSourcePath {
@@ -2341,18 +2555,43 @@ private enum MoveContestEffectFieldState {
     case nonSimple
 }
 
+private func missingFlagsInsertionIndex(fields: [String: MoveFieldSlice], entryText: String) -> String.Index? {
+    guard let priority = fields["priority"] else { return nil }
+    var index = priority.valueRange.upperBound
+    while index < entryText.endIndex, entryText[index] != "\n" {
+        index = entryText.index(after: index)
+    }
+    guard index < entryText.endIndex else { return nil }
+    return entryText.index(after: index)
+}
+
+private func lineIndentation(containing index: String.Index?, in text: String) -> String {
+    guard let index else { return "" }
+    var lineStart = index
+    while lineStart > text.startIndex {
+        let previous = text.index(before: lineStart)
+        guard text[previous] != "\n" else { break }
+        lineStart = previous
+    }
+    var cursor = lineStart
+    while cursor < text.endIndex, text[cursor] == " " || text[cursor] == "\t" {
+        cursor = text.index(after: cursor)
+    }
+    return String(text[lineStart..<cursor])
+}
+
 private enum MoveContestScalarKind {
     case symbolLike
     case numeric
 }
 
-private struct MoveConstantDefinition {
+struct MoveConstantDefinition {
     let symbol: String
     let value: String
     let span: SourceSpan
 }
 
-private enum MoveConstantDefinitionError: Error {
+enum MoveConstantDefinitionError: Error {
     case missing
     case unreadable
 }
@@ -2363,7 +2602,7 @@ private enum MoveContestScalarFieldState {
     case nonSimple
 }
 
-private func moveConstantDefinitions(root: URL, fileManager: FileManager) throws -> [MoveConstantDefinition] {
+func moveConstantDefinitions(root: URL, fileManager: FileManager) throws -> [MoveConstantDefinition] {
     let relativePath = "include/constants/moves.h"
     let url = root.appendingPathComponent(relativePath)
     guard fileManager.fileExists(atPath: url.path) else {
@@ -2383,6 +2622,39 @@ private func moveConstantDefinitions(root: URL, fileManager: FileManager) throws
             span: SourceSpan(relativePath: relativePath, startLine: lineIndex + 1)
         )
     }
+}
+
+private func moveFlagConstantDefinitions(root: URL, fileManager: FileManager) throws -> [MoveConstantDefinition] {
+    let relativePaths = [
+        "include/constants/pokemon.h",
+        "include/constants/battle.h",
+        "include/constants/moves.h"
+    ]
+    var definitions: [MoveConstantDefinition] = []
+    var foundHeader = false
+    for relativePath in relativePaths {
+        let url = root.appendingPathComponent(relativePath)
+        guard fileManager.fileExists(atPath: url.path) else { continue }
+        foundHeader = true
+        guard let text = try? moveReadText(at: url) else {
+            throw MoveConstantDefinitionError.unreadable
+        }
+        definitions.append(contentsOf: text.components(separatedBy: .newlines).enumerated().compactMap { lineIndex, line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#define FLAG_") else { return nil }
+            let parts = trimmed.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard parts.count >= 3 else { return nil }
+            return MoveConstantDefinition(
+                symbol: parts[1],
+                value: parts[2],
+                span: SourceSpan(relativePath: relativePath, startLine: lineIndex + 1)
+            )
+        })
+    }
+    guard foundHeader else {
+        throw MoveConstantDefinitionError.missing
+    }
+    return definitions
 }
 
 private func moveContestEffectFieldState(move: MoveDetail) -> MoveContestEffectFieldState {
@@ -2412,6 +2684,11 @@ private func moveContestScalarFieldState(
 
 private func rubyContestScalarFieldState(field: String, fields: [String: MoveFieldSlice]) -> MoveContestScalarFieldState {
     moveContestScalarFieldState(field: field, fields: fields, kind: .symbolLike)
+}
+
+private func rubyContestComboMovesFieldState(fields: [String: MoveFieldSlice]) -> MoveContestScalarFieldState {
+    guard let slice = fields["comboMoves"] else { return .missing }
+    return simpleRubyContestComboMoves(slice.value) == nil ? .nonSimple : .simple
 }
 
 private func moveContestComboMovesFieldState(fields: [String: MoveFieldSlice]) -> MoveContestScalarFieldState {
@@ -2516,6 +2793,14 @@ private func renderFlags(_ flags: [String]) -> String {
 }
 
 private func simpleContestComboMoves(_ value: String) -> [String]? {
+    simpleContestComboSymbols(value, isAllowed: isMoveConstantSymbol)
+}
+
+private func simpleRubyContestComboMoves(_ value: String) -> [String]? {
+    simpleContestComboSymbols(value, isAllowed: isRubyContestComboSymbol)
+}
+
+private func simpleContestComboSymbols(_ value: String, isAllowed: (String) -> Bool) -> [String]? {
     let compact = compactMoveValue(value)
     guard compact.hasPrefix("{"), compact.hasSuffix("}") else { return nil }
     let bodyStart = compact.index(after: compact.startIndex)
@@ -2532,7 +2817,7 @@ private func simpleContestComboMoves(_ value: String) -> [String]? {
             guard index == parts.indices.last else { return nil }
             continue
         }
-        guard isMoveConstantSymbol(token) else { return nil }
+        guard isAllowed(token) else { return nil }
         moves.append(token)
     }
     return moves
@@ -2542,12 +2827,28 @@ private func renderContestComboMoves(_ moves: [String]) -> String {
     moves.isEmpty ? "{ }" : "{ \(moves.joined(separator: ", ")) }"
 }
 
+private func contestComboMovesForDraft(_ value: String, detail: MoveDetail) -> [String]? {
+    if detail.sourceSpan.relativePath == "src/data/battle_moves.c" {
+        return simpleRubyContestComboMoves(value)
+    }
+    return simpleContestComboMoves(value)
+}
+
 private func isFlagToken(_ value: String) -> Bool {
     value.range(of: #"^FLAG_[A-Z0-9_]+$"#, options: .regularExpression) != nil
 }
 
 private func isMoveConstantSymbol(_ value: String) -> Bool {
     value.range(of: #"^MOVE_[A-Z0-9_]+$"#, options: .regularExpression) != nil
+}
+
+private func isRubyContestComboSymbol(_ value: String) -> Bool {
+    value.range(of: #"^COMBO_STARTER_[A-Z0-9_]+$"#, options: .regularExpression) != nil
+}
+
+private func rubyContestComboMoveID(for value: String) -> String? {
+    guard isRubyContestComboSymbol(value) else { return nil }
+    return "MOVE_" + String(value.dropFirst("COMBO_STARTER_".count))
 }
 
 private func isSimpleSymbol(_ value: String) -> Bool {

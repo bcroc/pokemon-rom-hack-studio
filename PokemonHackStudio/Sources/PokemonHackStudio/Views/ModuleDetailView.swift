@@ -35,6 +35,8 @@ struct ModuleDetailView: View {
                 gameCubeLoadStatus: store.gameCubeResourceLoadStatus,
                 loadingResourceEntryID: store.loadingResourceLibraryEntryID,
                 assets: store.filteredResourceAssetRows,
+                selectedAsset: store.selectedResourceAsset,
+                assetGroups: store.resourceAssetWorkflowGroups,
                 assetLoadStatus: store.assetCatalogLoadStatus,
                 gameCubeResourcePath: Binding(
                     get: { store.selectedGameCubeResourcePath },
@@ -51,6 +53,14 @@ struct ModuleDetailView: View {
                 selectedCategory: Binding(
                     get: { store.resourceAssetCategory },
                     set: { store.resourceAssetCategory = $0 }
+                ),
+                workflowFacet: Binding(
+                    get: { store.resourceAssetWorkflowFacet },
+                    set: { store.resourceAssetWorkflowFacet = $0 }
+                ),
+                groupingMode: Binding(
+                    get: { store.resourceAssetGroupingMode },
+                    set: { store.resourceAssetGroupingMode = $0 }
                 ),
                 sortMode: Binding(
                     get: { store.resourceAssetSortMode },

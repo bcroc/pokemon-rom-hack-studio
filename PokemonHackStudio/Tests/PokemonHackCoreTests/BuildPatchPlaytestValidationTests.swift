@@ -452,15 +452,63 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(patchPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps"))
         XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps.manifest.json"))
         XCTAssertEqual(result.patchSHA1, pokemonHackSHA1Hex(patchData))
+        let verification = try XCTUnwrap(result.verification)
+        XCTAssertEqual(verification.status, .passed)
+        XCTAssertEqual(verification.appliedOutputSHA1, pokemonHackSHA1Hex(builtData))
+        XCTAssertEqual(verification.appliedOutputCRC32, pokemonHackCRC32Hex(builtData))
+        XCTAssertEqual(verification.appliedOutputSizeBytes, UInt64(builtData.count))
+        XCTAssertEqual(verification.expectedBuiltOutputSHA1, pokemonHackSHA1Hex(builtData))
+        XCTAssertEqual(verification.expectedBuiltOutputCRC32, pokemonHackCRC32Hex(builtData))
+        XCTAssertEqual(verification.expectedBuiltOutputSizeBytes, UInt64(builtData.count))
+        XCTAssertTrue(verification.sha1Matches)
+        XCTAssertTrue(verification.crc32Matches)
+        XCTAssertTrue(verification.sizeMatches)
+        XCTAssertTrue(verification.headerPolicyMatches)
+        XCTAssertEqual(verification.headerPolicy.mode, "no-header-rewrite")
+        XCTAssertFalse(verification.headerPolicy.shouldRewriteHeader)
         XCTAssertEqual(result.manifest?.action, "patch-create")
+        XCTAssertEqual(result.manifest?.schemaVersion, 2)
         XCTAssertEqual(result.manifest?.patchFormat, .bps)
         XCTAssertEqual(result.manifest?.baseROMSHA1, pokemonHackSHA1Hex(baseData))
         XCTAssertEqual(result.manifest?.builtOutputSHA1, pokemonHackSHA1Hex(builtData))
         XCTAssertEqual(result.manifest?.headerPolicy.shouldRewriteHeader, false)
+        XCTAssertEqual(result.manifest?.verification, verification)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_VERIFICATION_PASSED" })
         XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_WRITTEN" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
         XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
         XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+    }
+
+    func testPatchCreationVerifierReportsMismatchedInMemoryOutputIdentity() throws {
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abxyz".utf8)
+        let expectedBuiltData = Data("different-built-output".utf8)
+        let patchData = BPSPatchCodec.encode(source: baseData, target: targetData)
+        let headerPolicy = PatchArtifactHeaderPolicy(
+            mode: "no-header-rewrite",
+            detail: "Patch creation verification will not rewrite header bytes.",
+            shouldRewriteHeader: false
+        )
+
+        let verification = PatchCreationBuilder.verifyCreatedPatch(
+            patchData: patchData,
+            baseData: baseData,
+            expectedBuiltData: expectedBuiltData,
+            headerPolicy: headerPolicy
+        )
+
+        XCTAssertEqual(verification.status, .failed)
+        XCTAssertEqual(verification.appliedOutputSHA1, pokemonHackSHA1Hex(targetData))
+        XCTAssertEqual(verification.appliedOutputCRC32, pokemonHackCRC32Hex(targetData))
+        XCTAssertEqual(verification.appliedOutputSizeBytes, UInt64(targetData.count))
+        XCTAssertEqual(verification.expectedBuiltOutputSHA1, pokemonHackSHA1Hex(expectedBuiltData))
+        XCTAssertEqual(verification.expectedBuiltOutputCRC32, pokemonHackCRC32Hex(expectedBuiltData))
+        XCTAssertEqual(verification.expectedBuiltOutputSizeBytes, UInt64(expectedBuiltData.count))
+        XCTAssertFalse(verification.sha1Matches)
+        XCTAssertFalse(verification.crc32Matches)
+        XCTAssertFalse(verification.sizeMatches)
+        XCTAssertTrue(verification.headerPolicyMatches)
     }
 
     func testPatchCreationBlocksMismatchedBaseROMWithoutWritingArtifacts() throws {
@@ -546,6 +594,146 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_PATCH_PATH_SYMLINK_OUTSIDE_ROOT" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/clean-base-to-pokeemerald.bps").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/clean-base-to-pokeemerald.bps.manifest.json").path))
+    }
+
+    func testPatchArtifactLibraryScansCreatedBPSManifestReadOnly() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let patchPath = try XCTUnwrap(result.patchPath)
+        let patchData = try Data(contentsOf: URL(fileURLWithPath: patchPath))
+        let beforeScanFiles = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path).sorted()
+
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertTrue(library.isReadOnly)
+        XCTAssertEqual(library.relativeArtifactRoot, ".pokemonhackstudio/patches")
+        XCTAssertEqual(library.items.count, 1)
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .valid)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .matched)
+        XCTAssertEqual(item.builtOutputStatus, .matched)
+        XCTAssertEqual(item.patchSummary?.format, .bps)
+        XCTAssertEqual(item.patchSummary?.sourceSize, UInt64(baseData.count))
+        XCTAssertEqual(item.patchSummary?.targetSize, UInt64(builtData.count))
+        XCTAssertEqual(item.patchIdentity.sha1, pokemonHackSHA1Hex(patchData))
+        XCTAssertTrue(item.verificationSummary.contains("no apply/export was attempted"))
+        XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path).sorted(), beforeScanFiles)
+    }
+
+    func testPatchArtifactLibraryReportsStaleInputsWithoutWriting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let patchPath = try XCTUnwrap(result.patchPath)
+        let patchData = try Data(contentsOf: URL(fileURLWithPath: patchPath))
+        try FileManager.default.removeItem(at: baseROM)
+        try write(Data("changed".utf8), to: builtOutput)
+
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .warning)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .missing)
+        XCTAssertEqual(item.builtOutputStatus, .mismatched)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_BASE_ROM_MISSING" })
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_BUILT_OUTPUT_HASH_MISMATCH" })
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: patchPath)), patchData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+    }
+
+    func testPatchArtifactLibraryReportsManifestProblemsWithoutWriting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let patchData = makeBPSPatch(source: baseData, target: builtData)
+        let loosePatch = root.appendingPathComponent(".pokemonhackstudio/patches/loose.bps")
+        let brokenPatch = root.appendingPathComponent(".pokemonhackstudio/patches/broken.bps")
+        let mismatchPatch = root.appendingPathComponent(".pokemonhackstudio/patches/mismatch.bps")
+        try write(patchData, to: loosePatch)
+        try write(patchData, to: brokenPatch)
+        try write(Data("{not json".utf8), to: URL(fileURLWithPath: brokenPatch.path + ".manifest.json"))
+        try write(patchData, to: mismatchPatch)
+
+        let manifest = PatchCreationArtifactManifest(
+            schemaVersion: 1,
+            action: "patch-create",
+            projectRoot: root.path,
+            baseROMPath: baseROM.path,
+            baseROMSHA1: pokemonHackSHA1Hex(baseData),
+            baseROMCRC32: pokemonHackCRC32Hex(baseData),
+            baseROMSizeBytes: UInt64(baseData.count),
+            matchedBaseROMCandidate: "rom.sha1",
+            builtOutputPath: builtOutput.path,
+            builtOutputRelativePath: "pokeemerald.gba",
+            builtOutputTargetID: "gba",
+            builtOutputSHA1: pokemonHackSHA1Hex(builtData),
+            builtOutputCRC32: pokemonHackCRC32Hex(builtData),
+            builtOutputSizeBytes: UInt64(builtData.count),
+            patchPath: loosePatch.path,
+            patchSHA1: String(repeating: "0", count: 40),
+            patchCRC32: "00000000",
+            patchSizeBytes: UInt64(patchData.count),
+            patchFormat: .bps,
+            headerPolicy: PatchArtifactHeaderPolicy(mode: "no-header-rewrite", detail: "test", shouldRewriteHeader: false),
+            diagnostics: []
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(to: URL(fileURLWithPath: mismatchPatch.path + ".manifest.json"))
+
+        let beforeScanFiles = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path).sorted()
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertEqual(library.items.count, 3)
+        let loose = try XCTUnwrap(library.items.first { $0.fileName == "loose.bps" })
+        XCTAssertEqual(loose.manifestStatus, .missing)
+        XCTAssertEqual(loose.status, .warning)
+        let broken = try XCTUnwrap(library.items.first { $0.fileName == "broken.bps" })
+        XCTAssertEqual(broken.manifestStatus, .unreadable)
+        XCTAssertEqual(broken.status, .warning)
+        let mismatch = try XCTUnwrap(library.items.first { $0.fileName == "mismatch.bps" })
+        XCTAssertEqual(mismatch.manifestStatus, .mismatched)
+        XCTAssertEqual(mismatch.patchChecksumStatus, .mismatched)
+        XCTAssertEqual(mismatch.status, .warning)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path).sorted(), beforeScanFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/mismatch.gba").path))
+    }
+
+    func testPatchArtifactLibraryMissingRootDoesNotCreateArtifactDirectory() throws {
+        let root = try makePatchCreationProjectRoot()
+
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertTrue(library.items.isEmpty)
+        XCTAssertTrue(library.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
     }
 
     func testPatchManifestBuildsReadonlyBinaryDiffFreeSpaceAndRepointPreview() throws {
