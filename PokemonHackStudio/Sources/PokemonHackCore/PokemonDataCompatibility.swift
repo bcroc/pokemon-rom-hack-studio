@@ -186,6 +186,7 @@ public struct PokemonDataCompatibilitySourceTable: Codable, Equatable {
     public let readiness: String?
     public let relatedSourcePaths: [String]?
     public let blockedActions: [String]?
+    public let learnablesCoverage: PokemonLearnablesCoverage?
 
     public init(
         path: String,
@@ -197,7 +198,8 @@ public struct PokemonDataCompatibilitySourceTable: Codable, Equatable {
         recommendedFutureRow: String? = nil,
         readiness: String? = nil,
         relatedSourcePaths: [String]? = nil,
-        blockedActions: [String]? = nil
+        blockedActions: [String]? = nil,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
     ) {
         self.path = path
         self.tableSymbol = tableSymbol
@@ -209,6 +211,7 @@ public struct PokemonDataCompatibilitySourceTable: Codable, Equatable {
         self.readiness = readiness
         self.relatedSourcePaths = relatedSourcePaths
         self.blockedActions = blockedActions
+        self.learnablesCoverage = learnablesCoverage
     }
 }
 
@@ -295,6 +298,7 @@ public enum PokemonDataCompatibilityReportBuilder {
         let editable = catalog?.moves.filter(\.isEditable).count ?? 0
         let descriptionEditable = catalog?.moves.filter(\.isDescriptionEditable).count ?? 0
         let contestEffectEditable = catalog?.moves.filter(\.isContestEffectEditable).count ?? 0
+        let contestMoveFactCount = rubyContestMoveRecordCount(profile: index.profile, in: sourceIndex)
         return entry(
             surface: .moves,
             index: index,
@@ -308,7 +312,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: indexed,
                 editableCount: editable,
                 descriptionEditableCount: descriptionEditable,
-                contestEffectEditableCount: contestEffectEditable
+                contestEffectEditableCount: contestEffectEditable,
+                contestMoveFactCount: contestMoveFactCount
             )
         )
     }
@@ -389,6 +394,11 @@ public enum PokemonDataCompatibilityReportBuilder {
             indexed = 0
         }
         let editable = supportsLearnsetMutationEditing(surface: surface, profile: index.profile) && indexed > 0 ? indexed : 0
+        let allLearnablesCoverage = ExpansionAllLearnablesCoverageBuilder.report(
+            index: index,
+            speciesCatalog: speciesCatalog,
+            fileManager: fileManager
+        )?.summary
         let sourceTables: [PokemonDataCompatibilitySourceTable]?
         switch surface {
         case .levelUpLearnsets:
@@ -400,28 +410,32 @@ public enum PokemonDataCompatibilityReportBuilder {
                 rubyTMHMIndexedCount: rubyTMHMIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 rubyTMHMEditableCount: rubyTMHMEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 rubyEggIndexedCount: rubyEggIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
-                rubyEggEditableCount: rubyEggEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex)
+                rubyEggEditableCount: rubyEggEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                learnablesCoverage: allLearnablesCoverage
             )
         case .tmhmLearnsets:
             sourceTables = tmhmLearnsetSourceTables(
                 profile: index.profile,
                 sourceIndex: sourceIndex,
                 indexedCount: indexed,
-                editableCount: editable
+                editableCount: editable,
+                learnablesCoverage: allLearnablesCoverage
             )
         case .tutorLearnsets:
             sourceTables = tutorLearnsetSourceTables(
                 profile: index.profile,
                 sourceIndex: sourceIndex,
                 indexedCount: indexed,
-                editableCount: editable
+                editableCount: editable,
+                learnablesCoverage: allLearnablesCoverage
             )
         case .eggMoves:
             sourceTables = eggMoveSourceTables(
                 profile: index.profile,
                 sourceIndex: sourceIndex,
                 indexedCount: indexed,
-                editableCount: editable
+                editableCount: editable,
+                learnablesCoverage: allLearnablesCoverage
             )
         default:
             sourceTables = nil
@@ -791,12 +805,12 @@ public enum PokemonDataCompatibilityReportBuilder {
                 path: "src/data/items.h",
                 tableSymbol: "gItemsInfo .effect/.iconPic/.iconPalette",
                 indexedCount: metadataFactCount,
-                status: .readOnly,
-                note: "Expansion ItemInfo effect/icon fields are indexed as metadata-only compatibility facts; effect/icon writers remain blocked.",
-                sourceRole: "metadataOnlyCompatibilityFacts",
-                readiness: "read-only metadata facts",
+                status: metadataFactCount > 0 ? .editable : .blocked,
+                note: "Expansion ItemInfo effect/icon fields are editable only as existing simple C-symbol fields through the item mutation-plan gate.",
+                sourceRole: "editableSourceFields",
+                readiness: metadataFactCount > 0 ? "editable existing source fields" : "no existing effect/icon fields indexed",
                 blockedActions: [
-                    "effect/icon writers",
+                    "icon asset rewrites",
                     "generated output writes",
                     "Modern Emerald writes",
                     "ROM/build/export paths",
@@ -847,7 +861,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         indexedCount: Int,
         editableCount: Int,
         descriptionEditableCount: Int,
-        contestEffectEditableCount: Int
+        contestEffectEditableCount: Int,
+        contestMoveFactCount: Int
     ) -> [PokemonDataCompatibilitySourceTable]? {
         let sourceStatus: PokemonDataCompatibilityStatus
         if editableCount > 0 {
@@ -866,6 +881,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptionStatus = .blocked
         }
         let contestEffectStatus: PokemonDataCompatibilityStatus = contestEffectEditableCount > 0 ? .editable : .blocked
+        let contestMoveStatus: PokemonDataCompatibilityStatus = contestMoveFactCount > 0 ? .readOnly : .blocked
         if profile == .pokeruby {
             return [
                 PokemonDataCompatibilitySourceTable(
@@ -897,11 +913,23 @@ public enum PokemonDataCompatibilityReportBuilder {
                     note: "Existing simple Ruby/Sapphire contestEffect fields are editable through move drafts; missing or non-simple fields stay blocked."
                 ),
                 PokemonDataCompatibilitySourceTable(
-                    path: "src/data/battle_moves.c",
-                    tableSymbol: "other contest data",
-                    indexedCount: 0,
-                    status: .blocked,
-                    note: "Contest tables, combo data, and broader contest rewrites remain read-only for this slice."
+                    path: "src/data/contest_moves.h",
+                    tableSymbol: "gContestMoves",
+                    indexedCount: contestMoveFactCount,
+                    status: contestMoveStatus,
+                    note: "Ruby/Sapphire contest move metadata is surfaced as read-only facts linked back to move IDs; contest writers and combo edits remain blocked.",
+                    sourceRole: "readOnlyContestMetadata",
+                    readiness: contestMoveFactCount > 0 ? "factsOnly" : nil,
+                    blockedActions: [
+                        "contest writers",
+                        "combo array editing",
+                        "constants",
+                        "row insertion/removal/reorder",
+                        "generated writes",
+                        "reference writes",
+                        "ROM writes",
+                        "binary writes"
+                    ]
                 ),
                 PokemonDataCompatibilitySourceTable(
                     path: "src/data/pokemon/tmhm_learnsets.h",
@@ -965,14 +993,16 @@ public enum PokemonDataCompatibilityReportBuilder {
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/moves_info.h",
-                tableSymbol: "gMovesInfo contest metadata",
+                tableSymbol: "gMovesInfo contest scalars",
                 indexedCount: indexedCount,
-                status: .readOnly,
-                note: "Expansion contest metadata is surfaced as read-only raw gMovesInfo facts; contest writers remain future PHS-T78 work.",
-                sourceRole: "readOnlyContestMetadata",
-                readiness: "factsOnly",
+                status: indexedCount > 0 ? .editable : .blocked,
+                note: "Existing simple Expansion contestCategory, contestAppeal, contestJam, and contestComboStarterId fields are editable through move drafts.",
+                sourceRole: "editableContestScalars",
+                readiness: indexedCount > 0 ? "editable existing simple scalar fields" : "no existing contest scalar fields indexed",
                 blockedActions: [
-                    "contest writers",
+                    "contestComboMoves arrays",
+                    "constants",
+                    "row insertion/removal/reorder",
                     "generated outputs",
                     "reference writes",
                     "ROM/binary writes"
@@ -983,7 +1013,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: "gContestMoves",
                 indexedCount: 0,
                 status: .blocked,
-                note: "Contest data remains read-only for this slice."
+                note: "Contest combo arrays and adjacent contest tables remain blocked for this slice."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/pokemon/tmhm_learnsets.h",
@@ -1046,7 +1076,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         rubyTMHMIndexedCount: Int = 0,
         rubyTMHMEditableCount: Int = 0,
         rubyEggIndexedCount: Int = 0,
-        rubyEggEditableCount: Int = 0
+        rubyEggEditableCount: Int = 0,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
     ) -> [PokemonDataCompatibilitySourceTable]? {
         if profile == .pokeruby {
             let sourceStatus: PokemonDataCompatibilityStatus
@@ -1145,7 +1176,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: sourceStatus,
                 note: "Local source-backed Expansion level-up blocks use the species mutation-plan gate only when an existing block span is parsed."
             ),
-            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount),
+            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount, learnablesCoverage: learnablesCoverage),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
                 tableSymbol: nil,
@@ -1174,7 +1205,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         profile: GameProfile,
         sourceIndex: ProjectSourceIndex,
         indexedCount: Int,
-        editableCount: Int
+        editableCount: Int,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
     ) -> [PokemonDataCompatibilitySourceTable]? {
         guard profile == .pokeemeraldExpansion else { return nil }
         let localRowCount = Set(
@@ -1202,7 +1234,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: sourceStatus,
                 note: "Local source-backed Expansion TM/HM rows use the species mutation-plan gate only when an existing species row span is parsed."
             ),
-            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount),
+            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount, learnablesCoverage: learnablesCoverage),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
                 tableSymbol: nil,
@@ -1231,7 +1263,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         profile: GameProfile,
         sourceIndex: ProjectSourceIndex,
         indexedCount: Int,
-        editableCount: Int
+        editableCount: Int,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
     ) -> [PokemonDataCompatibilitySourceTable]? {
         guard profile == .pokeruby || profile == .pokeemeraldExpansion else { return nil }
         let sourceStatus: PokemonDataCompatibilityStatus
@@ -1248,7 +1281,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             ? "references/pokeruby/src/data/pokemon/tutor_learnsets.h"
             : "references/pokeemerald-expansion/src/data/pokemon/tutor_learnsets.h"
         let allLearnablesSourceTable = profile == .pokeemeraldExpansion
-            ? expansionAllLearnablesSourceTable(indexedCount: allLearnablesIndexedCount(in: sourceIndex))
+            ? expansionAllLearnablesSourceTable(indexedCount: allLearnablesIndexedCount(in: sourceIndex), learnablesCoverage: learnablesCoverage)
             : PokemonDataCompatibilitySourceTable(
                 path: "src/data/pokemon/all_learnables.json",
                 tableSymbol: nil,
@@ -1360,7 +1393,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         profile: GameProfile,
         sourceIndex: ProjectSourceIndex,
         indexedCount: Int,
-        editableCount: Int
+        editableCount: Int,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
     ) -> [PokemonDataCompatibilitySourceTable]? {
         guard profile == .pokeemeraldExpansion else { return nil }
         let localRowCount = Set(
@@ -1388,7 +1422,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: sourceStatus,
                 note: "Local source-backed Expansion egg-move rows use the species mutation-plan gate only when an existing egg_moves(...) span is parsed."
             ),
-            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount),
+            expansionAllLearnablesSourceTable(indexedCount: allLearnablesCount, learnablesCoverage: learnablesCoverage),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
                 tableSymbol: nil,
@@ -1448,7 +1482,10 @@ public enum PokemonDataCompatibilityReportBuilder {
         ).count
     }
 
-    private static func expansionAllLearnablesSourceTable(indexedCount: Int) -> PokemonDataCompatibilitySourceTable {
+    private static func expansionAllLearnablesSourceTable(
+        indexedCount: Int,
+        learnablesCoverage: PokemonLearnablesCoverage? = nil
+    ) -> PokemonDataCompatibilitySourceTable {
         PokemonDataCompatibilitySourceTable(
             path: "src/data/pokemon/all_learnables.json",
             tableSymbol: nil,
@@ -1458,7 +1495,8 @@ public enum PokemonDataCompatibilityReportBuilder {
             sourceRole: "generatedAllLearnablesIndex",
             readiness: "read-only generated context",
             relatedSourcePaths: expansionAllLearnablesRelatedSourcePaths,
-            blockedActions: expansionAllLearnablesBlockedActions
+            blockedActions: expansionAllLearnablesBlockedActions,
+            learnablesCoverage: learnablesCoverage
         )
     }
 
@@ -1663,6 +1701,15 @@ public enum PokemonDataCompatibilityReportBuilder {
         sourceIndex.records.filter { record in
             record.module == module
                 && (pathContains == nil || record.sourceSpan.relativePath.contains(pathContains ?? ""))
+        }.count
+    }
+
+    private static func rubyContestMoveRecordCount(profile: GameProfile, in sourceIndex: ProjectSourceIndex) -> Int {
+        guard profile == .pokeruby else { return 0 }
+        return sourceIndex.records.filter { record in
+            record.module == .moves
+                && record.sourceSpan.relativePath == "src/data/contest_moves.h"
+                && record.title != "MOVE_NONE"
         }.count
     }
 
@@ -2236,7 +2283,16 @@ private func pokedexUnsupportedFields(profile: GameProfile, editableCount: Int) 
 
 private func movesUnsupportedFields(profile: GameProfile) -> [String] {
     var fields = ["new/reordered move constants"]
-    fields.append(profile == .pokeruby ? "contest data beyond existing .contestEffect" : "contest data")
+    if profile == .pokeruby {
+        fields.append("contest data beyond existing .contestEffect")
+    } else if profile == .pokeemeraldExpansion {
+        fields.append(contentsOf: [
+            "contestComboMoves arrays",
+            "gMovesInfo non-simple contest scalar expressions"
+        ])
+    } else {
+        fields.append("contest data")
+    }
     if profile != .pokeemeraldExpansion && profile != .pokeruby {
         fields.append("description text rewrites")
     }

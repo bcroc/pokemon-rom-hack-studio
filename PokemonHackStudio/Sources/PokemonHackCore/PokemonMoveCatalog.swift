@@ -60,6 +60,7 @@ public struct MoveCatalogSummary: Codable, Equatable {
 }
 
 public struct MoveContestMetadata: Codable, Equatable {
+    public let contestEffect: String?
     public let contestCategory: String?
     public let contestAppeal: String?
     public let contestJam: String?
@@ -67,12 +68,14 @@ public struct MoveContestMetadata: Codable, Equatable {
     public let contestComboMoves: String?
 
     public init(
+        contestEffect: String? = nil,
         contestCategory: String? = nil,
         contestAppeal: String? = nil,
         contestJam: String? = nil,
         contestComboStarterId: String? = nil,
         contestComboMoves: String? = nil
     ) {
+        self.contestEffect = contestEffect
         self.contestCategory = contestCategory
         self.contestAppeal = contestAppeal
         self.contestJam = contestJam
@@ -81,7 +84,8 @@ public struct MoveContestMetadata: Codable, Equatable {
     }
 
     public var isEmpty: Bool {
-        contestCategory == nil
+        contestEffect == nil
+            && contestCategory == nil
             && contestAppeal == nil
             && contestJam == nil
             && contestComboStarterId == nil
@@ -105,6 +109,7 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
     public let contestEffect: String?
     public let isContestEffectEditable: Bool
     public let contestMetadata: MoveContestMetadata?
+    public let isContestScalarsEditable: Bool
     public let isEditable: Bool
     public let machineMemberships: [MoveMachineMembership]
     public let tutorMemberships: [MoveTutorMembership]
@@ -125,6 +130,7 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
         contestEffect: String? = nil,
         isContestEffectEditable: Bool = false,
         contestMetadata: MoveContestMetadata? = nil,
+        isContestScalarsEditable: Bool = false,
         isEditable: Bool = false,
         machineMemberships: [MoveMachineMembership] = [],
         tutorMemberships: [MoveTutorMembership] = [],
@@ -144,6 +150,7 @@ public struct MoveDetail: Codable, Equatable, Identifiable {
         self.contestEffect = contestEffect
         self.isContestEffectEditable = isContestEffectEditable
         self.contestMetadata = contestMetadata
+        self.isContestScalarsEditable = isContestScalarsEditable
         self.isEditable = isEditable
         self.machineMemberships = machineMemberships
         self.tutorMemberships = tutorMemberships
@@ -248,6 +255,10 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
     public var flags: [String]
     public var descriptionText: String?
     public var contestEffect: String?
+    public var contestCategory: String?
+    public var contestAppeal: Int?
+    public var contestJam: Int?
+    public var contestComboStarterId: String?
 
     public init(
         moveID: String,
@@ -261,7 +272,11 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
         priority: Int,
         flags: [String],
         descriptionText: String? = nil,
-        contestEffect: String? = nil
+        contestEffect: String? = nil,
+        contestCategory: String? = nil,
+        contestAppeal: Int? = nil,
+        contestJam: Int? = nil,
+        contestComboStarterId: String? = nil
     ) {
         self.moveID = moveID
         self.effect = effect
@@ -275,6 +290,10 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
         self.flags = normalizedFlags(flags)
         self.descriptionText = descriptionText
         self.contestEffect = contestEffect.map(compactMoveValue)
+        self.contestCategory = contestCategory.map(compactMoveValue)
+        self.contestAppeal = contestAppeal
+        self.contestJam = contestJam
+        self.contestComboStarterId = contestComboStarterId.map(compactMoveValue)
     }
 
     public init?(detail: MoveDetail) {
@@ -316,7 +335,11 @@ public struct MoveEditDraft: Codable, Equatable, Identifiable {
             priority: priority,
             flags: flags,
             descriptionText: detail.isDescriptionEditable ? detail.descriptionText : nil,
-            contestEffect: detail.isContestEffectEditable ? detail.contestEffect : nil
+            contestEffect: detail.isContestEffectEditable ? detail.contestEffect : nil,
+            contestCategory: detail.isContestScalarsEditable ? detail.contestMetadata?.contestCategory : nil,
+            contestAppeal: detail.isContestScalarsEditable ? detail.contestMetadata?.contestAppeal.flatMap { Int(compactMoveValue($0)) } : nil,
+            contestJam: detail.isContestScalarsEditable ? detail.contestMetadata?.contestJam.flatMap { Int(compactMoveValue($0)) } : nil,
+            contestComboStarterId: detail.isContestScalarsEditable ? detail.contestMetadata?.contestComboStarterId : nil
         )
     }
 }
@@ -451,7 +474,8 @@ public enum ProjectMoveCatalogBuilder {
         var diagnostics = sourceIndex.diagnostics + moveGraph.diagnostics + speciesCatalog.diagnostics
 
         let root = URL(fileURLWithPath: index.root.path)
-        let moveRecords = sourceIndex.records.filter { $0.module == .moves }
+        let allMoveRecords = sourceIndex.records.filter { $0.module == .moves }
+        let moveRecords = allMoveRecords.filter { isPrimaryMoveRecord(profile: index.profile, record: $0) }
         if moveRecords.isEmpty {
             diagnostics.append(
                 Diagnostic(
@@ -500,6 +524,12 @@ public enum ProjectMoveCatalogBuilder {
         let tutorByMove = Dictionary(grouping: tutorScan.memberships, by: \.moveID)
         let learnedByMove = Dictionary(grouping: learnsetMemberships, by: \.moveID)
         let descriptionTexts = moveDescriptionTexts(root: root, profile: index.profile, fileManager: fileManager)
+        let contestMetadataByMove = rubyContestMetadataByMove(
+            root: root,
+            profile: index.profile,
+            records: allMoveRecords,
+            fileManager: fileManager
+        )
 
         let moves = moveRecords.compactMap { record -> MoveDetail? in
             let moveID = normalizedMoveID(record.title)
@@ -509,7 +539,15 @@ public enum ProjectMoveCatalogBuilder {
             let descriptionSymbol = moveDescriptionSymbol(profile: index.profile, fields: previewFields)
             let descriptionText = descriptionSymbol.flatMap { descriptionTexts[$0]?.text }
             let contestEffect = moveContestEffect(profile: index.profile, record: record, fields: previewFields)
-            let contestMetadata = moveContestMetadata(profile: index.profile, record: record, fields: previewFields)
+            let contestMetadata = mergedContestMetadata(
+                moveContestMetadata(profile: index.profile, record: record, fields: previewFields),
+                contestMetadataByMove[moveID]
+            )
+            let isContestScalarsEditable = moveContestScalarsEditable(
+                profile: index.profile,
+                record: record,
+                fields: previewFields
+            )
             let editDiagnostics = editabilityDiagnostics(record: record, profile: index.profile, preview: fullPreview)
             let moveDiagnostics = record.diagnostics + editDiagnostics + diagnostics.filter { $0.span == record.sourceSpan }
             return MoveDetail(
@@ -518,7 +556,11 @@ public enum ProjectMoveCatalogBuilder {
                 ordinal: ordinal(from: record),
                 sourceSpan: record.sourceSpan,
                 sourcePreview: fullPreview,
-                facts: facts(record.facts, contestMetadata: contestMetadata),
+                facts: facts(
+                    record.facts,
+                    contestMetadata: contestMetadata,
+                    isContestScalarsEditable: isContestScalarsEditable
+                ),
                 flags: flags(in: record.facts, preview: fullPreview),
                 descriptionSymbol: descriptionSymbol,
                 descriptionText: descriptionText,
@@ -530,6 +572,7 @@ public enum ProjectMoveCatalogBuilder {
                     && index.profile == .pokeruby
                     && record.sourceSpan.relativePath == editableMoveSourcePath(for: index.profile),
                 contestMetadata: contestMetadata,
+                isContestScalarsEditable: isContestScalarsEditable,
                 isEditable: moveDiagnostics.allSatisfy { $0.severity != .error },
                 machineMemberships: machineByMove[moveID] ?? [],
                 tutorMemberships: tutorByMove[moveID] ?? [],
@@ -805,18 +848,29 @@ public enum ProjectMoveCatalogBuilder {
         return simpleFlags(in: factValue ?? previewValue ?? "") ?? []
     }
 
-    private static func facts(_ facts: [SourceIndexFact], contestMetadata: MoveContestMetadata?) -> [SourceIndexFact] {
+    private static func facts(
+        _ facts: [SourceIndexFact],
+        contestMetadata: MoveContestMetadata?,
+        isContestScalarsEditable: Bool
+    ) -> [SourceIndexFact] {
         guard let contestMetadata, !contestMetadata.isEmpty else { return facts }
         var result = facts
+        appendFact(label: "contestEffect", value: contestMetadata.contestEffect, to: &result)
         appendFact(label: "contestCategory", value: contestMetadata.contestCategory, to: &result)
         appendFact(label: "contestAppeal", value: contestMetadata.contestAppeal, to: &result)
         appendFact(label: "contestJam", value: contestMetadata.contestJam, to: &result)
         appendFact(label: "contestComboStarterId", value: contestMetadata.contestComboStarterId, to: &result)
         appendFact(label: "contestComboMoves", value: contestMetadata.contestComboMoves, to: &result)
-        appendFact(label: "Contest Metadata Readiness", value: "factsOnly", to: &result)
+        appendFact(
+            label: "Contest Metadata Readiness",
+            value: isContestScalarsEditable ? "editableSimpleScalars" : "factsOnly",
+            to: &result
+        )
         appendFact(
             label: "Contest Metadata Blocked Actions",
-            value: "contest writers; generated outputs; reference writes; ROM/binary writes",
+            value: isContestScalarsEditable
+                ? "contestComboMoves arrays; constants; row insertion/removal/reorder; generated outputs; reference writes; ROM/binary writes"
+                : "contest writers; combo array editing; constants; row insertion/removal/reorder; generated outputs; reference writes; ROM/binary writes",
             to: &result
         )
         return result
@@ -1003,11 +1057,67 @@ public enum ProjectMoveCatalogBuilder {
             record.sourceSpan.relativePath == editableMoveSourcePath(for: profile)
         else { return nil }
         let metadata = MoveContestMetadata(
+            contestEffect: compactField("contestEffect", in: fields),
             contestCategory: compactField("contestCategory", in: fields),
             contestAppeal: compactField("contestAppeal", in: fields),
             contestJam: compactField("contestJam", in: fields),
             contestComboStarterId: compactField("contestComboStarterId", in: fields),
             contestComboMoves: compactField("contestComboMoves", in: fields)
+        )
+        return metadata.isEmpty ? nil : metadata
+    }
+
+    private static func moveContestScalarsEditable(
+        profile: GameProfile,
+        record: SourceIndexRecord,
+        fields: [String: MoveFieldSlice]
+    ) -> Bool {
+        guard
+            profile == .pokeemeraldExpansion,
+            record.sourceSpan.relativePath == editableMoveSourcePath(for: profile)
+        else { return false }
+        return moveContestScalarFieldState(field: "contestCategory", fields: fields, kind: .symbolLike) == .simple
+            && moveContestScalarFieldState(field: "contestAppeal", fields: fields, kind: .numeric) == .simple
+            && moveContestScalarFieldState(field: "contestJam", fields: fields, kind: .numeric) == .simple
+            && moveContestScalarFieldState(field: "contestComboStarterId", fields: fields, kind: .symbolLike) == .simple
+    }
+
+    private static func rubyContestMetadataByMove(
+        root: URL,
+        profile: GameProfile,
+        records: [SourceIndexRecord],
+        fileManager: FileManager
+    ) -> [String: MoveContestMetadata] {
+        guard profile == .pokeruby else { return [:] }
+        var metadataByMove: [String: MoveContestMetadata] = [:]
+        for record in records where record.sourceSpan.relativePath == rubyContestMoveSourcePath {
+            let moveID = normalizedMoveID(record.title)
+            guard moveID != "MOVE_NONE" else { continue }
+            let preview = sourceEntryPreview(root: root, record: record, fileManager: fileManager) ?? record.preview
+            let fields = preview.map { MoveTopLevelFieldScanner.fields(in: $0) } ?? [:]
+            let metadata = MoveContestMetadata(
+                contestEffect: compactField("effect", in: fields),
+                contestCategory: compactField("contestCategory", in: fields),
+                contestComboStarterId: compactField("comboStarterId", in: fields),
+                contestComboMoves: compactField("comboMoves", in: fields)
+            )
+            guard !metadata.isEmpty, metadataByMove[moveID] == nil else { continue }
+            metadataByMove[moveID] = metadata
+        }
+        return metadataByMove
+    }
+
+    private static func mergedContestMetadata(
+        _ primary: MoveContestMetadata?,
+        _ overlay: MoveContestMetadata?
+    ) -> MoveContestMetadata? {
+        let metadata = MoveContestMetadata(
+            contestEffect: overlay?.contestEffect ?? primary?.contestEffect,
+            contestCategory: overlay?.contestCategory ?? primary?.contestCategory,
+            contestAppeal: overlay?.contestAppeal ?? primary?.contestAppeal,
+            contestJam: overlay?.contestJam ?? primary?.contestJam,
+            contestComboStarterId: overlay?.contestComboStarterId ?? primary?.contestComboStarterId,
+            contestComboMoves: overlay?.contestComboMoves ?? primary?.contestComboMoves
         )
         return metadata.isEmpty ? nil : metadata
     }
@@ -1143,6 +1253,7 @@ public enum MoveMutationPlanner {
             diagnostics.append(Diagnostic(severity: .error, code: "MOVE_DESCRIPTION_NOT_EDITABLE", message: "\(move.moveID) does not have a source-backed move description declaration that can be rewritten.", span: move.sourceSpan))
         }
         appendContestEffectDiagnostics(profile: profile, move: move, draft: draft, diagnostics: &diagnostics)
+        appendContestScalarDiagnostics(profile: profile, move: move, draft: draft, diagnostics: &diagnostics)
         return diagnostics
     }
 
@@ -1197,6 +1308,95 @@ public enum MoveMutationPlanner {
             diagnostics.append(Diagnostic(severity: .error, code: code, message: "\(move.moveID) does not have an existing simple Ruby/Sapphire contestEffect field that can be rewritten.", span: move.sourceSpan))
             return
         }
+    }
+
+    private static func appendContestScalarDiagnostics(profile: GameProfile, move: MoveDetail, draft: MoveEditDraft, diagnostics: inout [Diagnostic]) {
+        let edits = contestScalarEdits(move: move, draft: draft)
+        guard !edits.isEmpty else { return }
+
+        for edit in edits {
+            switch edit.field {
+            case "contestCategory", "contestComboStarterId":
+                guard let value = edit.symbolValue else { continue }
+                if let integer = Int(compactMoveValue(value)), !(0...255).contains(integer) {
+                    diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_RANGE_INVALID", message: "\(edit.field) integer value must be between 0 and 255.", span: move.sourceSpan))
+                } else if !isSimpleContestScalarValue(value) {
+                    diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_INVALID", message: "\(edit.field) must be a single C constant symbol or integer literal.", span: move.sourceSpan))
+                }
+            case "contestAppeal", "contestJam":
+                guard let value = edit.numericValue, !(0...255).contains(value) else { continue }
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_RANGE_INVALID", message: "\(edit.field) must be between 0 and 255.", span: move.sourceSpan))
+            default:
+                continue
+            }
+        }
+
+        guard profile == .pokeemeraldExpansion,
+              move.sourceSpan.relativePath == editableMoveSourcePath(for: profile),
+              let preview = move.sourcePreview
+        else {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_NOT_EDITABLE", message: "\(move.moveID) is not backed by editable Expansion gMovesInfo contest scalar source.", span: move.sourceSpan))
+            return
+        }
+
+        let fields = MoveTopLevelFieldScanner.fields(in: preview)
+        let requiredFields: [(String, MoveContestScalarKind)] = [
+            ("contestCategory", .symbolLike),
+            ("contestAppeal", .numeric),
+            ("contestJam", .numeric),
+            ("contestComboStarterId", .symbolLike)
+        ]
+        var hasSourceShapeError = false
+        for (field, kind) in requiredFields {
+            switch moveContestScalarFieldState(field: field, fields: fields, kind: kind) {
+            case .missing:
+                hasSourceShapeError = true
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_FIELD_MISSING", message: "\(move.moveID) is missing existing contest scalar field \(field).", span: move.sourceSpan))
+            case .nonSimple:
+                hasSourceShapeError = true
+                diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_UNSUPPORTED_EXPRESSION", message: "\(move.moveID) has a non-simple contest scalar expression in \(field).", span: move.sourceSpan))
+            case .simple:
+                continue
+            }
+        }
+        if !hasSourceShapeError, !move.isContestScalarsEditable {
+            diagnostics.append(Diagnostic(severity: .error, code: "MOVE_CONTEST_SCALAR_NOT_EDITABLE", message: "\(move.moveID) does not have editable simple Expansion contest scalar fields.", span: move.sourceSpan))
+        }
+    }
+
+    private struct ContestScalarEdit {
+        let field: String
+        let symbolValue: String?
+        let numericValue: Int?
+    }
+
+    private static func contestScalarEdits(move: MoveDetail, draft: MoveEditDraft) -> [ContestScalarEdit] {
+        var edits: [ContestScalarEdit] = []
+        if let value = draft.contestCategory {
+            let rendered = compactMoveValue(value)
+            if move.contestMetadata?.contestCategory.map(compactMoveValue) != rendered {
+                edits.append(ContestScalarEdit(field: "contestCategory", symbolValue: rendered, numericValue: nil))
+            }
+        }
+        if let value = draft.contestAppeal {
+            let current = move.contestMetadata?.contestAppeal.flatMap { Int(compactMoveValue($0)) }
+            if current != value {
+                edits.append(ContestScalarEdit(field: "contestAppeal", symbolValue: nil, numericValue: value))
+            }
+        }
+        if let value = draft.contestJam {
+            let current = move.contestMetadata?.contestJam.flatMap { Int(compactMoveValue($0)) }
+            if current != value {
+                edits.append(ContestScalarEdit(field: "contestJam", symbolValue: nil, numericValue: value))
+            }
+        }
+        if let value = draft.contestComboStarterId {
+            let rendered = compactMoveValue(value)
+            if move.contestMetadata?.contestComboStarterId.map(compactMoveValue) != rendered {
+                edits.append(ContestScalarEdit(field: "contestComboStarterId", symbolValue: rendered, numericValue: nil))
+            }
+        }
+        return edits
     }
 
     private struct MoveFileTextReplacement {
@@ -1296,6 +1496,10 @@ public enum MoveMutationPlanner {
         appendNumericReplacement(field: "priority", newValue: draft.priority, fields: fields, replacements: &replacements)
         appendFlagsReplacement(newFlags: draft.flags, fields: fields, replacements: &replacements)
         appendOptionalSymbolReplacement(field: "contestEffect", newValue: draft.contestEffect, fields: fields, replacements: &replacements)
+        appendOptionalScalarReplacement(field: "contestCategory", newValue: draft.contestCategory, fields: fields, replacements: &replacements)
+        appendOptionalNumericReplacement(field: "contestAppeal", newValue: draft.contestAppeal, fields: fields, replacements: &replacements)
+        appendOptionalNumericReplacement(field: "contestJam", newValue: draft.contestJam, fields: fields, replacements: &replacements)
+        appendOptionalScalarReplacement(field: "contestComboStarterId", newValue: draft.contestComboStarterId, fields: fields, replacements: &replacements)
 
         guard !replacements.isEmpty else { return (nil, []) }
         var replacementEntry = entryText
@@ -1429,6 +1633,26 @@ public enum MoveMutationPlanner {
         appendReplacement(field: field, newValue: newValue, fields: fields, replacements: &replacements)
     }
 
+    private static func appendOptionalScalarReplacement(
+        field: String,
+        newValue: String?,
+        fields: [String: MoveFieldSlice],
+        replacements: inout [(field: MoveFieldSlice, value: String)]
+    ) {
+        guard let newValue else { return }
+        appendReplacement(field: field, newValue: newValue, fields: fields, replacements: &replacements)
+    }
+
+    private static func appendOptionalNumericReplacement(
+        field: String,
+        newValue: Int?,
+        fields: [String: MoveFieldSlice],
+        replacements: inout [(field: MoveFieldSlice, value: String)]
+    ) {
+        guard let newValue else { return }
+        appendNumericReplacement(field: field, newValue: newValue, fields: fields, replacements: &replacements)
+    }
+
     private static func backupTimestamp() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -1543,6 +1767,15 @@ private func editableMoveSourcePath(for profile: GameProfile) -> String? {
     default:
         return nil
     }
+}
+
+private let rubyContestMoveSourcePath = "src/data/contest_moves.h"
+
+private func isPrimaryMoveRecord(profile: GameProfile, record: SourceIndexRecord) -> Bool {
+    if profile == .pokeruby, record.sourceSpan.relativePath == rubyContestMoveSourcePath {
+        return false
+    }
+    return true
 }
 
 private func requiredEditableMoveFields(for profile: GameProfile) -> [String] {
@@ -1838,6 +2071,17 @@ private enum MoveContestEffectFieldState {
     case nonSimple
 }
 
+private enum MoveContestScalarKind {
+    case symbolLike
+    case numeric
+}
+
+private enum MoveContestScalarFieldState {
+    case missing
+    case simple
+    case nonSimple
+}
+
 private func moveContestEffectFieldState(move: MoveDetail) -> MoveContestEffectFieldState {
     guard
         let preview = move.sourcePreview,
@@ -1846,6 +2090,21 @@ private func moveContestEffectFieldState(move: MoveDetail) -> MoveContestEffectF
         return .missing
     }
     return isSimpleSymbol(compactMoveValue(field.value)) ? .simple : .nonSimple
+}
+
+private func moveContestScalarFieldState(
+    field: String,
+    fields: [String: MoveFieldSlice],
+    kind: MoveContestScalarKind
+) -> MoveContestScalarFieldState {
+    guard let slice = fields[field] else { return .missing }
+    let value = compactMoveValue(slice.value)
+    switch kind {
+    case .symbolLike:
+        return isSimpleContestScalarValue(value) ? .simple : .nonSimple
+    case .numeric:
+        return Int(value).map { (0...255).contains($0) } == true ? .simple : .nonSimple
+    }
 }
 
 private struct MoveDescriptionText {
@@ -1950,6 +2209,13 @@ private func isFlagToken(_ value: String) -> Bool {
 
 private func isSimpleSymbol(_ value: String) -> Bool {
     value.range(of: #"^[A-Z_][A-Z0-9_]*$"#, options: .regularExpression) != nil
+}
+
+private func isSimpleContestScalarValue(_ value: String) -> Bool {
+    if let integer = Int(compactMoveValue(value)) {
+        return (0...255).contains(integer)
+    }
+    return isSimpleSymbol(compactMoveValue(value))
 }
 
 private func isMoveDescriptionSymbol(_ value: String) -> Bool {

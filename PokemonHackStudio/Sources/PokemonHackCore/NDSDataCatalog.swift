@@ -569,19 +569,22 @@ public enum NDSDataCatalogBuilder {
         }
 
         let records = enrichGenVReadiness(
-            records: enrichDiamondPearlMapInventory(
-                records: enrichHeartGoldSoulSilverScriptSequenceInventory(
-                    records: enrichHeartGoldSoulSilverMapInventory(
-                        records: enrichPlatinumMapInventory(
-                            records: enrichRelationships(
-                                records: uniqueRecords(
-                                    descriptors.flatMap { descriptor in
-                                        catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                                    }
-                                    + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                    + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                    + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                ).sorted(by: recordSort),
+            records: enrichDiamondPearlCAnchorFutureReadiness(
+                records: enrichDiamondPearlMapInventory(
+                    records: enrichHeartGoldSoulSilverScriptSequenceInventory(
+                        records: enrichHeartGoldSoulSilverMapInventory(
+                            records: enrichPlatinumMapInventory(
+                                records: enrichRelationships(
+                                    records: uniqueRecords(
+                                        descriptors.flatMap { descriptor in
+                                            catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                                        }
+                                        + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                        + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                        + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                    ).sorted(by: recordSort),
+                                    profile: index.profile
+                                ),
                                 profile: index.profile
                             ),
                             profile: index.profile
@@ -837,8 +840,8 @@ public enum NDSDataCatalogBuilder {
         let containerSummary = exists
             ? containerSummary(url: url, relativePath: relativePath, format: format, isDirectory: isDirectory, fileManager: fileManager)
             : nil
-        let genVScriptInventory = genVFielddataScriptInventory(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory, fileManager: fileManager)
-        let byteCount = containerSummary?.byteCount ?? genVScriptInventory?.byteCount ?? (exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil)
+        let genVDirectoryInventory = genVDirectoryInventory(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory, fileManager: fileManager)
+        let byteCount = containerSummary?.byteCount ?? genVDirectoryInventory?.byteCount ?? (exists && !isDirectory ? fileByteCount(url, fileManager: fileManager) : nil)
         let recordCount = containerSummary?.memberCount ?? (exists ? shallowRecordCount(url: url, format: format, isDirectory: isDirectory, fileManager: fileManager) : nil)
         var diagnostics: [Diagnostic] = []
 
@@ -904,7 +907,7 @@ public enum NDSDataCatalogBuilder {
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
             audioPreview: audioPreview
-        ) + genVFielddataScriptInventoryFacts(genVScriptInventory)
+        ) + genVDirectoryInventoryFacts(genVDirectoryInventory)
           + genVSHA1TextFacts(relativePath: relativePath, url: url, exists: exists, isDirectory: isDirectory)
         return NDSDataCatalogRecord(
             id: "\(descriptor.domain.rawValue):\(relativePath)",
@@ -918,7 +921,7 @@ public enum NDSDataCatalogBuilder {
             byteCount: byteCount,
             sourceSpan: SourceSpan(relativePath: relativePath, startLine: 1),
             facts: facts,
-            preview: genVFielddataScriptInventoryPreview(genVScriptInventory) ?? containerPreview(containerSummary) ?? preview(url: url, format: format),
+            preview: genVDirectoryInventoryPreview(genVDirectoryInventory) ?? containerPreview(containerSummary) ?? preview(url: url, format: format),
             containerSummary: containerSummary,
             textBankPreview: textPreview,
             migrationPlan: migrationPlan,
@@ -1211,9 +1214,9 @@ public enum NDSDataCatalogBuilder {
     private static func enrichRelationships(records: [NDSDataCatalogRecord], profile: GameProfile) -> [NDSDataCatalogRecord] {
         let recordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         let relationshipKeysByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, relationshipKeys(for: $0, profile: profile)) })
-        let relationshipRecordIDsByID = relationshipRecordIDs(records: records, relationshipKeysByID: relationshipKeysByID)
+        let relationshipRecordIDsByID = relationshipRecordIDs(records: records, relationshipKeysByID: relationshipKeysByID, profile: profile)
         return records.map { record in
-            let related = relatedRecords(for: record, recordsByID: recordsByID, relationshipRecordIDsByID: relationshipRecordIDsByID)
+            let related = relatedRecords(for: record, recordsByID: recordsByID, relationshipRecordIDsByID: relationshipRecordIDsByID, profile: profile)
             let readiness = readinessSummary(for: record, profile: profile, relatedRecords: related)
             let relationshipFacts = factsForRelationships(related, readiness: readiness)
             let diagnostics = record.diagnostics + diagnosticsForReadiness(readiness, record: record)
@@ -1227,6 +1230,13 @@ public enum NDSDataCatalogBuilder {
     }
 
     private static let relationshipDomains: Set<NDSDataDomain> = [.maps, .scripts, .text]
+    private static let genVFielddataRelationshipRootPaths: Set<String> = [
+        "files/fielddata",
+        "files/fielddata/mapmatrix",
+        "files/fielddata/maptable",
+        "files/fielddata/script",
+        "files/fielddata/eventdata/zone_event"
+    ]
     private static let heartGoldSoulSilverMapInventoryRelationshipRootPaths: Set<String> = [
         "files/fielddata/mapmatrix",
         "files/fielddata/maptable",
@@ -1235,17 +1245,18 @@ public enum NDSDataCatalogBuilder {
 
     private static func relationshipRecordIDs(
         records: [NDSDataCatalogRecord],
-        relationshipKeysByID: [String: Set<String>]
+        relationshipKeysByID: [String: Set<String>],
+        profile: GameProfile
     ) -> [String: Set<String>] {
         var recordIDsByKey: [String: Set<String>] = [:]
-        for record in records where relationshipDomains.contains(record.domain) {
+        for record in records where participatesInRelationships(record, profile: profile) {
             for key in relationshipKeysByID[record.id] ?? [] {
                 recordIDsByKey[key, default: []].insert(record.id)
             }
         }
 
         var relatedIDsByID: [String: Set<String>] = [:]
-        for record in records where relationshipDomains.contains(record.domain) {
+        for record in records where participatesInRelationships(record, profile: profile) {
             var relatedIDs: Set<String> = []
             for key in relationshipKeysByID[record.id] ?? [] {
                 relatedIDs.formUnion(recordIDsByKey[key] ?? [])
@@ -1261,9 +1272,10 @@ public enum NDSDataCatalogBuilder {
     private static func relatedRecords(
         for record: NDSDataCatalogRecord,
         recordsByID: [String: NDSDataCatalogRecord],
-        relationshipRecordIDsByID: [String: Set<String>]
+        relationshipRecordIDsByID: [String: Set<String>],
+        profile: GameProfile
     ) -> [NDSDataRelatedRecord] {
-        guard relationshipDomains.contains(record.domain),
+        guard participatesInRelationships(record, profile: profile),
               let relatedIDs = relationshipRecordIDsByID[record.id],
               !relatedIDs.isEmpty
         else { return [] }
@@ -1814,6 +1826,114 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
+    private struct DiamondPearlCAnchorFutureSpec {
+        let domain: NDSDataDomain
+        let relativePath: String
+        let sourceRole: String
+        let domainLabel: String
+        let diagnosticCode: String
+    }
+
+    private static let diamondPearlCAnchorFutureSpecs = [
+        DiamondPearlCAnchorFutureSpec(
+            domain: .moves,
+            relativePath: "arm9/src/waza.c",
+            sourceRole: "dpMoveCAnchorFutureRow",
+            domainLabel: "move",
+            diagnosticCode: "NDS_DATA_DP_MOVE_C_ANCHOR_FUTURE_ROW"
+        ),
+        DiamondPearlCAnchorFutureSpec(
+            domain: .encounters,
+            relativePath: "arm9/src/encounter.c",
+            sourceRole: "dpEncounterCAnchorFutureRow",
+            domainLabel: "encounter",
+            diagnosticCode: "NDS_DATA_DP_ENCOUNTER_C_ANCHOR_FUTURE_ROW"
+        )
+    ]
+
+    private static func enrichDiamondPearlCAnchorFutureReadiness(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard profile == .pokediamond else { return records }
+        return records.map { record in
+            guard let spec = diamondPearlCAnchorFutureSpec(for: record) else {
+                return record
+            }
+            let blockedActions = diamondPearlCAnchorFutureBlockedActions(for: spec)
+            let readiness = diamondPearlCAnchorFutureReadiness(for: record, spec: spec, blockedActions: blockedActions)
+            let facts = [
+                SourceIndexFact(label: "Gen IV Source Role", value: spec.sourceRole),
+                SourceIndexFact(label: "Gen IV Source Provenance", value: "diamondPearl:\(spec.relativePath)"),
+                SourceIndexFact(label: "Gen IV Readiness", value: "futureRowBlocked"),
+                SourceIndexFact(label: "Gen IV Future Row", value: "PHS-T98"),
+                SourceIndexFact(label: "Gen IV Blocked Actions", value: blockedActions.joined(separator: ", ")),
+                SourceIndexFact(label: "Gen IV Action State", value: diamondPearlCAnchorFutureActionState(for: spec))
+            ]
+            return record.copy(
+                facts: record.facts + facts,
+                readiness: .some(readiness),
+                diagnostics: record.diagnostics + diamondPearlCAnchorFutureDiagnostics(
+                    for: record,
+                    spec: spec,
+                    blockedActions: blockedActions
+                )
+            )
+        }
+    }
+
+    private static func diamondPearlCAnchorFutureSpec(for record: NDSDataCatalogRecord) -> DiamondPearlCAnchorFutureSpec? {
+        let lower = record.relativePath.lowercased()
+        return diamondPearlCAnchorFutureSpecs.first { spec in
+            record.domain == spec.domain && lower == spec.relativePath
+        }
+    }
+
+    private static func diamondPearlCAnchorFutureBlockedActions(for spec: DiamondPearlCAnchorFutureSpec) -> [String] {
+        [
+            "semantic editing",
+            "\(spec.domainLabel) C-anchor writer",
+            "NARC/container work",
+            "generated output write",
+            "reference write",
+            "ROM rebuild",
+            "ROM export",
+            "binary write"
+        ]
+    }
+
+    private static func diamondPearlCAnchorFutureActionState(for spec: DiamondPearlCAnchorFutureSpec) -> String {
+        "Diamond/Pearl \(spec.domainLabel) C anchor \(spec.relativePath) is indexed as a future PHS-T98 row only; no parser, semantic editor, \(spec.domainLabel) C-anchor writer, NARC/container work, generated/reference write, ROM rebuild/export, or binary write path is enabled."
+    }
+
+    private static func diamondPearlCAnchorFutureReadiness(
+        for record: NDSDataCatalogRecord,
+        spec: DiamondPearlCAnchorFutureSpec,
+        blockedActions: [String]
+    ) -> NDSDataReadinessSummary {
+        NDSDataReadinessSummary(
+            status: .blocked,
+            title: "Diamond/Pearl \(spec.domainLabel) C-anchor future-row readiness",
+            detail: "\(record.relativePath) is visible for future PHS-T98 schema work only; no parser, semantic editor, \(spec.domainLabel) C-anchor writer, NARC/container work, generated/reference write, ROM rebuild/export, or binary write path is enabled.",
+            blockedActions: blockedActions
+        )
+    }
+
+    private static func diamondPearlCAnchorFutureDiagnostics(
+        for record: NDSDataCatalogRecord,
+        spec: DiamondPearlCAnchorFutureSpec,
+        blockedActions: [String]
+    ) -> [Diagnostic] {
+        [
+            Diagnostic(
+                severity: .warning,
+                code: spec.diagnosticCode,
+                message: "Diamond/Pearl \(spec.domainLabel) C anchor \(record.relativePath) is a read-only future-row catalog fact; blocked actions: \(blockedActions.joined(separator: ", ")).",
+                span: record.sourceSpan
+            )
+        ]
+    }
+
     private static func genVReadinessSummary(for record: NDSDataCatalogRecord) -> NDSDataReadinessSummary {
         let sourceRole = genVSourceRole(for: record)
         if isGenVUnavailableTitle(record) {
@@ -1900,11 +2020,29 @@ public enum NDSDataCatalogBuilder {
             return facts
         }
 
-        return [
+        let url = URL(fileURLWithPath: record.relativePath)
+        let ext = url.pathExtension.lowercased()
+        let stem = url.deletingPathExtension().lastPathComponent
+        var facts = [
             SourceIndexFact(label: "Gen V Message Candidate Kind", value: genVMessageCandidateKind(for: lower)),
             SourceIndexFact(label: "Gen V Message Candidate Basis", value: "pathExtensionOnly"),
-            SourceIndexFact(label: "Gen V Message Candidate Posture", value: "previewOnlyFilenameFacts")
+            SourceIndexFact(label: "Gen V Message Candidate Posture", value: "previewOnlyFilenameFacts"),
+            SourceIndexFact(label: "Gen V Message Decoded Preview", value: "noDecodedPreview")
         ]
+        if let byteCount = record.byteCount {
+            facts.append(SourceIndexFact(label: "Gen V Message Candidate Bytes", value: "\(byteCount)"))
+        }
+        if ["txt", "gmm", "str"].contains(ext),
+           let lineCount = record.recordCount {
+            facts.append(SourceIndexFact(label: "Gen V Message Candidate Lines", value: "\(lineCount)"))
+        }
+        if ["bin", "dat", "msg"].contains(ext) {
+            let hints = digitRuns(in: stem)
+            if !hints.isEmpty {
+                facts.append(SourceIndexFact(label: "Gen V Message Numeric Bank Hint", value: hints.joined(separator: ", ")))
+            }
+        }
+        return facts
     }
 
     private static func genVMessageCandidateKind(for relativePath: String) -> String {
@@ -1919,6 +2057,23 @@ public enum NDSDataCatalogBuilder {
         default:
             return ext.isEmpty ? "messagePathCandidate" : "messageAssetCandidate"
         }
+    }
+
+    private static func digitRuns(in value: String) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        for character in value {
+            if character.isNumber {
+                current.append(character)
+            } else if !current.isEmpty {
+                runs.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty {
+            runs.append(current)
+        }
+        return runs
     }
 
     private static func genVBuildMetadataFacts(
@@ -1987,19 +2142,32 @@ public enum NDSDataCatalogBuilder {
         ]
     }
 
-    private typealias GenVFielddataScriptInventorySummary = (memberCount: Int, byteCount: UInt64, samplePaths: [String])
+    private struct GenVDirectoryInventorySummary {
+        let factLabelPrefix: String
+        let memberCount: Int
+        let byteCount: UInt64
+        let samplePaths: [String]
+    }
 
-    private static func genVFielddataScriptInventory(
+    private static func genVDirectoryInventory(
         relativePath: String,
         url: URL,
         exists: Bool,
         isDirectory: Bool,
         fileManager: FileManager
-    ) -> GenVFielddataScriptInventorySummary? {
-        guard exists,
-              isDirectory,
-              relativePath.lowercased() == "files/fielddata/script"
-        else {
+    ) -> GenVDirectoryInventorySummary? {
+        guard exists, isDirectory else {
+            return nil
+        }
+        let factLabelPrefix: String
+        switch relativePath.lowercased() {
+        case "files/fielddata/script":
+            factLabelPrefix = "Gen V Script"
+        case "overlays":
+            factLabelPrefix = "Gen V Overlay"
+        case "ndsdisasm_config":
+            factLabelPrefix = "Gen V Disassembly Config"
+        default:
             return nil
         }
 
@@ -2010,25 +2178,30 @@ public enum NDSDataCatalogBuilder {
         let samplePaths = members.prefix(maxContainerSampleMembers).map { member in
             "\(relativePath)/\(member.relativePath)"
         }
-        return (members.count, byteCount, samplePaths)
+        return GenVDirectoryInventorySummary(
+            factLabelPrefix: factLabelPrefix,
+            memberCount: members.count,
+            byteCount: byteCount,
+            samplePaths: samplePaths
+        )
     }
 
-    private static func genVFielddataScriptInventoryFacts(
-        _ inventory: GenVFielddataScriptInventorySummary?
+    private static func genVDirectoryInventoryFacts(
+        _ inventory: GenVDirectoryInventorySummary?
     ) -> [SourceIndexFact] {
         guard let inventory else { return [] }
         var facts = [
-            SourceIndexFact(label: "Gen V Script Members", value: "\(inventory.memberCount)"),
-            SourceIndexFact(label: "Gen V Script Bytes", value: "\(inventory.byteCount)")
+            SourceIndexFact(label: "\(inventory.factLabelPrefix) Members", value: "\(inventory.memberCount)"),
+            SourceIndexFact(label: "\(inventory.factLabelPrefix) Bytes", value: "\(inventory.byteCount)")
         ]
         if !inventory.samplePaths.isEmpty {
-            facts.append(SourceIndexFact(label: "Gen V Script Sample Paths", value: inventory.samplePaths.joined(separator: ", ")))
+            facts.append(SourceIndexFact(label: "\(inventory.factLabelPrefix) Sample Paths", value: inventory.samplePaths.joined(separator: ", ")))
         }
         return facts
     }
 
-    private static func genVFielddataScriptInventoryPreview(
-        _ inventory: GenVFielddataScriptInventorySummary?
+    private static func genVDirectoryInventoryPreview(
+        _ inventory: GenVDirectoryInventorySummary?
     ) -> String? {
         guard let inventory, !inventory.samplePaths.isEmpty else { return nil }
         return inventory.samplePaths.joined(separator: ", ")
@@ -2379,6 +2552,11 @@ public enum NDSDataCatalogBuilder {
         let lower = record.relativePath.lowercased()
         var keys: Set<String> = []
 
+        if profile == .pokeblack,
+           genVFielddataRelationshipRootPaths.contains(lower) {
+            keys.insert("gen-v-fielddata-roots")
+        }
+
         if lower.contains("map_headers") || lower.contains("map_header") || lower.contains("maptable") {
             keys.insert("map-header")
         }
@@ -2405,6 +2583,15 @@ public enum NDSDataCatalogBuilder {
             keys.insert("token:\(normalized)")
         }
         return keys
+    }
+
+    private static func participatesInRelationships(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
+        if relationshipDomains.contains(record.domain) {
+            return true
+        }
+        return profile == .pokeblack
+            && record.domain == .resources
+            && genVFielddataRelationshipRootPaths.contains(record.relativePath.lowercased())
     }
 
     private static func relationshipTokenVariants(_ value: String) -> Set<String> {

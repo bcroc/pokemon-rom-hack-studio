@@ -114,6 +114,9 @@ public struct ItemEditDraft: Codable, Equatable {
     public var secondaryId: String?
     public var fieldUseFunc: String?
     public var battleUseFunc: String?
+    public var effect: String?
+    public var iconPic: String?
+    public var iconPalette: String?
     public var descriptionText: String?
 
     public init(
@@ -128,6 +131,9 @@ public struct ItemEditDraft: Codable, Equatable {
         secondaryId: String? = nil,
         fieldUseFunc: String? = nil,
         battleUseFunc: String? = nil,
+        effect: String? = nil,
+        iconPic: String? = nil,
+        iconPalette: String? = nil,
         descriptionText: String? = nil
     ) {
         self.itemID = itemID
@@ -141,6 +147,9 @@ public struct ItemEditDraft: Codable, Equatable {
         self.secondaryId = secondaryId
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
+        self.effect = effect
+        self.iconPic = iconPic
+        self.iconPalette = iconPalette
         self.descriptionText = descriptionText
     }
 
@@ -158,6 +167,9 @@ public struct ItemEditDraft: Codable, Equatable {
             secondaryId: detail.isEditable ? detail.secondaryId : nil,
             fieldUseFunc: detail.isEditable ? detail.fieldUseFunc : nil,
             battleUseFunc: detail.isEditable ? detail.battleUseFunc : nil,
+            effect: detail.isEditable ? detail.effect : nil,
+            iconPic: detail.isEditable ? detail.iconPic : nil,
+            iconPalette: detail.isEditable ? detail.iconPalette : nil,
             descriptionText: detail.descriptionText
         )
     }
@@ -515,7 +527,7 @@ public enum ItemMutationPlanner {
             )
         }
 
-        var diagnostics = plannerDiagnostics(item: item, draft: draft)
+        var diagnostics = plannerDiagnostics(descriptor: descriptor, item: item, draft: draft)
         var changes: [ItemEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -664,7 +676,7 @@ public enum ItemMutationPlanner {
         )
     }
 
-    private static func plannerDiagnostics(item: ItemDetail, draft: ItemEditDraft) -> [Diagnostic] {
+    private static func plannerDiagnostics(descriptor: ItemCatalogDescriptor, item: ItemDetail, draft: ItemEditDraft) -> [Diagnostic] {
         var diagnostics = item.diagnostics.filter { $0.severity == .error }
         guard item.isEditable || item.isDescriptionEditable else {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_NOT_EDITABLE", message: "\(item.itemID) is read-only until its source diagnostics are resolved.", span: item.sourceSpan))
@@ -676,7 +688,35 @@ public enum ItemMutationPlanner {
         if draft.descriptionText != item.descriptionText, !item.isDescriptionEditable {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_NOT_EDITABLE", message: "\(item.itemID) does not have a simple editable item description source.", span: item.sourceSpan))
         }
+        appendEffectIconDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         return diagnostics
+    }
+
+    private static func appendEffectIconDiagnostics(
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        let fields = [
+            ("effect", item.effect, draft.effect),
+            ("iconPic", item.iconPic, draft.iconPic),
+            ("iconPalette", item.iconPalette, draft.iconPalette)
+        ]
+        for (label, current, draftValue) in fields where current != draftValue {
+            guard descriptor.supportsEffectIconEditing else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_EFFECT_ICON_NOT_EDITABLE", message: "\(label) edits are currently supported only for local Expansion gItemsInfo rows.", span: item.sourceSpan))
+                continue
+            }
+            guard let draftValue, !draftValue.isEmpty else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_EFFECT_ICON_REQUIRED", message: "\(label) cannot be removed from an existing Expansion gItemsInfo row.", span: item.sourceSpan))
+                continue
+            }
+            guard isSimpleItemSymbol(draftValue) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_EFFECT_ICON_SYMBOL_INVALID", message: "\(label) must be a single C symbol.", span: item.sourceSpan))
+                continue
+            }
+        }
     }
 
     private static func rewriteChange(
@@ -778,7 +818,10 @@ public enum ItemMutationPlanner {
             fieldChange(key: "battleUsage", current: item.battleUsage, draft: draft.battleUsage),
             fieldChange(key: "secondaryId", current: item.secondaryId, draft: draft.secondaryId),
             fieldChange(key: "fieldUseFunc", current: item.fieldUseFunc, draft: draft.fieldUseFunc),
-            fieldChange(key: "battleUseFunc", current: item.battleUseFunc, draft: draft.battleUseFunc)
+            fieldChange(key: "battleUseFunc", current: item.battleUseFunc, draft: draft.battleUseFunc),
+            descriptor.supportsEffectIconEditing ? fieldChange(key: "effect", current: item.effect, draft: draft.effect) : nil,
+            descriptor.supportsEffectIconEditing ? fieldChange(key: "iconPic", current: item.iconPic, draft: draft.iconPic) : nil,
+            descriptor.supportsEffectIconEditing ? fieldChange(key: "iconPalette", current: item.iconPalette, draft: draft.iconPalette) : nil
         ].compactMap { $0 }
     }
 
@@ -945,6 +988,10 @@ private struct ItemCatalogDescriptor {
 
     var supportsItemCatalogParsing: Bool {
         supportsRowEditing || supportsDescriptionEditing
+    }
+
+    var supportsEffectIconEditing: Bool {
+        profile == .pokeemeraldExpansion
     }
 
     static func descriptor(for profile: GameProfile) -> ItemCatalogDescriptor? {
@@ -1272,6 +1319,10 @@ private func inlineCompoundStringDescription(_ value: String) -> String? {
     let strings = ItemDescriptionScanner.quotedStrings(in: literalBlock, trimContents: false)
     guard !strings.isEmpty else { return nil }
     return strings.map(unescapeCString).joined()
+}
+
+private func isSimpleItemSymbol(_ value: String) -> Bool {
+    value.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
 }
 
 private func displayName(for itemID: String) -> String {

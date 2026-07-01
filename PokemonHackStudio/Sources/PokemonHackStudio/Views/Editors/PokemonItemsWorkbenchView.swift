@@ -50,7 +50,7 @@ struct PokemonItemsWorkbenchView: View {
 
                 ScrollView {
                     if let selectedItem {
-                        itemDetail(selectedItem)
+                        itemDetail(selectedItem, catalog: catalog)
                     } else {
                         ContentUnavailableView(
                             "No Item Selected",
@@ -195,7 +195,7 @@ struct PokemonItemsWorkbenchView: View {
         .buttonStyle(.plain)
     }
 
-    private func itemDetail(_ item: ItemDetailViewState) -> some View {
+    private func itemDetail(_ item: ItemDetailViewState, catalog: ItemCatalogViewState) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -216,7 +216,7 @@ struct PokemonItemsWorkbenchView: View {
             }
 
             if let draft {
-                editSection(draft, item: item)
+                editSection(draft, item: item, catalog: catalog)
             } else {
                 EditorSection(title: "Editing") {
                     Text("This item source shape is read-only.")
@@ -247,7 +247,7 @@ struct PokemonItemsWorkbenchView: View {
         .padding(24)
     }
 
-    private func editSection(_ draft: ItemEditDraft, item: ItemDetailViewState) -> some View {
+    private func editSection(_ draft: ItemEditDraft, item: ItemDetailViewState, catalog: ItemCatalogViewState) -> some View {
         EditorSection(title: isDirty ? "Item Data Edited" : "Item Data") {
             VStack(alignment: .leading, spacing: 14) {
                 if item.isEditable {
@@ -262,6 +262,11 @@ struct PokemonItemsWorkbenchView: View {
                         itemTextField("Secondary", text: draftOptionalStringBinding(\.secondaryId))
                         itemTextField("Field Func", text: draftOptionalStringBinding(\.fieldUseFunc))
                         itemTextField("Battle Func", text: draftOptionalStringBinding(\.battleUseFunc))
+                        if catalog.profile == "pokeemeraldExpansion" {
+                            itemTextField("Effect", text: draftOptionalStringBinding(\.effect))
+                            itemTextField("Icon Pic", text: draftOptionalStringBinding(\.iconPic))
+                            itemTextField("Icon Palette", text: draftOptionalStringBinding(\.iconPalette))
+                        }
                     }
                 } else {
                     Text("Only description text is editable for this profile.")

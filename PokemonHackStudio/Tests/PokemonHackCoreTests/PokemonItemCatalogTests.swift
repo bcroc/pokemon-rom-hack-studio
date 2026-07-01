@@ -191,6 +191,9 @@ final class PokemonItemCatalogTests: XCTestCase {
         draft.price = "250"
         draft.holdEffectParam = "30"
         draft.descriptionText = "Restores HP by\n30 points."
+        draft.effect = "ITEM_EFFECT_RESTORE_HP"
+        draft.iconPic = "gItemIcon_PotionPlus"
+        draft.iconPalette = "gItemIconPalette_PotionPlus"
 
         let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
         XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
@@ -203,12 +206,15 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertTrue(preview.contains(#""Restores HP by\n""#))
         XCTAssertTrue(preview.contains(#""30 points.""#))
         XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_HEALTH_RECOVERY,"))
-        XCTAssertTrue(preview.contains(".effect = ITEM_EFFECT_HEAL,"))
-        XCTAssertTrue(preview.contains(".iconPic = gItemIcon_Potion,"))
-        XCTAssertTrue(preview.contains(".iconPalette = gItemIconPalette_Potion,"))
+        XCTAssertTrue(preview.contains(".effect = ITEM_EFFECT_RESTORE_HP,"))
+        XCTAssertTrue(preview.contains(".iconPic = gItemIcon_PotionPlus,"))
+        XCTAssertTrue(preview.contains(".iconPalette = gItemIconPalette_PotionPlus,"))
 
         let result = try ItemMutationApplier.apply(plan: plan)
         XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+        let updatedSource = try String(contentsOf: root.appendingPathComponent("src/data/items.h"), encoding: .utf8)
+        XCTAssertEqual(updatedSource.components(separatedBy: "[ITEM_POTION]").count - 1, 1)
 
         let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
         let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
@@ -218,9 +224,29 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.price, "250")
         XCTAssertEqual(edited.holdEffectParam, "30")
         XCTAssertEqual(edited.descriptionText, "Restores HP by\n30 points.")
-        XCTAssertEqual(edited.effect, "ITEM_EFFECT_HEAL")
-        XCTAssertEqual(edited.iconPic, "gItemIcon_Potion")
-        XCTAssertEqual(edited.iconPalette, "gItemIconPalette_Potion")
+        XCTAssertEqual(edited.effect, "ITEM_EFFECT_RESTORE_HP")
+        XCTAssertEqual(edited.iconPic, "gItemIcon_PotionPlus")
+        XCTAssertEqual(edited.iconPalette, "gItemIconPalette_PotionPlus")
+    }
+
+    func testExpansionItemInfoEffectIconRejectsNonSimpleSymbolsAndRemoval() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.effect = "ITEM_EFFECT_HEAL | ITEM_EFFECT_CURE"
+        draft.iconPic = "GetItemIcon(ITEM_POTION)"
+        draft.iconPalette = nil
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_EFFECT_ICON_SYMBOL_INVALID" && $0.message.contains("effect") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_EFFECT_ICON_SYMBOL_INVALID" && $0.message.contains("iconPic") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_EFFECT_ICON_REQUIRED" && $0.message.contains("iconPalette") })
     }
 
     func testExpansionInlineCompoundStringConcatenatesCLiteralsWithoutExtraBlankLines() throws {

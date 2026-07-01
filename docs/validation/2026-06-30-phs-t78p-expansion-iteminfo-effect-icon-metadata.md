@@ -19,9 +19,9 @@
 
 ## Validation
 
-- `swift test --package-path PokemonHackStudio --filter 'PokemonItemCatalogTests|PokemonDataCompatibilityTests|PokemonHackCLITests/testPokemonCompatibilityCommandEmitsPreviewJSON'` (blocked before selected tests executed by unrelated compile drift in `PokemonHackStudio/Sources/PokemonHackCore/MapCatalog.swift`: `MapEventCapacityLimits.unknown` and `MapEventCapacitySummary.unknown` are rejected as non-`Sendable` static properties under Swift concurrency checks.)
-- `make validate-synthetic` (blocked at the same unrelated `MapCatalog.swift` concurrency diagnostics after `bash -n script/*.sh` and `./script/build_and_run.sh --check-tools` passed.)
-- `git diff --check` (passed.)
+- `swift test --package-path PokemonHackStudio --filter 'PokemonItemCatalogTests|PokemonDataCompatibilityTests|PokemonHackCLITests/testPokemonCompatibilityCommandEmitsPreviewJSON'` passed on 2026-06-30 17:34 America/Vancouver with 24 selected tests and 0 failures.
+- `make validate-synthetic` was rerun on 2026-06-30 17:35 America/Vancouver. `bash -n script/*.sh` and `./script/build_and_run.sh --check-tools` passed, SwiftPM built, then the full suite executed 433 tests with 6 unrelated Gen V NitroFS root failures: 3 in `NDSDataCatalogTests/testPokeBlackCatalogSurfacesGenVNitroFSRootInventoryFacts` and 3 in `PokemonHackCLITests/testNDSDataCatalogCommandEmitsPokeBlackNitroFSRootInventoryJSON`, expecting shallow count `10` and observing `13` plus matching fact assertion failures.
+- `git diff --check` passed. Post-validation `git status --short --branch` showed `## main...origin/main [ahead 1]`.
 
 ## Source-Write Posture
 

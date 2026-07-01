@@ -708,6 +708,40 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(mapHeaderDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MAP_HEADER_SEMANTIC_SCALARS" })
         XCTAssertTrue(mapHeaderDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MAP_HEADER_WRITE_LIMITED" })
 
+        let moveCAnchor = try XCTUnwrap(records.first { $0["relativePath"] as? String == "arm9/src/waza.c" })
+        XCTAssertEqual(moveCAnchor["domain"] as? String, "moves")
+        XCTAssertEqual(moveCAnchor["format"] as? String, "cSource")
+        let moveCAnchorFacts = try XCTUnwrap(moveCAnchor["facts"] as? [[String: Any]])
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorFutureRow" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Provenance" && $0["value"] as? String == "diamondPearl:arm9/src/waza.c" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Readiness" && $0["value"] as? String == "futureRowBlocked" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("move C-anchor writer") == true })
+        XCTAssertTrue(moveCAnchorFacts.contains { $0["label"] as? String == "Gen IV Action State" && ($0["value"] as? String)?.contains("no parser") == true })
+        let moveCAnchorReadiness = try XCTUnwrap(moveCAnchor["readiness"] as? [String: Any])
+        XCTAssertEqual(moveCAnchorReadiness["status"] as? String, "blocked")
+        let moveCAnchorBlockedActions = try XCTUnwrap(moveCAnchorReadiness["blockedActions"] as? [String])
+        XCTAssertTrue(moveCAnchorBlockedActions.contains("move C-anchor writer"))
+        let moveCAnchorDiagnostics = try XCTUnwrap(moveCAnchor["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(moveCAnchorDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_MOVE_C_ANCHOR_FUTURE_ROW" })
+
+        let encounterCAnchor = try XCTUnwrap(records.first { $0["relativePath"] as? String == "arm9/src/encounter.c" })
+        XCTAssertEqual(encounterCAnchor["domain"] as? String, "encounters")
+        XCTAssertEqual(encounterCAnchor["format"] as? String, "cSource")
+        let encounterCAnchorFacts = try XCTUnwrap(encounterCAnchor["facts"] as? [[String: Any]])
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpEncounterCAnchorFutureRow" })
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Source Provenance" && $0["value"] as? String == "diamondPearl:arm9/src/encounter.c" })
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Readiness" && $0["value"] as? String == "futureRowBlocked" })
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("encounter C-anchor writer") == true })
+        XCTAssertTrue(encounterCAnchorFacts.contains { $0["label"] as? String == "Gen IV Action State" && ($0["value"] as? String)?.contains("no parser") == true })
+        let encounterCAnchorReadiness = try XCTUnwrap(encounterCAnchor["readiness"] as? [String: Any])
+        XCTAssertEqual(encounterCAnchorReadiness["status"] as? String, "blocked")
+        let encounterCAnchorBlockedActions = try XCTUnwrap(encounterCAnchorReadiness["blockedActions"] as? [String])
+        XCTAssertTrue(encounterCAnchorBlockedActions.contains("encounter C-anchor writer"))
+        let encounterCAnchorDiagnostics = try XCTUnwrap(encounterCAnchor["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(encounterCAnchorDiagnostics.contains { $0["code"] as? String == "NDS_DATA_DP_ENCOUNTER_C_ANCHOR_FUTURE_ROW" })
+
         let matrixRoot = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/mapmatrix" })
         XCTAssertEqual(matrixRoot["format"] as? String, "directory")
         XCTAssertEqual(matrixRoot["recordCount"] as? Int, 1)
@@ -761,6 +795,16 @@ final class PokemonHackCLITests: XCTestCase {
         let mapHeaderResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data maps" && $0["path"] as? String == "arm9/src/map_header.c" })
         let mapHeaderResourceFacts = try XCTUnwrap(mapHeaderResource["facts"] as? [[String: Any]])
         XCTAssertTrue(mapHeaderResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMapHeaderCAnchor" })
+        let moveCAnchorResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data moves" && $0["path"] as? String == "arm9/src/waza.c" })
+        let moveCAnchorResourceFacts = try XCTUnwrap(moveCAnchorResource["facts"] as? [[String: Any]])
+        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpMoveCAnchorFutureRow" })
+        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(moveCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("move C-anchor writer") == true })
+        let encounterCAnchorResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data encounters" && $0["path"] as? String == "arm9/src/encounter.c" })
+        let encounterCAnchorResourceFacts = try XCTUnwrap(encounterCAnchorResource["facts"] as? [[String: Any]])
+        XCTAssertTrue(encounterCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Source Role" && $0["value"] as? String == "dpEncounterCAnchorFutureRow" })
+        XCTAssertTrue(encounterCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Future Row" && $0["value"] as? String == "PHS-T98" })
+        XCTAssertTrue(encounterCAnchorResourceFacts.contains { $0["label"] as? String == "Gen IV Blocked Actions" && ($0["value"] as? String)?.contains("encounter C-anchor writer") == true })
     }
 
     func testNDSDataCatalogCommandEmitsHeartGoldSoulSilverScriptSequenceInventoryJSON() throws {
@@ -1060,9 +1104,9 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(filesRoot["id"] as? String, "resources:files")
         XCTAssertEqual(filesRoot["domain"] as? String, "resources")
         XCTAssertEqual(filesRoot["format"] as? String, "directory")
-        XCTAssertEqual(filesRoot["recordCount"] as? Int, 10)
+        XCTAssertEqual(filesRoot["recordCount"] as? Int, 15)
         let filesRootFacts = try XCTUnwrap(filesRoot["facts"] as? [[String: Any]])
-        XCTAssertTrue(filesRootFacts.contains { $0["label"] as? String == "Shallow Count" && $0["value"] as? String == "10" })
+        XCTAssertTrue(filesRootFacts.contains { $0["label"] as? String == "Shallow Count" && $0["value"] as? String == "15" })
         XCTAssertTrue(filesRootFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "nitroFSRootInventory" })
         XCTAssertTrue(filesRootFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(filesRootFacts.contains { $0["label"] as? String == "Gen V Reference Posture" && $0["value"] as? String == "cleanRoomReferenceOnly" })
@@ -1090,7 +1134,7 @@ final class PokemonHackCLITests: XCTestCase {
         let filesResourceItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "files" })
         XCTAssertEqual(filesResourceItem["kind"] as? String, "directory")
         let resourceFacts = try XCTUnwrap(filesResourceItem["facts"] as? [[String: Any]])
-        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Shallow Count" && $0["value"] as? String == "10" })
+        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Shallow Count" && $0["value"] as? String == "15" })
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "nitroFSRootInventory" })
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
@@ -1133,6 +1177,9 @@ final class PokemonHackCLITests: XCTestCase {
         let mapMatrixChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/mapmatrix/0001.bin" })
         let mapMatrixChildFacts = try XCTUnwrap(mapMatrixChild["facts"] as? [[String: Any]])
         XCTAssertTrue(mapMatrixChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataMapMatrixMember" })
+        XCTAssertTrue(mapMatrixChildFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
+        let mapMatrixChildRelatedRecords = try XCTUnwrap(mapMatrixChild["relatedRecords"] as? [[String: Any]])
+        XCTAssertFalse(mapMatrixChildRelatedRecords.contains { $0["recordID"] as? String == "resources:files/fielddata" })
 
         let mapTableRoot = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/maptable" })
         XCTAssertEqual(mapTableRoot["id"] as? String, "maps:files/fielddata/maptable")
@@ -1146,6 +1193,9 @@ final class PokemonHackCLITests: XCTestCase {
         let mapTableChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/maptable/map.bin" })
         let mapTableChildFacts = try XCTUnwrap(mapTableChild["facts"] as? [[String: Any]])
         XCTAssertTrue(mapTableChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataMapTableMember" })
+        XCTAssertTrue(mapTableChildFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
+        let mapTableChildRelatedRecords = try XCTUnwrap(mapTableChild["relatedRecords"] as? [[String: Any]])
+        XCTAssertFalse(mapTableChildRelatedRecords.contains { $0["recordID"] as? String == "resources:files/fielddata" })
 
         let scriptRoot = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/script" })
         XCTAssertEqual(scriptRoot["id"] as? String, "scripts:files/fielddata/script")
@@ -1177,6 +1227,8 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(scriptChildFacts.contains { $0["label"] as? String == "Gen V Blocked Actions" && ($0["value"] as? String)?.contains("binary write") == true })
         let scriptChildDiagnostics = try XCTUnwrap(scriptChild["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(scriptChildDiagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+        let scriptChildRelatedRecords = try XCTUnwrap(scriptChild["relatedRecords"] as? [[String: Any]])
+        XCTAssertFalse(scriptChildRelatedRecords.contains { $0["recordID"] as? String == "resources:files/fielddata" })
 
         let secondScriptChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/script/scr_seq/0002.bin" })
         XCTAssertEqual(secondScriptChild["byteCount"] as? Int, 3)
@@ -1198,6 +1250,29 @@ final class PokemonHackCLITests: XCTestCase {
         let zoneEventChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/fielddata/eventdata/zone_event/zone_001.json" })
         let zoneEventChildFacts = try XCTUnwrap(zoneEventChild["facts"] as? [[String: Any]])
         XCTAssertTrue(zoneEventChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataZoneEventMetadata" })
+        XCTAssertTrue(zoneEventChildFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
+        let zoneEventChildRelatedRecords = try XCTUnwrap(zoneEventChild["relatedRecords"] as? [[String: Any]])
+        XCTAssertFalse(zoneEventChildRelatedRecords.contains { $0["recordID"] as? String == "resources:files/fielddata" })
+
+        let fielddataRootIDs: Set<String> = [
+            "resources:files/fielddata",
+            "maps:files/fielddata/mapmatrix",
+            "maps:files/fielddata/maptable",
+            "scripts:files/fielddata/script",
+            "scripts:files/fielddata/eventdata/zone_event"
+        ]
+        func assertFielddataRootRelationships(_ record: [String: Any], facts: [[String: Any]], relatedDomains: String) throws {
+            let recordID = try XCTUnwrap(record["id"] as? String)
+            let relatedRecords = try XCTUnwrap(record["relatedRecords"] as? [[String: Any]])
+            XCTAssertEqual(Set(relatedRecords.compactMap { $0["recordID"] as? String }), fielddataRootIDs.subtracting([recordID]))
+            XCTAssertTrue(facts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+            XCTAssertTrue(facts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == relatedDomains })
+        }
+        try assertFielddataRootRelationships(fielddataRoot, facts: fielddataRootFacts, relatedDomains: "maps, scripts")
+        try assertFielddataRootRelationships(mapMatrixRoot, facts: mapMatrixRootFacts, relatedDomains: "maps, resources, scripts")
+        try assertFielddataRootRelationships(mapTableRoot, facts: mapTableRootFacts, relatedDomains: "maps, resources, scripts")
+        try assertFielddataRootRelationships(scriptRoot, facts: scriptRootFacts, relatedDomains: "maps, resources, scripts")
+        try assertFielddataRootRelationships(zoneEventRoot, facts: zoneEventRootFacts, relatedDomains: "maps, resources, scripts")
 
         let resourceIndex = try decodeJSON(
             PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
@@ -1208,11 +1283,23 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(fielddataResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataInventory" })
         XCTAssertTrue(fielddataResourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(fielddataResourceFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
+        XCTAssertTrue(fielddataResourceFacts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+        XCTAssertTrue(fielddataResourceFacts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == "maps, scripts" })
         XCTAssertFalse(fielddataResourceFacts.contains { $0["label"] as? String == "Migration Status" })
 
         let mapMatrixResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data maps" && $0["path"] as? String == "files/fielddata/mapmatrix" })
         let mapMatrixResourceFacts = try XCTUnwrap(mapMatrixResource["facts"] as? [[String: Any]])
         XCTAssertTrue(mapMatrixResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataMapMatrixInventory" })
+        XCTAssertTrue(mapMatrixResourceFacts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+        XCTAssertTrue(mapMatrixResourceFacts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == "maps, resources, scripts" })
+        XCTAssertFalse(mapMatrixResourceFacts.contains { $0["label"] as? String == "Migration Status" })
+
+        let mapTableResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data maps" && $0["path"] as? String == "files/fielddata/maptable" })
+        let mapTableResourceFacts = try XCTUnwrap(mapTableResource["facts"] as? [[String: Any]])
+        XCTAssertTrue(mapTableResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataMapTableInventory" })
+        XCTAssertTrue(mapTableResourceFacts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+        XCTAssertTrue(mapTableResourceFacts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == "maps, resources, scripts" })
+        XCTAssertFalse(mapTableResourceFacts.contains { $0["label"] as? String == "Migration Status" })
 
         let scriptResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data scripts" && $0["path"] as? String == "files/fielddata/script" })
         XCTAssertEqual(scriptResource["size"] as? Int, 4)
@@ -1220,7 +1307,16 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(scriptResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataScriptInventory" })
         XCTAssertTrue(scriptResourceFacts.contains { $0["label"] as? String == "Gen V Script Members" && $0["value"] as? String == "2" })
         XCTAssertTrue(scriptResourceFacts.contains { $0["label"] as? String == "Gen V Script Bytes" && $0["value"] as? String == "4" })
+        XCTAssertTrue(scriptResourceFacts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+        XCTAssertTrue(scriptResourceFacts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == "maps, resources, scripts" })
         XCTAssertFalse(scriptResourceFacts.contains { $0["label"] as? String == "Migration Status" })
+
+        let zoneEventResource = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data scripts" && $0["path"] as? String == "files/fielddata/eventdata/zone_event" })
+        let zoneEventResourceFacts = try XCTUnwrap(zoneEventResource["facts"] as? [[String: Any]])
+        XCTAssertTrue(zoneEventResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "fielddataZoneEventInventory" })
+        XCTAssertTrue(zoneEventResourceFacts.contains { $0["label"] as? String == "Related Rows" && $0["value"] as? String == "4" })
+        XCTAssertTrue(zoneEventResourceFacts.contains { $0["label"] as? String == "Related Domains" && $0["value"] as? String == "maps, resources, scripts" })
+        XCTAssertFalse(zoneEventResourceFacts.contains { $0["label"] as? String == "Migration Status" })
     }
 
     func testNDSDataCatalogCommandEmitsPokeBlackMessageBankInventoryJSON() throws {
@@ -1235,15 +1331,15 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(messageBankRoot["id"] as? String, "text:files/msgdata")
         XCTAssertEqual(messageBankRoot["domain"] as? String, "text")
         XCTAssertEqual(messageBankRoot["format"] as? String, "directory")
-        XCTAssertEqual(messageBankRoot["recordCount"] as? Int, 4)
+        XCTAssertEqual(messageBankRoot["recordCount"] as? Int, 6)
         XCTAssertNil(messageBankRoot["textBankPreview"])
         let messageBankRootFacts = try XCTUnwrap(messageBankRoot["facts"] as? [[String: Any]])
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankInventory" })
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Reference Posture" && $0["value"] as? String == "cleanRoomReferenceOnly" })
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
-        XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Count" && $0["value"] as? String == "4" })
-        XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Extensions" && $0["value"] as? String == "bin, dat, gmm, txt" })
+        XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Count" && $0["value"] as? String == "6" })
+        XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Extensions" && $0["value"] as? String == "bin, dat, gmm, msg, str, txt" })
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Basis" && $0["value"] as? String == "pathExtensionOnly" })
         XCTAssertTrue(messageBankRootFacts.contains { $0["label"] as? String == "Gen V Message Candidate Posture" && $0["value"] as? String == "previewOnlyFilenameFacts" })
         XCTAssertFalse(messageBankRootFacts.contains { $0["label"] as? String == "Migration Status" })
@@ -1260,6 +1356,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "sourceTextCandidate" })
         XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Candidate Basis" && $0["value"] as? String == "pathExtensionOnly" })
         XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Candidate Posture" && $0["value"] as? String == "previewOnlyFilenameFacts" })
+        XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "14" })
+        XCTAssertTrue(childFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" && $0["value"] as? String == "1" })
+        XCTAssertFalse(childFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" })
         XCTAssertFalse(childFacts.contains { $0["label"] as? String == "Text Bank Preview" })
         XCTAssertFalse(childFacts.contains { $0["label"] as? String == "Migration Status" })
 
@@ -1268,6 +1368,10 @@ final class PokemonHackCLITests: XCTestCase {
         let binaryChildFacts = try XCTUnwrap(binaryMessageBankChild["facts"] as? [[String: Any]])
         XCTAssertTrue(binaryChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
         XCTAssertTrue(binaryChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "numberedBinaryBankCandidate" })
+        XCTAssertTrue(binaryChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(binaryChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "4" })
+        XCTAssertTrue(binaryChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0001" })
+        XCTAssertFalse(binaryChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
         XCTAssertFalse(binaryChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
         XCTAssertFalse(binaryChildFacts.contains { $0["label"] as? String == "Migration Status" })
 
@@ -1276,8 +1380,47 @@ final class PokemonHackCLITests: XCTestCase {
         let gmmChildFacts = try XCTUnwrap(gmmMessageBankChild["facts"] as? [[String: Any]])
         XCTAssertTrue(gmmChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
         XCTAssertTrue(gmmChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "sourceTextCandidate" })
+        XCTAssertTrue(gmmChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(gmmChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "26" })
+        XCTAssertTrue(gmmChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" && $0["value"] as? String == "1" })
         XCTAssertFalse(gmmChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
         XCTAssertFalse(gmmChildFacts.contains { $0["label"] as? String == "Migration Status" })
+
+        let strMessageBankChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/msgdata/system/help.str" })
+        XCTAssertNil(strMessageBankChild["textBankPreview"])
+        let strChildFacts = try XCTUnwrap(strMessageBankChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(strChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
+        XCTAssertTrue(strChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "sourceTextCandidate" })
+        XCTAssertTrue(strChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(strChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "11" })
+        XCTAssertTrue(strChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" && $0["value"] as? String == "2" })
+        XCTAssertFalse(strChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" })
+        XCTAssertFalse(strChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+        XCTAssertFalse(strChildFacts.contains { $0["label"] as? String == "Migration Status" })
+
+        let msgMessageBankChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/msgdata/msg/msg_0099.msg" })
+        XCTAssertNil(msgMessageBankChild["textBankPreview"])
+        let msgChildFacts = try XCTUnwrap(msgMessageBankChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(msgChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
+        XCTAssertTrue(msgChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "numberedBinaryBankCandidate" })
+        XCTAssertTrue(msgChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(msgChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "3" })
+        XCTAssertTrue(msgChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0099" })
+        XCTAssertFalse(msgChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
+        XCTAssertFalse(msgChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+        XCTAssertFalse(msgChildFacts.contains { $0["label"] as? String == "Migration Status" })
+
+        let datMessageBankChild = try XCTUnwrap(records.first { $0["relativePath"] as? String == "files/msgdata/system/msg_0002.dat" })
+        XCTAssertNil(datMessageBankChild["textBankPreview"])
+        let datChildFacts = try XCTUnwrap(datMessageBankChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(datChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
+        XCTAssertTrue(datChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "numberedBinaryBankCandidate" })
+        XCTAssertTrue(datChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(datChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "4" })
+        XCTAssertTrue(datChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0002" })
+        XCTAssertFalse(datChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
+        XCTAssertFalse(datChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+        XCTAssertFalse(datChildFacts.contains { $0["label"] as? String == "Migration Status" })
 
         let resourceIndex = try decodeJSON(
             PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
@@ -1289,16 +1432,47 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankInventory" })
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
-        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Message Candidate Count" && $0["value"] as? String == "4" })
-        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Message Candidate Extensions" && $0["value"] as? String == "bin, dat, gmm, txt" })
+        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Message Candidate Count" && $0["value"] as? String == "6" })
+        XCTAssertTrue(resourceFacts.contains { $0["label"] as? String == "Gen V Message Candidate Extensions" && $0["value"] as? String == "bin, dat, gmm, msg, str, txt" })
         XCTAssertFalse(resourceFacts.contains { $0["label"] as? String == "Migration Status" })
         XCTAssertFalse(resourceFacts.contains { $0["label"] as? String == "Text Bank Preview" })
         let messageBankResourceChild = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "files/msgdata/msg/0001.bin" })
         let resourceChildFacts = try XCTUnwrap(messageBankResourceChild["facts"] as? [[String: Any]])
         XCTAssertTrue(resourceChildFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "messageBankMetadata" })
         XCTAssertTrue(resourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Kind" && $0["value"] as? String == "numberedBinaryBankCandidate" })
+        XCTAssertTrue(resourceChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(resourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "4" })
+        XCTAssertTrue(resourceChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0001" })
+        XCTAssertFalse(resourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
         XCTAssertFalse(resourceChildFacts.contains { $0["label"] as? String == "Migration Status" })
         XCTAssertFalse(resourceChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+
+        let textMessageBankResourceChild = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "files/msgdata/system/help.str" })
+        let textResourceChildFacts = try XCTUnwrap(textMessageBankResourceChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(textResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(textResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "11" })
+        XCTAssertTrue(textResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" && $0["value"] as? String == "2" })
+        XCTAssertFalse(textResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" })
+        XCTAssertFalse(textResourceChildFacts.contains { $0["label"] as? String == "Migration Status" })
+        XCTAssertFalse(textResourceChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+
+        let msgMessageBankResourceChild = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "files/msgdata/msg/msg_0099.msg" })
+        let msgResourceChildFacts = try XCTUnwrap(msgMessageBankResourceChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(msgResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(msgResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "3" })
+        XCTAssertTrue(msgResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0099" })
+        XCTAssertFalse(msgResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
+        XCTAssertFalse(msgResourceChildFacts.contains { $0["label"] as? String == "Migration Status" })
+        XCTAssertFalse(msgResourceChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
+
+        let datMessageBankResourceChild = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "files/msgdata/system/msg_0002.dat" })
+        let datResourceChildFacts = try XCTUnwrap(datMessageBankResourceChild["facts"] as? [[String: Any]])
+        XCTAssertTrue(datResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Decoded Preview" && $0["value"] as? String == "noDecodedPreview" })
+        XCTAssertTrue(datResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Bytes" && $0["value"] as? String == "4" })
+        XCTAssertTrue(datResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Numeric Bank Hint" && $0["value"] as? String == "0002" })
+        XCTAssertFalse(datResourceChildFacts.contains { $0["label"] as? String == "Gen V Message Candidate Lines" })
+        XCTAssertFalse(datResourceChildFacts.contains { $0["label"] as? String == "Migration Status" })
+        XCTAssertFalse(datResourceChildFacts.contains { $0["label"] as? String == "Text Bank Preview" })
     }
 
     func testNDSDataCatalogCommandEmitsPokeBlackOverlayAndDisassemblyConfigInventoryJSON() throws {
@@ -1313,8 +1487,13 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(overlayRoot["id"] as? String, "scripts:overlays")
         XCTAssertEqual(overlayRoot["domain"] as? String, "scripts")
         XCTAssertEqual(overlayRoot["format"] as? String, "directory")
-        XCTAssertEqual(overlayRoot["recordCount"] as? Int, 1)
+        XCTAssertEqual(overlayRoot["recordCount"] as? Int, 2)
+        XCTAssertEqual(overlayRoot["byteCount"] as? Int, 10)
         let overlayRootFacts = try XCTUnwrap(overlayRoot["facts"] as? [[String: Any]])
+        XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Overlay Members" && $0["value"] as? String == "2" })
+        XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Overlay Bytes" && $0["value"] as? String == "10" })
+        XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Overlay Sample Paths" && ($0["value"] as? String)?.contains("overlays/overlay_93/source.s") == true })
+        XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Overlay Sample Paths" && ($0["value"] as? String)?.contains("overlays/overlay_94/source.s") == true })
         XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "overlayInventory" })
         XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(overlayRootFacts.contains { $0["label"] as? String == "Gen V Reference Posture" && $0["value"] as? String == "cleanRoomReferenceOnly" })
@@ -1332,8 +1511,13 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(configRoot["id"] as? String, "resources:ndsdisasm_config")
         XCTAssertEqual(configRoot["domain"] as? String, "resources")
         XCTAssertEqual(configRoot["format"] as? String, "directory")
-        XCTAssertEqual(configRoot["recordCount"] as? Int, 1)
+        XCTAssertEqual(configRoot["recordCount"] as? Int, 2)
+        XCTAssertEqual(configRoot["byteCount"] as? Int, 10)
         let configRootFacts = try XCTUnwrap(configRoot["facts"] as? [[String: Any]])
+        XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Members" && $0["value"] as? String == "2" })
+        XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Bytes" && $0["value"] as? String == "10" })
+        XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Sample Paths" && ($0["value"] as? String)?.contains("ndsdisasm_config/ARM9.cfg") == true })
+        XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Sample Paths" && ($0["value"] as? String)?.contains("ndsdisasm_config/overlays/overlay_94.cfg") == true })
         XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "disassemblyConfigInventory" })
         XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(configRootFacts.contains { $0["label"] as? String == "Gen V Reference Posture" && $0["value"] as? String == "cleanRoomReferenceOnly" })
@@ -1353,16 +1537,24 @@ final class PokemonHackCLITests: XCTestCase {
         let items = try XCTUnwrap(resourceIndex["items"] as? [[String: Any]])
         let overlayResourceItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data scripts" && $0["path"] as? String == "overlays" })
         XCTAssertEqual(overlayResourceItem["kind"] as? String, "directory")
+        XCTAssertEqual(overlayResourceItem["size"] as? Int, 10)
         let overlayResourceFacts = try XCTUnwrap(overlayResourceItem["facts"] as? [[String: Any]])
         XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "overlayInventory" })
+        XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Overlay Members" && $0["value"] as? String == "2" })
+        XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Overlay Bytes" && $0["value"] as? String == "10" })
+        XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Overlay Sample Paths" && ($0["value"] as? String)?.contains("overlays/overlay_93/source.s") == true })
         XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(overlayResourceFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
         XCTAssertFalse(overlayResourceFacts.contains { $0["label"] as? String == "Migration Status" })
 
         let configResourceItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "ndsdisasm_config" })
         XCTAssertEqual(configResourceItem["kind"] as? String, "directory")
+        XCTAssertEqual(configResourceItem["size"] as? Int, 10)
         let configResourceFacts = try XCTUnwrap(configResourceItem["facts"] as? [[String: Any]])
         XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Source Role" && $0["value"] as? String == "disassemblyConfigInventory" })
+        XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Members" && $0["value"] as? String == "2" })
+        XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Bytes" && $0["value"] as? String == "10" })
+        XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Disassembly Config Sample Paths" && ($0["value"] as? String)?.contains("ndsdisasm_config/ARM9.cfg") == true })
         XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Readiness" && $0["value"] as? String == "previewOnly" })
         XCTAssertTrue(configResourceFacts.contains { $0["label"] as? String == "Gen V Action State" && ($0["value"] as? String)?.contains("source inventory stays preview-only") == true })
         XCTAssertFalse(configResourceFacts.contains { $0["label"] as? String == "Migration Status" })
@@ -4159,8 +4351,40 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(pound["isEditable"] as? Bool, true)
         XCTAssertEqual(pound["contestEffect"] as? String, "CONTEST_EFFECT_NONE")
         XCTAssertEqual(pound["isContestEffectEditable"] as? Bool, true)
+        let contestMetadata = try XCTUnwrap(pound["contestMetadata"] as? [String: Any])
+        XCTAssertEqual(contestMetadata["contestEffect"] as? String, "CONTEST_EFFECT_HIGHLY_APPEALING")
+        XCTAssertEqual(contestMetadata["contestCategory"] as? String, "CONTEST_CATEGORY_TOUGH")
+        XCTAssertEqual(contestMetadata["contestComboStarterId"] as? String, "COMBO_STARTER_POUND")
+        XCTAssertEqual(contestMetadata["contestComboMoves"] as? String, "{ COMBO_STARTER_GROWL }")
+        let facts = try XCTUnwrap(pound["facts"] as? [[String: Any]])
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "contestCategory" && $0["value"] as? String == "CONTEST_CATEGORY_TOUGH" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "contestComboStarterId" && $0["value"] as? String == "COMBO_STARTER_POUND" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "contestComboMoves" && $0["value"] as? String == "{ COMBO_STARTER_GROWL }" })
         let sourceSpan = try XCTUnwrap(pound["sourceSpan"] as? [String: Any])
         XCTAssertEqual(sourceSpan["relativePath"] as? String, "src/data/battle_moves.c")
+    }
+
+    func testMoveCatalogCommandEmitsExpansionContestScalarJSON() throws {
+        let root = try makeExpansionMoveCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["move-catalog", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeemeraldExpansion")
+        let moves = try XCTUnwrap(result["moves"] as? [[String: Any]])
+        let pound = try XCTUnwrap(moves.first { $0["moveID"] as? String == "MOVE_POUND" })
+        XCTAssertEqual(pound["isContestScalarsEditable"] as? Bool, true)
+        XCTAssertEqual(pound["isContestEffectEditable"] as? Bool, false)
+        let contestMetadata = try XCTUnwrap(pound["contestMetadata"] as? [String: Any])
+        XCTAssertEqual(contestMetadata["contestCategory"] as? String, "CONTEST_CATEGORY_TOUGH")
+        XCTAssertEqual(contestMetadata["contestAppeal"] as? String, "2")
+        XCTAssertEqual(contestMetadata["contestJam"] as? String, "1")
+        XCTAssertEqual(contestMetadata["contestComboStarterId"] as? String, "COMBO_STARTER_POUND")
+        XCTAssertEqual(contestMetadata["contestComboMoves"] as? String, "{ MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH }")
+        let facts = try XCTUnwrap(pound["facts"] as? [[String: Any]])
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Contest Metadata Readiness" && $0["value"] as? String == "editableSimpleScalars" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Contest Metadata Blocked Actions" && ($0["value"] as? String)?.contains("contestComboMoves arrays") == true })
     }
 
     func testTrainerCatalogCommandEmitsRubySapphireEditableJSON() throws {
@@ -4344,6 +4568,35 @@ final class PokemonHackCLITests: XCTestCase {
         )
     }
 
+    func testPokemonCompatibilityCommandEmitsExpansionItemEffectIconEditableJSON() throws {
+        let root = try makeExpansionCompatibilityProject()
+        try writeExpansionItemInfo(at: root)
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["pokemon-compatibility", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeemeraldExpansion")
+        let entries = try XCTUnwrap(result["entries"] as? [[String: Any]])
+        let items = try XCTUnwrap(entries.first { $0["surface"] as? String == "items" })
+        let sourceTables = try XCTUnwrap(items["sourceTables"] as? [[String: Any]])
+        let effectIconSource = try XCTUnwrap(sourceTables.first {
+            $0["path"] as? String == "src/data/items.h"
+                && $0["tableSymbol"] as? String == "gItemsInfo .effect/.iconPic/.iconPalette"
+        })
+        XCTAssertEqual(effectIconSource["status"] as? String, "editable")
+        XCTAssertEqual(effectIconSource["indexedCount"] as? Int, 1)
+        XCTAssertEqual(effectIconSource["sourceRole"] as? String, "editableSourceFields")
+        XCTAssertEqual(effectIconSource["readiness"] as? String, "editable existing source fields")
+        XCTAssertEqual(effectIconSource["blockedActions"] as? [String], [
+            "icon asset rewrites",
+            "generated output writes",
+            "Modern Emerald writes",
+            "ROM/build/export paths",
+            "identity edits"
+        ])
+    }
+
     func testPokemonCompatibilityAndAssetIndexCommandsEmitExpansionAllLearnablesFacts() throws {
         let root = try makeExpansionAllLearnablesProject()
         let expectedRelatedSourcePaths = [
@@ -4389,6 +4642,18 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(facts.contains { $0["label"] as? String == "Generated From" && $0["value"] as? String == "level-up, TM/HM, tutor, egg learnsets" })
         XCTAssertTrue(facts.contains { $0["label"] as? String == "Readiness" && $0["value"] as? String == "read-only generated context" })
         XCTAssertTrue(facts.contains { $0["label"] as? String == "Blocked Actions" && $0["value"] as? String == "apply; generated output writes; reference writes; ROM/binary writes" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Coverage Status" && $0["value"] as? String == "matching" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Parsed Source Moves" && $0["value"] as? String == "4" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Missing Generated Moves" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Extra Generated Moves" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Generated Species" && $0["value"] as? String == "1" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Parsed Source Species" && $0["value"] as? String == "1" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Coverage Matches" && $0["value"] as? String == "1" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Coverage Mismatches" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Generated-only Species" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Source-only Species" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Move-set Mismatches" && $0["value"] as? String == "0" })
+        XCTAssertTrue(facts.contains { $0["label"] as? String == "Stale Source Files" && $0["value"] as? String == "0" })
     }
 
     func testPokemonCompatibilityCommandEmitsCryAudioBlockedJSON() throws {
@@ -4455,7 +4720,59 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(unsupportedFields.contains("binary ROM move writes"))
         let sourceTables = try XCTUnwrap(moves["sourceTables"] as? [[String: Any]])
         XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/battle_moves.c" && $0["tableSymbol"] as? String == ".contestEffect" && $0["status"] as? String == "editable" })
-        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/battle_moves.c" && $0["tableSymbol"] as? String == "other contest data" && $0["status"] as? String == "blocked" })
+        let contestMoves = try XCTUnwrap(sourceTables.first { $0["path"] as? String == "src/data/contest_moves.h" && $0["tableSymbol"] as? String == "gContestMoves" })
+        XCTAssertEqual(contestMoves["status"] as? String, "readOnly")
+        XCTAssertEqual(contestMoves["indexedCount"] as? Int, 1)
+        XCTAssertEqual(contestMoves["sourceRole"] as? String, "readOnlyContestMetadata")
+        XCTAssertEqual(contestMoves["readiness"] as? String, "factsOnly")
+        let blockedActions = try XCTUnwrap(contestMoves["blockedActions"] as? [String])
+        XCTAssertTrue(blockedActions.contains("contest writers"))
+        XCTAssertTrue(blockedActions.contains("combo array editing"))
+        XCTAssertTrue(blockedActions.contains("constants"))
+        XCTAssertTrue(blockedActions.contains("row insertion/removal/reorder"))
+        XCTAssertTrue(blockedActions.contains("generated writes"))
+        XCTAssertTrue(blockedActions.contains("reference writes"))
+        XCTAssertTrue(blockedActions.contains("ROM writes"))
+        XCTAssertTrue(blockedActions.contains("binary writes"))
+    }
+
+    func testPokemonCompatibilityCommandEmitsExpansionContestScalarsEditableJSON() throws {
+        let root = try makeExpansionMoveCatalogProject()
+
+        let result = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["pokemon-compatibility", root.path, "--json"])
+        )
+
+        XCTAssertEqual(result["profile"] as? String, "pokeemeraldExpansion")
+        let entries = try XCTUnwrap(result["entries"] as? [[String: Any]])
+        let moves = try XCTUnwrap(entries.first { $0["surface"] as? String == "moves" })
+        XCTAssertEqual(moves["status"] as? String, "editable")
+        XCTAssertEqual(moves["sourcePath"] as? String, "src/data/moves_info.h")
+        XCTAssertEqual(moves["tableSymbol"] as? String, "gMovesInfo")
+        XCTAssertEqual(moves["editableCount"] as? Int, 1)
+        let unsupportedFields = try XCTUnwrap(moves["unsupportedFields"] as? [String])
+        XCTAssertFalse(unsupportedFields.contains("contest data"))
+        XCTAssertTrue(unsupportedFields.contains("contestComboMoves arrays"))
+        XCTAssertTrue(unsupportedFields.contains("gMovesInfo non-simple contest scalar expressions"))
+        XCTAssertTrue(unsupportedFields.contains("generated move output writes"))
+        XCTAssertTrue(unsupportedFields.contains("reference-only move source writes"))
+        XCTAssertTrue(unsupportedFields.contains("binary ROM move writes"))
+        let sourceTables = try XCTUnwrap(moves["sourceTables"] as? [[String: Any]])
+        let contestScalars = try XCTUnwrap(sourceTables.first { $0["path"] as? String == "src/data/moves_info.h" && $0["tableSymbol"] as? String == "gMovesInfo contest scalars" })
+        XCTAssertEqual(contestScalars["status"] as? String, "editable")
+        XCTAssertEqual(contestScalars["sourceRole"] as? String, "editableContestScalars")
+        XCTAssertEqual(contestScalars["readiness"] as? String, "editable existing simple scalar fields")
+        let blockedActions = try XCTUnwrap(contestScalars["blockedActions"] as? [String])
+        XCTAssertTrue(blockedActions.contains("contestComboMoves arrays"))
+        XCTAssertTrue(blockedActions.contains("constants"))
+        XCTAssertTrue(blockedActions.contains("row insertion/removal/reorder"))
+        XCTAssertTrue(blockedActions.contains("generated outputs"))
+        XCTAssertTrue(blockedActions.contains("reference writes"))
+        XCTAssertTrue(blockedActions.contains("ROM/binary writes"))
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/contest_moves.h" && $0["status"] as? String == "blocked" })
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "generated" && $0["status"] as? String == "blocked" })
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "references/pokeemerald-expansion/src/data/moves_info.h" && $0["status"] as? String == "blocked" })
+        XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "ROM output" && $0["status"] as? String == "blocked" })
     }
 
     func testPokemonCompatibilityCommandEmitsRubySapphireTutorLearnsetsEditableJSON() throws {
@@ -4869,11 +5186,15 @@ final class PokemonHackCLITests: XCTestCase {
         try write("Route 1 hello\n", to: root.appendingPathComponent("files/msgdata/story/message_bank.txt"))
         try write("Trainer message candidate\n", to: root.appendingPathComponent("files/msgdata/battle/trainer_messages.gmm"))
         try write(Data([0x10, 0x00, 0x00, 0x00]), to: root.appendingPathComponent("files/msgdata/msg/0001.bin"))
+        try write("Alpha\nBeta\n", to: root.appendingPathComponent("files/msgdata/system/help.str"))
+        try write(Data([0x30, 0x31, 0x32]), to: root.appendingPathComponent("files/msgdata/msg/msg_0099.msg"))
         try write(Data([0x20, 0x00, 0x00, 0x00]), to: root.appendingPathComponent("files/msgdata/system/msg_0002.dat"))
         try write(Data("NARC".utf8), to: root.appendingPathComponent("files/soundstatus.narc"))
         try write(Data("SDAT".utf8) + Data(repeating: 0, count: 12), to: root.appendingPathComponent("files/wb_sound_data.sdat"))
         try write("overlay\n", to: root.appendingPathComponent("overlays/overlay_93/source.s"))
+        try write(Data([0xaa, 0xbb]), to: root.appendingPathComponent("overlays/overlay_94/source.s"))
         try write("config\n", to: root.appendingPathComponent("ndsdisasm_config/ARM9.cfg"))
+        try write(Data([0x01, 0x02, 0x03]), to: root.appendingPathComponent("ndsdisasm_config/overlays/overlay_94.cfg"))
         return root
     }
 
@@ -5012,6 +5333,45 @@ final class PokemonHackCLITests: XCTestCase {
         return root
     }
 
+    private func makeExpansionMoveCatalogProject() throws -> URL {
+        let root = try makeExpansionCompatibilityProject()
+        try write(
+            """
+            const struct MoveInfo gMovesInfo[] =
+            {
+                [MOVE_POUND] =
+                {
+                    .effect = EFFECT_HIT,
+                    .power = 40,
+                    .type = TYPE_NORMAL,
+                    .accuracy = 100,
+                    .pp = 35,
+                    .secondaryEffectChance = 0,
+                    .target = MOVE_TARGET_SELECTED,
+                    .priority = 0,
+                    .flags = FLAG_MAKES_CONTACT,
+                    .description = sPoundDescription,
+                    .contestCategory = CONTEST_CATEGORY_TOUGH,
+                    .contestAppeal = 2,
+                    .contestJam = 1,
+                    .contestComboStarterId = COMBO_STARTER_POUND,
+                    .contestComboMoves = { MOVE_DOUBLE_SLAP, MOVE_MEGA_PUNCH },
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/moves_info.h")
+        )
+        try write(
+            """
+            static const u8 sPoundDescription[] = _("Pounds with forelegs.");
+
+            """,
+            to: root.appendingPathComponent("src/data/text/move_descriptions.h")
+        )
+        return root
+    }
+
     private func makeRubyMoveCatalogProject() throws -> URL {
         let root = try makeTemporaryDirectory()
         try write("GAME_VERSION ?= RUBY\n", to: root.appendingPathComponent("config.mk"))
@@ -5051,6 +5411,22 @@ final class PokemonHackCLITests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("src/data/battle_moves.c")
+        )
+        try write(
+            """
+            const struct ContestMove gContestMoves[MOVES_COUNT] =
+            {
+                [MOVE_POUND] =
+                {
+                    .effect = CONTEST_EFFECT_HIGHLY_APPEALING,
+                    .contestCategory = CONTEST_CATEGORY_TOUGH,
+                    .comboStarterId = COMBO_STARTER_POUND,
+                    .comboMoves = { COMBO_STARTER_GROWL },
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/contest_moves.h")
         )
         return root
     }
@@ -5229,8 +5605,88 @@ final class PokemonHackCLITests: XCTestCase {
         return root
     }
 
+    private func writeExpansionItemInfo(at root: URL) throws {
+        try write(
+            """
+            const struct ItemInfo gItemsInfo[] =
+            {
+                [ITEM_POTION] =
+                {
+                    .name = ITEM_NAME("Potion"),
+                    .price = 300,
+                    .holdEffectParam = 20,
+                    .description = COMPOUND_STRING("Restores HP."),
+                    .pocket = POCKET_ITEMS,
+                    .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .effect = ITEM_EFFECT_HEAL,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = EFFECT_ITEM_RESTORE_HP,
+                    .battleUseFunc = NULL,
+                    .secondaryId = 0,
+                    .iconPic = gItemIcon_Potion,
+                    .iconPalette = gItemIconPalette_Potion,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
+        )
+    }
+
     private func makeExpansionAllLearnablesProject() throws -> URL {
         let root = try makeExpansionCompatibilityProject()
+        try write(
+            """
+            const struct SpeciesInfo gSpeciesInfo[] =
+            {
+                [SPECIES_TREECKO] = { .baseHP = 40 },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/species_info.h")
+        )
+        try write(
+            """
+            static const u16 sTreeckoLevelUpLearnset[] = {
+                LEVEL_UP_MOVE(1, MOVE_POUND),
+                LEVEL_UP_MOVE(6, MOVE_ABSORB),
+                LEVEL_UP_END
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/level_up_learnsets/treecko.h")
+        )
+        try write(
+            """
+            const struct TMHMLearnset sTMHMLearnsets[] =
+            {
+                [SPECIES_TREECKO] = { .learnset = { .BULLET_SEED = TRUE } },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        )
+        try write(
+            """
+            const u16 gTutorLearnsets[] =
+            {
+                [SPECIES_TREECKO] = TUTOR(MEGA_PUNCH),
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/tutor_learnsets.h")
+        )
+        try write(
+            """
+            const u16 gEggMoves[] = {
+                egg_moves(TREECKO),
+                EGG_MOVES_TERMINATOR
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        )
         try write(
             """
             {
@@ -5302,6 +5758,16 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(sourceTable["readiness"] as? String, "read-only generated context", file: file, line: line)
         XCTAssertEqual(sourceTable["relatedSourcePaths"] as? [String], expectedRelatedSourcePaths, file: file, line: line)
         XCTAssertEqual(sourceTable["blockedActions"] as? [String], expectedBlockedActions, file: file, line: line)
+        let coverage = try XCTUnwrap(sourceTable["learnablesCoverage"] as? [String: Any], file: file, line: line)
+        XCTAssertEqual(coverage["generatedSpeciesCount"] as? Int, 1, file: file, line: line)
+        XCTAssertEqual(coverage["parsedSourceSpeciesCount"] as? Int, 1, file: file, line: line)
+        XCTAssertEqual(coverage["matchingSpeciesCount"] as? Int, 1, file: file, line: line)
+        XCTAssertEqual(coverage["mismatchSpeciesCount"] as? Int, 0, file: file, line: line)
+        XCTAssertEqual(coverage["generatedOnlySpeciesCount"] as? Int, 0, file: file, line: line)
+        XCTAssertEqual(coverage["sourceOnlySpeciesCount"] as? Int, 0, file: file, line: line)
+        XCTAssertEqual(coverage["moveMismatchSpeciesCount"] as? Int, 0, file: file, line: line)
+        XCTAssertEqual(coverage["staleSourceFileCount"] as? Int, 0, file: file, line: line)
+        XCTAssertNil(coverage["newestStaleSourcePath"], file: file, line: line)
     }
 
     private func write(_ text: String, to url: URL) throws {

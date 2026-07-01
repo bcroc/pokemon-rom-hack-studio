@@ -8,9 +8,9 @@
 
 ## Validation
 
-- `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalogTests|PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON'` was attempted. The first run aborted before selected tests ran because unrelated `PokemonMoveCatalogTests.swift` changed during the build. Reruns failed before selected tests ran while compiling unrelated dirty `PokemonHackStudio/Sources/PokemonHackCore/MapCatalog.swift`: `MapEventCapacityLimits.unknown` and `MapEventCapacitySummary.unknown` are non-`Sendable` static properties rejected by Swift concurrency checks.
-- `make validate-nds` was attempted and failed before NDS tests ran with the same unrelated `MapCatalog.swift` concurrency errors.
-- `git diff --check` passed.
+- `swift test --package-path PokemonHackStudio --filter 'NDSDataCatalogTests|PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON'` was rerun on 2026-06-30 17:34 America/Vancouver. SwiftPM built and ran 54 selected tests; `PokemonHackCLITests/testNDSDataCatalogCommandEmitsHeartGoldSoulSilverMapInventoryJSON` passed, but the selected run failed in unrelated `NDSDataCatalogTests/testPokeBlackCatalogSurfacesGenVNitroFSRootInventoryFacts` assertions expecting shallow count `10` and observing `13`, with the matching resource-index/fact assertion failing.
+- `make validate-nds` was rerun on 2026-06-30 17:34 America/Vancouver. SwiftPM built and ran 103 selected tests; the routed HGSS map inventory and semantic CLI tests passed, but the tier failed on the same unrelated Gen V NitroFS root shallow-count drift with 3 failures.
+- `git diff --check` passed. Post-validation `git status --short --branch` showed `## main...origin/main [ahead 1]`.
 
 ## Posture
 
