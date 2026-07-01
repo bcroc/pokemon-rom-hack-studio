@@ -3,6 +3,7 @@ import Foundation
 public enum ValidationTier: String, CaseIterable, Identifiable, Codable, Equatable, Sendable {
     case synthetic
     case localGBAFixtures
+    case ndsSyntheticAndOptionalReferences
     case centralNDSReferences
     case appGUISmoke
     case releaseCandidate
@@ -15,6 +16,8 @@ public enum ValidationTier: String, CaseIterable, Identifiable, Codable, Equatab
             "Synthetic"
         case .localGBAFixtures:
             "Local GBA Fixtures"
+        case .ndsSyntheticAndOptionalReferences:
+            "NDS Synthetic And Optional References"
         case .centralNDSReferences:
             "Central NDS References"
         case .appGUISmoke:
@@ -30,6 +33,8 @@ public enum ValidationTier: String, CaseIterable, Identifiable, Codable, Equatab
             "make validate-synthetic"
         case .localGBAFixtures:
             "make validate-gba-fixtures"
+        case .ndsSyntheticAndOptionalReferences:
+            "make validate-nds"
         case .centralNDSReferences:
             "make validate-nds-strict"
         case .appGUISmoke:
@@ -40,7 +45,54 @@ public enum ValidationTier: String, CaseIterable, Identifiable, Codable, Equatab
     }
 }
 
-public struct ValidationTierCommandRow: Identifiable, Equatable, Sendable {
+public enum ValidationReferenceAvailabilityBehavior: String, Codable, Equatable, Hashable, Sendable {
+    case skippedWhenMissing
+    case failsWhenMissing
+
+    public var title: String {
+        switch self {
+        case .skippedWhenMissing:
+            "Skipped when missing"
+        case .failsWhenMissing:
+            "Fails when missing"
+        }
+    }
+}
+
+public struct ValidationSkippedReferenceCause: Identifiable, Codable, Equatable, Sendable {
+    public let id: String
+    public let label: String
+    public let defaultPath: String
+    public let overrideEnvironmentVariables: [String]
+    public let behavior: ValidationReferenceAvailabilityBehavior
+    public let detail: String
+
+    public init(
+        id: String,
+        label: String,
+        defaultPath: String,
+        overrideEnvironmentVariables: [String],
+        behavior: ValidationReferenceAvailabilityBehavior,
+        detail: String
+    ) {
+        self.id = id
+        self.label = label
+        self.defaultPath = defaultPath
+        self.overrideEnvironmentVariables = overrideEnvironmentVariables
+        self.behavior = behavior
+        self.detail = detail
+    }
+}
+
+public struct ValidationTierReport: Codable, Equatable, Sendable {
+    public let rows: [ValidationTierCommandRow]
+
+    public init(rows: [ValidationTierCommandRow] = ValidationTier.allCases.map(ValidationTierCommandRow.init(tier:))) {
+        self.rows = rows
+    }
+}
+
+public struct ValidationTierCommandRow: Identifiable, Equatable, Sendable, Codable {
     public let tier: ValidationTier
 
     public init(tier: ValidationTier) {
@@ -54,8 +106,171 @@ public struct ValidationTierCommandRow: Identifiable, Equatable, Sendable {
     public var runStateTitle: String { "Run manually" }
     public var canRunInApp: Bool { false }
     public var canCopyCommand: Bool { true }
+    public var strictnessTitle: String {
+        switch tier {
+        case .synthetic:
+            "Synthetic only"
+        case .localGBAFixtures:
+            "Strict local GBA fixtures"
+        case .ndsSyntheticAndOptionalReferences:
+            "Optional central NDS references"
+        case .centralNDSReferences:
+            "Strict central NDS references"
+        case .appGUISmoke:
+            "App-hosted smoke"
+        case .releaseCandidate:
+            "Composite release ladder"
+        }
+    }
+
+    public var strictnessDetail: String {
+        switch tier {
+        case .synthetic:
+            "Runs shell checks and SwiftPM tests over checked-in synthetic fixtures."
+        case .localGBAFixtures:
+            "Requires local Gen III fixture roots by setting REQUIRE_GBA_FIXTURES=1."
+        case .ndsSyntheticAndOptionalReferences:
+            "Runs NDS synthetic tests and reports missing central reference roots as skips."
+        case .centralNDSReferences:
+            "Requires central NDS reference roots by setting REQUIRE_NDS_REFERENCES=1."
+        case .appGUISmoke:
+            "Runs the app-hosted Xcode smoke target; no reference roots are expected."
+        case .releaseCandidate:
+            "Runs scripts, core validation, optional NDS references, app tests, and app verify."
+        }
+    }
+
+    public var skippedReferenceCauses: [ValidationSkippedReferenceCause] {
+        switch tier {
+        case .synthetic, .appGUISmoke:
+            []
+        case .localGBAFixtures:
+            Self.gbaFixtureCauses(behavior: .failsWhenMissing)
+        case .ndsSyntheticAndOptionalReferences:
+            Self.ndsReferenceCauses(behavior: .skippedWhenMissing)
+        case .centralNDSReferences:
+            Self.ndsReferenceCauses(behavior: .failsWhenMissing)
+        case .releaseCandidate:
+            Self.gbaFixtureCauses(behavior: .skippedWhenMissing)
+                + Self.ndsReferenceCauses(behavior: .skippedWhenMissing)
+        }
+    }
+
+    public var skippedReferenceCauseSummary: String {
+        guard !skippedReferenceCauses.isEmpty else {
+            return "No reference fixture skips expected."
+        }
+        let grouped = Dictionary(grouping: skippedReferenceCauses, by: \.behavior)
+        return grouped
+            .sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { behavior, causes in
+                let labels = causes.map(\.label).joined(separator: ", ")
+                return "\(behavior.title): \(labels)"
+            }
+            .joined(separator: ". ")
+    }
+
     public var disabledReason: String {
         "Validation commands are copy-only in PokemonHackStudio; run this command from the repository root in Terminal."
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tier
+        case id
+        case title
+        case command
+        case copyValue
+        case runStateTitle
+        case canRunInApp
+        case canCopyCommand
+        case strictnessTitle
+        case strictnessDetail
+        case skippedReferenceCauses
+        case disabledReason
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(tier, forKey: .tier)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(command, forKey: .command)
+        try container.encode(copyValue, forKey: .copyValue)
+        try container.encode(runStateTitle, forKey: .runStateTitle)
+        try container.encode(canRunInApp, forKey: .canRunInApp)
+        try container.encode(canCopyCommand, forKey: .canCopyCommand)
+        try container.encode(strictnessTitle, forKey: .strictnessTitle)
+        try container.encode(strictnessDetail, forKey: .strictnessDetail)
+        try container.encode(skippedReferenceCauses, forKey: .skippedReferenceCauses)
+        try container.encode(disabledReason, forKey: .disabledReason)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let decodedTier = try? container.decode(ValidationTier.self, forKey: .tier) {
+            tier = decodedTier
+            return
+        }
+        let id = try container.decode(String.self, forKey: .id)
+        guard let decodedTier = ValidationTier(rawValue: id) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: container,
+                debugDescription: "Unknown validation tier id \(id)."
+            )
+        }
+        tier = decodedTier
+    }
+
+    private static func gbaFixtureCauses(
+        behavior: ValidationReferenceAvailabilityBehavior
+    ) -> [ValidationSkippedReferenceCause] {
+        [
+            ValidationSkippedReferenceCause(
+                id: "pokeemerald",
+                label: "pokeemerald",
+                defaultPath: "pokeemerald",
+                overrideEnvironmentVariables: ["POKEEMERALD_FIXTURE_ROOT", "POKEEMERALD_DIR", "GBA_FIXTURE_ROOT"],
+                behavior: behavior,
+                detail: "Emerald source-tree fixture used by Gen III CLI smokes."
+            ),
+            ValidationSkippedReferenceCause(
+                id: "pokefirered",
+                label: "pokefirered",
+                defaultPath: "pokefirered",
+                overrideEnvironmentVariables: ["POKEFIRERED_FIXTURE_ROOT", "POKEFIRERED_DIR", "GBA_FIXTURE_ROOT"],
+                behavior: behavior,
+                detail: "FireRed source-tree fixture used by Gen III CLI smokes."
+            ),
+            ValidationSkippedReferenceCause(
+                id: "pokeruby-reference",
+                label: "pokeruby reference",
+                defaultPath: "references/pokeruby",
+                overrideEnvironmentVariables: ["POKERUBY_REFERENCE_FIXTURE_ROOT", "POKERUBY_REFERENCE_DIR"],
+                behavior: behavior,
+                detail: "Ruby/Sapphire reference source tree used by optional CLI smokes."
+            )
+        ]
+    }
+
+    private static func ndsReferenceCauses(
+        behavior: ValidationReferenceAvailabilityBehavior
+    ) -> [ValidationSkippedReferenceCause] {
+        [
+            "pret__pokeplatinum",
+            "pret__pokediamond",
+            "pret__pokeheartgold",
+            "pret__pmd-sky"
+        ].map { repoID in
+            ValidationSkippedReferenceCause(
+                id: repoID,
+                label: repoID,
+                defaultPath: "/Users/bryan/projects/reference-repos/repos/\(repoID)",
+                overrideEnvironmentVariables: ["REFERENCE_REPOS_ROOT"],
+                behavior: behavior,
+                detail: "Central NDS reference root used by clean-room catalog and toolchain smokes."
+            )
+        }
     }
 }
 

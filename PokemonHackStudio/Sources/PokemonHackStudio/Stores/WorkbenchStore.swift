@@ -1517,7 +1517,8 @@ final class WorkbenchStore: ObservableObject {
             stage: stage,
             nextActionTitle: nextAction,
             blockedReason: ndsReadiness?.firstBlocker?.message ?? state.previewBlockedReason ?? state.applyBlockedReason,
-            diagnosticsCount: currentModuleDiagnosticCount
+            diagnosticsCount: currentModuleDiagnosticCount,
+            facts: selection == .maps ? MapEventCapacityFactBuilder.facts(from: mapEditorSession.activeMapEventCapacity) : []
         )
     }
 
@@ -10248,13 +10249,17 @@ final class WorkbenchStore: ObservableObject {
             ("Name", item.name),
             ("Price", item.price),
             ("Pocket", item.pocket),
+            ("Sort Type", item.sortType),
             ("Type", item.type),
             ("Hold Effect", item.holdEffect),
             ("Hold Param", item.holdEffectParam),
+            ("Importance", item.importance),
+            ("Registrability", item.registrability),
             ("Battle Use", item.battleUsage),
             ("Field Func", item.fieldUseFunc),
             ("Battle Func", item.battleUseFunc),
             ("Secondary", item.secondaryId),
+            ("Exits Bag", item.exitsBagOnUse),
             ("Description", item.descriptionSymbol),
             ("Description Text", item.descriptionText),
             ("Editable", item.isEditable ? "Yes" : "No"),

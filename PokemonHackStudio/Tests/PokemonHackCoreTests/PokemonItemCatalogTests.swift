@@ -229,6 +229,47 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.iconPalette, "gItemIconPalette_PotionPlus")
     }
 
+    func testExpansionItemInfoUsageScalarsPlanApplyBackUpAndReload() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(potion.holdEffect, "HOLD_EFFECT_NONE")
+        XCTAssertEqual(potion.holdEffectParam, "20")
+        XCTAssertEqual(potion.pocket, "POCKET_ITEMS")
+        XCTAssertEqual(potion.type, "ITEM_USE_PARTY_MENU")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+        draft.holdEffectParam = "ITEM_POTION"
+        draft.pocket = "POCKET_MEDICINE"
+        draft.type = "ITEM_USE_FIELD"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".holdEffect = HOLD_EFFECT_RESTORE_HP,"))
+        XCTAssertTrue(preview.contains(".holdEffectParam = ITEM_POTION,"))
+        XCTAssertTrue(preview.contains(".pocket = POCKET_MEDICINE,"))
+        XCTAssertTrue(preview.contains(".type = ITEM_USE_FIELD,"))
+        XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_HEALTH_RECOVERY,"))
+        XCTAssertTrue(preview.contains(".effect = ITEM_EFFECT_HEAL,"))
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.holdEffect, "HOLD_EFFECT_RESTORE_HP")
+        XCTAssertEqual(edited.holdEffectParam, "ITEM_POTION")
+        XCTAssertEqual(edited.pocket, "POCKET_MEDICINE")
+        XCTAssertEqual(edited.type, "ITEM_USE_FIELD")
+    }
+
     func testExpansionItemInfoBehaviorScalarsPlanApplyBackUpAndReload() throws {
         let root = try temporaryRoot()
         try makeExpansionItemInfoProject(at: root)
@@ -269,6 +310,51 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.secondaryId, "ITEM_ANTIDOTE")
     }
 
+    func testExpansionItemInfoUsageScalarsRejectNonSimpleValuesRemovalAndMissingFields() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.holdEffect = "HOLD_EFFECT_NONE | HOLD_EFFECT_RESTORE_HP"
+        draft.holdEffectParam = "20 + 1"
+        draft.pocket = nil
+        draft.type = "GetItemType(ITEM_POTION)"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_INVALID" && $0.message.contains("holdEffect") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_INVALID" && $0.message.contains("holdEffectParam") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_REQUIRED" && $0.message.contains("pocket") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_INVALID" && $0.message.contains("type") })
+
+        let missingRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: missingRoot, includeUsageScalars: false)
+        let missingCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: missingRoot, profile: .pokeemeraldExpansion))
+        let missingPotion = try XCTUnwrap(missingCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var missingDraft = try XCTUnwrap(ItemEditDraft(detail: missingPotion))
+        missingDraft.pocket = "POCKET_MEDICINE"
+
+        let missingPlan = ItemMutationPlanner.plan(catalog: missingCatalog, draft: missingDraft)
+        XCTAssertTrue(missingPlan.changes.isEmpty)
+        XCTAssertFalse(missingPlan.isApplyable)
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_NOT_EDITABLE" && $0.message.contains("missing-field insertion") })
+
+        let nonSimpleCurrentRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: nonSimpleCurrentRoot, holdEffectValue: "HOLD_EFFECT_ALIAS(HOLD_EFFECT_NONE)")
+        let nonSimpleCurrentCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: nonSimpleCurrentRoot, profile: .pokeemeraldExpansion))
+        let nonSimpleCurrentPotion = try XCTUnwrap(nonSimpleCurrentCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var nonSimpleCurrentDraft = try XCTUnwrap(ItemEditDraft(detail: nonSimpleCurrentPotion))
+        nonSimpleCurrentDraft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+
+        let nonSimpleCurrentPlan = ItemMutationPlanner.plan(catalog: nonSimpleCurrentCatalog, draft: nonSimpleCurrentDraft)
+        XCTAssertTrue(nonSimpleCurrentPlan.changes.isEmpty)
+        XCTAssertFalse(nonSimpleCurrentPlan.isApplyable)
+        XCTAssertTrue(nonSimpleCurrentPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_UNSUPPORTED_EXPRESSION" && $0.message.contains("holdEffect") })
+    }
+
     func testExpansionItemInfoBehaviorScalarsRejectNonSimpleValuesRemovalAndMissingFields() throws {
         let root = try temporaryRoot()
         try makeExpansionItemInfoProject(at: root)
@@ -300,6 +386,104 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertTrue(missingPlan.changes.isEmpty)
         XCTAssertFalse(missingPlan.isApplyable)
         XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_BEHAVIOR_SCALAR_NOT_EDITABLE" && $0.message.contains("missing-field insertion") })
+    }
+
+    func testExpansionItemInfoBagClassificationScalarsPlanApplyBackUpReloadAndBlockDrift() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(potion.importance, "0")
+        XCTAssertEqual(potion.registrability, "0")
+        XCTAssertEqual(potion.sortType, "ITEM_TYPE_HEALTH_RECOVERY")
+        XCTAssertEqual(potion.exitsBagOnUse, "FALSE")
+
+        let sourceIndex = try ProjectSourceIndexLoader.load(from: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potionSource = try XCTUnwrap(sourceIndex.records.first { $0.module == .items && $0.title == "ITEM_POTION" })
+        XCTAssertEqual(fact("sortType", in: potionSource.facts), "ITEM_TYPE_HEALTH_RECOVERY")
+        XCTAssertEqual(fact("exitsBagOnUse", in: potionSource.facts), "FALSE")
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.importance = "1"
+        draft.registrability = "ITEM_REGISTER_ALLOWED"
+        draft.sortType = "ITEM_TYPE_FIELD_USE"
+        draft.exitsBagOnUse = "TRUE"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        XCTAssertTrue(preview.contains(".importance = 1,"))
+        XCTAssertTrue(preview.contains(".registrability = ITEM_REGISTER_ALLOWED,"))
+        XCTAssertTrue(preview.contains(".sortType = ITEM_TYPE_FIELD_USE,"))
+        XCTAssertTrue(preview.contains(".exitsBagOnUse = TRUE,"))
+        XCTAssertTrue(preview.contains(".fieldUseFunc = ItemUseOutOfBattle_Medicine,"))
+
+        let sourcePath = root.appendingPathComponent("src/data/items.h")
+        let original = try String(contentsOf: sourcePath, encoding: .utf8)
+        try "\(original)\n// drift\n".write(to: sourcePath, atomically: true, encoding: .utf8)
+        let driftApplyability = plan.validateApplyability()
+        XCTAssertFalse(driftApplyability.isApplyable)
+        XCTAssertTrue(driftApplyability.diagnostics.contains { $0.code == "ITEM_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "ITEM_APPLY_ORIGINAL_HASH_MISMATCH" })
+        try original.write(to: sourcePath, atomically: true, encoding: .utf8)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.importance, "1")
+        XCTAssertEqual(edited.registrability, "ITEM_REGISTER_ALLOWED")
+        XCTAssertEqual(edited.sortType, "ITEM_TYPE_FIELD_USE")
+        XCTAssertEqual(edited.exitsBagOnUse, "TRUE")
+    }
+
+    func testExpansionItemInfoBagClassificationScalarsRejectNonSimpleValuesRemovalAndMissingFields() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.importance = "(1 + 2)"
+        draft.registrability = nil
+        draft.sortType = "ITEM_TYPE_HEALTH_RECOVERY | ITEM_TYPE_FIELD_USE"
+        draft.exitsBagOnUse = "GetExitFlag()"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertFalse(plan.isApplyable)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_INVALID" && $0.message.contains("importance") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_REQUIRED" && $0.message.contains("registrability") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_INVALID" && $0.message.contains("sortType") })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_INVALID" && $0.message.contains("exitsBagOnUse") })
+
+        let missingRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: missingRoot, includeBagClassificationScalars: false)
+        let missingCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: missingRoot, profile: .pokeemeraldExpansion))
+        let missingPotion = try XCTUnwrap(missingCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var missingDraft = try XCTUnwrap(ItemEditDraft(detail: missingPotion))
+        missingDraft.sortType = "ITEM_TYPE_FIELD_USE"
+
+        let missingPlan = ItemMutationPlanner.plan(catalog: missingCatalog, draft: missingDraft)
+        XCTAssertTrue(missingPlan.changes.isEmpty)
+        XCTAssertFalse(missingPlan.isApplyable)
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_NOT_EDITABLE" && $0.message.contains("missing-field insertion") })
+
+        let nonSimpleCurrentRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: nonSimpleCurrentRoot, sortTypeValue: "GetItemSortType(ITEM_POTION)")
+        let nonSimpleCurrentCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: nonSimpleCurrentRoot, profile: .pokeemeraldExpansion))
+        let nonSimpleCurrentPotion = try XCTUnwrap(nonSimpleCurrentCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var nonSimpleCurrentDraft = try XCTUnwrap(ItemEditDraft(detail: nonSimpleCurrentPotion))
+        nonSimpleCurrentDraft.sortType = "ITEM_TYPE_FIELD_USE"
+
+        let nonSimpleCurrentPlan = ItemMutationPlanner.plan(catalog: nonSimpleCurrentCatalog, draft: nonSimpleCurrentDraft)
+        XCTAssertTrue(nonSimpleCurrentPlan.changes.isEmpty)
+        XCTAssertFalse(nonSimpleCurrentPlan.isApplyable)
+        XCTAssertTrue(nonSimpleCurrentPlan.diagnostics.contains { $0.code == "ITEM_BAG_CLASSIFICATION_SCALAR_UNSUPPORTED_EXPRESSION" && $0.message.contains("sortType") })
     }
 
     func testExpansionItemInfoEffectIconRejectsNonSimpleSymbolsAndRemoval() throws {
@@ -532,7 +716,11 @@ final class PokemonItemCatalogTests: XCTestCase {
         COMPOUND_STRING(
                         "Restores HP.")
         """,
-        includeBehaviorScalars: Bool = true
+        holdEffectValue: String = "HOLD_EFFECT_NONE",
+        sortTypeValue: String = "ITEM_TYPE_HEALTH_RECOVERY",
+        includeUsageScalars: Bool = true,
+        includeBehaviorScalars: Bool = true,
+        includeBagClassificationScalars: Bool = true
     ) throws {
         var source = """
             const struct ItemInfo gItemsInfo[] =
@@ -541,11 +729,35 @@ final class PokemonItemCatalogTests: XCTestCase {
                 {
                     .name = ITEM_NAME("Potion"),
                     .price = (I_PRICE >= GEN_7) ? 200 : 300,
+            """
+        if includeUsageScalars {
+            source += """
+                    .holdEffect = \(holdEffectValue),
                     .holdEffectParam = 20,
+            """
+        }
+        source += """
                     .description = \(descriptionValue),
+            """
+        if includeUsageScalars {
+            source += """
                     .pocket = POCKET_ITEMS,
-                    .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+            """
+        }
+        if includeBagClassificationScalars {
+            source += """
+                    .importance = 0,
+                    .registrability = 0,
+                    .sortType = \(sortTypeValue),
+                    .exitsBagOnUse = FALSE,
+            """
+        }
+        if includeUsageScalars {
+            source += """
                     .type = ITEM_USE_PARTY_MENU,
+            """
+        }
+        source += """
                     .effect = ITEM_EFFECT_HEAL,
             """
         if includeBehaviorScalars {

@@ -263,6 +263,10 @@ struct PokemonItemsWorkbenchView: View {
                         itemTextField("Field Func", text: draftOptionalStringBinding(\.fieldUseFunc))
                         itemTextField("Battle Func", text: draftOptionalStringBinding(\.battleUseFunc))
                         if catalog.profile == "pokeemeraldExpansion" {
+                            itemTextField("Importance", text: draftOptionalStringBinding(\.importance))
+                            itemTextField("Registrability", text: draftOptionalStringBinding(\.registrability))
+                            itemTextField("Sort Type", text: draftOptionalStringBinding(\.sortType))
+                            itemTextField("Exits Bag", text: draftOptionalStringBinding(\.exitsBagOnUse))
                             itemTextField("Effect", text: draftOptionalStringBinding(\.effect))
                             itemTextField("Icon Pic", text: draftOptionalStringBinding(\.iconPic))
                             itemTextField("Icon Palette", text: draftOptionalStringBinding(\.iconPalette))

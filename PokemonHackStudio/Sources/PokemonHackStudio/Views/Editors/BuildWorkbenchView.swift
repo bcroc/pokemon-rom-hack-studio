@@ -1312,6 +1312,23 @@ private struct ValidationTierCommandRowView: View {
                 .disabled(!row.canCopyCommand)
                 .help("Copy validation command")
             }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.strictnessTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(row.strictnessDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Text(row.skippedReferenceCauseSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(3)
+            }
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))

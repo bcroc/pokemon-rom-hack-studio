@@ -21,8 +21,9 @@
 ## Validation
 
 - `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78q-cli-scratch --filter PokemonItemCatalogTests` (passed; 13 selected tests, 0 failures.)
-- `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78q-cli-scratch --filter PokemonDataCompatibilityTests` (blocked by unrelated all-learnables compatibility failures after the PHS-T78Q item compatibility assertion passed; 12 selected tests ran, 5 failures in `testExpansionAllLearnablesCoverageCountsGeneratedSourceAndMoveMismatches` and `testExpansionLearnsetCompatibilityWarnsWhenAllLearnablesIsStale`.)
+- Historical run: `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78q-cli-scratch --filter PokemonDataCompatibilityTests` (blocked by unrelated all-learnables compatibility failures after the PHS-T78Q item compatibility assertion passed; 12 selected tests ran, 5 failures in `testExpansionAllLearnablesCoverageCountsGeneratedSourceAndMoveMismatches` and `testExpansionLearnsetCompatibilityWarnsWhenAllLearnablesIsStale`; superseded by the current reconciliation proof below.)
 - `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78q-cli-scratch --filter 'PokemonHackCLITests/testPokemonCompatibilityCommandEmitsModernEmeraldMetadataJSON|PokemonHackCLITests/testPokemonCompatibilityCommandEmitsExpansionItemEffectIconEditableJSON'` (passed; 2 selected tests, 0 failures.)
+- `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-reconcile-all-learnables-swiftpm --filter 'PokemonDataCompatibilityTests|GenIIIAssetCatalogTests|PokemonHackCLITests/testPokemonCompatibility'` (passed on 2026-07-01; 28 selected tests, 0 failures; confirms the current compatibility/catalog/CLI all-learnables proof passes.)
 - `git diff --check` (passed.)
 
 ## Source-Write Posture

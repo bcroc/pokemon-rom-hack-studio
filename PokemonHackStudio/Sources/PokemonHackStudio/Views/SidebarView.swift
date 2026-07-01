@@ -110,6 +110,10 @@ struct WorkbenchSidebarPanel: View {
                     sidebarMetric("Apply", session.canApply ? "Yes" : "No")
                     sidebarMetric("Diagnostics", "\(session.diagnosticsCount)")
                 }
+
+                if !session.facts.isEmpty {
+                    FactGrid(facts: session.facts)
+                }
             }
         }
     }

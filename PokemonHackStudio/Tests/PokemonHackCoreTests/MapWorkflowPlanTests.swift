@@ -183,8 +183,77 @@ final class MapWorkflowPlanTests: XCTestCase {
 
         XCTAssertEqual(diagnostic.severity, .warning)
         XCTAssertEqual(diagnostic.span?.relativePath, "data/maps/TestRoom/map.json")
+        XCTAssertEqual(plan.eventCapacity.counts.objectEvents, 2)
+        XCTAssertEqual(plan.eventCapacity.limits.objectEvents, 1)
+        XCTAssertTrue(plan.eventCapacity.diagnostics.contains { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
         XCTAssertTrue(plan.changes.contains { $0.path == "data/maps/TestRoom/map.json" })
         XCTAssertTrue(plan.isApplyable, "\(plan.applyability.diagnostics.map(\.code))")
+    }
+
+    func testDuplicationPlanCarriesSourceCapacityWarningsWithoutBlockingApply() throws {
+        let root = try makeTemporaryProjectRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try write(#"{"id":"MAP_OLDALE_TOWN","name":"OldaleTown"}"#, to: root.appendingPathComponent("data/maps/OldaleTown/map.json"))
+        try write("[\"OldaleTown\"]", to: root.appendingPathComponent("data/maps/map_groups.json"))
+        let sourceCapacity = MapEventCapacitySummary(
+            counts: MapEventCounts(objectEvents: 2),
+            limits: MapEventCapacityLimits(
+                objectEvents: 1,
+                sources: [
+                    MapEventCapacityLimits.Source(
+                        kind: .object,
+                        path: "include/constants/global.h",
+                        symbol: "OBJECT_EVENT_TEMPLATES_COUNT",
+                        detail: "Object map template capacity."
+                    )
+                ]
+            ),
+            mapSourcePath: "data/maps/OldaleTown/map.json"
+        )
+        let catalog = ProjectMapCatalog(
+            id: "emerald",
+            rootPath: root.path,
+            profile: .pokeemerald,
+            mapGroups: [],
+            maps: [
+                MapDescriptor(
+                    id: "MAP_OLDALE_TOWN",
+                    name: "OldaleTown",
+                    sourcePath: "data/maps/OldaleTown/map.json",
+                    groupID: nil,
+                    groupIndex: nil,
+                    mapIndexInGroup: nil,
+                    layout: nil,
+                    layoutSlotIndex: nil,
+                    music: nil,
+                    mapType: nil,
+                    weather: nil,
+                    regionMapSection: nil,
+                    floorNumber: nil,
+                    sharedEventsMap: nil,
+                    sharedScriptsMap: nil,
+                    eventCounts: sourceCapacity.counts,
+                    eventCapacity: sourceCapacity
+                )
+            ],
+            layoutSlots: []
+        )
+
+        let plan = MapWorkflowPlanner.planDuplication(
+            catalog: catalog,
+            sourceMapID: "MAP_OLDALE_TOWN",
+            proposedMapID: "MAP_CODEX_TEST",
+            proposedMapName: "CodexTest",
+            duplicateLayout: false
+        )
+        let diagnostic = try XCTUnwrap(plan.diagnostics.first { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+
+        XCTAssertEqual(plan.sourceEventCapacity, sourceCapacity)
+        XCTAssertEqual(diagnostic.severity, .warning)
+        XCTAssertTrue(plan.mutationPlan.diagnostics.contains { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
+        XCTAssertTrue(plan.executionState.canApply, "\(plan.executionState.reasons)")
+        XCTAssertTrue(plan.executionState.reasons.isEmpty)
     }
 
     func testDuplicationApplyBlocksStaleSnapshots() throws {

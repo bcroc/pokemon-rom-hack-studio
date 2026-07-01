@@ -583,6 +583,35 @@ struct ModuleEditorSession: Identifiable {
     let nextActionTitle: String
     let blockedReason: String?
     let diagnosticsCount: Int
+    let facts: [Fact]
+
+    init(
+        module: WorkbenchModule,
+        selectedObjectTitle: String,
+        selectedObjectID: String?,
+        isDirty: Bool,
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        stage: ModuleEditorMutationStage,
+        nextActionTitle: String,
+        blockedReason: String?,
+        diagnosticsCount: Int,
+        facts: [Fact] = []
+    ) {
+        self.module = module
+        self.selectedObjectTitle = selectedObjectTitle
+        self.selectedObjectID = selectedObjectID
+        self.isDirty = isDirty
+        self.canPreview = canPreview
+        self.canApply = canApply
+        self.canDiscard = canDiscard
+        self.stage = stage
+        self.nextActionTitle = nextActionTitle
+        self.blockedReason = blockedReason
+        self.diagnosticsCount = diagnosticsCount
+        self.facts = facts
+    }
 
     var id: String {
         "\(module.id)::\(selectedObjectID ?? "none")"
@@ -734,6 +763,40 @@ struct Fact: Identifiable {
     let id = UUID()
     let label: String
     let value: String
+}
+
+enum MapEventCapacityFactBuilder {
+    static func facts(from summary: MapEventCapacitySummary, includeWarningCount: Bool = true) -> [Fact] {
+        var facts = summary.usages.map { usage in
+            Fact(label: label(for: usage.kind), value: valueText(for: usage))
+        }
+        if includeWarningCount {
+            facts.append(Fact(label: "Capacity Warnings", value: "\(summary.diagnostics.count)"))
+        }
+        return facts
+    }
+
+    static func valueText(for usage: MapEventCapacityUsage) -> String {
+        guard let limit = usage.limit else {
+            return "\(usage.count)/?"
+        }
+        return usage.isOverLimit ? "\(usage.count)/\(limit) over" : "\(usage.count)/\(limit)"
+    }
+
+    private static func label(for kind: MapEventKind) -> String {
+        switch kind {
+        case .object:
+            "Objects"
+        case .warp:
+            "Warps"
+        case .coord:
+            "Coords"
+        case .bg:
+            "BG"
+        case .connection:
+            "Connections"
+        }
+    }
 }
 
 struct BuildTarget: Identifiable, Hashable {

@@ -1710,7 +1710,7 @@ public enum NDSDataCatalogBuilder {
         "map table write",
         "map matrix write",
         "land data write",
-        "area data write",
+        "unsupported area data write",
         "script write",
         "map editor",
         "matrix compiler",
@@ -1723,8 +1723,24 @@ public enum NDSDataCatalogBuilder {
         "binary write"
     ]
 
-    private static let diamondPearlMapInventoryActionState = "Diamond/Pearl map matrix, map table, land data, and area data rows are inventory-only map metadata; no semantic editor, raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
-    private static let diamondPearlMapHeaderActionState = "Diamond/Pearl map header rows expose existing integer-literal sMapHeaders scalars through the semantic mutation-plan gate; map table, map matrix, land data, area data, scripts, compilers, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
+    private static let diamondPearlAreaDataSemanticBlockedActions = [
+        "nested area-data edit",
+        "missing field insertion",
+        "row add/remove/reorder",
+        "land data write",
+        "map table write",
+        "map matrix write",
+        "NARC/container work",
+        "generated output write",
+        "reference write",
+        "ROM rebuild",
+        "ROM export",
+        "binary write"
+    ]
+
+    private static let diamondPearlMapInventoryActionState = "Diamond/Pearl map matrix, map table, land data, and unsupported area-data rows are inventory-only map metadata; no raw C-anchor writer, compiler, rebuild, export, or binary write path is enabled."
+    private static let diamondPearlMapHeaderActionState = "Diamond/Pearl map header rows expose existing integer-literal sMapHeaders scalars through the semantic mutation-plan gate; map table, map matrix, land data, unsupported area data, scripts, compilers, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
+    private static let diamondPearlAreaDataSemanticActionState = "Diamond/Pearl area-data JSON rows expose existing top-level scalar fields through the semantic mutation-plan gate; nested area data, land data, map table/matrix rows, NARC/container work, generated/reference writes, ROM rebuild/export, and binary writes remain blocked."
 
     private static func enrichDiamondPearlMapInventory(
         records: [NDSDataCatalogRecord],
@@ -1779,6 +1795,9 @@ public enum NDSDataCatalogBuilder {
         if lower == "files/fielddata/areadata" {
             return "dpAreaDataInventory"
         }
+        if isDiamondPearlAreaDataSemanticRecord(record) {
+            return "dpAreaDataSemanticScalars"
+        }
         if lower.hasPrefix("files/fielddata/areadata/") {
             return "dpAreaDataMember"
         }
@@ -1809,16 +1828,43 @@ public enum NDSDataCatalogBuilder {
         record.domain == .maps && record.relativePath.lowercased() == "arm9/src/map_header.c"
     }
 
+    private static func isDiamondPearlAreaDataSemanticRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        guard record.domain == .maps, record.format == .json else { return false }
+        let prefix = "files/fielddata/areadata/"
+        let lower = record.relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
     private static func diamondPearlMapReadiness(for record: NDSDataCatalogRecord) -> String {
-        isDiamondPearlMapHeaderRecord(record) ? "semanticIntegerScalars" : "inventoryOnly"
+        if isDiamondPearlMapHeaderRecord(record) {
+            return "semanticIntegerScalars"
+        }
+        if isDiamondPearlAreaDataSemanticRecord(record) {
+            return "semanticJSONScalars"
+        }
+        return "inventoryOnly"
     }
 
     private static func diamondPearlMapBlockedActions(for record: NDSDataCatalogRecord) -> [String] {
-        isDiamondPearlMapHeaderRecord(record) ? diamondPearlMapHeaderBlockedActions : diamondPearlMapInventoryBlockedActions
+        if isDiamondPearlMapHeaderRecord(record) {
+            return diamondPearlMapHeaderBlockedActions
+        }
+        if isDiamondPearlAreaDataSemanticRecord(record) {
+            return diamondPearlAreaDataSemanticBlockedActions
+        }
+        return diamondPearlMapInventoryBlockedActions
     }
 
     private static func diamondPearlMapActionState(for record: NDSDataCatalogRecord) -> String {
-        isDiamondPearlMapHeaderRecord(record) ? diamondPearlMapHeaderActionState : diamondPearlMapInventoryActionState
+        if isDiamondPearlMapHeaderRecord(record) {
+            return diamondPearlMapHeaderActionState
+        }
+        if isDiamondPearlAreaDataSemanticRecord(record) {
+            return diamondPearlAreaDataSemanticActionState
+        }
+        return diamondPearlMapInventoryActionState
     }
 
     private static func diamondPearlMapDiagnostics(for record: NDSDataCatalogRecord) -> [Diagnostic] {
@@ -1838,6 +1884,22 @@ public enum NDSDataCatalogBuilder {
                 )
             ]
         }
+        if isDiamondPearlAreaDataSemanticRecord(record) {
+            return [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_DATA_DP_AREA_DATA_SEMANTIC_SCALARS",
+                    message: "Diamond/Pearl area-data JSON row \(record.relativePath) exposes existing top-level scalar fields through the semantic mutation-plan gate.",
+                    span: record.sourceSpan
+                ),
+                Diagnostic(
+                    severity: .warning,
+                    code: "NDS_DATA_DP_AREA_DATA_WRITE_LIMITED",
+                    message: "Diamond/Pearl area-data writes are limited to existing top-level JSON scalar replacements; blocked actions: \(diamondPearlAreaDataSemanticBlockedActions.joined(separator: ", ")).",
+                    span: record.sourceSpan
+                )
+            ]
+        }
         return [
             Diagnostic(
                 severity: .info,
@@ -1848,7 +1910,7 @@ public enum NDSDataCatalogBuilder {
             Diagnostic(
                 severity: .warning,
                 code: "NDS_DATA_DP_MAP_WRITE_BLOCKED",
-                message: "Diamond/Pearl map matrix, map table, land data, and area data writes remain blocked; blocked actions: \(diamondPearlMapInventoryBlockedActions.joined(separator: ", ")).",
+                message: "Diamond/Pearl map matrix, map table, land data, unsupported area-data rows, and broader map writes remain blocked; blocked actions: \(diamondPearlMapInventoryBlockedActions.joined(separator: ", ")).",
                 span: record.sourceSpan
             )
         ]
@@ -2107,6 +2169,8 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Source Data Root", value: spec.rootPath),
             SourceIndexFact(label: "Gen V Source Data Basis", value: "pathFilenameCountBytesOnly"),
             SourceIndexFact(label: "Gen V Source Data Posture", value: "previewOnlyNoParser"),
+            SourceIndexFact(label: "Gen V Source Data Blocked Actions", value: genVSourceDataBlockedActions.joined(separator: ", ")),
+            SourceIndexFact(label: "Gen V Source Data Blocked Reason", value: isRoot ? "domainInventoryPreviewOnly" : "memberMetadataPreviewOnly"),
             SourceIndexFact(
                 label: "Gen V Source Data Relationship Audit",
                 value: isRoot
@@ -3936,6 +4000,18 @@ public enum NDSDataCatalogBuilder {
         "ROM export",
         "binary write",
         "mutation apply"
+    ]
+    private static let genVSourceDataBlockedActions = [
+        "parser",
+        "decoded preview",
+        "semantic controls",
+        "source writes",
+        "extraction",
+        "NARC packing",
+        "build/playtest",
+        "ROM export",
+        "mutation apply",
+        "binary writes"
     ]
     private static let genVActionStateSummary = "editing/apply, build, playtest, and export actions are disabled; source inventory stays preview-only"
 

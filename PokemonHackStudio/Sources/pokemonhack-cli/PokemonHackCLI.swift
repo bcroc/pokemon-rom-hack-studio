@@ -198,6 +198,8 @@ struct PokemonHackCLI {
             return try trainerCatalog(arguments: Array(arguments.dropFirst()))
         case "validate":
             return try validate(arguments: Array(arguments.dropFirst()))
+        case "validation-tiers":
+            return try validationTiers(arguments: Array(arguments.dropFirst()))
         case "maps":
             return try maps(arguments: Array(arguments.dropFirst()))
         case "map-visual":
@@ -492,6 +494,13 @@ struct PokemonHackCLI {
                 toolchainHealthReport: toolchainHealthReport
             )
         )
+    }
+
+    private static func validationTiers(arguments: [String]) throws -> String {
+        guard arguments == ["--json"] else {
+            throw CLIError.usage
+        }
+        return try encode(ValidationTierReport())
     }
 
     private static func maps(arguments: [String]) throws -> String {
@@ -1286,6 +1295,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "pokemon-catalog", usage: "pokemon-catalog <path> --json", summary: "Emit Pokemon species catalog data."),
         CLICommandMetadata(name: "trainer-catalog", usage: "trainer-catalog <path> --json", summary: "Emit trainer catalog data."),
         CLICommandMetadata(name: "validate", usage: "validate <path> --json", summary: "Emit the composite validation report."),
+        CLICommandMetadata(name: "validation-tiers", usage: "validation-tiers --json", summary: "Emit copy-only validation tier commands and strictness metadata without running them."),
         CLICommandMetadata(name: "maps", usage: "maps <path> --json", summary: "Emit map catalog data."),
         CLICommandMetadata(name: "map-visual", usage: "map-visual <path> <map-id> --json", summary: "Emit map visual data for one map."),
         CLICommandMetadata(name: "graphics", usage: "graphics <path> --json", summary: "Emit graphics diagnostics."),

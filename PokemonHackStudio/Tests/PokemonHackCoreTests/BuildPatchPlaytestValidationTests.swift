@@ -9,7 +9,7 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         super.tearDown()
     }
 
-    func testValidationTierCommandRowsStayCopyOnlyAndManual() {
+    func testValidationTierCommandRowsReportStrictnessSkippedCausesAndExactCommands() throws {
         let rows = ValidationTier.allCases.map(ValidationTierCommandRow.init(tier:))
 
         XCTAssertEqual(
@@ -17,6 +17,7 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
             [
                 "make validate-synthetic",
                 "make validate-gba-fixtures",
+                "make validate-nds",
                 "make validate-nds-strict",
                 "make validate-gui-smoke",
                 "make validate-release-candidate"
@@ -30,6 +31,35 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.runStateTitle == "Run manually" })
         XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("copy-only") })
         XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("repository root") })
+        XCTAssertTrue(rows.allSatisfy { !$0.strictnessTitle.isEmpty })
+        XCTAssertTrue(rows.allSatisfy { !$0.strictnessDetail.isEmpty })
+
+        let gbaFixtures = try XCTUnwrap(rows.first { $0.tier == .localGBAFixtures })
+        XCTAssertEqual(gbaFixtures.strictnessTitle, "Strict local GBA fixtures")
+        XCTAssertEqual(gbaFixtures.skippedReferenceCauses.count, 3)
+        XCTAssertTrue(gbaFixtures.skippedReferenceCauses.allSatisfy { $0.behavior == .failsWhenMissing })
+        XCTAssertTrue(gbaFixtures.skippedReferenceCauses.contains { $0.overrideEnvironmentVariables.contains("POKEEMERALD_FIXTURE_ROOT") })
+
+        let optionalNDS = try XCTUnwrap(rows.first { $0.tier == .ndsSyntheticAndOptionalReferences })
+        XCTAssertEqual(optionalNDS.command, "make validate-nds")
+        XCTAssertEqual(optionalNDS.copyValue, "make validate-nds")
+        XCTAssertEqual(optionalNDS.strictnessTitle, "Optional central NDS references")
+        XCTAssertEqual(optionalNDS.skippedReferenceCauses.count, 4)
+        XCTAssertTrue(optionalNDS.skippedReferenceCauses.allSatisfy { $0.behavior == .skippedWhenMissing })
+        XCTAssertTrue(optionalNDS.skippedReferenceCauses.contains { $0.defaultPath == "/Users/bryan/projects/reference-repos/repos/pret__pokeplatinum" })
+        XCTAssertTrue(optionalNDS.skippedReferenceCauseSummary.contains("Skipped when missing"))
+
+        let strictNDS = try XCTUnwrap(rows.first { $0.tier == .centralNDSReferences })
+        XCTAssertEqual(strictNDS.command, "make validate-nds-strict")
+        XCTAssertTrue(strictNDS.skippedReferenceCauses.allSatisfy { $0.behavior == .failsWhenMissing })
+
+        let releaseCandidate = try XCTUnwrap(rows.first { $0.tier == .releaseCandidate })
+        XCTAssertEqual(releaseCandidate.skippedReferenceCauses.count, 7)
+        XCTAssertTrue(releaseCandidate.skippedReferenceCauses.allSatisfy { $0.behavior == .skippedWhenMissing })
+
+        let encoded = try JSONEncoder().encode(ValidationTierReport(rows: rows))
+        let decoded = try JSONDecoder().decode(ValidationTierReport.self, from: encoded)
+        XCTAssertEqual(decoded, ValidationTierReport(rows: rows))
     }
 
     func testBuildReportValidatesOutputChecksumFreshnessAndToolAvailability() throws {

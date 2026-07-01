@@ -184,11 +184,18 @@ final class MapEditorSessionTests: XCTestCase {
         XCTAssertEqual(usage.count, 3)
         XCTAssertEqual(usage.limit, 1)
         XCTAssertTrue(usage.isOverLimit)
+        XCTAssertEqual(session.activeMapEventCapacity, session.stagedMapEventCapacity)
 
         let plan = try XCTUnwrap(session.previewSelectedMapMutationPlan())
         let diagnostic = try XCTUnwrap(plan.diagnostics.first { $0.code == "MAP_EVENT_CAPACITY_OVER_LIMIT" })
         XCTAssertEqual(diagnostic.severity, .warning)
         XCTAssertEqual(diagnostic.span?.relativePath, "data/maps/Route1/map.json")
+        XCTAssertEqual(plan.eventCapacity.counts.objectEvents, 3)
+        XCTAssertEqual(session.activeMapEventCapacity, plan.eventCapacity)
+        let context = try XCTUnwrap(MutationPlanPanelContext.map(session: session))
+        XCTAssertTrue(context.facts.contains { $0.label == "Objects" && $0.value == "3/1 over" })
+        XCTAssertTrue(context.facts.contains { $0.label == "Capacity Warnings" && $0.value == "1" })
+        XCTAssertTrue(context.canApply)
         XCTAssertTrue(session.canApplySelectedMapMutationPlan)
     }
 

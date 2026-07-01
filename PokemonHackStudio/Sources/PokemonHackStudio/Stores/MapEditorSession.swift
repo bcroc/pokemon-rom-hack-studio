@@ -166,6 +166,13 @@ final class MapEditorSession: ObservableObject {
         )
     }
 
+    var activeMapEventCapacity: MapEventCapacitySummary {
+        if isLatestMapEditPlanCurrent, let latestMapEditPlan {
+            return latestMapEditPlan.eventCapacity
+        }
+        return stagedMapEventCapacity
+    }
+
     var isLatestMapEditPlanCurrent: Bool {
         guard let document = selectedMapVisualDocument, let latestMapEditPlan else { return false }
         return latestMapEditPlan.documentID == document.id
@@ -881,6 +888,7 @@ final class MapEditorSession: ObservableObject {
             diagnostics: plan.diagnostics + [
                 Diagnostic(severity: .error, code: "MAP_APPLY_FAILED", message: error.localizedDescription)
             ],
+            eventCapacity: plan.eventCapacity,
             mutationPlan: plan.mutationPlan,
             backupRelativeRoot: plan.backupRelativeRoot
         )

@@ -9,11 +9,44 @@ struct MutationPlanPanelContext {
     let changes: [MutationPlanChangeRow]
     let appliedChanges: [MutationPlanAppliedChangeRow]
     let diagnostics: [MutationPlanDiagnosticRow]
+    let facts: [Fact]
     let canPreview: Bool
     let canApply: Bool
     let canDiscard: Bool
     let previewBlockedReason: String?
     let applyBlockedReason: String?
+
+    init(
+        target: WorkbenchToolbarMutationTarget,
+        title: String,
+        summary: String,
+        status: ValidationState,
+        operationCount: Int,
+        changes: [MutationPlanChangeRow],
+        appliedChanges: [MutationPlanAppliedChangeRow],
+        diagnostics: [MutationPlanDiagnosticRow],
+        facts: [Fact] = [],
+        canPreview: Bool,
+        canApply: Bool,
+        canDiscard: Bool,
+        previewBlockedReason: String?,
+        applyBlockedReason: String?
+    ) {
+        self.target = target
+        self.title = title
+        self.summary = summary
+        self.status = status
+        self.operationCount = operationCount
+        self.changes = changes
+        self.appliedChanges = appliedChanges
+        self.diagnostics = diagnostics
+        self.facts = facts
+        self.canPreview = canPreview
+        self.canApply = canApply
+        self.canDiscard = canDiscard
+        self.previewBlockedReason = previewBlockedReason
+        self.applyBlockedReason = applyBlockedReason
+    }
 }
 
 struct MutationPlanChangeRow: Identifiable {
@@ -70,6 +103,7 @@ extension MutationPlanPanelContext {
             changes: (plan?.changes ?? []).map { MutationPlanChangeRow(change: $0) },
             appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
             diagnostics: diagnostics,
+            facts: MapEventCapacityFactBuilder.facts(from: session.activeMapEventCapacity),
             canPreview: session.canPreviewSelectedMapMutationPlan,
             canApply: session.canApplySelectedMapMutationPlan,
             canDiscard: session.canDiscardMapEdits,

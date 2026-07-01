@@ -599,7 +599,7 @@ public enum NDSDataSemanticEditor {
     ) -> [Diagnostic] {
         var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: record.id, fileManager: fileManager)
         if !isSemanticProfileSupported(catalog.profile, record: record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event JSON rows, the Diamond/Pearl move C anchor, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_PROFILE_BLOCKED", message: "Semantic Gen IV field editing is limited to Platinum source-tree Pokemon/move/item/trainer/trainer-class/encounter/field-event/map-matrix/area-data JSON records, existing text lines under res/text/**/*.txt, existing text JSON string leaves under res/text/**/*.json, HeartGold/SoulSilver personal/trainer/item JSON rows, direct item CSV rows, encounter JSON rows, zone-event JSON rows, and map header integer scalars, Diamond/Pearl personal/trainer/item/encounter/field-event/area-data JSON rows, the Diamond/Pearl move C anchor, the Diamond/Pearl item mapping C anchor, the Diamond/Pearl trainer class gender C anchor, and the Diamond/Pearl map header C anchor in this slice; \(catalog.profile.rawValue) stays on raw source editing for now.", span: record.sourceSpan))
         }
         if ![NDSDataDomain.species, .personal, .moves, .items, .trainers, .encounters, .maps, .scripts, .text].contains(record.domain) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DOMAIN_BLOCKED", message: "Semantic Gen IV field editing is limited to source-backed Pokemon, personal, move, item, trainer, encounter, field-event map, HGSS zone-event script, and Platinum text line or text JSON records in this slice.", span: record.sourceSpan))
@@ -608,7 +608,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_HGSS_PATH_BLOCKED", message: "Semantic HeartGold/SoulSilver editing is limited to source-backed personal JSON rows under files/poketool/personal, trainer JSON rows under files/poketool/trainer, item JSON rows and direct item CSV rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct zone-event JSON rows under files/fielddata/eventdata/zone_event, and map header integer scalars in src/data/map_headers.h; NARC, generated, script binary, inventory-only map matrix/map table relationship rows, nested map directories, nested item CSV rows, binary item rows, and nested event rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if catalog.profile == .pokediamond, !isDiamondPearlSemanticDataPath(record) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, move scalars in arm9/src/waza.c, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_DP_PATH_BLOCKED", message: "Semantic Diamond/Pearl editing is limited to source-backed personal JSON rows under files/poketool/personal or files/poketool/personal_pearl, trainer JSON rows under files/poketool/trainer, item JSON rows under files/itemtool/itemdata, encounter JSON rows under files/fielddata/encountdata, direct field-event JSON rows under files/fielddata/eventdata, direct area-data JSON rows under files/fielddata/areadata, move scalars in arm9/src/waza.c, item mapping scalars in arm9/src/itemtool.c, trainer class gender scalars in arm9/src/trainer_data.c, and map header integer scalars in arm9/src/map_header.c; NARC, container, generated, binary, reference, and ROM rows remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .moves, !isSemanticMoveDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MOVE_PATH_BLOCKED", message: "Semantic move editing is limited to Platinum source-backed JSON rows directly under res/battle/moves and Diamond/Pearl move scalars in arm9/src/waza.c; nested move tables, HeartGold/SoulSilver move containers, generated/reference rows, ROM/export/rebuild paths, row insert/remove/reorder, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -623,7 +623,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; slot insert/delete/reorder, nested object reshaping, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .maps, !isSemanticMapDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata or files/fielddata/areadata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table/land-data rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .scripts, !isSemanticScriptDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_SCRIPT_PATH_BLOCKED", message: "Semantic script/event editing is limited to HeartGold/SoulSilver direct source-backed JSON rows under files/fielddata/eventdata/zone_event; nested zone-event directories, binary script rows, map matrices, NARC/container rows, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -769,6 +769,7 @@ public enum NDSDataSemanticEditor {
             return relativePath == heartGoldSoulSilverMapHeaderCAnchorPath
         case .pokediamond:
             return isDiamondPearlFieldEventDataPath(relativePath)
+                || isDiamondPearlAreaDataPath(relativePath)
                 || relativePath == diamondPearlMapHeaderCAnchorPath
         default:
             return false
@@ -777,6 +778,14 @@ public enum NDSDataSemanticEditor {
 
     private static func isDiamondPearlFieldEventDataPath(_ relativePath: String) -> Bool {
         let prefix = "files/fielddata/eventdata/"
+        let lower = relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func isDiamondPearlAreaDataPath(_ relativePath: String) -> Bool {
+        let prefix = "files/fielddata/areadata/"
         let lower = relativePath.lowercased()
         guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
         let remainder = lower.dropFirst(prefix.count)
@@ -866,6 +875,7 @@ public enum NDSDataSemanticEditor {
             return isDiamondPearlEncounterDataPath(record.relativePath) && record.format == .json
         case .maps:
             return (isDiamondPearlFieldEventDataPath(record.relativePath) && record.format == .json)
+                || (isDiamondPearlAreaDataPath(record.relativePath) && record.format == .json)
                 || isDiamondPearlMapHeaderCAnchorRecord(record)
         default:
             return false

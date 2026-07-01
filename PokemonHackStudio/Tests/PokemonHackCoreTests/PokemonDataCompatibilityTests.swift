@@ -234,7 +234,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data"))
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data beyond existing .contestEffect"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("missing or non-simple contest combo arrays and non-simple contest scalar expressions"))
-        XCTAssertTrue(rubyMoves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
+        XCTAssertFalse(rubyMoves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("tutor compatibility edits"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("TM/HM item mapping edits"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("machine constant creation"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("missing TM/HM row insertion"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("generated move output writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("reference-only move source writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("binary ROM move writes"))
@@ -258,6 +262,21 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "binary writes"
         ])
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == ".contestEffect" && $0.status == .editable && $0.indexedCount == 1 })
+        let rubyMoveTMHM = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.tableSymbol == "gTMHMLearnsets" })
+        XCTAssertEqual(rubyMoveTMHM.status, .editable)
+        XCTAssertEqual(rubyMoveTMHM.indexedCount, 1)
+        XCTAssertEqual(rubyMoveTMHM.sourceRole, "editableTMHMLearnsets")
+        XCTAssertEqual(rubyMoveTMHM.readiness, "editable existing gTMHMLearnsets rows")
+        XCTAssertEqual(rubyMoveTMHM.blockedActions, [
+            "TM/HM item mapping edits",
+            "machine constant creation",
+            "missing TM/HM row insertion",
+            "row insertion/removal/reorder",
+            "generated writes",
+            "reference writes",
+            "ROM writes",
+            "binary writes"
+        ])
         let rubyContestMoves = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/contest_moves.h" && $0.tableSymbol == "gContestMoves" })
         XCTAssertEqual(rubyContestMoves.status, .editable)
         XCTAssertEqual(rubyContestMoves.indexedCount, 1)
@@ -272,7 +291,6 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "ROM writes",
             "binary writes"
         ])
-        XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "references/pokeruby/src/data/battle_moves.c" && $0.status == .blocked })
@@ -335,6 +353,25 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(metadataJSON.contains(#""blockedActions""#))
         XCTAssertTrue(metadataJSON.contains("effect"))
         XCTAssertTrue(metadataJSON.contains("Modern Emerald writes"))
+        let usageSource = try XCTUnwrap(expansionItemSources.first {
+            $0.path == "src/data/items.h"
+                && $0.tableSymbol == "gItemsInfo .holdEffect/.holdEffectParam/.pocket/.type"
+        })
+        XCTAssertEqual(usageSource.status, .editable)
+        XCTAssertEqual(usageSource.indexedCount, 1)
+        XCTAssertEqual(usageSource.sourceRole, "editableUsageScalars")
+        XCTAssertEqual(usageSource.readiness, "editable existing usage/classification scalar fields")
+        XCTAssertEqual(usageSource.blockedActions, [
+            "constants-file edits/creation",
+            "missing-field insertion/removal",
+            "row insertion/removal/reorder",
+            "generated outputs",
+            "reference writes",
+            "ROM/build/export paths",
+            "binary writes",
+            "broad schema rewrites"
+        ])
+        XCTAssertTrue(usageSource.note?.contains("existing simple local source fields") == true)
         let behaviorSource = try XCTUnwrap(expansionItemSources.first {
             $0.path == "src/data/items.h"
                 && $0.tableSymbol == "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId"
@@ -354,6 +391,25 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "broad schema rewrites"
         ])
         XCTAssertTrue(behaviorSource.note?.contains("existing simple local source fields") == true)
+        let bagClassificationSource = try XCTUnwrap(expansionItemSources.first {
+            $0.path == "src/data/items.h"
+                && $0.tableSymbol == "gItemsInfo .importance/.registrability/.sortType/.exitsBagOnUse"
+        })
+        XCTAssertEqual(bagClassificationSource.status, .editable)
+        XCTAssertEqual(bagClassificationSource.indexedCount, 1)
+        XCTAssertEqual(bagClassificationSource.sourceRole, "editableBagClassificationScalars")
+        XCTAssertEqual(bagClassificationSource.readiness, "editable existing bag/classification scalar fields")
+        XCTAssertEqual(bagClassificationSource.blockedActions, [
+            "constants-file edits/creation",
+            "missing-field insertion",
+            "row insertion/removal/reorder",
+            "generated outputs",
+            "reference writes",
+            "ROM/build/export paths",
+            "binary writes",
+            "broad schema rewrites"
+        ])
+        XCTAssertTrue(bagClassificationSource.note?.contains("existing simple local source fields") == true)
         XCTAssertTrue(expansionItemSources.contains { $0.path == "include/config/item.h" && $0.status == .blocked })
         XCTAssertTrue(expansionItemSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(expansionItemSources.contains { $0.path == "references/pokeemerald-expansion/src/data/items.h" && $0.status == .blocked })
@@ -1648,11 +1704,15 @@ final class PokemonDataCompatibilityTests: XCTestCase {
                 {
                     .name = ITEM_NAME("Potion"),
                     .price = 300,
+                    .holdEffect = HOLD_EFFECT_NONE,
                     .holdEffectParam = 20,
                     .description = COMPOUND_STRING("Restores HP."),
                     .pocket = POCKET_ITEMS,
+                    .importance = 0,
+                    .registrability = 0,
                     .sortType = ITEM_TYPE_HEALTH_RECOVERY,
                     .type = ITEM_USE_PARTY_MENU,
+                    .exitsBagOnUse = FALSE,
                     .effect = ITEM_EFFECT_HEAL,
                     .fieldUseFunc = ItemUseOutOfBattle_Medicine,
                     .battleUsage = EFFECT_ITEM_RESTORE_HP,

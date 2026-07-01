@@ -38,13 +38,17 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
     public let price: String?
     public let holdEffect: String?
     public let holdEffectParam: String?
+    public let importance: String?
+    public let registrability: String?
     public let pocket: String?
+    public let sortType: String?
     public let type: String?
     public let battleUsage: String?
     public let effect: String?
     public let secondaryId: String?
     public let fieldUseFunc: String?
     public let battleUseFunc: String?
+    public let exitsBagOnUse: String?
     public let iconPic: String?
     public let iconPalette: String?
     public let descriptionSymbol: String?
@@ -62,13 +66,17 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         price: String? = nil,
         holdEffect: String? = nil,
         holdEffectParam: String? = nil,
+        importance: String? = nil,
+        registrability: String? = nil,
         pocket: String? = nil,
+        sortType: String? = nil,
         type: String? = nil,
         battleUsage: String? = nil,
         effect: String? = nil,
         secondaryId: String? = nil,
         fieldUseFunc: String? = nil,
         battleUseFunc: String? = nil,
+        exitsBagOnUse: String? = nil,
         iconPic: String? = nil,
         iconPalette: String? = nil,
         descriptionSymbol: String? = nil,
@@ -85,13 +93,17 @@ public struct ItemDetail: Codable, Equatable, Identifiable {
         self.price = price
         self.holdEffect = holdEffect
         self.holdEffectParam = holdEffectParam
+        self.importance = importance
+        self.registrability = registrability
         self.pocket = pocket
+        self.sortType = sortType
         self.type = type
         self.battleUsage = battleUsage
         self.effect = effect
         self.secondaryId = secondaryId
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
+        self.exitsBagOnUse = exitsBagOnUse
         self.iconPic = iconPic
         self.iconPalette = iconPalette
         self.descriptionSymbol = descriptionSymbol
@@ -108,12 +120,16 @@ public struct ItemEditDraft: Codable, Equatable {
     public var price: String?
     public var holdEffect: String?
     public var holdEffectParam: String?
+    public var importance: String?
+    public var registrability: String?
     public var pocket: String?
+    public var sortType: String?
     public var type: String?
     public var battleUsage: String?
     public var secondaryId: String?
     public var fieldUseFunc: String?
     public var battleUseFunc: String?
+    public var exitsBagOnUse: String?
     public var effect: String?
     public var iconPic: String?
     public var iconPalette: String?
@@ -125,12 +141,16 @@ public struct ItemEditDraft: Codable, Equatable {
         price: String? = nil,
         holdEffect: String? = nil,
         holdEffectParam: String? = nil,
+        importance: String? = nil,
+        registrability: String? = nil,
         pocket: String? = nil,
+        sortType: String? = nil,
         type: String? = nil,
         battleUsage: String? = nil,
         secondaryId: String? = nil,
         fieldUseFunc: String? = nil,
         battleUseFunc: String? = nil,
+        exitsBagOnUse: String? = nil,
         effect: String? = nil,
         iconPic: String? = nil,
         iconPalette: String? = nil,
@@ -141,12 +161,16 @@ public struct ItemEditDraft: Codable, Equatable {
         self.price = price
         self.holdEffect = holdEffect
         self.holdEffectParam = holdEffectParam
+        self.importance = importance
+        self.registrability = registrability
         self.pocket = pocket
+        self.sortType = sortType
         self.type = type
         self.battleUsage = battleUsage
         self.secondaryId = secondaryId
         self.fieldUseFunc = fieldUseFunc
         self.battleUseFunc = battleUseFunc
+        self.exitsBagOnUse = exitsBagOnUse
         self.effect = effect
         self.iconPic = iconPic
         self.iconPalette = iconPalette
@@ -161,12 +185,16 @@ public struct ItemEditDraft: Codable, Equatable {
             price: detail.isEditable ? detail.price : nil,
             holdEffect: detail.isEditable ? detail.holdEffect : nil,
             holdEffectParam: detail.isEditable ? detail.holdEffectParam : nil,
+            importance: detail.isEditable ? detail.importance : nil,
+            registrability: detail.isEditable ? detail.registrability : nil,
             pocket: detail.isEditable ? detail.pocket : nil,
+            sortType: detail.isEditable ? detail.sortType : nil,
             type: detail.isEditable ? detail.type : nil,
             battleUsage: detail.isEditable ? detail.battleUsage : nil,
             secondaryId: detail.isEditable ? detail.secondaryId : nil,
             fieldUseFunc: detail.isEditable ? detail.fieldUseFunc : nil,
             battleUseFunc: detail.isEditable ? detail.battleUseFunc : nil,
+            exitsBagOnUse: detail.isEditable ? detail.exitsBagOnUse : nil,
             effect: detail.isEditable ? detail.effect : nil,
             iconPic: detail.isEditable ? detail.iconPic : nil,
             iconPalette: detail.isEditable ? detail.iconPalette : nil,
@@ -380,13 +408,17 @@ public enum ProjectItemCatalogBuilder {
                 price: fact("price", in: record.facts),
                 holdEffect: fact("holdEffect", in: record.facts),
                 holdEffectParam: fact("holdEffectParam", in: record.facts),
+                importance: fact("importance", in: record.facts),
+                registrability: fact("registrability", in: record.facts),
                 pocket: fact("pocket", in: record.facts),
+                sortType: fact("sortType", in: record.facts),
                 type: fact("type", in: record.facts),
                 battleUsage: fact("battleUsage", in: record.facts),
                 effect: fact("effect", in: record.facts),
                 secondaryId: fact("secondaryId", in: record.facts),
                 fieldUseFunc: fact("fieldUseFunc", in: record.facts),
                 battleUseFunc: fact("battleUseFunc", in: record.facts),
+                exitsBagOnUse: fact("exitsBagOnUse", in: record.facts),
                 iconPic: fact("iconPic", in: record.facts),
                 iconPalette: fact("iconPalette", in: record.facts),
                 descriptionSymbol: fact("description", in: record.facts),
@@ -427,13 +459,17 @@ public enum ProjectItemCatalogBuilder {
             price: compact(fields["price"]),
             holdEffect: compact(fields["holdEffect"]),
             holdEffectParam: compact(fields["holdEffectParam"]),
+            importance: compact(fields["importance"]),
+            registrability: compact(fields["registrability"]),
             pocket: compact(fields["pocket"]),
+            sortType: compact(fields["sortType"]),
             type: compact(fields["type"]),
             battleUsage: compact(fields["battleUsage"]),
             effect: compact(fields["effect"]),
             secondaryId: compact(fields["secondaryId"]),
             fieldUseFunc: compact(fields["fieldUseFunc"]),
             battleUseFunc: compact(fields["battleUseFunc"]),
+            exitsBagOnUse: compact(fields["exitsBagOnUse"]),
             iconPic: compact(fields["iconPic"]),
             iconPalette: compact(fields["iconPalette"]),
             descriptionSymbol: descriptionSymbol,
@@ -688,9 +724,79 @@ public enum ItemMutationPlanner {
         if draft.descriptionText != item.descriptionText, !item.isDescriptionEditable {
             diagnostics.append(Diagnostic(severity: .error, code: "ITEM_DESCRIPTION_NOT_EDITABLE", message: "\(item.itemID) does not have a simple editable item description source.", span: item.sourceSpan))
         }
+        appendUsageScalarDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         appendBehaviorScalarDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
+        appendBagClassificationScalarDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         appendEffectIconDiagnostics(descriptor: descriptor, item: item, draft: draft, diagnostics: &diagnostics)
         return diagnostics
+    }
+
+    private static func appendUsageScalarDiagnostics(
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard descriptor.supportsUsageScalarEditing else { return }
+        let symbolFields = [
+            ("holdEffect", item.holdEffect, draft.holdEffect),
+            ("pocket", item.pocket, draft.pocket),
+            ("type", item.type, draft.type)
+        ]
+        for (label, current, draftValue) in symbolFields where current != draftValue {
+            appendUsageScalarDiagnostic(
+                label: label,
+                current: current,
+                draftValue: draftValue,
+                item: item,
+                isValid: isSimpleItemSymbol
+            ) {
+                "\(label) must be a single C identifier."
+            } diagnostics: { diagnostic in
+                diagnostics.append(diagnostic)
+            }
+        }
+
+        if item.holdEffectParam != draft.holdEffectParam {
+            appendUsageScalarDiagnostic(
+                label: "holdEffectParam",
+                current: item.holdEffectParam,
+                draftValue: draft.holdEffectParam,
+                item: item,
+                isValid: isSimpleItemSymbolOrIntegerLiteral
+            ) {
+                "holdEffectParam must be a single C identifier or integer literal."
+            } diagnostics: { diagnostic in
+                diagnostics.append(diagnostic)
+            }
+        }
+    }
+
+    private static func appendUsageScalarDiagnostic(
+        label: String,
+        current: String?,
+        draftValue: String?,
+        item: ItemDetail,
+        isValid: (String) -> Bool,
+        invalidMessage: () -> String,
+        diagnostics append: (Diagnostic) -> Void
+    ) {
+        guard let current else {
+            append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_NOT_EDITABLE", message: "\(label) edits require an existing local Expansion gItemsInfo field; missing-field insertion is blocked.", span: item.sourceSpan))
+            return
+        }
+        guard isValid(current) else {
+            append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_UNSUPPORTED_EXPRESSION", message: "\(label) currently uses a non-simple Expansion gItemsInfo expression that cannot be round-tripped safely.", span: item.sourceSpan))
+            return
+        }
+        guard let draftValue, !draftValue.isEmpty else {
+            append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_REQUIRED", message: "\(label) cannot be removed from an existing Expansion gItemsInfo row.", span: item.sourceSpan))
+            return
+        }
+        guard isValid(draftValue) else {
+            append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_INVALID", message: invalidMessage(), span: item.sourceSpan))
+            return
+        }
     }
 
     private static func appendBehaviorScalarDiagnostics(
@@ -757,6 +863,39 @@ public enum ItemMutationPlanner {
         guard isValid(draftValue) else {
             append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_INVALID", message: invalidMessage(), span: item.sourceSpan))
             return
+        }
+    }
+
+    private static func appendBagClassificationScalarDiagnostics(
+        descriptor: ItemCatalogDescriptor,
+        item: ItemDetail,
+        draft: ItemEditDraft,
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard descriptor.supportsBagClassificationScalarEditing else { return }
+        let fields = [
+            ("importance", item.importance, draft.importance),
+            ("registrability", item.registrability, draft.registrability),
+            ("sortType", item.sortType, draft.sortType),
+            ("exitsBagOnUse", item.exitsBagOnUse, draft.exitsBagOnUse)
+        ]
+        for (label, current, draftValue) in fields where current != draftValue {
+            guard let current else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BAG_CLASSIFICATION_SCALAR_NOT_EDITABLE", message: "\(label) edits require an existing local Expansion gItemsInfo field; missing-field insertion is blocked.", span: item.sourceSpan))
+                continue
+            }
+            guard isSimpleItemSymbolOrIntegerLiteral(current) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BAG_CLASSIFICATION_SCALAR_UNSUPPORTED_EXPRESSION", message: "\(label) currently uses a non-simple Expansion gItemsInfo expression that cannot be round-tripped safely.", span: item.sourceSpan))
+                continue
+            }
+            guard let draftValue, !draftValue.isEmpty else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BAG_CLASSIFICATION_SCALAR_REQUIRED", message: "\(label) cannot be removed from an existing Expansion gItemsInfo row.", span: item.sourceSpan))
+                continue
+            }
+            guard isSimpleItemSymbolOrIntegerLiteral(draftValue) else {
+                diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BAG_CLASSIFICATION_SCALAR_INVALID", message: "\(label) must be a single C identifier or integer literal.", span: item.sourceSpan))
+                continue
+            }
         }
     }
 
@@ -881,12 +1020,16 @@ public enum ItemMutationPlanner {
             fieldChange(key: "price", current: item.price, draft: draft.price),
             fieldChange(key: "holdEffect", current: item.holdEffect, draft: draft.holdEffect),
             fieldChange(key: "holdEffectParam", current: item.holdEffectParam, draft: draft.holdEffectParam),
+            fieldChange(key: "importance", current: item.importance, draft: draft.importance),
+            fieldChange(key: "registrability", current: item.registrability, draft: draft.registrability),
             fieldChange(key: "pocket", current: item.pocket, draft: draft.pocket),
+            fieldChange(key: "sortType", current: item.sortType, draft: draft.sortType),
             fieldChange(key: "type", current: item.type, draft: draft.type),
             fieldChange(key: "battleUsage", current: item.battleUsage, draft: draft.battleUsage),
             fieldChange(key: "secondaryId", current: item.secondaryId, draft: draft.secondaryId),
             fieldChange(key: "fieldUseFunc", current: item.fieldUseFunc, draft: draft.fieldUseFunc),
             fieldChange(key: "battleUseFunc", current: item.battleUseFunc, draft: draft.battleUseFunc),
+            fieldChange(key: "exitsBagOnUse", current: item.exitsBagOnUse, draft: draft.exitsBagOnUse),
             descriptor.supportsEffectIconEditing ? fieldChange(key: "effect", current: item.effect, draft: draft.effect) : nil,
             descriptor.supportsEffectIconEditing ? fieldChange(key: "iconPic", current: item.iconPic, draft: draft.iconPic) : nil,
             descriptor.supportsEffectIconEditing ? fieldChange(key: "iconPalette", current: item.iconPalette, draft: draft.iconPalette) : nil
@@ -1062,7 +1205,15 @@ private struct ItemCatalogDescriptor {
         profile == .pokeemeraldExpansion
     }
 
+    var supportsUsageScalarEditing: Bool {
+        profile == .pokeemeraldExpansion
+    }
+
     var supportsBehaviorScalarEditing: Bool {
+        profile == .pokeemeraldExpansion
+    }
+
+    var supportsBagClassificationScalarEditing: Bool {
         profile == .pokeemeraldExpansion
     }
 

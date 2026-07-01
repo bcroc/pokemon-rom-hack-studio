@@ -15,6 +15,10 @@ struct MutationPlanPanel: View {
 
             summaryCounters
 
+            if !context.facts.isEmpty {
+                FactGrid(facts: context.facts)
+            }
+
             if !context.changes.isEmpty || !context.appliedChanges.isEmpty || !context.diagnostics.isEmpty {
                 detailColumns
             }

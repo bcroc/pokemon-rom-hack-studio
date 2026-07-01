@@ -30,6 +30,7 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
             [
                 "make validate-synthetic",
                 "make validate-gba-fixtures",
+                "make validate-nds",
                 "make validate-nds-strict",
                 "make validate-gui-smoke",
                 "make validate-release-candidate"
@@ -38,7 +39,7 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
     }
 
     @MainActor
-    func testValidationTierCommandRowsStayCopyOnlyAndManual() throws {
+    func testValidationTierCommandRowsReportStrictnessSkippedCausesAndExactCommands() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
         let rows = store.validationTierCommandRows
@@ -51,6 +52,20 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.runStateTitle == "Run manually" })
         XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("copy-only") })
         XCTAssertTrue(rows.allSatisfy { $0.disabledReason.contains("repository root") })
+        XCTAssertTrue(rows.allSatisfy { !$0.strictnessTitle.isEmpty })
+        XCTAssertTrue(rows.allSatisfy { !$0.strictnessDetail.isEmpty })
+
+        let optionalNDS = try XCTUnwrap(rows.first { $0.tier == .ndsSyntheticAndOptionalReferences })
+        XCTAssertEqual(optionalNDS.command, "make validate-nds")
+        XCTAssertEqual(optionalNDS.copyValue, "make validate-nds")
+        XCTAssertEqual(optionalNDS.strictnessTitle, "Optional central NDS references")
+        XCTAssertEqual(optionalNDS.skippedReferenceCauses.count, 4)
+        XCTAssertTrue(optionalNDS.skippedReferenceCauses.allSatisfy { $0.behavior == .skippedWhenMissing })
+        XCTAssertTrue(optionalNDS.skippedReferenceCauseSummary.contains("pret__pokeplatinum"))
+
+        let strictGBA = try XCTUnwrap(rows.first { $0.tier == .localGBAFixtures })
+        XCTAssertTrue(strictGBA.skippedReferenceCauses.allSatisfy { $0.behavior == .failsWhenMissing })
+        XCTAssertTrue(strictGBA.skippedReferenceCauses.contains { $0.overrideEnvironmentVariables.contains("GBA_FIXTURE_ROOT") })
     }
 
     @MainActor

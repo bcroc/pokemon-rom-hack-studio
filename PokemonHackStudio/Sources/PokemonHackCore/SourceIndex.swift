@@ -422,7 +422,7 @@ public enum ProjectSourceIndexLoader {
         case .trainers:
             preferred = ["trainerName", "trainerClass", "encounterMusic_gender", "items", "doubleBattle", "aiFlags", "party"]
         case .items:
-            preferred = ["itemId", "name", "price", "pocket", "type", "effect", "fieldUseFunc", "battleUsage", "iconPic", "iconPalette"]
+            preferred = ["itemId", "name", "price", "holdEffect", "holdEffectParam", "importance", "registrability", "pocket", "sortType", "type", "exitsBagOnUse", "effect", "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "iconPic", "iconPalette"]
         case .moves:
             preferred = ["effect", "power", "type", "accuracy", "pp", "secondaryEffectChance", "target", "priority", "flags", "contestEffect", "contestCategory", "comboStarterId", "comboMoves"]
         case .pokedex:
@@ -441,7 +441,7 @@ public enum ProjectSourceIndexLoader {
             }
         }
         facts.append(SourceIndexFact(label: "Lines", value: "\(entry.span.startLine)-\(entry.span.endLine)"))
-        let limit = (module == .moves || module == .items) ? 12 : 8
+        let limit = module == .items ? 24 : (module == .moves ? 12 : 8)
         return Array(facts.prefix(limit))
     }
 
@@ -883,7 +883,7 @@ struct SourceIndexDescriptorSet {
     private static let itemFields = [
         "itemId", "name", "price", "holdEffect", "holdEffectParam",
         "description", "descriptionPage1", "descriptionPage2",
-        "importance", "registrability", "pocket", "type",
+        "importance", "registrability", "pocket", "sortType", "type",
         "fieldUseFunc", "battleUsage", "battleUseFunc", "secondaryId", "exitsBagOnUse",
         "effect", "iconPic", "iconPalette"
     ]

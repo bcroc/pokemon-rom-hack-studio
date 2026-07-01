@@ -1377,6 +1377,7 @@ public struct MapEditPlan: Codable, Equatable, Identifiable {
     public let operations: [MapEditOperation]
     public let changes: [MapEditFileChange]
     public let diagnostics: [Diagnostic]
+    public let eventCapacity: MapEventCapacitySummary
     public let mutationPlan: MutationPlan
     public let backupRelativeRoot: String
 
@@ -1387,6 +1388,7 @@ public struct MapEditPlan: Codable, Equatable, Identifiable {
         operations: [MapEditOperation],
         changes: [MapEditFileChange],
         diagnostics: [Diagnostic],
+        eventCapacity: MapEventCapacitySummary = .unknown,
         mutationPlan: MutationPlan,
         backupRelativeRoot: String
     ) {
@@ -1396,6 +1398,7 @@ public struct MapEditPlan: Codable, Equatable, Identifiable {
         self.operations = operations
         self.changes = changes
         self.diagnostics = diagnostics
+        self.eventCapacity = eventCapacity
         self.mutationPlan = mutationPlan
         self.backupRelativeRoot = backupRelativeRoot
     }
@@ -2657,6 +2660,11 @@ public enum MapMutationPlanner {
 
     public static func plan(document: MapVisualDocument, operations: [MapEditOperation]) -> MapEditPlan {
         let draft = reduceDraft(document: document, operations: operations)
+        let eventCapacity = MapEventCapacitySummary(
+            counts: MapEventCounts(events: draft.events),
+            limits: document.eventCapacity.limits,
+            mapSourcePath: document.mapSourcePath
+        )
         var changes: [MapEditFileChange] = []
 
         let layoutValues = draft.blockdata.rawValues
@@ -2758,6 +2766,7 @@ public enum MapMutationPlanner {
             operations: operations,
             changes: changes,
             diagnostics: draft.diagnostics,
+            eventCapacity: eventCapacity,
             mutationPlan: mutationPlan,
             backupRelativeRoot: backupRoot
         )

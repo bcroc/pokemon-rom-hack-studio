@@ -691,6 +691,7 @@ final class MapEditorStoreTests: XCTestCase {
         ]
         let expectedRelatedRows = "20"
         let allGenVContextDomains = "encounters, items, maps, moves, resources, scripts, species, text, trainers"
+        let expectedBlockedActions = "parser, decoded preview, semantic controls, source writes, extraction, NARC packing, build/playtest, ROM export, mutation apply, binary writes"
 
         for sample in samples {
             let byteCount = sample.contents.utf8.count
@@ -705,6 +706,8 @@ final class MapEditorStoreTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Sample Paths", in: rootRow.facts), sample.child)
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: rootRow.facts), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: rootRow.facts), "previewOnlyNoParser")
+            XCTAssertEqual(factValue("Gen V Source Data Blocked Actions", in: rootRow.facts), expectedBlockedActions)
+            XCTAssertEqual(factValue("Gen V Source Data Blocked Reason", in: rootRow.facts), "domainInventoryPreviewOnly")
             XCTAssertEqual(factValue("Related Rows", in: rootRow.facts), expectedRelatedRows)
             XCTAssertEqual(factValue("Related Domains", in: rootRow.facts), allGenVContextDomains)
             XCTAssertEqual(factValue("Readiness", in: rootRow.facts), "partial")
@@ -722,6 +725,8 @@ final class MapEditorStoreTests: XCTestCase {
             XCTAssertEqual(factValue("Gen V Source Data Bytes", in: childRow.facts), "\(byteCount)")
             XCTAssertEqual(factValue("Gen V Source Data Basis", in: childRow.facts), "pathFilenameCountBytesOnly")
             XCTAssertEqual(factValue("Gen V Source Data Posture", in: childRow.facts), "previewOnlyNoParser")
+            XCTAssertEqual(factValue("Gen V Source Data Blocked Actions", in: childRow.facts), expectedBlockedActions)
+            XCTAssertEqual(factValue("Gen V Source Data Blocked Reason", in: childRow.facts), "memberMetadataPreviewOnly")
             XCTAssertNil(factValue("Related Rows", in: childRow.facts))
             XCTAssertNil(factValue("Related Domains", in: childRow.facts))
             XCTAssertNil(factValue("Migration Status", in: childRow.facts))
@@ -3481,6 +3486,58 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExpansionItemBagClassificationEditsFlowThroughItemsEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        try writeExpansionItemInfoTable(to: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.items, search: .replace("potion"))
+        let catalog = try await waitForSelectedItemCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestItemSelection("ITEM_POTION")
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+        XCTAssertEqual(store.selectedItemDetail?.source.path, "src/data/items.h")
+
+        var draft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertEqual(draft.importance, "0")
+        XCTAssertEqual(draft.registrability, "0")
+        XCTAssertEqual(draft.sortType, "ITEM_TYPE_HEALTH_RECOVERY")
+        XCTAssertEqual(draft.exitsBagOnUse, "FALSE")
+        draft.importance = "1"
+        draft.registrability = "ITEM_REGISTER_ALLOWED"
+        draft.sortType = "ITEM_TYPE_FIELD_USE"
+        draft.exitsBagOnUse = "TRUE"
+        store.updateSelectedItemDraft(draft)
+
+        XCTAssertTrue(store.selectedItemIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedItemMutationPlan)
+        store.previewSelectedItemMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestItemEditPlan)
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".importance = 1,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".registrability = ITEM_REGISTER_ALLOWED,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".sortType = ITEM_TYPE_FIELD_USE,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".exitsBagOnUse = TRUE,") == true)
+        XCTAssertTrue(store.canApplySelectedItemMutationPlan)
+
+        store.applySelectedItemMutationPlan()
+
+        XCTAssertEqual(store.latestItemApplyResult?.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.latestItemApplyResult?.backupRootPath ?? ""))
+        XCTAssertFalse(store.selectedItemIsDirty)
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+        let editedDraft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertEqual(editedDraft.importance, "1")
+        XCTAssertEqual(editedDraft.registrability, "ITEM_REGISTER_ALLOWED")
+        XCTAssertEqual(editedDraft.sortType, "ITEM_TYPE_FIELD_USE")
+        XCTAssertEqual(editedDraft.exitsBagOnUse, "TRUE")
+    }
+
+    @MainActor
     func testRubySapphireTrainerDraftPreviewApplyAndReloadsThroughStore() async throws {
         let root = try makeRubyPokemonProject()
         try writeRubyTrainerSources(to: root)
@@ -4955,6 +5012,68 @@ final class MapEditorStoreTests: XCTestCase {
         let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
         XCTAssertEqual(reloaded.learnsets.levelUp.map(\.move), ["MOVE_POUND", "MOVE_ABSORB", "MOVE_FLASH"])
         XCTAssertEqual(reloaded.learnsets.levelUp.map(\.level), [1, 6, 9])
+    }
+
+    @MainActor
+    func testRubySapphireMoveCompatibilityTMHMBatchPreviewApplyAndReloadsThroughMovesStore() async throws {
+        let root = try makeRubyPokemonProject()
+        try writeRubyBattleMoveTable(to: root)
+        let tmhmPath = root.appendingPathComponent("src/data/pokemon/tmhm_learnsets.h")
+        try write("#define ITEM_NONE 0\n#define ITEM_TM01_POUND 1\n", to: root.appendingPathComponent("include/constants/items.h"))
+        try write(
+            """
+            static const u32 gTMHMLearnsets[] =
+            {
+                [SPECIES_TREECKO] = TMHM(TM01_POUND),
+            };
+
+            """,
+            to: tmhmPath
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selection = .moves
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(treecko.learnsets.tmhmSourceSpan?.relativePath, "src/data/pokemon/tmhm_learnsets.h")
+        XCTAssertEqual(treecko.learnsets.tmhm.map(\.move), ["MOVE_POUND"])
+        XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_POUND", bucket: .tmhm))
+
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_POUND", bucket: .tmhm, isEnabled: false)
+
+        XCTAssertEqual(store.dirtySpeciesBatchDrafts.map(\.speciesID), ["SPECIES_TREECKO"])
+        XCTAssertEqual(store.toolbarMutationState.target, .pokemonBatch)
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+
+        store.previewToolbarMutationTarget()
+
+        let plan = try XCTUnwrap(store.latestSpeciesBatchEditPlans.first)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertEqual(store.latestSpeciesBatchEditPlans.count, 1)
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/tmhm_learnsets.h"], diagnosticCodes)
+        XCTAssertFalse(plan.changes.first?.textPreview?.contains("TM01_POUND") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_TMHM_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+
+        store.applyToolbarMutationTarget()
+
+        let result = try XCTUnwrap(store.latestSpeciesBatchApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/tmhm_learnsets.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertTrue(store.dirtySpeciesBatchDrafts.isEmpty)
+
+        let source = try String(contentsOf: tmhmPath, encoding: .utf8)
+        XCTAssertFalse(source.contains("TM01_POUND"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertTrue(reloaded.learnsets.tmhm.isEmpty)
     }
 
     @MainActor
@@ -7972,6 +8091,40 @@ final class MapEditorStoreTests: XCTestCase {
 
             """,
             to: root.appendingPathComponent("src/data/text/move_descriptions.h")
+        )
+    }
+
+    private func writeExpansionItemInfoTable(to root: URL) throws {
+        try write(
+            """
+            const struct ItemInfo gItemsInfo[] =
+            {
+                [ITEM_POTION] =
+                {
+                    .name = ITEM_NAME("Potion"),
+                    .price = 300,
+                    .holdEffect = HOLD_EFFECT_NONE,
+                    .holdEffectParam = 20,
+                    .description = COMPOUND_STRING(
+                                    "Restores HP."),
+                    .pocket = POCKET_ITEMS,
+                    .importance = 0,
+                    .registrability = 0,
+                    .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+                    .type = ITEM_USE_PARTY_MENU,
+                    .exitsBagOnUse = FALSE,
+                    .effect = ITEM_EFFECT_HEAL,
+                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .battleUsage = EFFECT_ITEM_RESTORE_HP,
+                    .battleUseFunc = NULL,
+                    .secondaryId = 0,
+                    .iconPic = gItemIcon_Potion,
+                    .iconPalette = gItemIconPalette_Potion,
+                },
+            };
+
+            """,
+            to: root.appendingPathComponent("src/data/items.h")
         )
     }
 

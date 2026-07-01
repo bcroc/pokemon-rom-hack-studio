@@ -164,6 +164,12 @@ struct MapWorkbenchPanels: View {
                             diagnostics: duplicationPlan.diagnostics,
                             reasons: duplicationPlan.executionState.reasons
                         )
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Source Event Capacity")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FactGrid(facts: MapEventCapacityFactBuilder.facts(from: duplicationPlan.sourceEventCapacity))
+                        }
                         workflowPathList(duplicationPlan.plannedFiles.map { $0.destinationPath ?? $0.sourcePath })
                     } else {
                         Text("Load the map catalog before planning duplication.")

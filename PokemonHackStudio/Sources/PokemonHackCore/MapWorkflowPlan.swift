@@ -64,6 +64,7 @@ public struct MapDuplicationPlan: Codable, Equatable, Identifiable {
     public let proposedLayoutID: String?
     public let proposedLayoutName: String?
     public let duplicateLayout: Bool
+    public let sourceEventCapacity: MapEventCapacitySummary
     public let sourceSnapshots: [MapWorkflowSourceSnapshot]
     public let plannedFiles: [MapDuplicationPlannedFile]
     public let mutationPlan: MutationPlan
@@ -79,6 +80,7 @@ public struct MapDuplicationPlan: Codable, Equatable, Identifiable {
         proposedLayoutID: String?,
         proposedLayoutName: String?,
         duplicateLayout: Bool,
+        sourceEventCapacity: MapEventCapacitySummary = .unknown,
         sourceSnapshots: [MapWorkflowSourceSnapshot],
         plannedFiles: [MapDuplicationPlannedFile],
         mutationPlan: MutationPlan,
@@ -93,6 +95,7 @@ public struct MapDuplicationPlan: Codable, Equatable, Identifiable {
         self.proposedLayoutID = proposedLayoutID
         self.proposedLayoutName = proposedLayoutName
         self.duplicateLayout = duplicateLayout
+        self.sourceEventCapacity = sourceEventCapacity
         self.sourceSnapshots = sourceSnapshots
         self.plannedFiles = plannedFiles
         self.mutationPlan = mutationPlan
@@ -350,6 +353,7 @@ public enum MapWorkflowPlanner {
                 proposedLayoutID: resolvedLayoutID,
                 proposedLayoutName: resolvedLayoutName,
                 duplicateLayout: duplicateLayout,
+                sourceEventCapacity: .unknown,
                 sourceSnapshots: [],
                 plannedFiles: [],
                 diagnostics: diagnostics
@@ -488,9 +492,10 @@ public enum MapWorkflowPlanner {
             proposedLayoutID: resolvedLayoutID,
             proposedLayoutName: resolvedLayoutName,
             duplicateLayout: duplicateLayout,
+            sourceEventCapacity: sourceMap.eventCapacity,
             sourceSnapshots: snapshots,
             plannedFiles: plannedFiles,
-            diagnostics: diagnostics
+            diagnostics: diagnostics + sourceMap.eventCapacity.diagnostics
         )
     }
 
@@ -732,6 +737,7 @@ public enum MapWorkflowPlanner {
         proposedLayoutID: String?,
         proposedLayoutName: String?,
         duplicateLayout: Bool,
+        sourceEventCapacity: MapEventCapacitySummary,
         sourceSnapshots: [MapWorkflowSourceSnapshot],
         plannedFiles: [MapDuplicationPlannedFile],
         diagnostics: [Diagnostic]
@@ -767,6 +773,7 @@ public enum MapWorkflowPlanner {
             proposedLayoutID: proposedLayoutID,
             proposedLayoutName: proposedLayoutName,
             duplicateLayout: duplicateLayout,
+            sourceEventCapacity: sourceEventCapacity,
             sourceSnapshots: sourceSnapshots,
             plannedFiles: plannedFiles,
             mutationPlan: mutationPlan,
