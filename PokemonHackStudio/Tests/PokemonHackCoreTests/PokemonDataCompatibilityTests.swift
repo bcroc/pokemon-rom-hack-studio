@@ -232,7 +232,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("Ruby/Sapphire move row rewrites"))
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("description text rewrites"))
         XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data"))
-        XCTAssertTrue(rubyMoves.unsupportedFields.contains("contest data beyond existing .contestEffect"))
+        XCTAssertFalse(rubyMoves.unsupportedFields.contains("contest data beyond existing .contestEffect"))
+        XCTAssertTrue(rubyMoves.unsupportedFields.contains("contest combo arrays and non-simple contest scalar expressions"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("generated move output writes"))
         XCTAssertTrue(rubyMoves.unsupportedFields.contains("reference-only move source writes"))
@@ -245,12 +246,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "include/constants/moves.h" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "src/data/battle_moves.c" && $0.tableSymbol == ".contestEffect" && $0.status == .editable && $0.indexedCount == 1 })
         let rubyContestMoves = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/contest_moves.h" && $0.tableSymbol == "gContestMoves" })
-        XCTAssertEqual(rubyContestMoves.status, .readOnly)
+        XCTAssertEqual(rubyContestMoves.status, .editable)
         XCTAssertEqual(rubyContestMoves.indexedCount, 1)
-        XCTAssertEqual(rubyContestMoves.sourceRole, "readOnlyContestMetadata")
-        XCTAssertEqual(rubyContestMoves.readiness, "factsOnly")
+        XCTAssertEqual(rubyContestMoves.sourceRole, "editableContestScalars")
+        XCTAssertEqual(rubyContestMoves.readiness, "editable existing simple scalar fields")
         XCTAssertEqual(rubyContestMoves.blockedActions, [
-            "contest writers",
             "combo array editing",
             "constants",
             "row insertion/removal/reorder",
@@ -264,10 +264,10 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "references/pokeruby/src/data/battle_moves.c" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "ROM output" && $0.status == .blocked })
-        let rubyJSON = String(data: try JSONEncoder().encode(ruby), encoding: .utf8) ?? ""
+        let rubyJSON = String(data: try JSONEncoder().encode(rubyMovesReport), encoding: .utf8) ?? ""
         XCTAssertTrue(rubyJSON.contains(#""gLevelUpLearnsets""#))
         XCTAssertTrue(rubyJSON.contains(#""gContestMoves""#))
-        XCTAssertTrue(rubyJSON.contains(#""readOnlyContestMetadata""#))
+        XCTAssertTrue(rubyJSON.contains(#""editableContestScalars""#))
         XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
 
         let expansionItems = entry(.items, in: expansion)
@@ -322,8 +322,22 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         )
         assertModernEmeraldSource(
             in: expansionItemSources,
+            path: "references/modern-emerald/include/config.h"
+        )
+        assertModernEmeraldSource(
+            in: expansionItemSources,
             path: "references/modern-emerald/src/data/graphics/items.h",
             tableSymbol: "item graphics metadata"
+        )
+        assertModernEmeraldSource(
+            in: expansionItemSources,
+            path: "references/modern-emerald/graphics/items/icons",
+            tableSymbol: "item icon PNG paths"
+        )
+        assertModernEmeraldSource(
+            in: expansionItemSources,
+            path: "references/modern-emerald/graphics/items/icon_palettes",
+            tableSymbol: "item icon palette paths"
         )
         XCTAssertTrue(expansionItems.diagnostics.contains { $0.code == "GBA_MODERN_EMERALD_ITEMS_UNSUPPORTED" })
     }
@@ -387,8 +401,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertNil(moves.blockedReason)
         XCTAssertTrue(moves.unsupportedFields.contains("new/reordered move constants"))
         XCTAssertFalse(moves.unsupportedFields.contains("contest data"))
-        XCTAssertTrue(moves.unsupportedFields.contains("contestComboMoves arrays"))
         XCTAssertTrue(moves.unsupportedFields.contains("gMovesInfo non-simple contest scalar expressions"))
+        XCTAssertTrue(moves.unsupportedFields.contains("gMovesInfo non-simple contest combo move arrays"))
         XCTAssertFalse(moves.unsupportedFields.contains("description text rewrites"))
         XCTAssertTrue(moves.unsupportedFields.contains("non-source-backed move description rewrites"))
         XCTAssertTrue(moves.unsupportedFields.contains("TM/HM/tutor compatibility edits"))
@@ -408,12 +422,24 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(contestMetadata.status, .editable)
         XCTAssertEqual(contestMetadata.sourceRole, "editableContestScalars")
         XCTAssertEqual(contestMetadata.readiness, "editable existing simple scalar fields")
-        XCTAssertTrue(contestMetadata.blockedActions?.contains("contestComboMoves arrays") == true)
         XCTAssertTrue(contestMetadata.blockedActions?.contains("constants") == true)
+        XCTAssertTrue(contestMetadata.blockedActions?.contains("missing-field insertion") == true)
         XCTAssertTrue(contestMetadata.blockedActions?.contains("row insertion/removal/reorder") == true)
         XCTAssertTrue(contestMetadata.blockedActions?.contains("generated outputs") == true)
         XCTAssertTrue(contestMetadata.blockedActions?.contains("reference writes") == true)
         XCTAssertTrue(contestMetadata.blockedActions?.contains("ROM/binary writes") == true)
+        let contestCombos = try XCTUnwrap(sourceTables.first { $0.path == "src/data/moves_info.h" && $0.tableSymbol == "gMovesInfo contest combo moves" })
+        XCTAssertEqual(contestCombos.status, .editable)
+        XCTAssertEqual(contestCombos.indexedCount, 1)
+        XCTAssertEqual(contestCombos.sourceRole, "editableContestComboMoves")
+        XCTAssertEqual(contestCombos.readiness, "editable existing simple MOVE_* arrays")
+        XCTAssertTrue(contestCombos.blockedActions?.contains("constants") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("missing-field insertion") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("row insertion/removal/reorder") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("generated outputs") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("reference writes") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("ROM/build/export paths") == true)
+        XCTAssertTrue(contestCombos.blockedActions?.contains("binary writes") == true)
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/contest_moves.h" && $0.status == .blocked })
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/tmhm_learnsets.h" && $0.status == .blocked })
         XCTAssertTrue(sourceTables.contains { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.status == .blocked })
@@ -423,6 +449,14 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             in: sourceTables,
             path: "references/modern-emerald/src/data/battle_moves.h",
             tableSymbol: "gBattleMoves"
+        )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/include/constants/moves.h"
+        )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/include/config.h"
         )
         assertModernEmeraldSource(
             in: sourceTables,
@@ -493,6 +527,23 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             path: "references/modern-emerald/src/data/pokemon/species_info.h",
             tableSymbol: "gSpeciesInfo"
         )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/include/constants/species.h"
+        )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/include/constants/pokemon.h"
+        )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/include/config.h"
+        )
+        assertModernEmeraldSource(
+            in: sourceTables,
+            path: "references/modern-emerald/graphics/pokemon",
+            tableSymbol: "species graphics/icon paths"
+        )
         XCTAssertTrue(sourceTables.contains { $0.path == "ROM output" && $0.status == .blocked })
         XCTAssertTrue(species.diagnostics.contains { $0.code == "GBA_MODERN_EMERALD_SPECIES_UNSUPPORTED" })
 
@@ -518,6 +569,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertBlockedGeneratedLearnsetRows(in: levelUp)
         XCTAssertTrue(levelUpSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(levelUpSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/level_up_learnsets" && $0.status == .blocked })
+        assertModernEmeraldSource(
+            in: levelUpSources,
+            path: "references/modern-emerald/src/data/pokemon/level_up_learnsets.h",
+            tableSymbol: "s*LevelUpLearnset"
+        )
         XCTAssertTrue(levelUpSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let tmhm = entry(.tmhmLearnsets, in: expansion)
@@ -543,6 +599,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertBlockedGeneratedLearnsetRows(in: tmhm)
         XCTAssertTrue(tmhmSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(tmhmSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/tmhm_learnsets.h" && $0.tableSymbol == "sTMHMLearnsets/gTMHMLearnsets" && $0.status == .blocked })
+        assertModernEmeraldSource(
+            in: tmhmSources,
+            path: "references/modern-emerald/src/data/pokemon/tmhm_learnsets.h",
+            tableSymbol: "gTMHMLearnsets"
+        )
         XCTAssertTrue(tmhmSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let egg = entry(.eggMoves, in: expansion)
@@ -567,6 +628,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertBlockedGeneratedLearnsetRows(in: egg)
         XCTAssertTrue(eggSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(eggSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/egg_moves.h" && $0.tableSymbol == "gEggMoves" && $0.status == .blocked })
+        assertModernEmeraldSource(
+            in: eggSources,
+            path: "references/modern-emerald/src/data/pokemon/egg_moves.h",
+            tableSymbol: "gEggMoves"
+        )
         XCTAssertTrue(eggSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let tutor = entry(.tutorLearnsets, in: expansion)
@@ -593,6 +659,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         assertBlockedGeneratedLearnsetRows(in: tutor)
         XCTAssertTrue(tutorSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(tutorSources.contains { $0.path == "references/pokeemerald-expansion/src/data/pokemon/tutor_learnsets.h" && $0.tableSymbol == "gTutorLearnsets" && $0.status == .blocked })
+        assertModernEmeraldSource(
+            in: tutorSources,
+            path: "references/modern-emerald/src/data/pokemon/tutor_learnsets.h",
+            tableSymbol: "gTutorMoves/s*TutorLearnset"
+        )
         XCTAssertTrue(tutorSources.contains { $0.path == "ROM output" && $0.status == .blocked })
 
         let evolutions = entry(.evolutions, in: expansion)
@@ -693,7 +764,10 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/pokedex_text.h""#))
         XCTAssertTrue(json.contains(#""references\/pokeemerald-expansion\/src\/data\/pokemon\/tutor_learnsets.h""#))
         XCTAssertTrue(json.contains(#""references\/modern-emerald\/src\/data\/pokemon\/species_info.h""#))
+        XCTAssertTrue(json.contains(#""references\/modern-emerald\/include\/config.h""#))
+        XCTAssertTrue(json.contains(#""references\/modern-emerald\/graphics\/pokemon""#))
         XCTAssertTrue(json.contains(#""references\/modern-emerald\/src\/data\/items.h""#))
+        XCTAssertTrue(json.contains(#""references\/modern-emerald\/graphics\/items\/icons""#))
         XCTAssertTrue(json.contains(#""sourceRole":"referenceOnly""#))
         XCTAssertTrue(json.contains(#""recommendedFutureRow":"PHS-T78""#))
     }

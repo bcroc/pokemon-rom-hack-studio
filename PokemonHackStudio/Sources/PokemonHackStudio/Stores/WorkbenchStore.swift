@@ -83,6 +83,7 @@ private struct BuildPatchPlaytestReportExportPayload: Codable {
     let buildRows: [BuildReportRowExportPayload]
     let patchManifest: PokemonHackCore.PatchManifestReport?
     let patchCreationPreview: PokemonHackCore.PatchCreationPreviewReport?
+    let patchCreationResult: PokemonHackCore.PatchCreationResult?
     let binaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     let playtest: PlaytestReportExportPayload?
 }
@@ -319,8 +320,10 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var selectedPatchManifestReport: PatchManifestReportViewState?
     @Published private(set) var patchCreationPreviewLoadStatus: PatchCreationPreviewLoadStatus = .idle
     @Published private(set) var selectedPatchCreationPreviewReport: PatchCreationPreviewReportViewState?
+    @Published private(set) var selectedPatchCreationResultReport: PatchCreationResultViewState?
     @Published private(set) var binaryROMMutationDryRunLoadStatus: BinaryROMMutationDryRunLoadStatus = .idle
     @Published private(set) var selectedBinaryROMMutationDryRunReport: BinaryROMMutationDryRunReportViewState?
+    @Published private(set) var latestPatchCreationResult: PokemonHackCore.PatchCreationResult?
     @Published private(set) var latestPatchApplyExportResult: PokemonHackCore.PatchApplyExportResult?
     @Published private(set) var graphicsImportPackagePlanStatus: GraphicsImportPackagePlanLoadStatus = .idle
     @Published private(set) var selectedGraphicsImportPackagePlan: GraphicsImportPackagePlanViewState?
@@ -1277,6 +1280,31 @@ final class WorkbenchStore: ObservableObject {
         return report.artifactPlan.patchFormat == .bps || report.artifactPlan.patchFormat == .ips
     }
 
+    var canCreateSelectedBPSPatch: Bool {
+        guard let report = rawPatchCreationPreviewReport else { return false }
+        guard report.isReady else { return false }
+        guard selectedIndexedProject?.rootPath != nil else { return false }
+        guard !selectedBaseROMPath.isEmpty else { return false }
+        return true
+    }
+
+    var createBPSPatchDisabledReason: String {
+        guard selectedIndexedProject?.rootPath != nil else {
+            return "Open a project before creating a BPS patch."
+        }
+        guard !selectedBaseROMPath.isEmpty else {
+            return "Select a base ROM before creating a BPS patch."
+        }
+        guard let report = rawPatchCreationPreviewReport else {
+            return "Load patch creation preview before creating a BPS patch."
+        }
+        guard report.isReady else {
+            return report.diagnostics.first(where: { $0.severity == .error })?.message
+                ?? "Patch creation readiness is blocked."
+        }
+        return "Create the ignored BPS patch and manifest."
+    }
+
     func buildWorkflowActions(includePatchActions: Bool) -> [BuildWorkflowActionViewState] {
         Self.buildWorkflowActions(
             canRunBuild: canRunSelectedDecompBuild,
@@ -1347,6 +1375,7 @@ final class WorkbenchStore: ObservableObject {
             .filter(userSettings.shouldShowHealthDiagnosticInGlobalIssues)
         let patchDiagnostics = selectedPatchManifestReport?.diagnostics ?? []
         let patchCreationDiagnostics = selectedPatchCreationPreviewReport?.diagnostics ?? []
+        let patchCreationResultDiagnostics = selectedPatchCreationResultReport?.diagnostics ?? []
         let binaryROMMutationDryRunDiagnostics = selectedBinaryROMMutationDryRunReport?.diagnostics ?? []
         let scriptReadinessDiagnostics = selectedScriptReadinessReport?.diagnostics ?? []
         let graphicsDiagnostics = selectedGraphicsReport?.diagnostics ?? []
@@ -1368,6 +1397,7 @@ final class WorkbenchStore: ObservableObject {
             + buildDiagnostics
             + patchDiagnostics
             + patchCreationDiagnostics
+            + patchCreationResultDiagnostics
             + binaryROMMutationDryRunDiagnostics
             + scriptReadinessDiagnostics
             + graphicsDiagnostics
@@ -1711,6 +1741,11 @@ final class WorkbenchStore: ObservableObject {
     var filteredPatchCreationPreviewRows: [BuildReportRow] {
         guard let selectedPatchCreationPreviewReport else { return [] }
         return filter(buildRows: selectedPatchCreationPreviewReport.rows)
+    }
+
+    var filteredPatchCreationResultRows: [BuildReportRow] {
+        guard let selectedPatchCreationResultReport else { return [] }
+        return filter(buildRows: selectedPatchCreationResultReport.rows)
     }
 
     var filteredBinaryROMMutationDryRunRows: [BuildReportRow] {
@@ -3404,6 +3439,8 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchManifestReport = nil
         rawPatchCreationPreviewReport = nil
         selectedPatchCreationPreviewReport = nil
+        latestPatchCreationResult = nil
+        selectedPatchCreationResultReport = nil
         rawBinaryROMMutationDryRunManifest = nil
         selectedBinaryROMMutationDryRunReport = nil
         latestPatchApplyExportResult = nil
@@ -3415,6 +3452,8 @@ final class WorkbenchStore: ObservableObject {
     private func resetPatchCreationPreviewForInputChange() {
         rawPatchCreationPreviewReport = nil
         selectedPatchCreationPreviewReport = nil
+        latestPatchCreationResult = nil
+        selectedPatchCreationResultReport = nil
         patchCreationPreviewLoadStatus = selectedBaseROMPath.isEmpty ? .idle : .idle
     }
 
@@ -3519,6 +3558,49 @@ final class WorkbenchStore: ObservableObject {
             rawPatchCreationPreviewReport = nil
             selectedPatchCreationPreviewReport = nil
             patchCreationPreviewLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func createSelectedBPSPatch() {
+        guard !selectedBaseROMPath.isEmpty,
+              let projectRoot = selectedIndexedProject?.rootPath
+        else {
+            return
+        }
+
+        do {
+            let targetID = selectedEffectiveDecompBuildTargetID
+            let result = try PatchCreationBuilder.create(
+                projectPath: projectRoot,
+                baseROMPath: selectedBaseROMPath,
+                targetID: targetID.isEmpty ? nil : targetID,
+                fileManager: fileManager
+            )
+            latestPatchCreationResult = result
+            selectedPatchCreationResultReport = Self.patchCreationResultViewState(
+                from: result,
+                rootPath: projectRoot
+            )
+        } catch {
+            let result = PatchCreationResult(
+                status: .blocked,
+                patchPath: rawPatchCreationPreviewReport?.absolutePlannedPatchPath,
+                manifestPath: rawPatchCreationPreviewReport?.absolutePlannedPatchPath.appending(".manifest.json"),
+                patchSHA1: nil,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "PATCH_CREATION_FAILED",
+                        message: error.localizedDescription
+                    ),
+                ],
+                manifest: nil
+            )
+            latestPatchCreationResult = result
+            selectedPatchCreationResultReport = Self.patchCreationResultViewState(
+                from: result,
+                rootPath: projectRoot
+            )
         }
     }
 
@@ -5953,6 +6035,7 @@ final class WorkbenchStore: ObservableObject {
             buildRows: (report?.rows ?? []).map(Self.exportPayload(from:)),
             patchManifest: rawPatchManifestReport,
             patchCreationPreview: rawPatchCreationPreviewReport,
+            patchCreationResult: latestPatchCreationResult,
             binaryROMMutationDryRunManifest: rawBinaryROMMutationDryRunManifest,
             playtest: report.map(Self.exportPayload(fromPlaytest:))
         )
@@ -8264,6 +8347,75 @@ final class WorkbenchStore: ObservableObject {
             plannedPatchPath: report.plannedPatchPath,
             absolutePlannedPatchPath: report.absolutePlannedPatchPath,
             blockedActions: report.blockedActions,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
+    private static func patchCreationResultViewState(
+        from result: PokemonHackCore.PatchCreationResult,
+        rootPath: String
+    ) -> PatchCreationResultViewState {
+        let diagnostics = result.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = result.status == .created
+            ? validationStatus(for: diagnostics.map(\.severity))
+            : .error
+        let statusLabel = result.status.rawValue
+        let patchPath = result.patchPath ?? rootPath
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-creation-result:summary",
+                section: .patchManifest,
+                title: "BPS patch creation",
+                subtitle: statusLabel,
+                detail: result.status == .created
+                    ? "Created ignored BPS patch \(result.patchPath ?? "unknown") and manifest \(result.manifestPath ?? "unknown")."
+                    : "BPS patch creation was blocked before writing patch artifacts.",
+                status: status,
+                source: SourceLocation(path: patchPath, symbol: "patch-create", line: 1),
+                tags: [statusLabel, result.patchPath ?? "", result.manifestPath ?? "", result.patchSHA1 ?? ""]
+            ),
+        ]
+        if let patchPath = result.patchPath {
+            rows.append(
+                BuildReportRow(
+                    id: "patch-creation-result:patch",
+                    section: .patchManifest,
+                    title: "BPS patch artifact",
+                    subtitle: patchCreationSHA1Summary(result.patchSHA1),
+                    detail: result.status == .created
+                        ? "Patch file written to \(patchPath)."
+                        : "Planned patch path \(patchPath) was not written.",
+                    status: result.status == .created ? .valid : .warning,
+                    source: SourceLocation(path: patchPath, symbol: "bps-patch", line: 1),
+                    tags: [patchPath, result.patchSHA1 ?? ""]
+                )
+            )
+        }
+        if let manifestPath = result.manifestPath {
+            rows.append(
+                BuildReportRow(
+                    id: "patch-creation-result:manifest",
+                    section: .patchManifest,
+                    title: "Patch creation manifest",
+                    subtitle: result.manifest == nil ? "not written" : "schema \(result.manifest?.schemaVersion ?? 1)",
+                    detail: result.manifest == nil
+                        ? "Manifest path \(manifestPath) was not written."
+                        : "Manifest records base ROM, built output, patch checksums, and no-header-rewrite policy.",
+                    status: result.manifest == nil ? .warning : .valid,
+                    source: SourceLocation(path: manifestPath, symbol: "patch-create-manifest", line: 1),
+                    tags: [manifestPath, result.manifest?.baseROMSHA1 ?? "", result.manifest?.builtOutputSHA1 ?? ""]
+                )
+            )
+        }
+        rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
+        return PatchCreationResultViewState(
+            id: "patch-creation-result:\(result.patchPath ?? result.status.rawValue)",
+            status: status,
+            statusLabel: statusLabel,
+            patchPath: result.patchPath,
+            manifestPath: result.manifestPath,
+            patchSHA1: result.patchSHA1,
             diagnostics: diagnostics,
             rows: rows
         )

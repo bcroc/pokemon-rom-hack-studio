@@ -23,13 +23,13 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 
 4. **Build, Patch, And Playtest Pipeline**
    - Promote build previews into non-mutating validation reports.
-   - Expand patch parsing toward manifests and checksum workflows.
+   - Expand patch parsing, checksum workflows, and explicit BPS creation from selected base ROM plus existing built output while keeping patched-ROM export separate.
    - Prepare mGBA-compatible interactive and headless playtest handoff.
 
 5. **Cross-Media Resource Library**
-   - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface until a dedicated binary mutation implementation row opens direct writes.
+   - Treat GBA ROMs as read-only local inputs in the auto-loaded Resources surface; the only opened direct-write lane is the `PHS-T79C` CLI-only, reviewed, in-place byte replacement path for explicit local `.gba` inputs.
    - Treat NDS ROMs, containers, and generated/reference rows as read-only preview/catalog inputs; eligible local source-backed Gen IV text/JSON rows may write only through explicit mutation-plan gates opened by dedicated rows.
-   - Keep binary-only GBA mutation behind `PHS-T79` safety policy: source-tree-first refusal, dry-run mutation plans, base-hash drift refusal, ignored backups/artifacts/manifests, and explicit user confirmation are mandatory before any later direct ROM writer.
+   - Keep binary-only GBA mutation behind the `PHS-T79` safety policy: source-tree-first refusal, dry-run mutation plans, base-hash drift refusal, ignored backups/artifacts/manifests, and explicit user confirmation remain mandatory. `PHS-T79C` opens only CLI replace-byte apply; broader direct ROM writers remain blocked.
    - Keep GameCube `.iso`/`.gcm` media as direct parser inputs for `resource-index`, not auto-loaded Resources rows, until the GBA asset workflow is mature.
    - Parse GameCube headers, FST entries, DOL ranges, FSYS archives, and LZSS members before any future export workflow.
    - Show missing Colosseum, XD, Box, and Channel inputs as diagnostics instead of silently omitting them.
@@ -43,5 +43,5 @@ PokemonHackStudio is a Swift-native, Apple Silicon focused workbench for Pokemon
 - Treat NDS build/playtest as manual guidance only until a future row explicitly adds runnable NDS execution.
 - Keep all writes preview-first through mutation plans and diffs.
 - Back up source files under ignored `.pokemonhackstudio/backups/` before explicit apply operations.
-- Keep future binary ROM writes disabled unless a later row adds explicit guarded writers; `PHS-T79` only defines the required policy and proof contract.
+- Keep binary ROM writes disabled except for explicit guarded rows; today that means only `PHS-T79C` CLI replace-byte apply, while pointer repoint apply, free-space allocation apply, checksum repair, app apply UI, emulator launch, and ROM export remain blocked.
 - Use local `pokeemerald` and `pokefirered` as smoke targets, not hard unit-test dependencies.

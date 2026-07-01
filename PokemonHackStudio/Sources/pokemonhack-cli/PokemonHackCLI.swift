@@ -79,6 +79,44 @@ private struct NDSDataSemanticFileChangeReport: Codable, Equatable {
     }
 }
 
+private struct NDSDataTextLineOperationPlanReport: Codable, Equatable {
+    let recordID: String
+    let operations: [NDSDataTextLineOperationReport]
+    let beforeLineCount: Int
+    let afterLineCount: Int
+    let changes: [NDSDataSemanticFileChangeReport]
+    let diagnostics: [Diagnostic]
+    let mutationPlan: MutationPlan
+    let backupRelativeRoot: String
+    let changeCount: Int
+
+    init(plan: NDSDataTextLineOperationPlan) {
+        recordID = plan.draft.recordID
+        operations = plan.draft.operations.map(NDSDataTextLineOperationReport.init(operation:))
+        beforeLineCount = plan.beforeLineCount
+        afterLineCount = plan.afterLineCount
+        changes = plan.editPlan.changes.map(NDSDataSemanticFileChangeReport.init(change:))
+        diagnostics = plan.diagnostics
+        mutationPlan = plan.editPlan.mutationPlan
+        backupRelativeRoot = plan.editPlan.backupRelativeRoot
+        changeCount = plan.editPlan.changes.count
+    }
+}
+
+private struct NDSDataTextLineOperationReport: Codable, Equatable {
+    let kind: NDSDataTextLineOperationKind
+    let index: Int?
+    let fromIndex: Int?
+    let toIndex: Int?
+
+    init(operation: NDSDataTextLineOperation) {
+        kind = operation.kind
+        index = operation.index
+        fromIndex = operation.fromIndex
+        toIndex = operation.toIndex
+    }
+}
+
 private struct CLICommandMetadata: Codable, Equatable {
     let name: String
     let usage: String
@@ -188,6 +226,10 @@ struct PokemonHackCLI {
             return try ndsDataSemanticPlan(arguments: Array(arguments.dropFirst()))
         case "nds-data-semantic-apply":
             return try ndsDataSemanticApply(arguments: Array(arguments.dropFirst()))
+        case "nds-data-text-lines-plan":
+            return try ndsDataTextLinesPlan(arguments: Array(arguments.dropFirst()))
+        case "nds-data-text-lines-apply":
+            return try ndsDataTextLinesApply(arguments: Array(arguments.dropFirst()))
         case "toolchain-health":
             return try toolchainHealth(arguments: Array(arguments.dropFirst()))
         case "references":
@@ -200,12 +242,16 @@ struct PokemonHackCLI {
             return try patchArtifactPlan(arguments: Array(arguments.dropFirst()))
         case "patch-create-preview":
             return try patchCreatePreview(arguments: Array(arguments.dropFirst()))
+        case "patch-create":
+            return try patchCreate(arguments: Array(arguments.dropFirst()))
         case "patch-apply-export":
             return try patchApplyExport(arguments: Array(arguments.dropFirst()))
         case "rom-diff-preview":
             return try romDiffPreview(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-manifest":
             return try romMutationManifest(arguments: Array(arguments.dropFirst()))
+        case "rom-mutation-apply":
+            return try romMutationApply(arguments: Array(arguments.dropFirst()))
         case "build":
             return try build(arguments: Array(arguments.dropFirst()))
         case "playtest":
@@ -220,10 +266,10 @@ struct PokemonHackCLI {
     static func exitCode(arguments: [String], output: String) -> Int32 {
         guard let command = arguments.first else { return 0 }
         switch command {
-        case "patch-apply-export":
+        case "patch-apply-export", "patch-create", "rom-mutation-apply":
             guard let object = jsonObject(output) else { return 0 }
             return object["status"] as? String == "blocked" ? 1 : 0
-        case "script-command-edit-apply", "nds-data-edit-apply", "nds-data-semantic-apply":
+        case "script-command-edit-apply", "nds-data-edit-apply", "nds-data-semantic-apply", "nds-data-text-lines-apply":
             guard let object = jsonObject(output) else { return 0 }
             if diagnosticsContainError(object["diagnostics"]) {
                 return 1
@@ -564,6 +610,24 @@ struct PokemonHackCLI {
         return try encode(try NDSDataMutationApplier.apply(plan: semanticPlan.editPlan))
     }
 
+    private static func ndsDataTextLinesPlan(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataTextLineArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let plan = NDSDataTextLineOperationPlanner.plan(catalog: catalog, draft: request.draft)
+        return try encode(NDSDataTextLineOperationPlanReport(plan: plan))
+    }
+
+    private static func ndsDataTextLinesApply(arguments: [String]) throws -> String {
+        guard let request = parseNDSDataTextLineArguments(arguments) else {
+            throw CLIError.usage
+        }
+        let catalog = try NDSDataCatalogBuilder.build(path: request.projectPath)
+        let plan = NDSDataTextLineOperationPlanner.plan(catalog: catalog, draft: request.draft)
+        return try encode(try NDSDataMutationApplier.apply(plan: plan.editPlan))
+    }
+
     private static func parseNDSDataEditArguments(_ arguments: [String]) throws -> NDSDataEditCLIRequest? {
         guard arguments.count == 5,
               arguments[2] == "--draft-file",
@@ -602,6 +666,55 @@ struct PokemonHackCLI {
         }
         guard !edits.isEmpty else { return nil }
         return NDSDataSemanticCLIRequest(projectPath: projectPath, recordID: recordID, fieldEdits: edits)
+    }
+
+    private static func parseNDSDataTextLineArguments(_ arguments: [String]) -> NDSDataTextLineCLIRequest? {
+        guard arguments.count >= 5,
+              arguments.last == "--json"
+        else {
+            return nil
+        }
+
+        let projectPath = arguments[0]
+        let recordID = arguments[1]
+        var index = 2
+        var operations: [NDSDataTextLineOperation] = []
+        while index < arguments.count - 1 {
+            switch arguments[index] {
+            case "--insert":
+                guard index + 2 < arguments.count - 1,
+                      let lineIndex = Int(arguments[index + 1])
+                else {
+                    return nil
+                }
+                operations.append(.insert(index: lineIndex, text: arguments[index + 2]))
+                index += 3
+            case "--delete":
+                guard index + 1 < arguments.count - 1,
+                      let lineIndex = Int(arguments[index + 1])
+                else {
+                    return nil
+                }
+                operations.append(.delete(index: lineIndex))
+                index += 2
+            case "--reorder":
+                guard index + 2 < arguments.count - 1,
+                      let fromIndex = Int(arguments[index + 1]),
+                      let toIndex = Int(arguments[index + 2])
+                else {
+                    return nil
+                }
+                operations.append(.reorder(fromIndex: fromIndex, toIndex: toIndex))
+                index += 3
+            default:
+                return nil
+            }
+        }
+        guard !operations.isEmpty else { return nil }
+        return NDSDataTextLineCLIRequest(
+            projectPath: projectPath,
+            draft: NDSDataTextLineOperationDraft(recordID: recordID, operations: operations)
+        )
     }
 
     private static func ndsDataEditDraft(recordID: String, draftFilePath: String) throws -> NDSDataEditDraft {
@@ -734,6 +847,60 @@ struct PokemonHackCLI {
 
         let request = try parseROMMutationManifestArguments(Array(arguments.dropFirst().dropLast()))
         return try encode(BinaryROMMutationDryRunManifestBuilder.build(path: path, request: request))
+    }
+
+    private static func romMutationApply(arguments: [String]) throws -> String {
+        guard arguments.count >= 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let options = try parseROMMutationApplyArguments(Array(arguments.dropFirst().dropLast()))
+        return try encode(
+            BinaryROMMutationApplier.apply(
+                path: path,
+                manifestPath: options.manifestPath,
+                workspaceRoot: options.workspaceRoot,
+                confirmationToken: options.confirmationToken
+            )
+        )
+    }
+
+    private struct ROMMutationApplyOptions {
+        let manifestPath: String?
+        let workspaceRoot: String?
+        let confirmationToken: String?
+    }
+
+    private static func parseROMMutationApplyArguments(_ arguments: [String]) throws -> ROMMutationApplyOptions {
+        var manifestPath: String?
+        var workspaceRoot: String?
+        var confirmationToken: String?
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--manifest":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                manifestPath = arguments[index + 1]
+                index += 2
+            case "--workspace-root":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                workspaceRoot = arguments[index + 1]
+                index += 2
+            case "--confirm":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                confirmationToken = arguments[index + 1]
+                index += 2
+            default:
+                throw CLIError.usage
+            }
+        }
+
+        return ROMMutationApplyOptions(
+            manifestPath: manifestPath,
+            workspaceRoot: workspaceRoot,
+            confirmationToken: confirmationToken
+        )
     }
 
     private static func parseROMMutationManifestArguments(_ arguments: [String]) throws -> BinaryROMMutationDryRunRequest {
@@ -886,6 +1053,50 @@ struct PokemonHackCLI {
         }
         return try encode(
             PatchCreationPreviewBuilder.build(
+                projectPath: project,
+                baseROMPath: baseROMPath,
+                targetID: targetID
+            )
+        )
+    }
+
+    private static func patchCreate(arguments: [String]) throws -> String {
+        guard arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var targetID: String?
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else if argument == "--target" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                targetID = payload[nextIndex]
+                index += 2
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard positionals.count == 1, let project = positionals.first, let baseROMPath else {
+            throw CLIError.usage
+        }
+        return try encode(
+            PatchCreationBuilder.create(
                 projectPath: project,
                 baseROMPath: baseROMPath,
                 targetID: targetID
@@ -1089,15 +1300,19 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "nds-data-edit-apply", usage: "nds-data-edit-apply <project> <record-id> --draft-file <path> --json", summary: "Apply a raw source-backed NDS data edit through backups and safety checks."),
         CLICommandMetadata(name: "nds-data-semantic-plan", usage: "nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Plan redacted field-level NDS semantic edits."),
         CLICommandMetadata(name: "nds-data-semantic-apply", usage: "nds-data-semantic-apply <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Apply field-level NDS semantic edits through the existing source mutation gate."),
+        CLICommandMetadata(name: "nds-data-text-lines-plan", usage: "nds-data-text-lines-plan <project> <record-id> [--insert <index> <text> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed Platinum text line insert/delete/reorder operations."),
+        CLICommandMetadata(name: "nds-data-text-lines-apply", usage: "nds-data-text-lines-apply <project> <record-id> [--insert <index> <text> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe Platinum text line operations through backups and source freshness checks."),
         CLICommandMetadata(name: "toolchain-health", usage: "toolchain-health <path> --json", summary: "Emit toolchain readiness rows."),
         CLICommandMetadata(name: "references", usage: "references --json", summary: "Emit reference repository metadata."),
         CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
         CLICommandMetadata(name: "patch-manifest", usage: "patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json", summary: "Emit patch manifest compatibility data."),
         CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
         CLICommandMetadata(name: "patch-create-preview", usage: "patch-create-preview <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Preview BPS patch creation metadata from a selected base ROM to an existing built output without writing patch files."),
+        CLICommandMetadata(name: "patch-create", usage: "patch-create <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Explicitly create an ignored BPS patch and manifest from a selected base ROM to an existing built output."),
         CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
         CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
         CLICommandMetadata(name: "rom-mutation-manifest", usage: "rom-mutation-manifest <rom-or-source-path> [--workspace-root <path>] [--expect-sha1 <sha1>] [--replace <offset:length:hex>] [--repoint <pointer-offset:new-target-offset>] [--allocate <byte-count[:alignment]>] --json", summary: "Emit a dry-run-only future binary ROM mutation manifest with canApply=false."),
+        CLICommandMetadata(name: "rom-mutation-apply", usage: "rom-mutation-apply <rom> --manifest <dry-run-json> --workspace-root <path> --confirm <review-token> --json", summary: "Apply reviewed replace-only binary ROM byte changes in place with ignored backup and manifest artifacts."),
         CLICommandMetadata(name: "build", usage: "build <path> --json", summary: "Emit build validation data without building."),
         CLICommandMetadata(name: "playtest", usage: "playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json", summary: "Preview or run supported mGBA handoff actions."),
         CLICommandMetadata(name: "playtest-debug-plan", usage: "playtest-debug-plan <path> --json", summary: "Preview emulator debugging plans."),
@@ -1141,6 +1356,11 @@ private struct NDSDataSemanticCLIRequest {
     let projectPath: String
     let recordID: String
     let fieldEdits: [NDSDataSemanticFieldEdit]
+}
+
+private struct NDSDataTextLineCLIRequest {
+    let projectPath: String
+    let draft: NDSDataTextLineOperationDraft
 }
 
 struct ValidationReport: Encodable {

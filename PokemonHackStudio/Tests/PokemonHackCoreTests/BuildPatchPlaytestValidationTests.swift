@@ -429,6 +429,125 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: report.absolutePlannedPatchPath))
     }
 
+    func testPatchCreationWritesBPSPatchAndManifestWithoutExportingROM() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .created)
+        let patchPath = try XCTUnwrap(result.patchPath)
+        let manifestPath = try XCTUnwrap(result.manifestPath)
+        let patchData = try Data(contentsOf: URL(fileURLWithPath: patchPath))
+        XCTAssertEqual(try BPSPatchCodec.apply(patchData: patchData, baseData: baseData), builtData)
+        XCTAssertTrue(patchPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps"))
+        XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps.manifest.json"))
+        XCTAssertEqual(result.patchSHA1, pokemonHackSHA1Hex(patchData))
+        XCTAssertEqual(result.manifest?.action, "patch-create")
+        XCTAssertEqual(result.manifest?.patchFormat, .bps)
+        XCTAssertEqual(result.manifest?.baseROMSHA1, pokemonHackSHA1Hex(baseData))
+        XCTAssertEqual(result.manifest?.builtOutputSHA1, pokemonHackSHA1Hex(builtData))
+        XCTAssertEqual(result.manifest?.headerPolicy.shouldRewriteHeader, false)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_WRITTEN" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+        XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+    }
+
+    func testPatchCreationBlocksMismatchedBaseROMWithoutWritingArtifacts() throws {
+        let root = try makePatchCreationProjectRoot()
+        let expectedBase = Data("abc".utf8)
+        let wrongBase = Data("xyz".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("wrong-base.gba")
+        try write(wrongBase, to: baseROM)
+        try write(builtData, to: root.appendingPathComponent("pokeemerald.gba"))
+        try write("\(pokemonHackSHA1Hex(expectedBase))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_BASE_ROM_NOT_COMPATIBLE" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/wrong-base-to-pokeemerald.bps").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/wrong-base-to-pokeemerald.bps.manifest.json").path))
+    }
+
+    func testPatchCreationBlocksMissingBuiltOutputWithoutWritingArtifacts() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_BUILD_OUTPUT_MISSING" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches").path))
+    }
+
+    func testPatchCreationBlocksExistingBPSArtifactWithoutOverwriteOrBackup() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patchPath = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: root.appendingPathComponent("pokeemerald.gba"))
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try write(Data("existing".utf8), to: patchPath)
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_PATCH_EXISTS" })
+        XCTAssertEqual(try Data(contentsOf: patchPath), Data("existing".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
+    }
+
+    func testPatchCreationBlocksSymlinkEscapedPatchDirectory() throws {
+        let root = try makePatchCreationProjectRoot()
+        let outside = try makeTemporaryRoot()
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent(".pokemonhackstudio"),
+            withDestinationURL: outside
+        )
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: root.appendingPathComponent("pokeemerald.gba"))
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_PATCH_PATH_SYMLINK_OUTSIDE_ROOT" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/clean-base-to-pokeemerald.bps").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/clean-base-to-pokeemerald.bps.manifest.json").path))
+    }
+
     func testPatchManifestBuildsReadonlyBinaryDiffFreeSpaceAndRepointPreview() throws {
         let root = try makeTemporaryRoot()
         var bytes = [UInt8](repeating: 0xFF, count: 0x240)
@@ -1028,6 +1147,16 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         let temp = try ValidationTemporaryDirectory()
         temporaryDirectories.append(temp)
         return temp.url
+    }
+
+    private func makePatchCreationProjectRoot() throws -> URL {
+        let root = try makeTemporaryRoot()
+        try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
+        try write(#"{"group_order":[]}"#, to: root.appendingPathComponent("data/maps/map_groups.json"))
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        return root
     }
 
     private func availableTools(_ pathsByTool: [String: String]) -> ToolAvailabilityResolver {

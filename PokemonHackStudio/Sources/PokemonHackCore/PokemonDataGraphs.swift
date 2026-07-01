@@ -407,7 +407,7 @@ public enum SpeciesGraphBuilder {
     }
 }
 
-private func normalizedMoveID(_ value: String) -> String {
+func normalizedMoveID(_ value: String) -> String {
     value.hasPrefix("MOVE_") ? value : "MOVE_\(value)"
 }
 

@@ -279,7 +279,10 @@ struct BuildWorkbenchView: View {
                 }
             }
 
-            patchCreationPreviewSection(rows: store.filteredPatchCreationPreviewRows)
+            patchCreationPreviewSection(
+                rows: store.filteredPatchCreationPreviewRows,
+                resultRows: store.filteredPatchCreationResultRows
+            )
             binaryROMMutationDryRunSection(rows: store.filteredBinaryROMMutationDryRunRows)
 
             if !store.baseROMOptions.isEmpty {
@@ -395,7 +398,10 @@ struct BuildWorkbenchView: View {
         }
     }
 
-    private func patchCreationPreviewSection(rows: [BuildReportRow]) -> some View {
+    private func patchCreationPreviewSection(
+        rows: [BuildReportRow],
+        resultRows: [BuildReportRow]
+    ) -> some View {
         EditorSection(title: "Patch Creation Preview") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -408,6 +414,11 @@ struct BuildWorkbenchView: View {
                         store.loadSelectedPatchCreationPreview()
                     }
                     .disabled(store.selectedBaseROMPath.isEmpty)
+                    Button("Create BPS Patch", systemImage: "square.and.arrow.down") {
+                        store.createSelectedBPSPatch()
+                    }
+                    .disabled(!store.canCreateSelectedBPSPatch)
+                    .help(store.createBPSPatchDisabledReason)
                 }
 
                 HStack(spacing: 6) {
@@ -425,6 +436,16 @@ struct BuildWorkbenchView: View {
                     )
                 } else {
                     ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+
+                if !resultRows.isEmpty {
+                    Divider()
+                    ForEach(resultRows) { row in
                         BuildReportRowView(
                             row: row,
                             copyAction: store.copyBuildReportRowActionToPasteboard

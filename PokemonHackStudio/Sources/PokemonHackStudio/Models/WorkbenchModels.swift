@@ -962,6 +962,17 @@ struct PatchCreationPreviewReportViewState: Identifiable {
     let rows: [BuildReportRow]
 }
 
+struct PatchCreationResultViewState: Identifiable {
+    let id: String
+    let status: ValidationState
+    let statusLabel: String
+    let patchPath: String?
+    let manifestPath: String?
+    let patchSHA1: String?
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
 struct BinaryROMMutationBaseIdentityViewState: Identifiable {
     let id: String
     let title: String

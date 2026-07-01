@@ -298,6 +298,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         let editable = catalog?.moves.filter(\.isEditable).count ?? 0
         let descriptionEditable = catalog?.moves.filter(\.isDescriptionEditable).count ?? 0
         let contestEffectEditable = catalog?.moves.filter(\.isContestEffectEditable).count ?? 0
+        let contestScalarsEditable = catalog?.moves.filter(\.isContestScalarsEditable).count ?? 0
+        let contestComboMovesEditable = catalog?.moves.filter(\.isContestComboMovesEditable).count ?? 0
         let contestMoveFactCount = rubyContestMoveRecordCount(profile: index.profile, in: sourceIndex)
         return entry(
             surface: .moves,
@@ -313,6 +315,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 editableCount: editable,
                 descriptionEditableCount: descriptionEditable,
                 contestEffectEditableCount: contestEffectEditable,
+                contestScalarsEditableCount: contestScalarsEditable,
+                contestComboMovesEditableCount: contestComboMovesEditable,
                 contestMoveFactCount: contestMoveFactCount
             )
         )
@@ -768,6 +772,26 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tableSymbol: "gSpeciesInfo",
                 note: "Modern Emerald species data is reference-only schema pressure; species writers and generated outputs remain future PHS-T78 work."
             ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/constants/species.h",
+                tableSymbol: nil,
+                note: "Modern Emerald species constants stay reference-only; identity and constant creation remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/constants/pokemon.h",
+                tableSymbol: nil,
+                note: "Modern Emerald Pokemon constants stay reference-only; identity and schema rewrites remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/config.h",
+                tableSymbol: nil,
+                note: "Modern Emerald aggregate config gates are reference-only compatibility pressure; config writes remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/graphics/pokemon",
+                tableSymbol: "species graphics/icon paths",
+                note: "Modern Emerald Pokemon graphics and icon paths are reference-only metadata; graphics sync and asset writes remain blocked."
+            ),
             PokemonDataCompatibilitySourceTable(
                 path: "ROM output",
                 tableSymbol: nil,
@@ -849,9 +873,24 @@ public enum PokemonDataCompatibilityReportBuilder {
                 note: "Modern Emerald item constants stay reference-only; identity and constant creation remain blocked."
             ),
             modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/config.h",
+                tableSymbol: nil,
+                note: "Modern Emerald aggregate config gates are reference-only compatibility pressure; item config writes remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
                 path: "references/modern-emerald/src/data/graphics/items.h",
                 tableSymbol: "item graphics metadata",
                 note: "Modern Emerald item graphics metadata is reference-only; icon/effect asset rewrites stay blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/graphics/items/icons",
+                tableSymbol: "item icon PNG paths",
+                note: "Modern Emerald item icon paths are reference-only metadata; icon asset writes remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/graphics/items/icon_palettes",
+                tableSymbol: "item icon palette paths",
+                note: "Modern Emerald item icon palette paths are reference-only metadata; palette writes remain blocked."
             )
         ]
     }
@@ -862,6 +901,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         editableCount: Int,
         descriptionEditableCount: Int,
         contestEffectEditableCount: Int,
+        contestScalarsEditableCount: Int,
+        contestComboMovesEditableCount: Int,
         contestMoveFactCount: Int
     ) -> [PokemonDataCompatibilitySourceTable]? {
         let sourceStatus: PokemonDataCompatibilityStatus
@@ -881,7 +922,9 @@ public enum PokemonDataCompatibilityReportBuilder {
             descriptionStatus = .blocked
         }
         let contestEffectStatus: PokemonDataCompatibilityStatus = contestEffectEditableCount > 0 ? .editable : .blocked
-        let contestMoveStatus: PokemonDataCompatibilityStatus = contestMoveFactCount > 0 ? .readOnly : .blocked
+        let contestMoveStatus: PokemonDataCompatibilityStatus = contestScalarsEditableCount > 0
+            ? .editable
+            : (contestMoveFactCount > 0 ? .readOnly : .blocked)
         if profile == .pokeruby {
             return [
                 PokemonDataCompatibilitySourceTable(
@@ -917,11 +960,14 @@ public enum PokemonDataCompatibilityReportBuilder {
                     tableSymbol: "gContestMoves",
                     indexedCount: contestMoveFactCount,
                     status: contestMoveStatus,
-                    note: "Ruby/Sapphire contest move metadata is surfaced as read-only facts linked back to move IDs; contest writers and combo edits remain blocked.",
-                    sourceRole: "readOnlyContestMetadata",
-                    readiness: contestMoveFactCount > 0 ? "factsOnly" : nil,
+                    note: contestScalarsEditableCount > 0
+                        ? "Existing simple Ruby/Sapphire contest move effect, contestCategory, and comboStarterId scalar fields are editable through move drafts; comboMoves arrays remain blocked."
+                        : "Ruby/Sapphire contest move metadata is surfaced as read-only facts linked back to move IDs; contest scalar writers and combo edits remain blocked.",
+                    sourceRole: contestScalarsEditableCount > 0 ? "editableContestScalars" : "readOnlyContestMetadata",
+                    readiness: contestScalarsEditableCount > 0
+                        ? "editable existing simple scalar fields"
+                        : (contestMoveFactCount > 0 ? "factsOnly" : nil),
                     blockedActions: [
-                        "contest writers",
                         "combo array editing",
                         "constants",
                         "row insertion/removal/reorder",
@@ -994,14 +1040,14 @@ public enum PokemonDataCompatibilityReportBuilder {
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/moves_info.h",
                 tableSymbol: "gMovesInfo contest scalars",
-                indexedCount: indexedCount,
-                status: indexedCount > 0 ? .editable : .blocked,
+                indexedCount: contestScalarsEditableCount,
+                status: contestScalarsEditableCount > 0 ? .editable : (indexedCount > 0 ? .readOnly : .blocked),
                 note: "Existing simple Expansion contestCategory, contestAppeal, contestJam, and contestComboStarterId fields are editable through move drafts.",
                 sourceRole: "editableContestScalars",
-                readiness: indexedCount > 0 ? "editable existing simple scalar fields" : "no existing contest scalar fields indexed",
+                readiness: contestScalarsEditableCount > 0 ? "editable existing simple scalar fields" : "no existing simple contest scalar fields indexed",
                 blockedActions: [
-                    "contestComboMoves arrays",
                     "constants",
+                    "missing-field insertion",
                     "row insertion/removal/reorder",
                     "generated outputs",
                     "reference writes",
@@ -1009,11 +1055,29 @@ public enum PokemonDataCompatibilityReportBuilder {
                 ]
             ),
             PokemonDataCompatibilitySourceTable(
+                path: "src/data/moves_info.h",
+                tableSymbol: "gMovesInfo contest combo moves",
+                indexedCount: contestComboMovesEditableCount,
+                status: contestComboMovesEditableCount > 0 ? .editable : (indexedCount > 0 ? .readOnly : .blocked),
+                note: "Existing simple Expansion contestComboMoves MOVE_* arrays are editable through move drafts.",
+                sourceRole: "editableContestComboMoves",
+                readiness: contestComboMovesEditableCount > 0 ? "editable existing simple MOVE_* arrays" : "no simple contestComboMoves arrays indexed",
+                blockedActions: [
+                    "constants",
+                    "missing-field insertion",
+                    "row insertion/removal/reorder",
+                    "generated outputs",
+                    "reference writes",
+                    "ROM/build/export paths",
+                    "binary writes"
+                ]
+            ),
+            PokemonDataCompatibilitySourceTable(
                 path: "src/data/contest_moves.h",
                 tableSymbol: "gContestMoves",
                 indexedCount: 0,
                 status: .blocked,
-                note: "Contest combo arrays and adjacent contest tables remain blocked for this slice."
+                note: "Adjacent contest tables remain blocked for this slice."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/pokemon/tmhm_learnsets.h",
@@ -1047,6 +1111,16 @@ public enum PokemonDataCompatibilityReportBuilder {
                 path: "references/modern-emerald/src/data/battle_moves.h",
                 tableSymbol: "gBattleMoves",
                 note: "Modern Emerald battle move rows are reference-only schema pressure; move writers remain future PHS-T78 work."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/constants/moves.h",
+                tableSymbol: nil,
+                note: "Modern Emerald move constants stay reference-only; identity and constant creation remain blocked."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/include/config.h",
+                tableSymbol: nil,
+                note: "Modern Emerald aggregate config gates are reference-only compatibility pressure; move config writes remain blocked."
             ),
             modernEmeraldReferenceSourceTable(
                 path: "references/modern-emerald/src/data/pokemon/tmhm_learnsets.h",
@@ -1191,6 +1265,11 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: .blocked,
                 note: "Reference Expansion clones remain read-only research inputs."
             ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/src/data/pokemon/level_up_learnsets.h",
+                tableSymbol: "s*LevelUpLearnset",
+                note: "Modern Emerald level-up learnsets stay reference-only; learnset writers and generated outputs remain blocked."
+            ),
             PokemonDataCompatibilitySourceTable(
                 path: "ROM output",
                 tableSymbol: nil,
@@ -1249,6 +1328,11 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: .blocked,
                 note: "Reference Expansion clones remain read-only research inputs."
             ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/src/data/pokemon/tmhm_learnsets.h",
+                tableSymbol: "gTMHMLearnsets",
+                note: "Modern Emerald TM/HM learnsets stay reference-only; compatibility writers and generated outputs remain blocked."
+            ),
             PokemonDataCompatibilitySourceTable(
                 path: "ROM output",
                 tableSymbol: nil,
@@ -1289,7 +1373,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: .blocked,
                 note: "Generated/all-learnables JSON remains indexed for context and freshness reporting only; apply is blocked and refresh must happen outside PokemonHackStudio."
             )
-        return [
+        var tables = [
             PokemonDataCompatibilitySourceTable(
                 path: "src/data/pokemon/tutor_learnsets.h",
                 tableSymbol: tableSymbol,
@@ -1318,7 +1402,18 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: 0,
                 status: .blocked,
                 note: "Reference \(familyLabel) clones remain read-only research inputs."
-            ),
+            )
+        ]
+        if profile == .pokeemeraldExpansion {
+            tables.append(
+                modernEmeraldReferenceSourceTable(
+                    path: "references/modern-emerald/src/data/pokemon/tutor_learnsets.h",
+                    tableSymbol: "gTutorMoves/s*TutorLearnset",
+                    note: "Modern Emerald tutor learnsets stay reference-only; tutor compatibility writers and generated outputs remain blocked."
+                )
+            )
+        }
+        tables.append(
             PokemonDataCompatibilitySourceTable(
                 path: "ROM output",
                 tableSymbol: nil,
@@ -1326,7 +1421,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 status: .blocked,
                 note: "Binary ROM/export writes remain blocked."
             )
-        ]
+        )
+        return tables
     }
 
     private static func pokedexSourceTables(
@@ -1436,6 +1532,11 @@ public enum PokemonDataCompatibilityReportBuilder {
                 indexedCount: 0,
                 status: .blocked,
                 note: "Reference Expansion clones remain read-only research inputs."
+            ),
+            modernEmeraldReferenceSourceTable(
+                path: "references/modern-emerald/src/data/pokemon/egg_moves.h",
+                tableSymbol: "gEggMoves",
+                note: "Modern Emerald egg moves stay reference-only; egg-move writers and generated outputs remain blocked."
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "ROM output",
@@ -2284,11 +2385,11 @@ private func pokedexUnsupportedFields(profile: GameProfile, editableCount: Int) 
 private func movesUnsupportedFields(profile: GameProfile) -> [String] {
     var fields = ["new/reordered move constants"]
     if profile == .pokeruby {
-        fields.append("contest data beyond existing .contestEffect")
+        fields.append("contest combo arrays and non-simple contest scalar expressions")
     } else if profile == .pokeemeraldExpansion {
         fields.append(contentsOf: [
-            "contestComboMoves arrays",
-            "gMovesInfo non-simple contest scalar expressions"
+            "gMovesInfo non-simple contest scalar expressions",
+            "gMovesInfo non-simple contest combo move arrays"
         ])
     } else {
         fields.append("contest data")

@@ -108,6 +108,72 @@ public struct NDSDataSemanticEditPlan: Codable, Equatable {
     }
 }
 
+public enum NDSDataTextLineOperationKind: String, Codable, Equatable {
+    case insert
+    case delete
+    case reorder
+}
+
+public struct NDSDataTextLineOperation: Codable, Equatable {
+    public let kind: NDSDataTextLineOperationKind
+    public let index: Int?
+    public let text: String?
+    public let fromIndex: Int?
+    public let toIndex: Int?
+
+    public init(kind: NDSDataTextLineOperationKind, index: Int? = nil, text: String? = nil, fromIndex: Int? = nil, toIndex: Int? = nil) {
+        self.kind = kind
+        self.index = index
+        self.text = text
+        self.fromIndex = fromIndex
+        self.toIndex = toIndex
+    }
+
+    public static func insert(index: Int, text: String) -> NDSDataTextLineOperation {
+        NDSDataTextLineOperation(kind: .insert, index: index, text: text)
+    }
+
+    public static func delete(index: Int) -> NDSDataTextLineOperation {
+        NDSDataTextLineOperation(kind: .delete, index: index)
+    }
+
+    public static func reorder(fromIndex: Int, toIndex: Int) -> NDSDataTextLineOperation {
+        NDSDataTextLineOperation(kind: .reorder, fromIndex: fromIndex, toIndex: toIndex)
+    }
+}
+
+public struct NDSDataTextLineOperationDraft: Codable, Equatable {
+    public let recordID: String
+    public let operations: [NDSDataTextLineOperation]
+
+    public init(recordID: String, operations: [NDSDataTextLineOperation]) {
+        self.recordID = recordID
+        self.operations = operations
+    }
+}
+
+public struct NDSDataTextLineOperationPlan: Codable, Equatable {
+    public let draft: NDSDataTextLineOperationDraft
+    public let beforeLineCount: Int
+    public let afterLineCount: Int
+    public let diagnostics: [Diagnostic]
+    public let editPlan: NDSDataEditPlan
+
+    public init(
+        draft: NDSDataTextLineOperationDraft,
+        beforeLineCount: Int,
+        afterLineCount: Int,
+        diagnostics: [Diagnostic],
+        editPlan: NDSDataEditPlan
+    ) {
+        self.draft = draft
+        self.beforeLineCount = beforeLineCount
+        self.afterLineCount = afterLineCount
+        self.diagnostics = diagnostics
+        self.editPlan = editPlan
+    }
+}
+
 public struct NDSDataEditFileChange: Codable, Equatable, Identifiable {
     public let id: String
     public let path: String
@@ -550,7 +616,7 @@ public enum NDSDataSemanticEditor {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_TRAINER_PATH_BLOCKED", message: "Semantic trainer editing is limited to Platinum trainer data JSON rows under res/trainers/data, direct Platinum trainer class JSON rows under res/trainers/classes, HeartGold/SoulSilver trainer JSON rows under files/poketool/trainer, Diamond/Pearl trainer JSON rows under files/poketool/trainer, and Diamond/Pearl trainer class gender scalars in arm9/src/trainer_data.c; nested trainer class rows, trainer resources, other C anchors, and other trainer assets remain on raw source editing or read-only surfaces.", span: record.sourceSpan))
         }
         if record.domain == .encounters, !isSemanticEncounterDataPath(catalog.profile, record.relativePath) {
-            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; nested encounter arrays, slots, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_ENCOUNTER_PATH_BLOCKED", message: "Semantic encounter editing is limited to Platinum source-backed JSON rows directly under res/field/encounters, HeartGold/SoulSilver source-backed JSON rows under files/fielddata/encountdata, and Diamond/Pearl source-backed JSON rows under files/fielddata/encountdata; slot insert/delete/reorder, nested object reshaping, C anchors, containers, generated/reference rows, ROM/export/rebuild paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
         }
         if record.domain == .maps, !isSemanticMapDataPath(catalog.profile, record.relativePath) {
             diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_MAP_PATH_BLOCKED", message: "Semantic map/event editing is limited to Platinum source-backed JSON rows directly under res/field/events, res/field/matrices, or res/field/area_data, HeartGold/SoulSilver integer map-header scalars in src/data/map_headers.h, Diamond/Pearl direct JSON rows under files/fielddata/eventdata, and Diamond/Pearl integer map-header scalars in arm9/src/map_header.c; nested event, matrix, or area-data directories, res/field/maps/**, map binaries, inventory-only map matrix/map table rows, scripts, other C anchors, generated/reference rows, ROM/export/rebuild/playtest paths, and binary writes remain raw-source or read-only.", span: record.sourceSpan))
@@ -634,6 +700,22 @@ public enum NDSDataSemanticEditor {
         guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
         let remainder = lower.dropFirst(prefix.count)
         return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func isPlatinumEncounterRecord(_ record: NDSDataCatalogRecord) -> Bool {
+        record.domain == .encounters
+            && record.format == .json
+            && isPlatinumEncounterDataPath(record.relativePath)
+    }
+
+    private static func isPlatinumEncounterRecordID(_ recordID: String?) -> Bool {
+        guard let recordID,
+              recordID.hasPrefix("encounters:")
+        else {
+            return false
+        }
+        let relativePath = String(recordID.dropFirst("encounters:".count))
+        return isPlatinumEncounterDataPath(relativePath)
     }
 
     private static func isSemanticEncounterDataPath(_ profile: GameProfile, _ relativePath: String) -> Bool {
@@ -969,6 +1051,12 @@ public enum NDSDataSemanticEditor {
         }
         if let record, isHeartGoldSoulSilverItemCSVRecord(record) {
             return parseHeartGoldSoulSilverItemCSVFields(sourceText: sourceText, record: record)
+        }
+        if let record, isPlatinumEncounterRecord(record) {
+            return parsePlatinumEncounterJSONFields(sourceText: sourceText, record: record)
+        }
+        if record == nil, isPlatinumEncounterRecordID(recordID) {
+            return parsePlatinumEncounterJSONFields(sourceText: sourceText, record: nil)
         }
         if let record, isPlatinumSourceTextLineRecord(record) {
             return parsePlatinumSourceTextLineFields(sourceText: sourceText, record: record)
@@ -1888,6 +1976,243 @@ public enum NDSDataSemanticEditor {
         }
     }
 
+    private static func parsePlatinumEncounterJSONFields(
+        sourceText: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedSemanticFields {
+        var diagnostics: [Diagnostic] = []
+        let trimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Platinum encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+        if let data = sourceText.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) == nil {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_MALFORMED", message: "Platinum encounter semantic editing requires parseable JSON before slot field edits are planned.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+
+        var fields: [ParsedSemanticField] = []
+        var seenTopLevelKeys: Set<String> = []
+        var duplicateTopLevelKeys: Set<String> = []
+        var unsupportedNestedKeys: Set<String> = []
+        var index = sourceText.startIndex
+        guard let objectStart = sourceText[index...].firstIndex(of: "{") else {
+            diagnostics.append(Diagnostic(severity: .error, code: "NDS_DATA_SEMANTIC_JSON_OBJECT_REQUIRED", message: "Platinum encounter semantic editing requires a top-level JSON object.", span: record?.sourceSpan))
+            return ParsedSemanticFields(fields: [], diagnostics: diagnostics, unsupportedNestedKeys: [])
+        }
+        index = sourceText.index(after: objectStart)
+
+        while index < sourceText.endIndex {
+            skipWhitespaceAndCommas(sourceText, index: &index)
+            guard index < sourceText.endIndex, sourceText[index] != "}" else { break }
+            guard sourceText[index] == "\"", let keyToken = parseJSONStringToken(sourceText, start: index) else {
+                skipJSONValueOrToken(sourceText, index: &index)
+                continue
+            }
+            index = keyToken.end
+            if !seenTopLevelKeys.insert(keyToken.value).inserted {
+                duplicateTopLevelKeys.insert(keyToken.value)
+            }
+            skipWhitespace(sourceText, index: &index)
+            guard index < sourceText.endIndex, sourceText[index] == ":" else { continue }
+            index = sourceText.index(after: index)
+            skipWhitespace(sourceText, index: &index)
+            let valueStart = index
+            if let value = parseJSONScalarValue(sourceText, start: valueStart) {
+                index = value.end
+                fields.append(platinumEncounterField(key: keyToken.value, label: semanticLabel(for: keyToken.value), value: value, sourceText: sourceText, record: record, valueStart: valueStart))
+            } else if valueStart < sourceText.endIndex, sourceText[valueStart] == "[" {
+                parsePlatinumEncounterArrayFields(
+                    sourceText: sourceText,
+                    arrayKey: keyToken.value,
+                    start: valueStart,
+                    record: record,
+                    fields: &fields,
+                    diagnostics: &diagnostics
+                )
+                skipJSONValueOrToken(sourceText, index: &index)
+            } else {
+                if valueStart < sourceText.endIndex, sourceText[valueStart] == "{" {
+                    unsupportedNestedKeys.insert(keyToken.value)
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .info,
+                            code: "NDS_DATA_SEMANTIC_NESTED_VALUE_UNSUPPORTED",
+                            message: "Platinum encounter field \(keyToken.value) is nested and remains raw-source only in this slice.",
+                            span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+                        )
+                    )
+                } else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_SEMANTIC_SCALAR_INVALID",
+                            message: "Platinum encounter field \(keyToken.value) has an invalid scalar JSON value.",
+                            span: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+                        )
+                    )
+                }
+                skipJSONValueOrToken(sourceText, index: &index)
+            }
+        }
+        for key in duplicateTopLevelKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
+                    message: "Platinum encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+        for key in duplicateSemanticFieldKeys(fields) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_SEMANTIC_JSON_KEY_DUPLICATE",
+                    message: "Platinum encounter slot field \(key) appears more than once; duplicate source keys must be resolved before field-level edits are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+        if fields.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(Diagnostic(severity: .warning, code: "NDS_DATA_SEMANTIC_NO_SCALAR_FIELDS", message: "No top-level or slot scalar JSON fields were found for Platinum encounter semantic editing.", span: record?.sourceSpan))
+        }
+        return ParsedSemanticFields(fields: fields, diagnostics: diagnostics, unsupportedNestedKeys: unsupportedNestedKeys)
+    }
+
+    private static func parsePlatinumEncounterArrayFields(
+        sourceText: String,
+        arrayKey: String,
+        start: String.Index,
+        record: NDSDataCatalogRecord?,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) {
+        guard start < sourceText.endIndex,
+              sourceText[start] == "[",
+              let arrayEnd = matchingBracketEnd(sourceText, start: start)
+        else {
+            return
+        }
+        var cursor = sourceText.index(after: start)
+        let close = sourceText.index(before: arrayEnd)
+        var elementIndex = 0
+        while cursor < close {
+            skipWhitespace(sourceText, index: &cursor)
+            guard cursor < close else { break }
+            if sourceText[cursor] == "," {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+            if sourceText[cursor] == "]" {
+                break
+            }
+            if let value = parseJSONScalarValue(sourceText, start: cursor) {
+                fields.append(
+                    platinumEncounterField(
+                        key: "\(arrayKey).\(elementIndex)",
+                        label: "\(semanticLabel(for: arrayKey)) #\(elementIndex + 1)",
+                        value: value,
+                        sourceText: sourceText,
+                        record: record,
+                        valueStart: cursor
+                    )
+                )
+                cursor = value.end
+            } else if sourceText[cursor] == "{" {
+                cursor = parsePlatinumEncounterSlotObjectFields(
+                    sourceText: sourceText,
+                    arrayKey: arrayKey,
+                    slotIndex: elementIndex,
+                    start: cursor,
+                    record: record,
+                    fields: &fields,
+                    diagnostics: &diagnostics
+                )
+            } else {
+                skipJSONValueOrToken(sourceText, index: &cursor)
+            }
+            elementIndex += 1
+            skipWhitespace(sourceText, index: &cursor)
+            if cursor < close, sourceText[cursor] == "," {
+                cursor = sourceText.index(after: cursor)
+            }
+        }
+    }
+
+    private static func parsePlatinumEncounterSlotObjectFields(
+        sourceText: String,
+        arrayKey: String,
+        slotIndex: Int,
+        start: String.Index,
+        record: NDSDataCatalogRecord?,
+        fields: inout [ParsedSemanticField],
+        diagnostics: inout [Diagnostic]
+    ) -> String.Index {
+        guard start < sourceText.endIndex,
+              sourceText[start] == "{",
+              let objectEnd = matchingCBraceEnd(sourceText, start: start)
+        else {
+            var cursor = start
+            skipJSONValueOrToken(sourceText, index: &cursor)
+            return cursor
+        }
+        var cursor = sourceText.index(after: start)
+        let close = sourceText.index(before: objectEnd)
+        while cursor < close {
+            skipWhitespaceAndCommas(sourceText, index: &cursor)
+            guard cursor < close else { break }
+            guard sourceText[cursor] == "\"", let keyToken = parseJSONStringToken(sourceText, start: cursor) else {
+                skipJSONValueOrToken(sourceText, index: &cursor)
+                continue
+            }
+            cursor = keyToken.end
+            skipWhitespace(sourceText, index: &cursor)
+            guard cursor < close, sourceText[cursor] == ":" else { continue }
+            cursor = sourceText.index(after: cursor)
+            skipWhitespace(sourceText, index: &cursor)
+            let valueStart = cursor
+            if let value = parseJSONScalarValue(sourceText, start: valueStart) {
+                fields.append(
+                    platinumEncounterField(
+                        key: "\(arrayKey).\(slotIndex).\(keyToken.value)",
+                        label: "\(semanticLabel(for: arrayKey)) #\(slotIndex + 1) \(semanticLabel(for: keyToken.value))",
+                        value: value,
+                        sourceText: sourceText,
+                        record: record,
+                        valueStart: valueStart
+                    )
+                )
+                cursor = value.end
+            } else {
+                skipJSONValueOrToken(sourceText, index: &cursor)
+            }
+        }
+        return objectEnd
+    }
+
+    private static func platinumEncounterField(
+        key: String,
+        label: String,
+        value: (displayValue: String, kind: NDSDataSemanticFieldValueKind, end: String.Index),
+        sourceText: String,
+        record: NDSDataCatalogRecord?,
+        valueStart: String.Index
+    ) -> ParsedSemanticField {
+        ParsedSemanticField(
+            semanticField: NDSDataSemanticField(
+                key: key,
+                label: label,
+                value: value.displayValue,
+                valueKind: value.kind,
+                sourceSpan: SourceSpan(relativePath: record?.relativePath ?? "", startLine: lineNumber(in: sourceText, before: valueStart))
+            ),
+            valueRange: valueStart..<value.end
+        )
+    }
+
     private static func parseTopLevelScalarJSONFields(
         sourceText: String,
         record: NDSDataCatalogRecord?
@@ -2664,6 +2989,224 @@ public enum NDSDataSemanticEditor {
 
     private static func lineNumber(in text: String, before index: String.Index) -> Int {
         text[..<index].reduce(1) { count, character in character == "\n" ? count + 1 : count }
+    }
+}
+
+public enum NDSDataTextLineOperationPlanner {
+    public static func plan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataTextLineOperationDraft,
+        fileManager: FileManager = .default
+    ) -> NDSDataTextLineOperationPlan {
+        let record = catalog.records.first(where: { $0.id == draft.recordID })
+        let sourceText = NDSDataMutationPlanner.sourceText(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        ) ?? ""
+        var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        )
+
+        if let record, !isEligiblePlatinumTextLineRecord(record, profile: catalog.profile) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_TEXT_LINES_PATH_BLOCKED",
+                    message: "Only local Platinum source-tree res/text/**/*.txt rows support text line operations; BMG/message-bank files, JSON text rows, NARC/container rows, generated/reference rows, ROM rebuild/export, build/playtest execution, and binary paths remain blocked.",
+                    span: record.sourceSpan
+                )
+            )
+        }
+
+        let beforeLines = splitTextLines(sourceText)
+        let beforeLineCount = beforeLines.lines.count
+
+        guard !draft.operations.isEmpty else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_TEXT_LINES_OPERATION_REQUIRED",
+                    message: "At least one text line insert, delete, or reorder operation is required."
+                )
+            )
+            let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: sourceText)
+            let editPlan = blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+            return NDSDataTextLineOperationPlan(
+                draft: draft,
+                beforeLineCount: beforeLineCount,
+                afterLineCount: beforeLineCount,
+                diagnostics: editPlan.diagnostics,
+                editPlan: editPlan
+            )
+        }
+
+        var editedLines = beforeLines.lines
+        if diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(contentsOf: applyOperations(draft.operations, to: &editedLines))
+        }
+
+        let operationErrors = diagnostics.filter { $0.severity == .error }
+        let editedText = operationErrors.isEmpty
+            ? renderTextLines(editedLines, hadTrailingNewline: beforeLines.hadTrailingNewline)
+            : sourceText
+        let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editedText)
+        let editPlan = operationErrors.isEmpty
+            ? NDSDataMutationPlanner.plan(catalog: catalog, draft: editDraft, fileManager: fileManager)
+            : blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+        let allDiagnostics = diagnostics + editPlan.diagnostics.filter { editDiagnostic in
+            !diagnostics.contains(editDiagnostic)
+        }
+
+        return NDSDataTextLineOperationPlan(
+            draft: draft,
+            beforeLineCount: beforeLineCount,
+            afterLineCount: operationErrors.isEmpty ? editedLines.count : beforeLineCount,
+            diagnostics: allDiagnostics,
+            editPlan: editPlan
+        )
+    }
+
+    private static func isEligiblePlatinumTextLineRecord(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
+        guard profile == .pokeplatinum,
+              record.domain == .text,
+              record.role == .sourceTree,
+              record.format == .text
+        else {
+            return false
+        }
+        let lower = record.relativePath.lowercased()
+        return lower.hasPrefix("res/text/")
+            && lower.hasSuffix(".txt")
+            && !lower.dropFirst("res/text/".count).isEmpty
+    }
+
+    private static func applyOperations(
+        _ operations: [NDSDataTextLineOperation],
+        to lines: inout [String]
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        for (operationIndex, operation) in operations.enumerated() {
+            switch operation.kind {
+            case .insert:
+                guard let index = operation.index, let text = operation.text else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "insert requires an index and text value."))
+                    return diagnostics
+                }
+                guard !text.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_TEXT_LINES_NEWLINE_BLOCKED",
+                            message: "Text line insert operation \(operationIndex + 1) contains a newline; multiline text row operations remain blocked."
+                        )
+                    )
+                    return diagnostics
+                }
+                guard (0...lines.count).contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "insert index \(index)", lineCount: lines.count, allowsEnd: true))
+                    return diagnostics
+                }
+                lines.insert(text, at: index)
+
+            case .delete:
+                guard let index = operation.index else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "delete requires an index."))
+                    return diagnostics
+                }
+                guard lines.indices.contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "delete index \(index)", lineCount: lines.count, allowsEnd: false))
+                    return diagnostics
+                }
+                lines.remove(at: index)
+
+            case .reorder:
+                guard let fromIndex = operation.fromIndex, let toIndex = operation.toIndex else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "reorder requires from-index and to-index values."))
+                    return diagnostics
+                }
+                guard lines.indices.contains(fromIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder source index \(fromIndex)", lineCount: lines.count, allowsEnd: false))
+                    return diagnostics
+                }
+                let line = lines.remove(at: fromIndex)
+                guard (0...lines.count).contains(toIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder destination index \(toIndex)", lineCount: lines.count, allowsEnd: true))
+                    return diagnostics
+                }
+                lines.insert(line, at: toIndex)
+            }
+        }
+        return diagnostics
+    }
+
+    private static func splitTextLines(_ text: String) -> (lines: [String], hadTrailingNewline: Bool) {
+        let normalized = normalizeLineEndings(text)
+        let hadTrailingNewline = normalized.hasSuffix("\n")
+        var lines = normalized.components(separatedBy: "\n")
+        if hadTrailingNewline {
+            lines.removeLast()
+        }
+        if lines.count == 1, lines[0].isEmpty, normalized.isEmpty {
+            lines.removeAll()
+        }
+        return (lines, hadTrailingNewline)
+    }
+
+    private static func renderTextLines(_ lines: [String], hadTrailingNewline: Bool) -> String {
+        guard !lines.isEmpty else { return "" }
+        let rendered = lines.joined(separator: "\n")
+        return hadTrailingNewline ? rendered + "\n" : rendered
+    }
+
+    private static func invalidOperationDiagnostic(operationIndex: Int, detail: String) -> Diagnostic {
+        Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_TEXT_LINES_OPERATION_INVALID",
+            message: "Text line operation \(operationIndex + 1) is invalid: \(detail)"
+        )
+    }
+
+    private static func rangeDiagnostic(
+        operationIndex: Int,
+        indexDescription: String,
+        lineCount: Int,
+        allowsEnd: Bool
+    ) -> Diagnostic {
+        let validRange = allowsEnd ? "0...\(lineCount)" : "0..<\(lineCount)"
+        return Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_TEXT_LINES_INDEX_OUT_OF_RANGE",
+            message: "Text line operation \(operationIndex + 1) has \(indexDescription), but the valid range at that step is \(validRange)."
+        )
+    }
+
+    private static func blockedEditPlan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataEditDraft,
+        diagnostics: [Diagnostic]
+    ) -> NDSDataEditPlan {
+        let mutationPlan = MutationPlan(
+            title: "NDS text line operations blocked",
+            summary: "No NDS text line source files are applyable until operation diagnostics are resolved.",
+            diagnostics: diagnostics,
+            requiresExplicitApply: true
+        )
+        return NDSDataEditPlan(
+            rootPath: catalog.root.path,
+            recordID: draft.recordID,
+            draft: draft,
+            changes: [],
+            diagnostics: diagnostics,
+            mutationPlan: mutationPlan,
+            backupRelativeRoot: ".pokemonhackstudio/backups/text-line-operations-blocked"
+        )
+    }
+
+    private static func normalizeLineEndings(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 }
 

@@ -70,9 +70,227 @@ final class BinaryROMMutationDryRunManifestTests: XCTestCase {
         XCTAssertEqual(manifest.ignoredOutputGuidance.relativeRoot, ".pokemonhackstudio/rom-mutations/test")
         XCTAssertEqual(manifest.ignoredOutputGuidance.relativeManifestPath, ".pokemonhackstudio/rom-mutations/test/manifest.json")
         XCTAssertEqual(manifest.ignoredOutputGuidance.relativeOutputROMPath, ".pokemonhackstudio/rom-mutations/test/test-patched.gba")
+        XCTAssertEqual(manifest.ignoredOutputGuidance.relativeBackupRoot, ".pokemonhackstudio/rom-mutations/test/<timestamp-token>")
         XCTAssertTrue(manifest.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_DRY_RUN_ONLY" })
         XCTAssertTrue(manifest.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_IGNORED_OUTPUT_GUIDANCE" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: rom.deletingLastPathComponent().appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testApplyReviewMetadataAndReplaceApplyMutatesInPlaceWithBackupAndManifest() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                expectedSHA1: pokemonHackSHA1Hex(originalData),
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let review = try XCTUnwrap(manifest.applyReview)
+        XCTAssertTrue(review.isReviewable)
+        let token = try XCTUnwrap(review.reviewToken)
+        let replacement = try XCTUnwrap(manifest.operationPreviews.first)
+        XCTAssertEqual(replacement.originalSpanSHA1, pokemonHackSHA1Hex(Data([0x11, 0x22])))
+        XCTAssertEqual(replacement.replacementHex, "AABB")
+
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: token
+        )
+
+        XCTAssertEqual(result.status, .applied)
+        XCTAssertEqual(result.appliedReplacements.count, 1)
+        let updatedData = try Data(contentsOf: rom)
+        XCTAssertEqual(Array(updatedData[0x120..<0x122]), [0xAA, 0xBB])
+        let backupPath = try XCTUnwrap(result.backupPath)
+        let applyManifestPath = try XCTUnwrap(result.manifestPath)
+        XCTAssertTrue(backupPath.contains(".pokemonhackstudio/rom-mutations/test/"))
+        XCTAssertTrue(applyManifestPath.contains(".pokemonhackstudio/rom-mutations/test/"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: backupPath)), originalData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: applyManifestPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
+        XCTAssertNotEqual(result.baseBefore?.sha1, result.baseAfter?.sha1)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_IN_PLACE_COMPLETED" })
+    }
+
+    func testApplyBlocksWrongConfirmationWithoutWriting() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: "romreplace-wrong"
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_CONFIRMATION_MISMATCH" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testApplyBlocksSourceTreeAvailableWithoutWriting() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let sourceRoot = temp.url.appendingPathComponent("pokeemerald")
+        try makeEmeraldSourceTree(at: sourceRoot)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: token
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_SOURCE_TREE_AVAILABLE_REFUSED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_SOURCE_TREE_AVAILABLE_REFUSED" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testApplyBlocksBaseAndOriginalByteDriftWithoutWriting() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+        var drifted = originalData
+        drifted[0x120] = 0x99
+        try drifted.write(to: rom)
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: token
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_BASE_SHA1_DRIFT" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_BASE_CRC32_DRIFT" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_ORIGINAL_BYTES_MISMATCH" })
+        XCTAssertEqual(try Data(contentsOf: rom), drifted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testApplyBlocksUnsafeAndNonReplacementManifestWithoutWriting() throws {
+        let temp = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x10, length: 2, replacementBytes: [0xAA, 0xBB]),
+                    BinaryROMMutationReplacementRequest(offset: 0x11, length: 2, replacementBytes: [0xCC, 0xDD]),
+                    BinaryROMMutationReplacementRequest(offset: 0x23F, length: 4, replacementBytes: [0x01, 0x02, 0x03, 0x04])
+                ],
+                repoints: [
+                    BinaryROMMutationRepointRequest(pointerOffset: 0x100, newTargetOffset: 0x180)
+                ],
+                allocations: [
+                    BinaryROMMutationAllocationRequest(byteCount: 0x20, alignment: 0x10)
+                ]
+            )
+        )
+        XCTAssertFalse(manifest.applyReview?.isReviewable ?? true)
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: "romreplace-not-reviewable"
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_NON_REPLACEMENT_BLOCKED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_REPLACEMENT_OVERLAP" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_HEADER_REGION_BLOCKED" })
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_RANGE_OUT_OF_BOUNDS" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testApplyBlocksSymlinkEscapedROMMutationArtifactRootWithoutWriting() throws {
+        let temp = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        let rom = try makeSyntheticGBA(in: temp.url)
+        let originalData = try Data(contentsOf: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: temp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let token = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestURL = temp.url.appendingPathComponent("dry-run.json")
+        try writeManifest(manifest, to: manifestURL)
+        try FileManager.default.createSymbolicLink(
+            at: temp.url.appendingPathComponent(".pokemonhackstudio"),
+            withDestinationURL: outside.url
+        )
+
+        let result = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            manifestPath: manifestURL.path,
+            workspaceRoot: temp.url.path,
+            confirmationToken: token
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "BINARY_ROM_MUTATION_APPLY_BACKUP_PATH_SYMLINK_OUTSIDE_ROOT" })
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.url.appendingPathComponent("rom-mutations").path))
     }
 
     func testSourceTreeInputRefusesBinaryOnlyManifestPlanning() throws {
@@ -194,6 +412,13 @@ final class BinaryROMMutationDryRunManifestTests: XCTestCase {
     private func write(_ text: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func writeManifest(_ manifest: BinaryROMMutationDryRunManifest, to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try encoder.encode(manifest).write(to: url)
     }
 }
 

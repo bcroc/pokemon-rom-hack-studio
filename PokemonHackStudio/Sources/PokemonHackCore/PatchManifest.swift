@@ -173,6 +173,106 @@ public struct PatchCreationPreviewReport: Codable, Equatable {
     }
 }
 
+public enum PatchCreationStatus: String, Codable, Equatable {
+    case created
+    case blocked
+}
+
+public struct PatchCreationArtifactManifest: Codable, Equatable {
+    public let schemaVersion: Int
+    public let action: String
+    public let projectRoot: String
+    public let baseROMPath: String
+    public let baseROMSHA1: String
+    public let baseROMCRC32: String
+    public let baseROMSizeBytes: UInt64
+    public let matchedBaseROMCandidate: String
+    public let builtOutputPath: String
+    public let builtOutputRelativePath: String
+    public let builtOutputTargetID: String
+    public let builtOutputSHA1: String
+    public let builtOutputCRC32: String
+    public let builtOutputSizeBytes: UInt64
+    public let patchPath: String
+    public let patchSHA1: String
+    public let patchCRC32: String
+    public let patchSizeBytes: UInt64
+    public let patchFormat: PatchFormatID
+    public let headerPolicy: PatchArtifactHeaderPolicy
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        schemaVersion: Int,
+        action: String,
+        projectRoot: String,
+        baseROMPath: String,
+        baseROMSHA1: String,
+        baseROMCRC32: String,
+        baseROMSizeBytes: UInt64,
+        matchedBaseROMCandidate: String,
+        builtOutputPath: String,
+        builtOutputRelativePath: String,
+        builtOutputTargetID: String,
+        builtOutputSHA1: String,
+        builtOutputCRC32: String,
+        builtOutputSizeBytes: UInt64,
+        patchPath: String,
+        patchSHA1: String,
+        patchCRC32: String,
+        patchSizeBytes: UInt64,
+        patchFormat: PatchFormatID,
+        headerPolicy: PatchArtifactHeaderPolicy,
+        diagnostics: [Diagnostic]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.action = action
+        self.projectRoot = projectRoot
+        self.baseROMPath = baseROMPath
+        self.baseROMSHA1 = baseROMSHA1
+        self.baseROMCRC32 = baseROMCRC32
+        self.baseROMSizeBytes = baseROMSizeBytes
+        self.matchedBaseROMCandidate = matchedBaseROMCandidate
+        self.builtOutputPath = builtOutputPath
+        self.builtOutputRelativePath = builtOutputRelativePath
+        self.builtOutputTargetID = builtOutputTargetID
+        self.builtOutputSHA1 = builtOutputSHA1
+        self.builtOutputCRC32 = builtOutputCRC32
+        self.builtOutputSizeBytes = builtOutputSizeBytes
+        self.patchPath = patchPath
+        self.patchSHA1 = patchSHA1
+        self.patchCRC32 = patchCRC32
+        self.patchSizeBytes = patchSizeBytes
+        self.patchFormat = patchFormat
+        self.headerPolicy = headerPolicy
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct PatchCreationResult: Codable, Equatable {
+    public let status: PatchCreationStatus
+    public let patchPath: String?
+    public let manifestPath: String?
+    public let patchSHA1: String?
+    public let diagnostics: [Diagnostic]
+    public let manifest: PatchCreationArtifactManifest?
+
+    public init(
+        status: PatchCreationStatus,
+        patchPath: String?,
+        manifestPath: String?,
+        patchSHA1: String?,
+        diagnostics: [Diagnostic],
+        manifest: PatchCreationArtifactManifest?
+    ) {
+        self.status = status
+        self.patchPath = patchPath
+        self.manifestPath = manifestPath
+        self.patchSHA1 = patchSHA1
+        self.diagnostics = diagnostics
+        self.manifest = manifest
+    }
+}
+
 public struct PatchArtifactChecksumExpectations: Codable, Equatable {
     public let baseROMSHA1: String?
     public let expectedBaseROMSHA1: String?
@@ -850,6 +950,403 @@ public enum PatchCreationPreviewBuilder {
         }
         let sanitized = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
         return sanitized.isEmpty ? fallback : sanitized
+    }
+}
+
+public enum BPSPatchCodecError: Error, LocalizedError, Equatable {
+    case malformed(String)
+    case checksumMismatch(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .malformed(let message), .checksumMismatch(let message):
+            return message
+        }
+    }
+}
+
+public enum BPSPatchCodec {
+    public static func encode(source: Data, target: Data) -> Data {
+        var body = Data("BPS1".utf8)
+        body.append(contentsOf: encodeVariableLength(UInt64(source.count)))
+        body.append(contentsOf: encodeVariableLength(UInt64(target.count)))
+        body.append(contentsOf: encodeVariableLength(0))
+
+        let sourceBytes = Array(source)
+        let targetBytes = Array(target)
+        var prefixLength = 0
+        while prefixLength < min(sourceBytes.count, targetBytes.count),
+              sourceBytes[prefixLength] == targetBytes[prefixLength]
+        {
+            prefixLength += 1
+        }
+
+        if prefixLength > 0 {
+            body.append(contentsOf: encodeCommand(length: prefixLength, command: 0))
+        }
+        if prefixLength < targetBytes.count {
+            let length = targetBytes.count - prefixLength
+            body.append(contentsOf: encodeCommand(length: length, command: 1))
+            body.append(contentsOf: targetBytes[prefixLength...])
+        }
+
+        appendUInt32LE(pokemonHackCRC32(source), to: &body)
+        appendUInt32LE(pokemonHackCRC32(target), to: &body)
+        appendUInt32LE(pokemonHackCRC32(body), to: &body)
+        return body
+    }
+
+    public static func apply(patchData: Data, baseData: Data) throws -> Data {
+        let bytes = Array(patchData)
+        guard bytes.count >= 4, Data(bytes[0..<4]) == Data("BPS1".utf8) else {
+            throw BPSPatchCodecError.malformed("BPS patch header is missing.")
+        }
+        let hasChecksumTrailer = bytes.count >= 16
+        let patchBodyEnd = hasChecksumTrailer ? bytes.count - 12 : bytes.count
+        var cursor = ByteCursor(data: Data(bytes[0..<patchBodyEnd]))
+        _ = try cursor.readBytes(count: 4)
+        let sourceSize = try cursor.readVariableLengthQuantity()
+        let targetSize = try cursor.readVariableLengthQuantity()
+        let metadataSize = try cursor.readVariableLengthQuantity()
+        if metadataSize > 0 {
+            _ = try cursor.readBytes(count: Int(metadataSize))
+        }
+        guard sourceSize == UInt64(baseData.count) else {
+            throw BPSPatchCodecError.checksumMismatch("BPS source size \(sourceSize) does not match selected base ROM size \(baseData.count).")
+        }
+
+        var output: [UInt8] = []
+        output.reserveCapacity(Int(targetSize))
+        let source = Array(baseData)
+        var sourceRelativeOffset = 0
+        var targetRelativeOffset = 0
+
+        while output.count < Int(targetSize), !cursor.isAtEnd {
+            let data = try cursor.readVariableLengthQuantity()
+            let command = Int(data & 0x03)
+            let length = Int((data >> 2) + 1)
+            switch command {
+            case 0:
+                let offset = output.count
+                guard offset + length <= source.count else {
+                    throw BPSPatchCodecError.malformed("BPS SourceRead exceeds source ROM size.")
+                }
+                output.append(contentsOf: source[offset..<(offset + length)])
+            case 1:
+                output.append(contentsOf: try cursor.readBytes(count: length))
+            case 2:
+                sourceRelativeOffset += try readSignedOffset(cursor: &cursor)
+                guard sourceRelativeOffset >= 0, sourceRelativeOffset + length <= source.count else {
+                    throw BPSPatchCodecError.malformed("BPS SourceCopy exceeds source ROM size.")
+                }
+                output.append(contentsOf: source[sourceRelativeOffset..<(sourceRelativeOffset + length)])
+                sourceRelativeOffset += length
+            case 3:
+                targetRelativeOffset += try readSignedOffset(cursor: &cursor)
+                guard targetRelativeOffset >= 0 else {
+                    throw BPSPatchCodecError.malformed("BPS TargetCopy has a negative target offset.")
+                }
+                for index in 0..<length {
+                    let sourceIndex = targetRelativeOffset + index
+                    guard sourceIndex < output.count else {
+                        throw BPSPatchCodecError.malformed("BPS TargetCopy references bytes that have not been written.")
+                    }
+                    output.append(output[sourceIndex])
+                }
+                targetRelativeOffset += length
+            default:
+                throw BPSPatchCodecError.malformed("BPS command is invalid.")
+            }
+        }
+
+        guard output.count == Int(targetSize) else {
+            throw BPSPatchCodecError.malformed("BPS output size \(output.count) does not match target size \(targetSize).")
+        }
+        let outputData = Data(output)
+        if hasChecksumTrailer {
+            let expectedSourceCRC = readUInt32LE(bytes, offset: bytes.count - 12)
+            let expectedTargetCRC = readUInt32LE(bytes, offset: bytes.count - 8)
+            let expectedPatchCRC = readUInt32LE(bytes, offset: bytes.count - 4)
+            guard pokemonHackCRC32(baseData) == expectedSourceCRC else {
+                throw BPSPatchCodecError.checksumMismatch("BPS embedded source CRC32 does not match the selected base ROM.")
+            }
+            guard pokemonHackCRC32(outputData) == expectedTargetCRC else {
+                throw BPSPatchCodecError.checksumMismatch("BPS embedded target CRC32 does not match the exported ROM.")
+            }
+            guard pokemonHackCRC32(Data(bytes[0..<(bytes.count - 4)])) == expectedPatchCRC else {
+                throw BPSPatchCodecError.checksumMismatch("BPS embedded patch CRC32 does not match the patch file.")
+            }
+        }
+        return outputData
+    }
+
+    private static func encodeCommand(length: Int, command: UInt64) -> [UInt8] {
+        encodeVariableLength(UInt64((length - 1) << 2) | command)
+    }
+
+    private static func encodeVariableLength(_ value: UInt64) -> [UInt8] {
+        var data = value
+        var bytes: [UInt8] = []
+        while true {
+            let byte = UInt8(data & 0x7F)
+            data >>= 7
+            if data == 0 {
+                bytes.append(byte | 0x80)
+                break
+            }
+            bytes.append(byte)
+            data -= 1
+        }
+        return bytes
+    }
+
+    private static func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0xFF))
+        data.append(UInt8((value >> 8) & 0xFF))
+        data.append(UInt8((value >> 16) & 0xFF))
+        data.append(UInt8((value >> 24) & 0xFF))
+    }
+
+    private static func readSignedOffset(cursor: inout ByteCursor) throws -> Int {
+        let value = try cursor.readVariableLengthQuantity()
+        let magnitude = Int(value >> 1)
+        return value & 1 == 0 ? magnitude : -magnitude
+    }
+
+    private static func readUInt32LE(_ bytes: [UInt8], offset: Int) -> UInt32 {
+        UInt32(bytes[offset])
+            | (UInt32(bytes[offset + 1]) << 8)
+            | (UInt32(bytes[offset + 2]) << 16)
+            | (UInt32(bytes[offset + 3]) << 24)
+    }
+}
+
+public enum PatchCreationBuilder {
+    public static func create(
+        projectPath: String,
+        baseROMPath: String,
+        targetID: String? = nil,
+        fileManager: FileManager = .default
+    ) throws -> PatchCreationResult {
+        let index = try GameAdapterRegistry.index(path: projectPath)
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let buildReport = BuildValidationReportBuilder.build(
+            index: index,
+            fileManager: fileManager,
+            toolResolver: { ToolAvailability(name: $0, isAvailable: true) }
+        )
+        let preview = try PatchCreationPreviewBuilder.build(
+            projectPath: projectPath,
+            baseROMPath: baseROMPath,
+            targetID: targetID,
+            fileManager: fileManager
+        )
+        let manifestRelativePath = preview.plannedPatchPath.appending(".manifest.json")
+        let patchURL = root.appendingPathComponent(preview.plannedPatchPath).standardizedFileURL
+        let manifestURL = root.appendingPathComponent(manifestRelativePath).standardizedFileURL
+        var diagnostics = preview.diagnostics.filter { $0.code != "PATCH_CREATION_PREVIEW_ONLY" }
+
+        diagnostics.append(contentsOf: creationSafetyDiagnostics(
+            root: root,
+            patchRelativePath: preview.plannedPatchPath,
+            manifestRelativePath: manifestRelativePath,
+            fileManager: fileManager
+        ))
+
+        guard preview.candidateFormat == .bps else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_FORMAT_UNSUPPORTED", message: "Patch creation currently writes BPS artifacts only."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard !preview.headerPolicy.shouldRewriteHeader else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_HEADER_REWRITE_BLOCKED", message: "Patch creation will not rewrite title, game code, maker code, or header checksum."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        if fileManager.fileExists(atPath: patchURL.path) {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_PATCH_EXISTS", message: "BPS patch output already exists at \(patchURL.path); creation does not overwrite or back up existing patch artifacts."))
+        }
+        if fileManager.fileExists(atPath: manifestURL.path) {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_MANIFEST_EXISTS", message: "BPS patch manifest already exists at \(manifestURL.path); creation does not overwrite or back up existing manifests."))
+        }
+
+        guard preview.isReady else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_NOT_READY", message: "Patch creation requires a readable selected base ROM and an existing readable built output."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard diagnostics.contains(where: { $0.severity == .error }) == false else {
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard let baseSHA1 = preview.baseROM.sha1,
+              let builtOutput = preview.builtOutput,
+              let builtOutputSHA1 = builtOutput.sha1 else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_INPUT_HASH_UNAVAILABLE", message: "Patch creation requires SHA1 metadata for both selected base ROM and built output."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard let matchedCandidate = matchingBaseCandidate(sha1: baseSHA1, expectations: buildReport.sha1Expectations) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_BASE_ROM_NOT_COMPATIBLE", message: "Patch creation requires the selected base ROM SHA1 to match a declared project SHA1 candidate."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+
+        guard let baseData = try? Data(contentsOf: URL(fileURLWithPath: preview.baseROM.absolutePath)) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_BASE_ROM_UNREADABLE", message: "Selected base ROM could not be read immediately before patch creation at \(preview.baseROM.absolutePath)."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard let builtData = try? Data(contentsOf: URL(fileURLWithPath: builtOutput.absolutePath)) else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_BUILD_OUTPUT_UNREADABLE", message: "Built output could not be read immediately before patch creation at \(builtOutput.absolutePath)."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        let currentBaseSHA1 = pokemonHackSHA1Hex(baseData)
+        let currentBuiltSHA1 = pokemonHackSHA1Hex(builtData)
+        guard currentBaseSHA1.caseInsensitiveCompare(baseSHA1) == .orderedSame,
+              currentBaseSHA1.caseInsensitiveCompare(matchedCandidate.expectedSHA1 ?? "") == .orderedSame else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_BASE_ROM_HASH_CHANGED", message: "Selected base ROM SHA1 changed or no longer matches the declared project candidate."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+        guard currentBuiltSHA1.caseInsensitiveCompare(builtOutputSHA1) == .orderedSame else {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_BUILD_OUTPUT_HASH_CHANGED", message: "Built output SHA1 changed after readiness was computed; refresh the preview before creating a patch."))
+            return blockedResult(patchURL: patchURL, manifestURL: manifestURL, diagnostics: diagnostics)
+        }
+
+        let patchData = BPSPatchCodec.encode(source: baseData, target: builtData)
+        let patchSHA1 = pokemonHackSHA1Hex(patchData)
+        let writtenDiagnostic = Diagnostic(
+            severity: .info,
+            code: "PATCH_CREATION_WRITTEN",
+            message: "BPS patch was written to \(patchURL.path); manifest written to \(manifestURL.path)."
+        )
+        let resultDiagnostics = diagnostics + [writtenDiagnostic]
+        let manifest = PatchCreationArtifactManifest(
+            schemaVersion: 1,
+            action: "patch-create",
+            projectRoot: root.path,
+            baseROMPath: preview.baseROM.absolutePath,
+            baseROMSHA1: currentBaseSHA1,
+            baseROMCRC32: pokemonHackCRC32Hex(baseData),
+            baseROMSizeBytes: UInt64(baseData.count),
+            matchedBaseROMCandidate: matchedCandidate.relativePath,
+            builtOutputPath: builtOutput.absolutePath,
+            builtOutputRelativePath: builtOutput.relativePath,
+            builtOutputTargetID: builtOutput.targetID,
+            builtOutputSHA1: currentBuiltSHA1,
+            builtOutputCRC32: pokemonHackCRC32Hex(builtData),
+            builtOutputSizeBytes: UInt64(builtData.count),
+            patchPath: patchURL.path,
+            patchSHA1: patchSHA1,
+            patchCRC32: pokemonHackCRC32Hex(patchData),
+            patchSizeBytes: UInt64(patchData.count),
+            patchFormat: .bps,
+            headerPolicy: preview.headerPolicy,
+            diagnostics: resultDiagnostics
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let manifestData = try encoder.encode(manifest)
+        if let writeFailure = writePatchArtifacts(
+            patchData: patchData,
+            manifestData: manifestData,
+            patchURL: patchURL,
+            manifestURL: manifestURL,
+            fileManager: fileManager
+        ) {
+            return blockedResult(
+                patchURL: patchURL,
+                manifestURL: manifestURL,
+                diagnostics: diagnostics + [writeFailure]
+            )
+        }
+
+        return PatchCreationResult(
+            status: .created,
+            patchPath: patchURL.path,
+            manifestPath: manifestURL.path,
+            patchSHA1: patchSHA1,
+            diagnostics: resultDiagnostics,
+            manifest: manifest
+        )
+    }
+
+    private static func matchingBaseCandidate(
+        sha1: String,
+        expectations: [SHA1Expectation]
+    ) -> SHA1Expectation? {
+        expectations.first { expectation in
+            guard let expectedSHA1 = expectation.expectedSHA1 else { return false }
+            return expectedSHA1.caseInsensitiveCompare(sha1) == .orderedSame
+        }
+    }
+
+    private static func creationSafetyDiagnostics(
+        root: URL,
+        patchRelativePath: String,
+        manifestRelativePath: String,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        if !patchRelativePath.hasPrefix(".pokemonhackstudio/patches/") || !patchRelativePath.hasSuffix(".bps") {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_PATCH_PATH_UNSAFE", message: "BPS patch creation must write only ignored .pokemonhackstudio/patches/*.bps artifacts."))
+        }
+        if !manifestRelativePath.hasPrefix(".pokemonhackstudio/patches/") || !manifestRelativePath.hasSuffix(".bps.manifest.json") {
+            diagnostics.append(Diagnostic(severity: .error, code: "PATCH_CREATION_MANIFEST_PATH_UNSAFE", message: "BPS patch creation must write only ignored .pokemonhackstudio/patches/*.bps.manifest.json manifests."))
+        }
+        diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            patchRelativePath,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "PATCH_CREATION_PATCH",
+            subject: "Patch creation output path"
+        ))
+        diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            manifestRelativePath,
+            root: root,
+            fileManager: fileManager,
+            codePrefix: "PATCH_CREATION_MANIFEST",
+            subject: "Patch creation manifest path"
+        ))
+        return diagnostics
+    }
+
+    private static func writePatchArtifacts(
+        patchData: Data,
+        manifestData: Data,
+        patchURL: URL,
+        manifestURL: URL,
+        fileManager: FileManager
+    ) -> Diagnostic? {
+        let directory = patchURL.deletingLastPathComponent()
+        let patchTempURL = directory.appendingPathComponent(".\(patchURL.lastPathComponent).\(UUID().uuidString).tmp")
+        let manifestTempURL = directory.appendingPathComponent(".\(manifestURL.lastPathComponent).\(UUID().uuidString).tmp")
+        var movedPatch = false
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try patchData.write(to: patchTempURL, options: .atomic)
+            try manifestData.write(to: manifestTempURL, options: .atomic)
+            try fileManager.moveItem(at: patchTempURL, to: patchURL)
+            movedPatch = true
+            try fileManager.moveItem(at: manifestTempURL, to: manifestURL)
+            return nil
+        } catch {
+            try? fileManager.removeItem(at: patchTempURL)
+            try? fileManager.removeItem(at: manifestTempURL)
+            if movedPatch {
+                try? fileManager.removeItem(at: patchURL)
+            }
+            return Diagnostic(severity: .error, code: "PATCH_CREATION_WRITE_FAILED", message: "BPS patch creation failed while writing ignored artifacts: \(error.localizedDescription)")
+        }
+    }
+
+    private static func blockedResult(
+        patchURL: URL,
+        manifestURL: URL,
+        diagnostics: [Diagnostic]
+    ) -> PatchCreationResult {
+        PatchCreationResult(
+            status: .blocked,
+            patchPath: patchURL.path,
+            manifestPath: manifestURL.path,
+            patchSHA1: nil,
+            diagnostics: diagnostics,
+            manifest: nil
+        )
     }
 }
 
@@ -1613,93 +2110,7 @@ public enum PatchManifestBuilder {
     }
 
     private static func applyBPSPatch(patchData: Data, baseData: Data) throws -> Data {
-        let bytes = Array(patchData)
-        guard bytes.count >= 4, Data(bytes[0..<4]) == Data("BPS1".utf8) else {
-            throw PatchApplyError.malformed("BPS patch header is missing.")
-        }
-        let hasChecksumTrailer = bytes.count >= 16
-        let patchBodyEnd = hasChecksumTrailer ? bytes.count - 12 : bytes.count
-        var cursor = ByteCursor(data: Data(bytes[0..<patchBodyEnd]))
-        _ = try cursor.readBytes(count: 4)
-        let sourceSize = try cursor.readVariableLengthQuantity()
-        let targetSize = try cursor.readVariableLengthQuantity()
-        let metadataSize = try cursor.readVariableLengthQuantity()
-        if metadataSize > 0 {
-            _ = try cursor.readBytes(count: Int(metadataSize))
-        }
-        guard sourceSize == UInt64(baseData.count) else {
-            throw PatchApplyError.checksumMismatch("BPS source size \(sourceSize) does not match selected base ROM size \(baseData.count).")
-        }
-
-        var output: [UInt8] = []
-        output.reserveCapacity(Int(targetSize))
-        let source = Array(baseData)
-        var sourceRelativeOffset = 0
-        var targetRelativeOffset = 0
-
-        while output.count < Int(targetSize), !cursor.isAtEnd {
-            let data = try cursor.readVariableLengthQuantity()
-            let command = Int(data & 0x03)
-            let length = Int((data >> 2) + 1)
-            switch command {
-            case 0:
-                let offset = output.count
-                guard offset + length <= source.count else {
-                    throw PatchApplyError.malformed("BPS SourceRead exceeds source ROM size.")
-                }
-                output.append(contentsOf: source[offset..<(offset + length)])
-            case 1:
-                output.append(contentsOf: try cursor.readBytes(count: length))
-            case 2:
-                sourceRelativeOffset += try readBPSSignedOffset(cursor: &cursor)
-                guard sourceRelativeOffset >= 0, sourceRelativeOffset + length <= source.count else {
-                    throw PatchApplyError.malformed("BPS SourceCopy exceeds source ROM size.")
-                }
-                output.append(contentsOf: source[sourceRelativeOffset..<(sourceRelativeOffset + length)])
-                sourceRelativeOffset += length
-            case 3:
-                targetRelativeOffset += try readBPSSignedOffset(cursor: &cursor)
-                guard targetRelativeOffset >= 0 else {
-                    throw PatchApplyError.malformed("BPS TargetCopy has a negative target offset.")
-                }
-                for index in 0..<length {
-                    let sourceIndex = targetRelativeOffset + index
-                    guard sourceIndex < output.count else {
-                        throw PatchApplyError.malformed("BPS TargetCopy references bytes that have not been written.")
-                    }
-                    output.append(output[sourceIndex])
-                }
-                targetRelativeOffset += length
-            default:
-                throw PatchApplyError.malformed("BPS command is invalid.")
-            }
-        }
-
-        guard output.count == Int(targetSize) else {
-            throw PatchApplyError.malformed("BPS output size \(output.count) does not match target size \(targetSize).")
-        }
-        let outputData = Data(output)
-        if hasChecksumTrailer {
-            let expectedSourceCRC = readUInt32LE(bytes, offset: bytes.count - 12)
-            let expectedTargetCRC = readUInt32LE(bytes, offset: bytes.count - 8)
-            let expectedPatchCRC = readUInt32LE(bytes, offset: bytes.count - 4)
-            guard crc32(baseData) == expectedSourceCRC else {
-                throw PatchApplyError.checksumMismatch("BPS embedded source CRC32 does not match the selected base ROM.")
-            }
-            guard crc32(outputData) == expectedTargetCRC else {
-                throw PatchApplyError.checksumMismatch("BPS embedded target CRC32 does not match the exported ROM.")
-            }
-            guard crc32(Data(bytes[0..<(bytes.count - 4)])) == expectedPatchCRC else {
-                throw PatchApplyError.checksumMismatch("BPS embedded patch CRC32 does not match the patch file.")
-            }
-        }
-        return outputData
-    }
-
-    private static func readBPSSignedOffset(cursor: inout ByteCursor) throws -> Int {
-        let value = try cursor.readVariableLengthQuantity()
-        let magnitude = Int(value >> 1)
-        return value & 1 == 0 ? magnitude : -magnitude
+        try BPSPatchCodec.apply(patchData: patchData, baseData: baseData)
     }
 
     private static func patchArtifactRoot(projectRoot: String?, patchPath: String) -> URL {

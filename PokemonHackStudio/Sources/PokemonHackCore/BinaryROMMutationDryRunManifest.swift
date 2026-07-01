@@ -142,12 +142,40 @@ public struct BinaryROMMutationIgnoredOutputGuidance: Codable, Equatable {
         relativeRoot = ".pokemonhackstudio/rom-mutations/\(stem)"
         relativeManifestPath = "\(relativeRoot)/manifest.json"
         relativeOutputROMPath = "\(relativeRoot)/\(stem)-patched.gba"
-        relativeBackupRoot = ".pokemonhackstudio/backups"
+        relativeBackupRoot = "\(relativeRoot)/<timestamp-token>"
         guidance = [
             "Dry-run manifests report ignored future output paths only.",
             "No backup, manifest, patched ROM, export artifact, checksum repair, or byte write is created.",
             "Future binary mutation artifacts must stay under ignored .pokemonhackstudio/rom-mutations/ roots."
         ]
+    }
+}
+
+public struct BinaryROMMutationApplyReview: Codable, Equatable {
+    public let isReviewable: Bool
+    public let reviewToken: String?
+    public let confirmationArgument: String?
+    public let operationCount: Int
+    public let operationKinds: [BinaryROMMutationOperationKind]
+    public let blockedApplyActions: [String]
+    public let rationale: String
+
+    public init(
+        isReviewable: Bool,
+        reviewToken: String?,
+        confirmationArgument: String?,
+        operationCount: Int,
+        operationKinds: [BinaryROMMutationOperationKind],
+        blockedApplyActions: [String],
+        rationale: String
+    ) {
+        self.isReviewable = isReviewable
+        self.reviewToken = reviewToken
+        self.confirmationArgument = confirmationArgument
+        self.operationCount = operationCount
+        self.operationKinds = operationKinds
+        self.blockedApplyActions = blockedApplyActions
+        self.rationale = rationale
     }
 }
 
@@ -171,7 +199,9 @@ public struct BinaryROMMutationOperationPreview: Codable, Equatable, Identifiabl
     public let offset: UInt32?
     public let length: UInt32?
     public let originalPreviewHex: String?
+    public let originalSpanSHA1: String?
     public let replacementPreviewHex: String?
+    public let replacementHex: String?
     public let replacementSHA1: String?
     public let pointerSourceOffset: UInt32?
     public let oldTargetOffset: UInt32?
@@ -193,7 +223,9 @@ public struct BinaryROMMutationOperationPreview: Codable, Equatable, Identifiabl
         offset: UInt32? = nil,
         length: UInt32? = nil,
         originalPreviewHex: String? = nil,
+        originalSpanSHA1: String? = nil,
         replacementPreviewHex: String? = nil,
+        replacementHex: String? = nil,
         replacementSHA1: String? = nil,
         pointerSourceOffset: UInt32? = nil,
         oldTargetOffset: UInt32? = nil,
@@ -215,7 +247,9 @@ public struct BinaryROMMutationOperationPreview: Codable, Equatable, Identifiabl
         self.offset = offset
         self.length = length
         self.originalPreviewHex = originalPreviewHex
+        self.originalSpanSHA1 = originalSpanSHA1
         self.replacementPreviewHex = replacementPreviewHex
+        self.replacementHex = replacementHex
         self.replacementSHA1 = replacementSHA1
         self.pointerSourceOffset = pointerSourceOffset
         self.oldTargetOffset = oldTargetOffset
@@ -241,6 +275,7 @@ public struct BinaryROMMutationDryRunManifest: Codable, Equatable {
     public let sourceTreeFirst: BinaryROMMutationSourceTreeState
     public let operationPreviews: [BinaryROMMutationOperationPreview]
     public let ignoredOutputGuidance: BinaryROMMutationIgnoredOutputGuidance
+    public let applyReview: BinaryROMMutationApplyReview?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -250,6 +285,7 @@ public struct BinaryROMMutationDryRunManifest: Codable, Equatable {
         sourceTreeFirst: BinaryROMMutationSourceTreeState,
         operationPreviews: [BinaryROMMutationOperationPreview],
         ignoredOutputGuidance: BinaryROMMutationIgnoredOutputGuidance,
+        applyReview: BinaryROMMutationApplyReview? = nil,
         diagnostics: [Diagnostic]
     ) {
         schemaVersion = 1
@@ -261,7 +297,123 @@ public struct BinaryROMMutationDryRunManifest: Codable, Equatable {
         self.sourceTreeFirst = sourceTreeFirst
         self.operationPreviews = operationPreviews
         self.ignoredOutputGuidance = ignoredOutputGuidance
+        self.applyReview = applyReview
         self.diagnostics = diagnostics
+    }
+}
+
+public enum BinaryROMMutationApplyStatus: String, Codable, Equatable {
+    case applied
+    case blocked
+}
+
+public struct BinaryROMMutationApplyConfirmation: Codable, Equatable {
+    public let method: String
+    public let reviewToken: String
+    public let dryRunManifestPath: String
+    public let dryRunManifestSHA1: String
+
+    public init(method: String, reviewToken: String, dryRunManifestPath: String, dryRunManifestSHA1: String) {
+        self.method = method
+        self.reviewToken = reviewToken
+        self.dryRunManifestPath = dryRunManifestPath
+        self.dryRunManifestSHA1 = dryRunManifestSHA1
+    }
+}
+
+public struct BinaryROMMutationAppliedReplacement: Codable, Equatable, Identifiable {
+    public let id: String
+    public let offset: UInt32
+    public let length: UInt32
+    public let originalPreviewHex: String?
+    public let originalSpanSHA1: String?
+    public let replacementPreviewHex: String?
+    public let replacementSHA1: String?
+
+    public init(
+        id: String,
+        offset: UInt32,
+        length: UInt32,
+        originalPreviewHex: String?,
+        originalSpanSHA1: String?,
+        replacementPreviewHex: String?,
+        replacementSHA1: String?
+    ) {
+        self.id = id
+        self.offset = offset
+        self.length = length
+        self.originalPreviewHex = originalPreviewHex
+        self.originalSpanSHA1 = originalSpanSHA1
+        self.replacementPreviewHex = replacementPreviewHex
+        self.replacementSHA1 = replacementSHA1
+    }
+}
+
+public struct BinaryROMMutationApplyManifest: Codable, Equatable {
+    public let schemaVersion: Int
+    public let operationKind: String
+    public let inputPath: String
+    public let backupPath: String
+    public let baseBefore: BinaryROMMutationBaseIdentity
+    public let baseAfter: BinaryROMMutationBaseIdentity
+    public let replacements: [BinaryROMMutationAppliedReplacement]
+    public let confirmation: BinaryROMMutationApplyConfirmation
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        inputPath: String,
+        backupPath: String,
+        baseBefore: BinaryROMMutationBaseIdentity,
+        baseAfter: BinaryROMMutationBaseIdentity,
+        replacements: [BinaryROMMutationAppliedReplacement],
+        confirmation: BinaryROMMutationApplyConfirmation,
+        diagnostics: [Diagnostic]
+    ) {
+        schemaVersion = 1
+        operationKind = "replaceBytesInPlace"
+        self.inputPath = inputPath
+        self.backupPath = backupPath
+        self.baseBefore = baseBefore
+        self.baseAfter = baseAfter
+        self.replacements = replacements
+        self.confirmation = confirmation
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct BinaryROMMutationApplyResult: Codable, Equatable {
+    public let schemaVersion: Int
+    public let status: BinaryROMMutationApplyStatus
+    public let inputPath: String
+    public let backupPath: String?
+    public let manifestPath: String?
+    public let baseBefore: BinaryROMMutationBaseIdentity?
+    public let baseAfter: BinaryROMMutationBaseIdentity?
+    public let appliedReplacements: [BinaryROMMutationAppliedReplacement]
+    public let diagnostics: [Diagnostic]
+    public let manifest: BinaryROMMutationApplyManifest?
+
+    public init(
+        status: BinaryROMMutationApplyStatus,
+        inputPath: String,
+        backupPath: String? = nil,
+        manifestPath: String? = nil,
+        baseBefore: BinaryROMMutationBaseIdentity? = nil,
+        baseAfter: BinaryROMMutationBaseIdentity? = nil,
+        appliedReplacements: [BinaryROMMutationAppliedReplacement] = [],
+        diagnostics: [Diagnostic],
+        manifest: BinaryROMMutationApplyManifest? = nil
+    ) {
+        schemaVersion = 1
+        self.status = status
+        self.inputPath = inputPath
+        self.backupPath = backupPath
+        self.manifestPath = manifestPath
+        self.baseBefore = baseBefore
+        self.baseAfter = baseAfter
+        self.appliedReplacements = appliedReplacements
+        self.diagnostics = diagnostics
+        self.manifest = manifest
     }
 }
 
@@ -440,6 +592,7 @@ public enum BinaryROMMutationDryRunManifestBuilder {
                 )
             )
         }
+        let applyReview = applyReview(base: base, operationPreviews: operationPreviews, diagnostics: diagnostics)
 
         return BinaryROMMutationDryRunManifest(
             inputPath: inputURL.path,
@@ -452,6 +605,7 @@ public enum BinaryROMMutationDryRunManifestBuilder {
             ),
             operationPreviews: operationPreviews,
             ignoredOutputGuidance: outputGuidance,
+            applyReview: applyReview,
             diagnostics: diagnostics
         )
     }
@@ -543,7 +697,9 @@ public enum BinaryROMMutationDryRunManifestBuilder {
             offset: request.offset,
             length: request.length,
             originalPreviewHex: hexPreview(data: data, offset: request.offset, length: request.length),
+            originalSpanSHA1: spanSHA1(data: data, offset: request.offset, length: request.length),
             replacementPreviewHex: hexPreview(bytes: request.replacementBytes),
+            replacementHex: compactHex(bytes: request.replacementBytes),
             replacementSHA1: pokemonHackSHA1Hex(replacementData),
             diagnostics: diagnostics
         )
@@ -727,6 +883,56 @@ public enum BinaryROMMutationDryRunManifestBuilder {
         )
     }
 
+    private static func applyReview(
+        base: BinaryROMMutationBaseIdentity,
+        operationPreviews: [BinaryROMMutationOperationPreview],
+        diagnostics: [Diagnostic]
+    ) -> BinaryROMMutationApplyReview {
+        let replacementPreviews = operationPreviews.filter { $0.kind == .replaceBytes }
+        let hasErrors = diagnostics.contains { $0.severity == .error }
+            || operationPreviews.flatMap(\.diagnostics).contains { $0.severity == .error }
+        let replacementOnly = !operationPreviews.isEmpty && replacementPreviews.count == operationPreviews.count
+        let reviewable = replacementOnly
+            && !hasErrors
+            && operationPreviews.allSatisfy { $0.status == .previewOnly }
+            && replacementPreviews.allSatisfy {
+                $0.offset != nil
+                    && $0.length != nil
+                    && $0.originalSpanSHA1 != nil
+                    && $0.replacementHex != nil
+                    && $0.replacementSHA1 != nil
+            }
+        let token = reviewable ? binaryROMMutationReviewToken(base: base, replacements: replacementPreviews) : nil
+        let rationale: String
+        if reviewable {
+            rationale = "This dry-run is reviewable for the replace-only CLI apply path; copy the review token into rom-mutation-apply after reviewing base identity and byte spans."
+        } else if operationPreviews.isEmpty {
+            rationale = "No byte replacement operations are available to review for apply."
+        } else if !replacementOnly {
+            rationale = "Only explicit byte replacement operations can be applied by this first binary writer row."
+        } else {
+            rationale = "One or more diagnostics must be resolved before a binary replacement apply can be reviewed."
+        }
+        return BinaryROMMutationApplyReview(
+            isReviewable: reviewable,
+            reviewToken: token,
+            confirmationArgument: token.map { "--confirm \($0)" },
+            operationCount: operationPreviews.count,
+            operationKinds: operationPreviews.map(\.kind),
+            blockedApplyActions: [
+                "pointer repoint apply",
+                "free-space allocation apply",
+                "checksum repair",
+                "emulator launch",
+                "app apply UI",
+                "source mutation",
+                "ROM export",
+                "patched-copy output"
+            ],
+            rationale: rationale
+        )
+    }
+
     private static func sanitizedStem(for url: URL) -> String {
         let raw = url.deletingPathExtension().lastPathComponent
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
@@ -757,4 +963,527 @@ public enum BinaryROMMutationDryRunManifestBuilder {
         guard !bytes.isEmpty else { return nil }
         return bytes.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
     }
+
+    private static func compactHex(bytes: [UInt8]) -> String? {
+        guard !bytes.isEmpty else { return nil }
+        return bytes.map { String(format: "%02X", $0) }.joined()
+    }
+
+    private static func spanSHA1(data: Data, offset: UInt32, length: UInt32) -> String? {
+        guard let start = Int(exactly: offset), let requestedLength = Int(exactly: length) else { return nil }
+        guard start >= 0, requestedLength > 0, start + requestedLength <= data.count else { return nil }
+        return pokemonHackSHA1Hex(data.subdata(in: start..<(start + requestedLength)))
+    }
+}
+
+public enum BinaryROMMutationApplier {
+    public static func apply(
+        path: String,
+        manifestPath: String?,
+        workspaceRoot: String?,
+        confirmationToken: String?,
+        fileManager: FileManager = .default
+    ) -> BinaryROMMutationApplyResult {
+        let inputURL = URL(fileURLWithPath: path).standardizedFileURL
+        guard let manifestPath, !manifestPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return blocked(
+                inputPath: inputURL.path,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_REQUIRED",
+                        message: "Binary ROM mutation apply requires --manifest <dry-run-json>."
+                    )
+                ]
+            )
+        }
+        let manifestURL = URL(fileURLWithPath: manifestPath).standardizedFileURL
+        let manifestData: Data
+        do {
+            manifestData = try Data(contentsOf: manifestURL)
+        } catch {
+            return blocked(
+                inputPath: inputURL.path,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_UNREADABLE",
+                        message: "Could not read dry-run manifest at \(manifestURL.path): \(error.localizedDescription)"
+                    )
+                ]
+            )
+        }
+        let manifest: BinaryROMMutationDryRunManifest
+        do {
+            manifest = try JSONDecoder().decode(BinaryROMMutationDryRunManifest.self, from: manifestData)
+        } catch {
+            return blocked(
+                inputPath: inputURL.path,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_DECODE_FAILED",
+                        message: "Could not decode binary ROM mutation dry-run manifest at \(manifestURL.path): \(error.localizedDescription)"
+                    )
+                ]
+            )
+        }
+
+        return apply(
+            path: inputURL.path,
+            dryRunManifest: manifest,
+            dryRunManifestPath: manifestURL.path,
+            dryRunManifestData: manifestData,
+            workspaceRoot: workspaceRoot,
+            confirmationToken: confirmationToken,
+            fileManager: fileManager
+        )
+    }
+
+    public static func apply(
+        path: String,
+        dryRunManifest manifest: BinaryROMMutationDryRunManifest,
+        dryRunManifestPath: String,
+        dryRunManifestData: Data,
+        workspaceRoot: String?,
+        confirmationToken: String?,
+        fileManager: FileManager = .default
+    ) -> BinaryROMMutationApplyResult {
+        let inputURL = URL(fileURLWithPath: path).standardizedFileURL
+        var diagnostics: [Diagnostic] = []
+        let trimmedWorkspaceRoot = workspaceRoot?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedWorkspaceRoot.isEmpty else {
+            return blocked(
+                inputPath: inputURL.path,
+                diagnostics: [
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_WORKSPACE_ROOT_REQUIRED",
+                        message: "Binary ROM mutation apply requires --workspace-root so source-tree-first refusal can be rechecked immediately before writing."
+                    )
+                ]
+            )
+        }
+        let workspaceURL = URL(fileURLWithPath: trimmedWorkspaceRoot).standardizedFileURL
+
+        guard let baseBeforeReview = manifest.baseROM else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_BASE_IDENTITY_MISSING",
+                    message: "Dry-run manifest does not contain base ROM identity."
+                )
+            )
+            return blocked(inputPath: inputURL.path, diagnostics: diagnostics)
+        }
+
+        let manifestErrors = manifest.diagnostics.filter { $0.severity == .error }
+            + manifest.operationPreviews.flatMap(\.diagnostics).filter { $0.severity == .error }
+        if !manifestErrors.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_ERRORS",
+                    message: "Dry-run manifest still contains error diagnostics; review and regenerate the manifest before applying."
+                )
+            )
+            diagnostics.append(contentsOf: manifestErrors)
+        }
+
+        if manifest.inputPath != inputURL.path {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_INPUT_PATH_MISMATCH",
+                    message: "Dry-run manifest was created for \(manifest.inputPath), not \(inputURL.path)."
+                )
+            )
+        }
+
+        let replacementPreviews = manifest.operationPreviews.filter { $0.kind == .replaceBytes }
+        if replacementPreviews.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_NO_REPLACEMENTS",
+                    message: "Binary ROM mutation apply requires at least one explicit byte replacement."
+                )
+            )
+        }
+        if replacementPreviews.count != manifest.operationPreviews.count {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_NON_REPLACEMENT_BLOCKED",
+                    message: "This CLI apply path only supports replaceBytes operations; pointer repoint and free-space allocation apply remain blocked."
+                )
+            )
+        }
+        if replacementPreviews.contains(where: { $0.status != .previewOnly }) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_BLOCKED_PREVIEW",
+                    message: "One or more replacement previews are blocked and cannot be applied."
+                )
+            )
+        }
+        diagnostics.append(contentsOf: overlapDiagnostics(for: replacementPreviews))
+
+        let replacements = replacementPreviews.compactMap(Self.replacementRequest(from:))
+        if replacements.count != replacementPreviews.count {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_REPLACEMENT_IDENTITY_MISSING",
+                    message: "One or more replacement previews are missing offset, length, or full replacement hex identity."
+                )
+            )
+        }
+
+        guard let review = manifest.applyReview,
+              review.isReviewable,
+              let manifestReviewToken = review.reviewToken
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_MANIFEST_NOT_REVIEWABLE",
+                    message: "Dry-run manifest does not include a reviewable replace-only apply token."
+                )
+            )
+            return blocked(inputPath: inputURL.path, baseBefore: baseBeforeReview, diagnostics: diagnostics)
+        }
+        let expectedReviewToken = binaryROMMutationReviewToken(base: baseBeforeReview, replacements: replacementPreviews)
+        if manifestReviewToken != expectedReviewToken {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_REVIEW_TOKEN_STALE",
+                    message: "Dry-run manifest review token no longer matches its base identity and replacement set."
+                )
+            )
+        }
+        guard let confirmationToken, confirmationToken == manifestReviewToken else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_CONFIRMATION_MISMATCH",
+                    message: "Binary ROM mutation apply requires the exact review token from the dry-run manifest."
+                )
+            )
+            return blocked(inputPath: inputURL.path, baseBefore: baseBeforeReview, diagnostics: diagnostics)
+        }
+
+        let freshManifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: inputURL.path,
+            request: BinaryROMMutationDryRunRequest(
+                expectedSHA1: baseBeforeReview.sha1,
+                workspaceRoot: workspaceURL.path,
+                replacements: replacements
+            ),
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: freshManifest.diagnostics)
+        guard let freshBase = freshManifest.baseROM else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_FRESH_BASE_MISSING",
+                    message: "Could not re-read selected base ROM immediately before apply."
+                )
+            )
+            return blocked(inputPath: inputURL.path, baseBefore: baseBeforeReview, diagnostics: diagnostics)
+        }
+        if !freshManifest.sourceTreeFirst.canUseBinaryOnlyPlan {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_SOURCE_TREE_AVAILABLE_REFUSED",
+                    message: "Binary-only apply is refused because a source-tree edit path is available or the selected input is not a standalone binary ROM."
+                )
+            )
+        }
+        diagnostics.append(contentsOf: baseDriftDiagnostics(expected: baseBeforeReview, actual: freshBase))
+        diagnostics.append(contentsOf: originalByteDiagnostics(expected: replacementPreviews, actual: freshManifest.operationPreviews))
+        diagnostics.append(contentsOf: freshManifest.operationPreviews.flatMap(\.diagnostics).filter { $0.severity == .error })
+
+        let tokenSuffix = binaryROMMutationTokenSuffix(manifestReviewToken)
+        let relativeRoot = ".pokemonhackstudio/rom-mutations/\(binaryROMMutationSanitizedStem(for: inputURL))/\(binaryROMMutationTimestamp())-\(tokenSuffix)"
+        let backupRelativePath = "\(relativeRoot)/\(inputURL.deletingPathExtension().lastPathComponent)-original.gba"
+        let applyManifestRelativePath = "\(relativeRoot)/apply-manifest.json"
+        diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            backupRelativePath,
+            root: workspaceURL,
+            fileManager: fileManager,
+            codePrefix: "BINARY_ROM_MUTATION_APPLY_BACKUP",
+            subject: "Binary ROM mutation backup path"
+        ))
+        diagnostics.append(contentsOf: SourceTreeWriteSafety.diagnosticsForRelativeWritePath(
+            applyManifestRelativePath,
+            root: workspaceURL,
+            fileManager: fileManager,
+            codePrefix: "BINARY_ROM_MUTATION_APPLY_MANIFEST",
+            subject: "Binary ROM mutation apply manifest path"
+        ))
+
+        if diagnostics.contains(where: { $0.severity == .error }) {
+            return blocked(inputPath: inputURL.path, baseBefore: freshBase, diagnostics: diagnostics)
+        }
+
+        let originalData: Data
+        do {
+            originalData = try Data(contentsOf: inputURL)
+        } catch {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_BASE_READ_FAILED",
+                    message: "Could not read base ROM before apply: \(error.localizedDescription)"
+                )
+            )
+            return blocked(inputPath: inputURL.path, baseBefore: freshBase, diagnostics: diagnostics)
+        }
+        var mutatedBytes = Array(originalData)
+        for replacement in replacements {
+            let start = Int(replacement.offset)
+            let end = start + Int(replacement.length)
+            mutatedBytes.replaceSubrange(start..<end, with: replacement.replacementBytes)
+        }
+        let mutatedData = Data(mutatedBytes)
+        let afterGraph = BinaryROMGraphBuilder.build(path: inputURL.path, data: mutatedData)
+        let baseAfter = BinaryROMMutationBaseIdentity(path: inputURL.path, data: mutatedData, graph: afterGraph)
+        let appliedReplacements = replacementPreviews.map { preview in
+            BinaryROMMutationAppliedReplacement(
+                id: preview.id,
+                offset: preview.offset ?? 0,
+                length: preview.length ?? 0,
+                originalPreviewHex: preview.originalPreviewHex,
+                originalSpanSHA1: preview.originalSpanSHA1,
+                replacementPreviewHex: preview.replacementPreviewHex,
+                replacementSHA1: preview.replacementSHA1
+            )
+        }
+        let backupURL = workspaceURL.appendingPathComponent(backupRelativePath).standardizedFileURL
+        let applyManifestURL = workspaceURL.appendingPathComponent(applyManifestRelativePath).standardizedFileURL
+        let confirmation = BinaryROMMutationApplyConfirmation(
+            method: "dry-run-review-token",
+            reviewToken: manifestReviewToken,
+            dryRunManifestPath: dryRunManifestPath,
+            dryRunManifestSHA1: pokemonHackSHA1Hex(dryRunManifestData)
+        )
+        let successDiagnostics = diagnostics + [
+            Diagnostic(
+                severity: .info,
+                code: "BINARY_ROM_MUTATION_APPLY_IN_PLACE_COMPLETED",
+                message: "Applied \(appliedReplacements.count) explicit byte replacement(s) in place to \(inputURL.path); backup and manifest are under \(relativeRoot)."
+            )
+        ]
+        let applyManifest = BinaryROMMutationApplyManifest(
+            inputPath: inputURL.path,
+            backupPath: backupURL.path,
+            baseBefore: freshBase,
+            baseAfter: baseAfter,
+            replacements: appliedReplacements,
+            confirmation: confirmation,
+            diagnostics: successDiagnostics
+        )
+
+        do {
+            try fileManager.createDirectory(at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fileManager.copyItem(at: inputURL, to: backupURL)
+            try mutatedData.write(to: inputURL, options: .atomic)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(applyManifest).write(to: applyManifestURL, options: .atomic)
+        } catch {
+            let failureDiagnostics = diagnostics + [
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_WRITE_FAILED",
+                    message: "Binary ROM mutation apply failed while writing backup, ROM bytes, or manifest: \(error.localizedDescription)"
+                )
+            ]
+            return blocked(inputPath: inputURL.path, baseBefore: freshBase, diagnostics: failureDiagnostics)
+        }
+
+        return BinaryROMMutationApplyResult(
+            status: .applied,
+            inputPath: inputURL.path,
+            backupPath: backupURL.path,
+            manifestPath: applyManifestURL.path,
+            baseBefore: freshBase,
+            baseAfter: baseAfter,
+            appliedReplacements: appliedReplacements,
+            diagnostics: successDiagnostics,
+            manifest: applyManifest
+        )
+    }
+
+    private static func blocked(
+        inputPath: String,
+        baseBefore: BinaryROMMutationBaseIdentity? = nil,
+        diagnostics: [Diagnostic]
+    ) -> BinaryROMMutationApplyResult {
+        BinaryROMMutationApplyResult(status: .blocked, inputPath: inputPath, baseBefore: baseBefore, diagnostics: diagnostics)
+    }
+
+    private static func replacementRequest(
+        from preview: BinaryROMMutationOperationPreview
+    ) -> BinaryROMMutationReplacementRequest? {
+        guard let offset = preview.offset,
+              let length = preview.length,
+              let replacementHex = preview.replacementHex,
+              let replacementBytes = binaryROMMutationParseHex(replacementHex)
+        else {
+            return nil
+        }
+        return BinaryROMMutationReplacementRequest(offset: offset, length: length, replacementBytes: replacementBytes)
+    }
+
+    private static func overlapDiagnostics(for previews: [BinaryROMMutationOperationPreview]) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let ranges = previews.enumerated().compactMap { index, preview -> (index: Int, start: UInt64, end: UInt64)? in
+            guard let offset = preview.offset, let length = preview.length else { return nil }
+            return (index: index, start: UInt64(offset), end: UInt64(offset) + UInt64(length))
+        }
+        for range in ranges where ranges.contains(where: { other in
+            other.index != range.index && range.start < other.end && range.end > other.start
+        }) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "BINARY_ROM_MUTATION_APPLY_REPLACEMENT_OVERLAP",
+                    message: "Replacement \(range.index) overlaps another requested replacement range."
+                )
+            )
+        }
+        return diagnostics
+    }
+
+    private static func baseDriftDiagnostics(
+        expected: BinaryROMMutationBaseIdentity,
+        actual: BinaryROMMutationBaseIdentity
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        if expected.sha1 != actual.sha1 {
+            diagnostics.append(Diagnostic(severity: .error, code: "BINARY_ROM_MUTATION_APPLY_BASE_SHA1_DRIFT", message: "Base SHA1 drifted from \(expected.sha1) to \(actual.sha1)."))
+        }
+        if expected.crc32 != actual.crc32 {
+            diagnostics.append(Diagnostic(severity: .error, code: "BINARY_ROM_MUTATION_APPLY_BASE_CRC32_DRIFT", message: "Base CRC32 drifted from \(expected.crc32) to \(actual.crc32)."))
+        }
+        if expected.sizeBytes != actual.sizeBytes {
+            diagnostics.append(Diagnostic(severity: .error, code: "BINARY_ROM_MUTATION_APPLY_BASE_SIZE_DRIFT", message: "Base size drifted from \(expected.sizeBytes) to \(actual.sizeBytes) byte(s)."))
+        }
+        if expected.title != actual.title
+            || expected.gameCode != actual.gameCode
+            || expected.makerCode != actual.makerCode
+            || expected.revision != actual.revision
+            || expected.headerComplementChecksum != actual.headerComplementChecksum
+            || expected.expectedHeaderComplementChecksum != actual.expectedHeaderComplementChecksum
+            || expected.isHeaderComplementChecksumValid != actual.isHeaderComplementChecksumValid
+        {
+            diagnostics.append(Diagnostic(severity: .error, code: "BINARY_ROM_MUTATION_APPLY_HEADER_DRIFT", message: "Base GBA header facts changed after dry-run review."))
+        }
+        return diagnostics
+    }
+
+    private static func originalByteDiagnostics(
+        expected: [BinaryROMMutationOperationPreview],
+        actual: [BinaryROMMutationOperationPreview]
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let actualByID = Dictionary(uniqueKeysWithValues: actual.map { ($0.id, $0) })
+        for preview in expected {
+            guard let actualPreview = actualByID[preview.id] else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_ORIGINAL_BYTES_MISSING",
+                        message: "Replacement \(preview.id) could not be revalidated against the current ROM bytes."
+                    )
+                )
+                continue
+            }
+            if preview.originalSpanSHA1 != actualPreview.originalSpanSHA1 {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "BINARY_ROM_MUTATION_APPLY_ORIGINAL_BYTES_MISMATCH",
+                        message: "Replacement \(preview.id) original bytes no longer match the dry-run review."
+                    )
+                )
+            }
+        }
+        return diagnostics
+    }
+}
+
+private func binaryROMMutationReviewToken(
+    base: BinaryROMMutationBaseIdentity,
+    replacements: [BinaryROMMutationOperationPreview]
+) -> String {
+    var lines = [
+        "binary-rom-replace-apply-v1",
+        "base-sha1:\(base.sha1)",
+        "base-crc32:\(base.crc32)",
+        "base-size:\(base.sizeBytes)",
+        "base-title:\(base.title ?? "")",
+        "base-game-code:\(base.gameCode ?? "")",
+        "base-maker-code:\(base.makerCode ?? "")",
+        "base-revision:\(base.revision.map(String.init) ?? "")",
+        "base-header-complement:\(base.headerComplementChecksum.map(String.init) ?? "")",
+        "base-header-expected:\(base.expectedHeaderComplementChecksum.map(String.init) ?? "")",
+        "base-header-valid:\(base.isHeaderComplementChecksumValid.map(String.init) ?? "")"
+    ]
+    for replacement in replacements {
+        lines.append([
+            "replace",
+            String(replacement.offset ?? 0),
+            String(replacement.length ?? 0),
+            replacement.originalSpanSHA1 ?? "",
+            replacement.replacementSHA1 ?? "",
+            replacement.replacementHex ?? ""
+        ].joined(separator: ":"))
+    }
+    return "romreplace-\(pokemonHackSHA1Hex(Data(lines.joined(separator: "\n").utf8)).prefix(24))"
+}
+
+private func binaryROMMutationParseHex(_ text: String) -> [UInt8]? {
+    let compact = text.filter { character in
+        character.isHexDigit
+    }
+    guard compact.count > 0, compact.count % 2 == 0 else { return nil }
+    var bytes: [UInt8] = []
+    var index = compact.startIndex
+    while index < compact.endIndex {
+        let next = compact.index(index, offsetBy: 2)
+        guard let byte = UInt8(compact[index..<next], radix: 16) else { return nil }
+        bytes.append(byte)
+        index = next
+    }
+    return bytes
+}
+
+private func binaryROMMutationSanitizedStem(for url: URL) -> String {
+    let raw = url.deletingPathExtension().lastPathComponent
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+    let scalars = raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+    let stem = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+    return stem.isEmpty ? "binary-rom" : stem
+}
+
+private func binaryROMMutationTokenSuffix(_ token: String) -> String {
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+    let scalars = token.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+    return String(scalars).suffix(12).isEmpty ? "confirmed" : String(String(scalars).suffix(12))
+}
+
+private func binaryROMMutationTimestamp() -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+    return "\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8))"
 }

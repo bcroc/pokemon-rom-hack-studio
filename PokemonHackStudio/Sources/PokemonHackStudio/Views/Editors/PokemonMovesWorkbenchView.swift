@@ -291,6 +291,48 @@ struct PokemonMovesWorkbenchView: View {
                     Divider()
                     descriptionEditor(text: descriptionBinding)
                 }
+
+                if hasContestScalarFields(draft) {
+                    Divider()
+                    contestScalarEditor(draft)
+                }
+
+                if draft.contestComboMoves != nil {
+                    Divider()
+                    contestComboMovesEditor(text: contestComboMovesBinding)
+                }
+            }
+        }
+    }
+
+    private func hasContestScalarFields(_ draft: MoveEditDraft) -> Bool {
+        draft.contestEffect != nil
+            || draft.contestMoveEffect != nil
+            || draft.contestCategory != nil
+            || draft.contestAppeal != nil
+            || draft.contestJam != nil
+            || draft.contestComboStarterId != nil
+    }
+
+    private func contestScalarEditor(_ draft: MoveEditDraft) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], alignment: .leading, spacing: 12) {
+            if draft.contestEffect != nil {
+                moveTextField("Battle Contest Effect", text: draftOptionalStringBinding(\.contestEffect))
+            }
+            if draft.contestMoveEffect != nil {
+                moveTextField("Contest Move Effect", text: draftOptionalStringBinding(\.contestMoveEffect))
+            }
+            if draft.contestCategory != nil {
+                moveTextField("Contest Category", text: draftOptionalStringBinding(\.contestCategory))
+            }
+            if draft.contestAppeal != nil {
+                moveIntegerField("Contest Appeal", value: draftOptionalIntBinding(\.contestAppeal), range: 0...255)
+            }
+            if draft.contestJam != nil {
+                moveIntegerField("Contest Jam", value: draftOptionalIntBinding(\.contestJam), range: 0...255)
+            }
+            if draft.contestComboStarterId != nil {
+                moveTextField("Combo Starter", text: draftOptionalStringBinding(\.contestComboStarterId))
             }
         }
     }
@@ -340,6 +382,28 @@ struct PokemonMovesWorkbenchView: View {
         )
     }
 
+    private func draftOptionalStringBinding(_ keyPath: WritableKeyPath<MoveEditDraft, String?>) -> Binding<String> {
+        Binding(
+            get: { draft?[keyPath: keyPath] ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft[keyPath: keyPath] = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
+    private func draftOptionalIntBinding(_ keyPath: WritableKeyPath<MoveEditDraft, Int?>) -> Binding<Int> {
+        Binding(
+            get: { draft?[keyPath: keyPath] ?? 0 },
+            set: { value in
+                guard var draft else { return }
+                draft[keyPath: keyPath] = value
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
     private var flagsBinding: Binding<String> {
         Binding(
             get: { draft?.flags.joined(separator: " | ") ?? "" },
@@ -365,6 +429,20 @@ struct PokemonMovesWorkbenchView: View {
         )
     }
 
+    private var contestComboMovesBinding: Binding<String> {
+        Binding(
+            get: { draft?.contestComboMoves?.joined(separator: ", ") ?? "" },
+            set: { value in
+                guard var draft else { return }
+                draft.contestComboMoves = value
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                onUpdateDraft(draft)
+            }
+        )
+    }
+
     private func descriptionEditor(text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Description Text")
@@ -382,6 +460,17 @@ struct PokemonMovesWorkbenchView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color.secondary.opacity(0.22))
                 )
+        }
+    }
+
+    private func contestComboMovesEditor(text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Contest Combo Moves")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField("Contest Combo Moves", text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
         }
     }
 

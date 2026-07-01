@@ -49,9 +49,9 @@ The app should make the source location visible for each editable object. For ex
 
 ## Binary ROM Mutation Safety
 
-Direct ROM mutation is policy/proof-first until a later row explicitly adds writers. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract; it does not add direct byte writes, repoint apply, allocation apply, checksum repair, export, emulator launch, or binary mutation artifacts.
+Direct ROM mutation stays policy/proof-first. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract, and `PHS-T79C` opens only a CLI-reviewed in-place byte replacement writer for user-supplied local `.gba` inputs with no source-tree edit path; repoint apply, allocation apply, checksum repair, export, emulator launch, app apply UI, and patched-copy output remain blocked.
 
-Future binary-only writers must:
+Binary-only writers must:
 
 - Refuse when a source-tree edit path is available; only user-supplied local `.gba` `binaryROM` inputs may proceed.
 - Produce a dry-run mutation plan before apply with byte ranges, expected original bytes or hashes, replacement size/hash, diagnostics, base ROM identity, and explicit binary-only rationale.
@@ -59,8 +59,8 @@ Future binary-only writers must:
 - Keep direct byte edits bounds-checked, non-overlapping, previewed, and blocked for header/checksum regions unless a later row explicitly opens that policy.
 - Derive pointer repoints from accepted ROM graph candidates, recording old/new targets and pointer offsets, and refuse ambiguous, unresolved, or stale pointer bytes.
 - Allocate only from detected free-space ranges, recording alignment, fill, padding, reserved ranges, and overlap checks; ROM expansion stays blocked unless a later row opens it.
-- Write backups under ignored `.pokemonhackstudio/backups/` and future mutation artifacts/manifests under an ignored `.pokemonhackstudio/rom-mutations/` subroot.
-- Record manifests with base/post hashes, operation summaries, allocated ranges, backup/output paths, tool version, timestamp, and confirmation metadata without committing proprietary ROM bytes.
+- Write binary mutation backups, manifests, and artifacts under an ignored `.pokemonhackstudio/rom-mutations/` subroot; source and patch workflows may use their existing ignored backup roots.
+- Record manifests with base/post hashes, operation summaries, backup/output paths, tool version, timestamp, and confirmation metadata without committing proprietary ROM bytes. Allocation ranges are still future-only because free-space allocation apply remains blocked.
 - Require a separate explicit app or CLI confirmation after plan review; no background apply, auto-export, emulator launch, or implicit overwrite is allowed.
 
 ## Generated Artifacts
@@ -98,7 +98,7 @@ The CLI is the automation companion for the app:
 - `index`: emit or refresh the adapter-selected source graph, generated-output policy, and cacheable index data.
 - `validate`: run non-mutating checks for path integrity, source parseability, and artifact freshness.
 - `build`: report selected decomp build targets, output existence, checksums, freshness, and tool readiness before any future build execution.
-- `patch`: parse and verify patch metadata, base-ROM compatibility, and dry-run manifests before any future patch apply/export.
+- `patch`: parse and verify patch metadata, base-ROM compatibility, dry-run manifests, and explicit ignored BPS creation artifacts before any separate patch apply/export.
 - `playtest`: prepare headless mGBA-compatible run plans and explicitly launch runnable interactive handoffs through the external emulator boundary.
 - `migration-coverage`: report source-first, read-only, migration-plan-only, binary-only, and blocked domains across GBA/NDS inputs so CLI and app-facing diagnostics share one fact model before ROM asset migration planning.
 
