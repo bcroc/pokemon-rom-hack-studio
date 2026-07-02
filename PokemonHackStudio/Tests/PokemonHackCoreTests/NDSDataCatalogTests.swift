@@ -962,6 +962,69 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
     }
 
+    func testPokeBlackCatalogSurfacesGenVGeneratedOutputFreshnessPacket() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let packet = try XCTUnwrap(catalog.records.first { $0.id == "resources:gen-v/generated-output-freshness-packet" })
+        XCTAssertEqual(packet.domain, .resources)
+        XCTAssertEqual(packet.relativePath, "gen-v/generated-output-freshness-packet")
+        XCTAssertEqual(packet.format, .unknown)
+        XCTAssertEqual(packet.role, .metadataPacket)
+        XCTAssertTrue(packet.exists)
+        XCTAssertEqual(packet.readiness?.status, .partial)
+        XCTAssertEqual(factValue("Gen V Source Role", in: packet), "generatedOutputFreshnessPacket")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Packet", in: packet), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Basis", in: packet), "existingCatalogAndBuildValidationFactsOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Posture", in: packet), "previewOnlyNoBuildNoGeneratedOutputWrites")
+        XCTAssertEqual(
+            factValue("Gen V Source Marker States", in: packet),
+            "black.us=sourceMarkerPresent, white.us=sourceMarkerPresent, black2.us=sourceMarkerPresent, white2.us=unavailable"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Text States", in: packet),
+            "black.us=valid, white.us=valid, black2.us=invalid, white2.us=missing"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Valid Digests", in: packet),
+            "black.us=ffffffffffffffffffffffffffffffffffffffff, white.us=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        )
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: packet)?.contains("Makefile=present") == true)
+        XCTAssertEqual(factValue("Gen V Source Root Summaries", in: packet), "src=5/92, asm=1/5, include=1/16")
+        XCTAssertTrue(factValue("Gen V Variant Readiness Summary", in: packet)?.contains("packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Variant Readiness Summary", in: packet)?.contains("sha1States=black.us=valid") == true)
+        XCTAssertTrue(factValue("Gen V Declared Generated Outputs", in: packet)?.contains("build=missing") == true)
+        XCTAssertTrue(factValue("Gen V Declared Generated Outputs", in: packet)?.contains("pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: packet)?.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: packet)?.contains("checksum=outputMissing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: packet)?.contains("freshness=outputMissing") == true)
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: packet)?.contains("binary write") == true)
+        XCTAssertNil(packet.textBankPreview)
+        XCTAssertNil(packet.migrationPlan)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_GENERATED_OUTPUT_FRESHNESS_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let plan = NDSDataMutationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEditDraft(recordID: packet.id, editedText: "changed\n")
+        )
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_ROLE_BLOCKED" })
+
+        let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
+        let packetItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "gen-v/generated-output-freshness-packet" })
+        XCTAssertEqual(packetItem.kind, "unknown")
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Source Role" && $0.value == "generatedOutputFreshnessPacket" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Generated Output Freshness Packet" && $0.value == "previewOnly" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Build Target Output Freshness" && $0.value.contains("black-rom:pokeblack.nds=missing") })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
+    }
+
     func testPokeBlackCatalogSurfacesGenVArchiveGroupInventoryFacts() throws {
         let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
 
@@ -3858,6 +3921,200 @@ final class NDSDataCatalogTests: XCTestCase {
         )
         XCTAssertTrue(referencePlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
         XCTAssertTrue(referencePlan.editPlan.changes.isEmpty)
+    }
+
+    func testNDSDataEncounterJSONRowOperationPlannerHeartGoldSoulSilver() throws {
+        let root = try makeRoot(name: "pokeheartgold", configure: makeHeartGoldFixture)
+        let encounterPath = "files/fielddata/encountdata/johto/route29.json"
+        try write(
+            """
+            {"morning_rate": 20, "slots": [{"species":"RATTATA","rate":30,"enabled":true},{"species":"PIDGEY","rate":20,"enabled":false}], "swarms": ["PIDGEY","SENTRET"], "metadata": {"map":"ROUTE_29"}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("{\"slots\":[]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/empty.json"))
+        try write("{\"slots\":[{\"species\":\"RATTATA\",\"rate\":30},{\"species\":\"PIDGEY\"}]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/mismatch.json"))
+        try write("{\"slots\":[{\"species\":\"RATTATA\",\"species\":\"PIDGEY\",\"rate\":30,\"enabled\":true}]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/duplicate.json"))
+        try write("rate=15\n", to: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.txt"))
+        try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("files/fielddata/encountdata/encounter.c"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let plan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "slots",
+                operations: [
+                    .insert(index: 1, rowText: "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}"),
+                    .delete(index: 0),
+                    .reorder(fromIndex: 1, toIndex: 0)
+                ]
+            )
+        )
+
+        XCTAssertEqual(plan.beforeRowCount, 2)
+        XCTAssertEqual(plan.afterRowCount, 2)
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertEqual(plan.editPlan.changes.first?.path, encounterPath)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"PIDGEY\",\"rate\":20,\"enabled\":false},{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}]"))
+        XCTAssertTrue(updated.contains("\"swarms\": [\"PIDGEY\",\"SENTRET\"]"))
+        XCTAssertTrue(updated.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
+
+        let updatedCatalog = try NDSDataCatalogBuilder.build(path: root.path)
+        let scalarArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "swarms",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(scalarArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED" })
+        XCTAssertTrue(scalarArrayPlan.editPlan.changes.isEmpty)
+
+        let missingArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "missing_slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(missingArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING" })
+        XCTAssertTrue(missingArrayPlan.editPlan.changes.isEmpty)
+
+        let emptyArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:files/fielddata/encountdata/empty.json",
+                arrayKey: "slots",
+                operations: [.insert(index: 0, rowText: "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}")]
+            )
+        )
+        XCTAssertTrue(emptyArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED" })
+        XCTAssertTrue(emptyArrayPlan.editPlan.changes.isEmpty)
+
+        let nestedInsertPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "slots",
+                operations: [.insert(index: 0, rowText: "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true,\"metadata\":{\"time\":\"night\"}}")]
+            )
+        )
+        XCTAssertTrue(nestedInsertPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED" })
+        XCTAssertTrue(nestedInsertPlan.editPlan.changes.isEmpty)
+
+        let mismatchPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:files/fielddata/encountdata/mismatch.json",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(mismatchPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_SHAPE_MISMATCH" })
+        XCTAssertTrue(mismatchPlan.editPlan.changes.isEmpty)
+
+        let duplicatePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:files/fielddata/encountdata/duplicate.json",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(duplicatePlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE" })
+        XCTAssertTrue(duplicatePlan.editPlan.changes.isEmpty)
+
+        let nestedArrayPathPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "metadata.slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(nestedArrayPathPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_PATH_BLOCKED" })
+        XCTAssertTrue(nestedArrayPathPlan.editPlan.changes.isEmpty)
+
+        let textPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:files/fielddata/encountdata/gs_enc_data.txt",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(textPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(textPlan.editPlan.changes.isEmpty)
+
+        let cAnchorPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:files/fielddata/encountdata/encounter.c",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(cAnchorPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(cAnchorPlan.editPlan.changes.isEmpty)
+
+        let containerRecord = try XCTUnwrap(updatedCatalog.records.first { $0.relativePath.hasSuffix(".narc") })
+        let containerPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: containerRecord.id,
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(containerPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(containerPlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_CONTAINER_BLOCKED" })
+        XCTAssertTrue(containerPlan.editPlan.changes.isEmpty)
+
+        let referenceRoot = try makeRoot(name: "references/pokeheartgold", configure: makeHeartGoldFixture)
+        try write(
+            "{\"slots\":[{\"species\":\"RATTATA\",\"rate\":30,\"enabled\":true}]}\n",
+            to: referenceRoot.appendingPathComponent(encounterPath)
+        )
+        let referenceCatalog = try NDSDataCatalogBuilder.build(path: referenceRoot.path)
+        let referencePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: referenceCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(referencePlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
+        XCTAssertTrue(referencePlan.editPlan.changes.isEmpty)
+
+        let diamondRoot = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
+        let diamondPath = "files/fielddata/encountdata/sinnoh/route201.json"
+        try write(
+            "{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n",
+            to: diamondRoot.appendingPathComponent(diamondPath)
+        )
+        let diamondCatalog = try NDSDataCatalogBuilder.build(path: diamondRoot.path)
+        let diamondPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: diamondCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(diamondPath)",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(diamondPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(diamondPlan.editPlan.changes.isEmpty)
     }
 
     func testNDSDataSemanticEditorPlansDiamondPearlPersonalJSONScalars() throws {

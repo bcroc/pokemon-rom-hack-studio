@@ -87,6 +87,13 @@ struct PokemonHackStudioApp: App {
             }
 
             CommandMenu("Tools") {
+                Button("Show Command Palette") {
+                    store.showCommandPalette()
+                }
+                .keyboardShortcut("k", modifiers: .command)
+
+                Divider()
+
                 Button("Validate Sources") {
                     selectModule(.issues)
                 }

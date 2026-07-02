@@ -141,4 +141,165 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
         )
         XCTAssertEqual(DiagnosticSummary.bucket(for: blocking), .blockingErrors)
     }
+
+    @MainActor
+    func testUniversalIDENavigatorGroupsCoreSurfaces() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        let nodes = store.workbenchNavigatorNodes
+
+        XCTAssertEqual(nodes.map(\.title), WorkbenchNavigatorGroup.allCases.map(\.rawValue))
+
+        let visual = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.visual.id })
+        XCTAssertEqual(visual.children.map(\.module), [.maps, .graphics])
+
+        let data = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.data.id })
+        XCTAssertTrue(data.children.contains { $0.module == .pokemon })
+        XCTAssertTrue(data.children.contains { $0.module == .trainers })
+        XCTAssertTrue(data.children.contains { $0.module == .moves })
+        XCTAssertTrue(data.children.contains { $0.module == .items })
+        XCTAssertTrue(data.children.contains { $0.module == .encounters })
+        XCTAssertTrue(data.children.contains { $0.module == .scripts })
+        XCTAssertTrue(data.children.contains { $0.module == .text })
+
+        let assets = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.assets.id })
+        XCTAssertTrue(assets.children.contains { $0.module == .resources })
+        XCTAssertTrue(assets.children.contains { $0.title == "Artifacts" && $0.module == .build })
+
+        let ship = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.ship.id })
+        XCTAssertEqual(ship.children.first?.module, .build)
+
+        let romInputs = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.romInputs.id })
+        XCTAssertEqual(romInputs.children.first?.module, .resources)
+        XCTAssertEqual(romInputs.children.first?.title, "No ROM inputs")
+
+        let references = try XCTUnwrap(nodes.first { $0.id == WorkbenchNavigatorGroup.references.id })
+        XCTAssertEqual(references.children.first?.module, .resources)
+    }
+
+    @MainActor
+    func testUniversalIDETabsAndPanelsPersistBackwardCompatibly() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        var store: WorkbenchStore? = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store?.selectWorkbenchModule(.build)
+        store?.openEditorTab(for: .resources, targetID: "rom-input.gba", activate: true)
+        store?.navigatorSelectionID = "rom-input:demo"
+        store?.expandedNavigatorNodeIDs = [WorkbenchNavigatorGroup.visual.id, WorkbenchNavigatorGroup.romInputs.id]
+        store?.inspectorMode = .artifacts
+        store?.bottomPanelMode = .playtest
+        store?.bottomPanelHeight = 286
+        store?.recentCommandIDs = ["module:maps", "validation:synthetic"]
+        store?.activityCategoryFilter = .playtest
+
+        store = nil
+
+        let restored = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+        let resourceROMTabID = "\(WorkbenchModule.resources.id)::rom-input.gba"
+        XCTAssertTrue(restored.editorTabs.contains { $0.id == resourceROMTabID })
+        XCTAssertEqual(restored.activeEditorTabID, resourceROMTabID)
+        XCTAssertEqual(restored.selection, .resources)
+        XCTAssertEqual(restored.navigatorSelectionID, "rom-input:demo")
+        XCTAssertEqual(restored.expandedNavigatorNodeIDs, [WorkbenchNavigatorGroup.visual.id, WorkbenchNavigatorGroup.romInputs.id])
+        XCTAssertEqual(restored.inspectorMode, .artifacts)
+        XCTAssertEqual(restored.bottomPanelMode, .playtest)
+        XCTAssertEqual(restored.bottomPanelHeight, 286)
+        XCTAssertEqual(restored.recentCommandIDs, ["module:maps", "validation:synthetic"])
+        XCTAssertEqual(restored.activityCategoryFilter, .playtest)
+    }
+
+    @MainActor
+    func testUniversalIDEInspectorModeFollowsActiveEditorCategory() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        XCTAssertEqual(store.selection, .maps)
+        XCTAssertEqual(store.inspectorMode, .selection)
+
+        store.selectWorkbenchModule(.build)
+        XCTAssertEqual(store.inspectorMode, .artifacts)
+
+        store.selectWorkbenchModule(.issues)
+        XCTAssertEqual(store.inspectorMode, .diagnostics)
+
+        store.selectWorkbenchModule(.dashboard)
+        XCTAssertEqual(store.inspectorMode, .source)
+
+        store.selectWorkbenchModule(.pokemon)
+        XCTAssertEqual(store.inspectorMode, .selection)
+    }
+
+    @MainActor
+    func testUniversalIDECommandPaletteAvailabilityAndRoutingStayGuarded() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        let commands = store.workbenchCommands
+        let maps = try XCTUnwrap(commands.first { $0.id == "module:\(WorkbenchModule.maps.id)" })
+        XCTAssertTrue(maps.availability.isEnabled)
+
+        store.executeCommand(maps)
+        XCTAssertEqual(store.selection, .maps)
+        XCTAssertEqual(store.activeEditorTabID, WorkbenchModule.maps.id)
+        XCTAssertEqual(store.recentCommandIDs.first, maps.id)
+
+        let validation = try XCTUnwrap(store.workbenchCommands.first { $0.id == "validation:\(ValidationTier.synthetic.id)" })
+        XCTAssertTrue(validation.availability.isEnabled)
+        XCTAssertEqual(validation.scope, "Validation")
+        XCTAssertEqual(validation.action, .copyValidationCommand("make validate-synthetic"))
+
+        NSPasteboard.general.clearContents()
+        store.executeCommand(validation)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "make validate-synthetic")
+
+        let ndsValidation = try XCTUnwrap(store.workbenchCommands.first { $0.id == "validation:\(ValidationTier.ndsSyntheticAndOptionalReferences.id)" })
+        XCTAssertEqual(ndsValidation.action, .copyValidationCommand("make validate-nds"))
+        XCTAssertTrue(ndsValidation.availability.isEnabled)
+        XCTAssertTrue(store.validationTierCommandRows.first { $0.tier == .ndsSyntheticAndOptionalReferences }?.canRunInApp == false)
+
+        let mutationApply = try XCTUnwrap(store.workbenchCommands.first { $0.id == "mutation:apply" })
+        XCTAssertFalse(mutationApply.availability.isEnabled)
+        XCTAssertTrue(mutationApply.availability.isGuarded)
+        XCTAssertEqual(mutationApply.availability.disabledReason, "Preview the staged edits before applying.")
+
+        let buildRun = try XCTUnwrap(store.workbenchCommands.first { $0.id == "build:run" })
+        XCTAssertTrue(buildRun.availability.isGuarded)
+    }
+
+    @MainActor
+    func testUniversalIDECommandPaletteSearchAndPresentationState() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.showCommandPalette()
+        XCTAssertTrue(store.commandPaletteState.isPresented)
+        XCTAssertNotNil(store.commandPaletteState.selectedCommandID)
+
+        store.commandPaletteState.searchText = "playtest"
+        XCTAssertTrue(store.filteredWorkbenchCommands.allSatisfy { $0.searchBlob.contains("playtest") })
+        XCTAssertTrue(store.filteredWorkbenchCommands.contains { $0.id == "playtest:open" })
+
+        store.hideCommandPalette()
+        XCTAssertFalse(store.commandPaletteState.isPresented)
+        XCTAssertEqual(store.commandPaletteState.searchText, "")
+        XCTAssertNil(store.commandPaletteState.selectedCommandID)
+    }
+
+    @MainActor
+    func testUniversalIDEActivityConsoleAggregatesAndFiltersStoreEvents() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        XCTAssertTrue(store.currentIDEActivityEvents.contains { $0.category == .diagnostics })
+
+        store.activityCategoryFilter = .diagnostics
+        XCTAssertFalse(store.currentIDEActivityEvents.isEmpty)
+        XCTAssertTrue(store.currentIDEActivityEvents.allSatisfy { $0.category == .diagnostics })
+
+        store.bottomPanelMode = .buildLogs
+        XCTAssertTrue(store.visibleIDEActivityEvents.allSatisfy { $0.category == .build })
+
+        store.bottomPanelMode = .artifacts
+        XCTAssertTrue(store.visibleIDEActivityEvents.allSatisfy { $0.category == .patch || $0.category == .resources })
+    }
 }

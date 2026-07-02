@@ -683,7 +683,8 @@ public enum NDSDataCatalogBuilder {
                     ),
                     profile: index.profile
                 ),
-                profile: index.profile
+                index: index,
+                fileManager: fileManager
             ),
             profile: index.profile
         )
@@ -1483,9 +1484,10 @@ public enum NDSDataCatalogBuilder {
 
     private static func enrichGenVReadiness(
         records: [NDSDataCatalogRecord],
-        profile: GameProfile
+        index: ProjectIndex,
+        fileManager: FileManager
     ) -> [NDSDataCatalogRecord] {
-        guard profile == .pokeblack else { return records }
+        guard index.profile == .pokeblack else { return records }
         let existingRelativePaths = Set(records.map { $0.relativePath.lowercased() })
         let enriched = records.map { record in
             let readiness = genVReadinessSummary(for: record)
@@ -1495,11 +1497,16 @@ public enum NDSDataCatalogBuilder {
                 diagnostics: record.diagnostics + genVReadinessDiagnostics(for: record, readiness: readiness)
             )
         }
-        let packet = genVVariantReadinessPacketRecord(
+        let variantReadinessPacket = genVVariantReadinessPacketRecord(
             records: enriched,
             existingRelativePaths: existingRelativePaths
         )
-        return (enriched + [packet]).sorted(by: recordSort)
+        let generatedOutputFreshnessPacket = genVGeneratedOutputFreshnessPacketRecord(
+            records: enriched + [variantReadinessPacket],
+            existingRelativePaths: existingRelativePaths,
+            buildReport: BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
+        )
+        return (enriched + [variantReadinessPacket, generatedOutputFreshnessPacket]).sorted(by: recordSort)
     }
 
     private static let maxMapReviewRelatedRecords = 8
@@ -2560,6 +2567,41 @@ public enum NDSDataCatalogBuilder {
         )
     }
 
+    private static func genVGeneratedOutputFreshnessPacketRecord(
+        records: [NDSDataCatalogRecord],
+        existingRelativePaths: Set<String>,
+        buildReport: BuildValidationReport
+    ) -> NDSDataCatalogRecord {
+        let relativePath = genVGeneratedOutputFreshnessPacketPath
+        let sourceSpan = SourceSpan(relativePath: relativePath, startLine: 1)
+        let base = NDSDataCatalogRecord(
+            id: "resources:\(relativePath)",
+            domain: .resources,
+            title: "Gen V generated-output freshness packet",
+            relativePath: relativePath,
+            format: .unknown,
+            role: .metadataPacket,
+            exists: true,
+            sourceSpan: sourceSpan,
+            facts: genVGeneratedOutputFreshnessPacketFacts(records: records, buildReport: buildReport),
+            preview: "Preview-only aggregate of existing Gen V generated-output freshness facts.",
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_GEN_V_GENERATED_OUTPUT_FRESHNESS_PACKET_PREVIEW_ONLY",
+                    message: "Gen V generated-output freshness packet aggregates existing catalog and declared build-output metadata only; no build, playtest, export, mutation apply, generated-output write, or binary write path is enabled.",
+                    span: sourceSpan
+                )
+            ]
+        )
+        let readiness = genVReadinessSummary(for: base)
+        return base.copy(
+            facts: base.facts + genVReadinessFacts(for: base, existingRelativePaths: existingRelativePaths),
+            readiness: .some(readiness),
+            diagnostics: base.diagnostics + genVReadinessDiagnostics(for: base, readiness: readiness)
+        )
+    }
+
     private static func genVVariantReadinessPacketFacts(records: [NDSDataCatalogRecord]) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Gen V Variant Readiness Packet", value: "previewOnly"),
@@ -2577,6 +2619,25 @@ public enum NDSDataCatalogBuilder {
         facts.append(SourceIndexFact(label: "Gen V Overlay Summary", value: genVOverlaySummary(records: records)))
         facts.append(SourceIndexFact(label: "Gen V Build Metadata Summary", value: genVBuildMetadataSummary(records: records)))
         return facts
+    }
+
+    private static func genVGeneratedOutputFreshnessPacketFacts(
+        records: [NDSDataCatalogRecord],
+        buildReport: BuildValidationReport
+    ) -> [SourceIndexFact] {
+        [
+            SourceIndexFact(label: "Gen V Generated Output Freshness Packet", value: "previewOnly"),
+            SourceIndexFact(label: "Gen V Generated Output Freshness Basis", value: "existingCatalogAndBuildValidationFactsOnly"),
+            SourceIndexFact(label: "Gen V Generated Output Freshness Posture", value: "previewOnlyNoBuildNoGeneratedOutputWrites"),
+            SourceIndexFact(label: "Gen V Source Marker States", value: genVVariantMarkerStates(records: records)),
+            SourceIndexFact(label: "Gen V SHA1 Text States", value: genVSHA1TextStateSummary(records: records)),
+            SourceIndexFact(label: "Gen V SHA1 Valid Digests", value: genVSHA1DigestSummary(records: records)),
+            SourceIndexFact(label: "Gen V Build Metadata Summary", value: genVBuildMetadataSummary(records: records)),
+            SourceIndexFact(label: "Gen V Source Root Summaries", value: genVSourceRootSummary(records: records)),
+            SourceIndexFact(label: "Gen V Variant Readiness Summary", value: genVVariantReadinessSummary(records: records)),
+            SourceIndexFact(label: "Gen V Declared Generated Outputs", value: genVDeclaredGeneratedOutputSummary(buildReport: buildReport)),
+            SourceIndexFact(label: "Gen V Build Target Output Freshness", value: genVBuildTargetOutputFreshnessSummary(buildReport: buildReport))
+        ]
     }
 
     private static func genVVariantMarkerStates(records: [NDSDataCatalogRecord]) -> String {
@@ -2682,6 +2743,44 @@ public enum NDSDataCatalogBuilder {
             "main.rsf=\(genVFactValue("Gen V main.rsf Presence", in: makefile) ?? "missing")",
             "main.lsf=\(genVFactValue("Gen V main.lsf Presence", in: makefile) ?? "missing")"
         ].joined(separator: "; ")
+    }
+
+    private static func genVVariantReadinessSummary(records: [NDSDataCatalogRecord]) -> String {
+        guard let packet = records.first(where: { $0.relativePath.lowercased() == genVVariantReadinessPacketPath }) else {
+            return "packet=missing"
+        }
+        let posture = genVFactValue("Gen V Variant Readiness Posture", in: packet) ?? "missing"
+        let markers = genVFactValue("Gen V Variant Marker States", in: packet) ?? "missing"
+        let sha1States = genVFactValue("Gen V SHA1 Text States", in: packet) ?? "missing"
+        return "packet=present, posture=\(posture), markers=\(markers), sha1States=\(sha1States)"
+    }
+
+    private static func genVDeclaredGeneratedOutputSummary(buildReport: BuildValidationReport) -> String {
+        guard !buildReport.generatedArtifacts.isEmpty else {
+            return "none"
+        }
+        return buildReport.generatedArtifacts.map { item in
+            let matches = item.matchedPaths.isEmpty ? "" : " matches=\(item.matchedPaths.joined(separator: "|"))"
+            return "\(item.relativePath)=\(item.exists ? "present" : "missing")\(matches)"
+        }.joined(separator: ", ")
+    }
+
+    private static func genVBuildTargetOutputFreshnessSummary(buildReport: BuildValidationReport) -> String {
+        guard !buildReport.targets.isEmpty else {
+            return "targets=none"
+        }
+        return buildReport.targets.map { target in
+            if let output = target.output {
+                let status = output.exists ? "present" : "missing"
+                let sha1 = output.sha1 ?? output.expectation?.expectedSHA1 ?? "none"
+                let newestSource = output.newestSourcePath ?? "none"
+                return "\(target.target.id):\(output.relativePath)=\(status), checksum=\(output.checksumStatus.rawValue), freshness=\(output.freshnessStatus.rawValue), sha1=\(sha1), newestSource=\(newestSource)"
+            }
+            if let outputPath = target.target.outputPath {
+                return "\(target.target.id):\(outputPath)=notApplicable"
+            }
+            return "\(target.target.id)=no-output-path"
+        }.joined(separator: "; ")
     }
 
     private static func genVMemberByteSummary(
@@ -3109,6 +3208,9 @@ public enum NDSDataCatalogBuilder {
         let lower = record.relativePath.lowercased()
         if lower == genVVariantReadinessPacketPath {
             return "variantReadinessPacket"
+        }
+        if lower == genVGeneratedOutputFreshnessPacketPath {
+            return "generatedOutputFreshnessPacket"
         }
         if lower.hasPrefix("data/encounters/") {
             return "encounterPreview"
@@ -4667,6 +4769,7 @@ public enum NDSDataCatalogBuilder {
     private static let maxDiscoveredContainerRecords = 256
     private static let maxContainerSampleMembers = 8
     private static let genVVariantReadinessPacketPath = "gen-v/variant-readiness-packet"
+    private static let genVGeneratedOutputFreshnessPacketPath = "gen-v/generated-output-freshness-packet"
     private static let maxMemberFingerprintBytes = 32
     private static let maxMemberMagicBytes = 8
     private static let maxTextBankPreviewBytes = 65536

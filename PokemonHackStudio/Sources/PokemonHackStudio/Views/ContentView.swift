@@ -5,12 +5,7 @@ struct ContentView: View {
     @ObservedObject var store: WorkbenchStore
 
     var body: some View {
-        NavigationSplitView {
-            WorkbenchSidebarPanel(store: store)
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 460)
-        } detail: {
-            ModuleDetailView(store: store)
-        }
+        UniversalIDEView(store: store, onOpenProject: openProjectPanel)
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search sources")
         .onChange(of: store.selectedProjectID) { _, _ in
             store.refreshSelectedMapCatalog()
@@ -73,6 +68,15 @@ struct ContentView: View {
 
                 workspaceMenu
                 refreshMenu
+
+                Divider()
+
+                Button("Command Palette", systemImage: "command") {
+                    store.showCommandPalette()
+                }
+                .labelStyle(.iconOnly)
+                .keyboardShortcut("k", modifiers: .command)
+                .help("Command palette")
 
                 Divider()
 

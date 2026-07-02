@@ -21,7 +21,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(text.contains("nds-data-encounter-json-rows-plan <project> <record-id>"))
         XCTAssertTrue(text.contains("patch-create-preview <project> --base-rom <path>"))
         XCTAssertTrue(text.contains("patch-create <project> --base-rom <path>"))
+        XCTAssertTrue(text.contains("patch-library <project> --json"))
+        XCTAssertTrue(text.contains("patch-distribution-readiness <project> --base-rom <path>"))
         XCTAssertTrue(text.contains("rom-mutation-manifest <rom-or-source-path>"))
+        XCTAssertTrue(text.contains("rom-mutation-audit <rom> --manifest <dry-run-json>"))
         XCTAssertTrue(text.contains("rom-mutation-apply <rom> --manifest <dry-run-json>"))
         XCTAssertTrue(text.contains("validation-tiers --json"))
         XCTAssertTrue(text.contains("map-render-audit <path> --json"))
@@ -35,7 +38,14 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-encounter-json-rows-plan" && ($0["usage"] as? String)?.contains("--array <array-key>") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-create-preview" && ($0["usage"] as? String)?.contains("[--target <build-target-id>]") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-create" && ($0["usage"] as? String)?.contains("[--target <build-target-id>]") == true })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-library" && $0["usage"] as? String == "patch-library <project> --json" })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-distribution-readiness" && ($0["usage"] as? String)?.contains("[--patch <bps-path>]") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "rom-mutation-manifest" && ($0["usage"] as? String)?.contains("--replace <offset:length:hex>") == true })
+        let auditMetadata = try XCTUnwrap(commands.first { $0["name"] as? String == "rom-mutation-audit" })
+        let auditUsage = try XCTUnwrap(auditMetadata["usage"] as? String)
+        XCTAssertTrue(auditUsage.contains("--manifest <dry-run-json>"))
+        XCTAssertTrue(auditUsage.contains("--workspace-root <path>"))
+        XCTAssertFalse(auditUsage.contains("--confirm"))
         XCTAssertTrue(commands.contains { $0["name"] as? String == "rom-mutation-apply" && ($0["usage"] as? String)?.contains("--confirm <review-token>") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "validation-tiers" && $0["usage"] as? String == "validation-tiers --json" })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "map-render-audit" && ($0["usage"] as? String)?.contains("--all --json") == true })
@@ -93,11 +103,23 @@ final class PokemonHackCLITests: XCTestCase {
             0
         )
         XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness"], output: #"{"status":"blocked"}"#),
+            0
+        )
+        XCTAssertEqual(
             PokemonHackCLI.exitCode(arguments: ["rom-mutation-apply"], output: #"{"status":"blocked"}"#),
             1
         )
         XCTAssertEqual(
             PokemonHackCLI.exitCode(arguments: ["rom-mutation-apply"], output: #"{"status":"applied"}"#),
+            0
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: #"{"status":"blocked"}"#),
+            1
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: #"{"status":"ready"}"#),
             0
         )
         XCTAssertEqual(
@@ -457,6 +479,166 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/wrong-base-to-pokeemerald.bps").path))
     }
 
+    func testPatchLibraryCommandEmitsEmptyReadOnlyJSONWithoutCreatingDirectories() throws {
+        let root = try makeEmeraldProject()
+
+        let output = try PokemonHackCLI.run(arguments: ["patch-library", root.path, "--json"])
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["relativeArtifactRoot"] as? String, ".pokemonhackstudio/patches")
+        XCTAssertEqual((result["items"] as? [[String: Any]])?.count, 0)
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-library", root.path, "--json"], output: output), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testPatchLibraryCommandEmitsCreatedArtifactJSONReadOnly() throws {
+        let root = try makeEmeraldProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        _ = try PokemonHackCLI.run(arguments: ["patch-create", root.path, "--base-rom", baseROM.path, "--json"])
+
+        let patchRoot = root.appendingPathComponent(".pokemonhackstudio/patches")
+        let beforeScanFiles = try FileManager.default.contentsOfDirectory(atPath: patchRoot.path).sorted()
+        let output = try PokemonHackCLI.run(arguments: ["patch-library", root.path, "--json"])
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["relativeArtifactRoot"] as? String, ".pokemonhackstudio/patches")
+        let items = try XCTUnwrap(result["items"] as? [[String: Any]])
+        XCTAssertEqual(items.count, 1)
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(item["fileName"] as? String, "clean-base-to-pokeemerald.bps")
+        XCTAssertEqual(item["status"] as? String, "valid")
+        XCTAssertEqual(item["manifestStatus"] as? String, "matched")
+        XCTAssertEqual(item["patchChecksumStatus"] as? String, "matched")
+        XCTAssertEqual(item["baseROMStatus"] as? String, "matched")
+        XCTAssertEqual(item["builtOutputStatus"] as? String, "matched")
+        let patchSummary = try XCTUnwrap(item["patchSummary"] as? [String: Any])
+        XCTAssertEqual(patchSummary["format"] as? String, "bps")
+        XCTAssertTrue((item["verificationSummary"] as? String)?.contains("no apply/export was attempted") == true)
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-library", root.path, "--json"], output: output), 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: patchRoot.path).sorted(), beforeScanFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+    }
+
+    func testPatchDistributionReadinessCommandBlocksNoSelectionJSONWithoutCreatingArtifacts() throws {
+        let root = try makeEmeraldProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        _ = try PokemonHackCLI.run(arguments: ["patch-create", root.path, "--base-rom", baseROM.path, "--json"])
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let output = try PokemonHackCLI.run(arguments: ["patch-distribution-readiness", root.path, "--base-rom", baseROM.path, "--json"])
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(result["status"] as? String, "blocked")
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertNil(result["selectedPatch"] as? [String: Any])
+        XCTAssertNil(result["selectedPatchPath"] as? String)
+        XCTAssertNotNil(result["patchCreationPreview"] as? [String: Any])
+        XCTAssertNotNil(result["patchArtifactLibrary"] as? [String: Any])
+        XCTAssertNotNil(result["manualPlaytestReadiness"] as? [String: Any])
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_DISTRIBUTION_PATCH_NOT_SELECTED" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness", root.path, "--base-rom", baseROM.path, "--json"], output: output), 0)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+    }
+
+    func testPatchDistributionReadinessCommandMatchesExplicitRelativePatchPath() throws {
+        let root = try makeEmeraldProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let created = try decodeJSON(PokemonHackCLI.run(arguments: ["patch-create", root.path, "--base-rom", baseROM.path, "--json"]))
+        let patchPath = try XCTUnwrap(created["patchPath"] as? String)
+        let relativePatchPath = ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps"
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let output = try PokemonHackCLI.run(
+            arguments: [
+                "patch-distribution-readiness",
+                root.path,
+                "--base-rom",
+                baseROM.path,
+                "--patch",
+                relativePatchPath,
+                "--json",
+            ]
+        )
+        let result = try decodeJSON(output)
+
+        XCTAssertTrue(["ready", "readyWithWarnings"].contains(result["status"] as? String))
+        XCTAssertEqual(result["selectedPatchPath"] as? String, patchPath)
+        XCTAssertEqual(result["selectedPatchRelativePath"] as? String, relativePatchPath)
+        let selectedPatch = try XCTUnwrap(result["selectedPatch"] as? [String: Any])
+        XCTAssertEqual(selectedPatch["status"] as? String, "valid")
+        XCTAssertEqual(selectedPatch["relativePatchPath"] as? String, relativePatchPath)
+        let preview = try XCTUnwrap(result["patchCreationPreview"] as? [String: Any])
+        let headerPolicy = try XCTUnwrap(preview["headerPolicy"] as? [String: Any])
+        XCTAssertEqual(headerPolicy["mode"] as? String, "no-header-rewrite")
+        let blockedActions = try XCTUnwrap(result["blockedActions"] as? [String])
+        XCTAssertTrue(blockedActions.contains("Patch file creation"))
+        XCTAssertTrue(blockedActions.contains("Patch apply/export"))
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness", root.path, "--base-rom", baseROM.path, "--patch", relativePatchPath, "--json"], output: output), 0)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+    }
+
+    func testPatchDistributionReadinessCommandBlocksUnknownPatchPathWithoutAutoSelection() throws {
+        let root = try makeEmeraldProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        _ = try PokemonHackCLI.run(arguments: ["patch-create", root.path, "--base-rom", baseROM.path, "--json"])
+        let missingRelativePath = ".pokemonhackstudio/patches/missing.bps"
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let output = try PokemonHackCLI.run(
+            arguments: [
+                "patch-distribution-readiness",
+                root.path,
+                "--base-rom",
+                baseROM.path,
+                "--patch",
+                missingRelativePath,
+                "--json",
+            ]
+        )
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["status"] as? String, "blocked")
+        XCTAssertNil(result["selectedPatch"] as? [String: Any])
+        XCTAssertEqual(result["selectedPatchRelativePath"] as? String, missingRelativePath)
+        let library = try XCTUnwrap(result["patchArtifactLibrary"] as? [String: Any])
+        XCTAssertEqual((library["items"] as? [[String: Any]])?.count, 1)
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_DISTRIBUTION_PATCH_NOT_FOUND" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness", root.path, "--base-rom", baseROM.path, "--patch", missingRelativePath, "--json"], output: output), 0)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+    }
+
     func testROMMutationManifestCommandEmitsDryRunJSONWithoutWritingFiles() throws {
         let rom = try makeTestROM()
         let root = rom.deletingLastPathComponent()
@@ -501,6 +683,173 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
+    }
+
+    func testROMMutationAuditCommandEmitsReadyJSONWithoutConfirmationOrWrites() throws {
+        let rom = try makeTestROM()
+        let root = rom.deletingLastPathComponent()
+        let originalData = try Data(contentsOf: rom)
+        let dryRunJSON = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-manifest",
+            rom.path,
+            "--workspace-root",
+            root.path,
+            "--replace",
+            "0x120:2:AABB",
+            "--json"
+        ])
+        let dryRun = try decodeJSON(dryRunJSON)
+        let applyReview = try XCTUnwrap(dryRun["applyReview"] as? [String: Any])
+        let reviewToken = try XCTUnwrap(applyReview["reviewToken"] as? String)
+        let manifestURL = root.appendingPathComponent("dry-run.json")
+        try dryRunJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let output = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-audit",
+            rom.path,
+            "--manifest",
+            manifestURL.path,
+            "--workspace-root",
+            root.path,
+            "--json"
+        ])
+        let audit = try decodeJSON(output)
+
+        XCTAssertEqual(audit["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(audit["status"] as? String, "ready")
+        XCTAssertEqual(audit["inputPath"] as? String, rom.path)
+        XCTAssertEqual(audit["dryRunManifestPath"] as? String, manifestURL.path)
+        XCTAssertNotNil(audit["dryRunManifestSHA1"] as? String)
+        XCTAssertEqual(audit["reviewToken"] as? String, reviewToken)
+        XCTAssertEqual(audit["expectedReviewToken"] as? String, reviewToken)
+        XCTAssertEqual(audit["isReviewTokenStale"] as? Bool, false)
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: output), 0)
+        let artifactReviews = try XCTUnwrap(audit["artifactReviews"] as? [[String: Any]])
+        XCTAssertEqual(artifactReviews.first { $0["kind"] as? String == "originalROMBackup" }?["status"] as? String, "pendingExplicitApply")
+        XCTAssertEqual(artifactReviews.first { $0["kind"] as? String == "applyManifest" }?["status"] as? String, "pendingExplicitApply")
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
+
+        XCTAssertThrowsError(
+            try PokemonHackCLI.run(arguments: [
+                "rom-mutation-audit",
+                rom.path,
+                "--manifest",
+                manifestURL.path,
+                "--workspace-root",
+                root.path,
+                "--confirm",
+                reviewToken,
+                "--json"
+            ])
+        ) { error in
+            XCTAssertEqual(error as? CLIError, .usage)
+        }
+    }
+
+    func testROMMutationAuditCommandReturnsBlockedJSONForMissingInputs() throws {
+        let rom = try makeTestROM()
+        let root = rom.deletingLastPathComponent()
+        let originalData = try Data(contentsOf: rom)
+        let dryRunJSON = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-manifest",
+            rom.path,
+            "--workspace-root",
+            root.path,
+            "--replace",
+            "0x120:2:AABB",
+            "--json"
+        ])
+        let manifestURL = root.appendingPathComponent("dry-run.json")
+        try dryRunJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
+
+        let missingManifestOutput = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-audit",
+            rom.path,
+            "--workspace-root",
+            root.path,
+            "--json"
+        ])
+        let missingManifest = try decodeJSON(missingManifestOutput)
+        XCTAssertEqual(missingManifest["status"] as? String, "blocked")
+        var diagnostics = try XCTUnwrap(missingManifest["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "BINARY_ROM_MUTATION_AUDIT_MANIFEST_REQUIRED" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: missingManifestOutput), 1)
+
+        let missingWorkspaceOutput = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-audit",
+            rom.path,
+            "--manifest",
+            manifestURL.path,
+            "--json"
+        ])
+        let missingWorkspace = try decodeJSON(missingWorkspaceOutput)
+        XCTAssertEqual(missingWorkspace["status"] as? String, "blocked")
+        diagnostics = try XCTUnwrap(missingWorkspace["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "BINARY_ROM_MUTATION_AUDIT_WORKSPACE_ROOT_REQUIRED" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: missingWorkspaceOutput), 1)
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testROMMutationAuditCommandBlocksSourceTreeAndBaseDriftWithoutWriting() throws {
+        let rom = try makeTestROM()
+        let root = rom.deletingLastPathComponent()
+        let originalData = try Data(contentsOf: rom)
+        let dryRunJSON = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-manifest",
+            rom.path,
+            "--replace",
+            "0x120:2:AABB",
+            "--json"
+        ])
+        let manifestURL = root.appendingPathComponent("dry-run.json")
+        try dryRunJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
+        let sourceRoot = root.appendingPathComponent("pokeemerald")
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: sourceRoot.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: sourceRoot.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: sourceRoot.appendingPathComponent("data/layouts/layouts.json"))
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("graphics/pokenav"), withIntermediateDirectories: true)
+
+        let sourceBlockedOutput = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-audit",
+            rom.path,
+            "--manifest",
+            manifestURL.path,
+            "--workspace-root",
+            root.path,
+            "--json"
+        ])
+        let sourceBlocked = try decodeJSON(sourceBlockedOutput)
+        XCTAssertEqual(sourceBlocked["status"] as? String, "blocked")
+        var diagnostics = try XCTUnwrap(sourceBlocked["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "BINARY_ROM_MUTATION_AUDIT_SOURCE_TREE_AVAILABLE_REFUSED" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: sourceBlockedOutput), 1)
+        XCTAssertEqual(try Data(contentsOf: rom), originalData)
+
+        try FileManager.default.removeItem(at: sourceRoot)
+        var drifted = originalData
+        drifted[0x130] = 0x44
+        try drifted.write(to: rom)
+        let driftBlockedOutput = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-audit",
+            rom.path,
+            "--manifest",
+            manifestURL.path,
+            "--workspace-root",
+            root.path,
+            "--json"
+        ])
+        let driftBlocked = try decodeJSON(driftBlockedOutput)
+        XCTAssertEqual(driftBlocked["status"] as? String, "blocked")
+        diagnostics = try XCTUnwrap(driftBlocked["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "BINARY_ROM_MUTATION_APPLY_BASE_SHA1_DRIFT" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["rom-mutation-audit"], output: driftBlockedOutput), 1)
+        XCTAssertEqual(try Data(contentsOf: rom), drifted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
     }
 
     func testROMMutationApplyCommandAppliesReviewedReplacementInPlace() throws {
@@ -1841,6 +2190,66 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(factValue("Gen V Source Role", in: itemFacts), "variantReadinessPacket")
         XCTAssertEqual(factValue("Gen V Variant Readiness Packet", in: itemFacts), "previewOnly")
         XCTAssertEqual(factValue("Gen V Variant Readiness Basis", in: itemFacts), "existingCatalogFactsOnly")
+        XCTAssertNil(factValue("Migration Status", in: itemFacts))
+        XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
+    }
+
+    func testNDSDataCatalogCommandEmitsPokeBlackGeneratedOutputFreshnessPacketJSON() throws {
+        let root = try makeTestBlackDecompRoot()
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", root.path, "--json"])
+        )
+
+        let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
+        let packet = try XCTUnwrap(records.first { $0["id"] as? String == "resources:gen-v/generated-output-freshness-packet" })
+        XCTAssertEqual(packet["domain"] as? String, "resources")
+        XCTAssertEqual(packet["relativePath"] as? String, "gen-v/generated-output-freshness-packet")
+        XCTAssertEqual(packet["format"] as? String, "unknown")
+        XCTAssertEqual(packet["role"] as? String, "metadataPacket")
+        XCTAssertEqual(packet["exists"] as? Bool, true)
+        let readiness = try XCTUnwrap(packet["readiness"] as? [String: Any])
+        XCTAssertEqual(readiness["status"] as? String, "partial")
+        let facts = try XCTUnwrap(packet["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: facts), "generatedOutputFreshnessPacket")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Packet", in: facts), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Basis", in: facts), "existingCatalogAndBuildValidationFactsOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Posture", in: facts), "previewOnlyNoBuildNoGeneratedOutputWrites")
+        XCTAssertEqual(
+            factValue("Gen V Source Marker States", in: facts),
+            "black.us=sourceMarkerPresent, white.us=sourceMarkerPresent, black2.us=sourceMarkerPresent, white2.us=unavailable"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Text States", in: facts),
+            "black.us=valid, white.us=valid, black2.us=invalid, white2.us=missing"
+        )
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: facts)?.contains("variantHashes=black.us/rom.sha1=present") == true)
+        XCTAssertEqual(factValue("Gen V Source Root Summaries", in: facts), "src=5/92, asm=1/5, include=1/16")
+        XCTAssertTrue(factValue("Gen V Variant Readiness Summary", in: facts)?.contains("packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Declared Generated Outputs", in: facts)?.contains("build=missing") == true)
+        XCTAssertTrue(factValue("Gen V Declared Generated Outputs", in: facts)?.contains("pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: facts)?.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: facts)?.contains("checksum=outputMissing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: facts)?.contains("freshness=outputMissing") == true)
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: facts)?.contains("binary write") == true)
+        XCTAssertNil(packet["migrationPlan"])
+        XCTAssertNil(packet["textBankPreview"])
+        let diagnostics = try XCTUnwrap(packet["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_GENERATED_OUTPUT_FRESHNESS_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let resourceIndex = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
+        )
+        let items = try XCTUnwrap(resourceIndex["items"] as? [[String: Any]])
+        let packetItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "gen-v/generated-output-freshness-packet" })
+        XCTAssertEqual(packetItem["kind"] as? String, "unknown")
+        let itemFacts = try XCTUnwrap(packetItem["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: itemFacts), "generatedOutputFreshnessPacket")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Packet", in: itemFacts), "previewOnly")
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: itemFacts)?.contains("black-rom:pokeblack.nds=missing") == true)
         XCTAssertNil(factValue("Migration Status", in: itemFacts))
         XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
     }
@@ -3530,6 +3939,191 @@ final class PokemonHackCLITests: XCTestCase {
         )
         XCTAssertEqual(try XCTUnwrap(referenceApply["appliedChanges"] as? [[String: Any]]).count, 0)
         XCTAssertTrue(try XCTUnwrap(referenceApply["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
+    }
+
+    func testNDSDataEncounterJSONRowOperationCommandsHeartGoldSoulSilver() throws {
+        let root = try makeTestHeartGoldDecompRoot()
+        let encounterPath = "files/fielddata/encountdata/johto/route29.json"
+        let encounterRecordID = "encounters:\(encounterPath)"
+        try write(
+            """
+            {"morning_rate": 20, "slots": [{"species":"RATTATA","rate":30,"enabled":true},{"species":"PIDGEY","rate":20,"enabled":false}], "swarms": ["PIDGEY","SENTRET"], "metadata": {"map":"ROUTE_29"}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("{\"slots\":[]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/empty.json"))
+        try write("{\"slots\":[{\"species\":\"RATTATA\",\"rate\":30},{\"species\":\"PIDGEY\"}]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/mismatch.json"))
+        try write("{\"slots\":[{\"species\":\"RATTATA\",\"species\":\"PIDGEY\",\"rate\":30,\"enabled\":true}]}\n", to: root.appendingPathComponent("files/fielddata/encountdata/duplicate.json"))
+        try write("rate=15\n", to: root.appendingPathComponent("files/fielddata/encountdata/gs_enc_data.txt"))
+        try write("void Encounter_Load(void) {}\n", to: root.appendingPathComponent("files/fielddata/encountdata/encounter.c"))
+        try write(makeTestNARC(), to: root.appendingPathComponent("files/poketool/waza/waza_tbl.narc"))
+
+        let redactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-encounter-json-rows-plan",
+            root.path,
+            encounterRecordID,
+            "--array",
+            "slots",
+            "--insert",
+            "1",
+            "{\"species\":\"SECRET\",\"rate\":99,\"enabled\":true}",
+            "--json"
+        ])
+        XCTAssertFalse(redactedPlan.contains("SECRET"))
+        XCTAssertFalse(redactedPlan.contains("\"rate\":99"))
+        XCTAssertFalse(redactedPlan.contains("textPreview"))
+
+        let plan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-plan",
+                root.path,
+                encounterRecordID,
+                "--array",
+                "slots",
+                "--insert",
+                "1",
+                "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}",
+                "--delete",
+                "0",
+                "--reorder",
+                "1",
+                "0",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(plan["recordID"] as? String, encounterRecordID)
+        XCTAssertEqual(plan["arrayKey"] as? String, "slots")
+        XCTAssertEqual(plan["beforeRowCount"] as? Int, 2)
+        XCTAssertEqual(plan["afterRowCount"] as? Int, 2)
+        XCTAssertEqual(plan["changeCount"] as? Int, 1)
+        let operations = try XCTUnwrap(plan["operations"] as? [[String: Any]])
+        XCTAssertEqual(operations.count, 3)
+        XCTAssertEqual(operations[0]["kind"] as? String, "insert")
+        XCTAssertEqual(operations[0]["index"] as? Int, 1)
+        XCTAssertEqual(operations[0]["insertedFieldCount"] as? Int, 3)
+        XCTAssertNil(operations[0]["rowText"])
+        let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]])
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?["path"] as? String, encounterPath)
+        XCTAssertNil(changes.first?["textPreview"])
+
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-apply",
+                root.path,
+                encounterRecordID,
+                "--array",
+                "slots",
+                "--insert",
+                "1",
+                "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}",
+                "--delete",
+                "0",
+                "--reorder",
+                "1",
+                "0",
+                "--json"
+            ])
+        )
+        let appliedChanges = try XCTUnwrap(apply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(appliedChanges.count, 1)
+        XCTAssertNotNil(appliedChanges.first?["backupPath"])
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"slots\": [{\"species\":\"PIDGEY\",\"rate\":20,\"enabled\":false},{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}]"))
+        XCTAssertTrue(updated.contains("\"swarms\": [\"PIDGEY\",\"SENTRET\"]"))
+        XCTAssertTrue(updated.contains("\"metadata\": {\"map\":\"ROUTE_29\"}"))
+
+        let blockedPlans: [(String, String, [String], String?)] = [
+            (encounterRecordID, "swarms", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED"),
+            (encounterRecordID, "missing_slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING"),
+            ("encounters:files/fielddata/encountdata/empty.json", "slots", ["--insert", "0", "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true}"], "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED"),
+            (encounterRecordID, "slots", ["--insert", "0", "{\"species\":\"HOOTHOOT\",\"rate\":25,\"enabled\":true,\"metadata\":{\"time\":\"night\"}}"], "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/mismatch.json", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_SHAPE_MISMATCH"),
+            ("encounters:files/fielddata/encountdata/duplicate.json", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE"),
+            (encounterRecordID, "metadata.slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_PATH_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/gs_enc_data.txt", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/encounter.c", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED"),
+            ("moves:files/poketool/waza/waza_tbl.narc", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED")
+        ]
+        for (recordID, arrayKey, operationArguments, expectedCode) in blockedPlans {
+            let blocked = try decodeJSON(
+                PokemonHackCLI.run(arguments: [
+                    "nds-data-encounter-json-rows-plan",
+                    root.path,
+                    recordID,
+                    "--array",
+                    arrayKey
+                ] + operationArguments + ["--json"])
+            )
+            XCTAssertEqual(try XCTUnwrap(blocked["changes"] as? [[String: Any]]).count, 0, recordID)
+            XCTAssertTrue(
+                try XCTUnwrap(blocked["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == expectedCode },
+                "\(recordID) expected \(expectedCode ?? "nil")"
+            )
+        }
+
+        let referenceRoot = try makeTemporaryDirectory().appendingPathComponent("references/pokeheartgold")
+        try FileManager.default.createDirectory(at: referenceRoot, withIntermediateDirectories: true)
+        try write("GAME_VERSION ?= HEARTGOLD\nGAME_CODE := IPK\n", to: referenceRoot.appendingPathComponent("config.mk"))
+        try write("ROM := $(BUILD_DIR)/poke$(buildname).nds\n", to: referenceRoot.appendingPathComponent("Makefile"))
+        try write("HostRoot files/\n", to: referenceRoot.appendingPathComponent("rom.rsf"))
+        try write("filesystem: $(NITROFS_FILES)\n", to: referenceRoot.appendingPathComponent("filesystem.mk"))
+        try write("dddddddddddddddddddddddddddddddddddddddd  pokeheartgold.us.nds\n", to: referenceRoot.appendingPathComponent("heartgold.us/rom.sha1"))
+        try write("{\"slots\":[{\"species\":\"RATTATA\",\"rate\":30,\"enabled\":true}]}\n", to: referenceRoot.appendingPathComponent(encounterPath))
+        let referenceApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-apply",
+                referenceRoot.path,
+                encounterRecordID,
+                "--array",
+                "slots",
+                "--delete",
+                "0",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(try XCTUnwrap(referenceApply["appliedChanges"] as? [[String: Any]]).count, 0)
+        XCTAssertTrue(try XCTUnwrap(referenceApply["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
+
+        let diamondRoot = try makeTestDiamondDecompRoot()
+        let diamondPath = "files/fielddata/encountdata/sinnoh/route201.json"
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n", to: diamondRoot.appendingPathComponent(diamondPath))
+        let diamondPlan = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-plan",
+                diamondRoot.path,
+                "encounters:\(diamondPath)",
+                "--array",
+                "slots",
+                "--delete",
+                "0",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(try XCTUnwrap(diamondPlan["changes"] as? [[String: Any]]).count, 0)
+        XCTAssertTrue(try XCTUnwrap(diamondPlan["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+
+        let platinumRoot = try makeTestNDSDecompRoot()
+        try write("SPECIES_ABRA\n", to: platinumRoot.appendingPathComponent("generated/species.txt"))
+        let generatedApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-apply",
+                platinumRoot.path,
+                "resources:generated/species.txt",
+                "--array",
+                "slots",
+                "--delete",
+                "0",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(try XCTUnwrap(generatedApply["appliedChanges"] as? [[String: Any]]).count, 0)
+        let generatedDiagnostics = try XCTUnwrap(generatedApply["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(
+            generatedDiagnostics.contains { $0["code"] as? String == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" },
+            "\(generatedDiagnostics)"
+        )
     }
 
     func testNDSDataSemanticCommandsPlanAndApplyPlatinumTrainerClassJSONFields() throws {
@@ -6790,10 +7384,10 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(usageSource["status"] as? String, "editable")
         XCTAssertEqual(usageSource["indexedCount"] as? Int, 1)
         XCTAssertEqual(usageSource["sourceRole"] as? String, "editableUsageScalars")
-        XCTAssertEqual(usageSource["readiness"] as? String, "editable existing usage/classification scalar fields")
+        XCTAssertEqual(usageSource["readiness"] as? String, "editable existing usage/classification scalar fields; complete missing group insertion is anchor-gated")
         XCTAssertEqual(usageSource["blockedActions"] as? [String], [
             "constants-file edits/creation",
-            "missing-field insertion/removal",
+            "partial missing-field insertion/removal",
             "row insertion/removal/reorder",
             "generated outputs",
             "reference writes",
@@ -8507,6 +9101,23 @@ final class PokemonHackCLITests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func recursiveRelativeFiles(in root: URL) throws -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [String] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            files.append(String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)))
+        }
+        return files.sorted()
     }
 
     private func genVEncounterFielddataMessageContextRecordIDs() -> Set<String> {

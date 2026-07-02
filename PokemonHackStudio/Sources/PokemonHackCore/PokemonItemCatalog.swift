@@ -738,35 +738,51 @@ public enum ItemMutationPlanner {
         diagnostics: inout [Diagnostic]
     ) {
         guard descriptor.supportsUsageScalarEditing else { return }
-        let symbolFields = [
-            ("holdEffect", item.holdEffect, draft.holdEffect),
-            ("pocket", item.pocket, draft.pocket),
-            ("type", item.type, draft.type)
-        ]
-        for (label, current, draftValue) in symbolFields where current != draftValue {
-            appendUsageScalarDiagnostic(
-                label: label,
-                current: current,
-                draftValue: draftValue,
-                item: item,
-                isValid: isSimpleItemSymbol
-            ) {
-                "\(label) must be a single C identifier."
-            } diagnostics: { diagnostic in
-                diagnostics.append(diagnostic)
+        let fields = [
+            BehaviorScalarField(label: "holdEffect", current: item.holdEffect, draftValue: draft.holdEffect, isValid: isSimpleItemSymbol) {
+                "holdEffect must be a single C identifier."
+            },
+            BehaviorScalarField(label: "holdEffectParam", current: item.holdEffectParam, draftValue: draft.holdEffectParam, isValid: isSimpleItemSymbolOrIntegerLiteral) {
+                "holdEffectParam must be a single C identifier or integer literal."
+            },
+            BehaviorScalarField(label: "pocket", current: item.pocket, draftValue: draft.pocket, isValid: isSimpleItemSymbol) {
+                "pocket must be a single C identifier."
+            },
+            BehaviorScalarField(label: "type", current: item.type, draftValue: draft.type, isValid: isSimpleItemSymbol) {
+                "type must be a single C identifier."
             }
+        ]
+        let editedMissingFields = fields.filter { $0.current == nil && $0.current != $0.draftValue }
+        if !editedMissingFields.isEmpty {
+            let missingFields = fields.filter { $0.current == nil }
+            guard missingFields.count == fields.count else {
+                for field in editedMissingFields {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_NOT_EDITABLE", message: "\(field.label) edits require an existing local Expansion gItemsInfo field; partial missing-field insertion is blocked.", span: item.sourceSpan))
+                }
+                return
+            }
+            for field in fields {
+                guard let draftValue = field.draftValue, !draftValue.isEmpty else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_INSERTION_REQUIRED", message: "Usage/classification scalar insertion requires holdEffect, holdEffectParam, pocket, and type values together.", span: item.sourceSpan))
+                    continue
+                }
+                guard field.isValid(draftValue) else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_USAGE_SCALAR_INVALID", message: field.invalidMessage(), span: item.sourceSpan))
+                    continue
+                }
+            }
+            return
         }
 
-        if item.holdEffectParam != draft.holdEffectParam {
+        for field in fields where field.current != field.draftValue {
             appendUsageScalarDiagnostic(
-                label: "holdEffectParam",
-                current: item.holdEffectParam,
-                draftValue: draft.holdEffectParam,
+                label: field.label,
+                current: field.current,
+                draftValue: field.draftValue,
                 item: item,
-                isValid: isSimpleItemSymbolOrIntegerLiteral
-            ) {
-                "holdEffectParam must be a single C identifier or integer literal."
-            } diagnostics: { diagnostic in
+                isValid: field.isValid,
+                invalidMessage: field.invalidMessage
+            ) { diagnostic in
                 diagnostics.append(diagnostic)
             }
         }
@@ -1289,6 +1305,13 @@ private struct ItemFieldRange {
 }
 
 private enum ItemFieldPatcher {
+    private static let usageScalarInsertionKeys = [
+        "holdEffect",
+        "holdEffectParam",
+        "pocket",
+        "type"
+    ]
+
     private static let behaviorScalarInsertionKeys = [
         "fieldUseFunc",
         "battleUsage",
@@ -1305,10 +1328,13 @@ private enum ItemFieldPatcher {
         let ranges = Dictionary(uniqueKeysWithValues: fieldRanges(in: entryBody).map { ($0.key, $0) })
         var characters = Array(entryBody)
         var edits: [(start: Int, end: Int, value: String)] = []
+        var missingUsageChanges: [ItemFieldChange] = []
         var missingBehaviorChanges: [ItemFieldChange] = []
         for change in changes {
             guard let range = ranges[change.key] else {
-                if behaviorScalarInsertionKeys.contains(change.key) {
+                if usageScalarInsertionKeys.contains(change.key) {
+                    missingUsageChanges.append(change)
+                } else if behaviorScalarInsertionKeys.contains(change.key) {
                     missingBehaviorChanges.append(change)
                 } else {
                     diagnostics.append(
@@ -1335,6 +1361,16 @@ private enum ItemFieldPatcher {
             }
             edits.append((range.start, range.end, change.replacement))
         }
+        if !missingUsageChanges.isEmpty {
+            appendUsageScalarInsertionEdits(
+                changes: missingUsageChanges,
+                ranges: ranges,
+                characters: characters,
+                diagnostics: &diagnostics,
+                span: span,
+                edits: &edits
+            )
+        }
         if !missingBehaviorChanges.isEmpty {
             appendBehaviorScalarInsertionEdit(
                 changes: missingBehaviorChanges,
@@ -1350,6 +1386,80 @@ private enum ItemFieldPatcher {
             characters.replaceSubrange(edit.start..<edit.end, with: Array(edit.value))
         }
         return String(characters)
+    }
+
+    private static func appendUsageScalarInsertionEdits(
+        changes: [ItemFieldChange],
+        ranges: [String: ItemFieldRange],
+        characters: [Character],
+        diagnostics: inout [Diagnostic],
+        span: SourceSpan,
+        edits: inout [(start: Int, end: Int, value: String)]
+    ) {
+        let changeKeys = Set(changes.map(\.key))
+        guard changeKeys == Set(usageScalarInsertionKeys),
+              usageScalarInsertionKeys.allSatisfy({ ranges[$0] == nil })
+        else {
+            for change in changes {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "ITEM_FIELD_MISSING",
+                        message: "Cannot edit \(change.key) because the existing item entry does not contain that top-level field.",
+                        span: span
+                    )
+                )
+            }
+            return
+        }
+        guard let holdInsertionPoint = insertionPointAfterField(for: "price", ranges: ranges, characters: characters),
+              let pocketInsertionPoint = insertionPointAfterField(for: "description", ranges: ranges, characters: characters),
+              let typeInsertionPoint = insertionPointAfterField(for: "sortType", ranges: ranges, characters: characters)
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "ITEM_USAGE_SCALAR_INSERTION_ANCHOR_MISSING",
+                    message: "Usage/classification scalar insertion requires existing top-level .price, .description, and .sortType anchors.",
+                    span: span
+                )
+            )
+            return
+        }
+        let values = Dictionary(uniqueKeysWithValues: changes.map { ($0.key, $0.replacement) })
+        guard usageScalarInsertionKeys.allSatisfy({ values[$0]?.isEmpty == false }) else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "ITEM_USAGE_SCALAR_INSERTION_REQUIRED",
+                    message: "Usage/classification scalar insertion requires holdEffect, holdEffectParam, pocket, and type values together.",
+                    span: span
+                )
+            )
+            return
+        }
+
+        appendInsertion(
+            lines: ["holdEffect", "holdEffectParam"],
+            values: values,
+            indentation: lineIndentation(containing: ranges["price"]?.start, characters: characters),
+            insertionPoint: holdInsertionPoint,
+            edits: &edits
+        )
+        appendInsertion(
+            lines: ["pocket"],
+            values: values,
+            indentation: lineIndentation(containing: ranges["description"]?.start, characters: characters),
+            insertionPoint: pocketInsertionPoint,
+            edits: &edits
+        )
+        appendInsertion(
+            lines: ["type"],
+            values: values,
+            indentation: lineIndentation(containing: ranges["sortType"]?.start, characters: characters),
+            insertionPoint: typeInsertionPoint,
+            edits: &edits
+        )
     }
 
     private static func appendBehaviorScalarInsertionEdit(
@@ -1403,7 +1513,23 @@ private enum ItemFieldPatcher {
             return
         }
         let indentation = lineIndentation(containing: ranges["effect"]?.start, characters: characters)
-        var inserted = behaviorScalarInsertionKeys
+        appendInsertion(
+            lines: behaviorScalarInsertionKeys,
+            values: values,
+            indentation: indentation,
+            insertionPoint: insertionPoint,
+            edits: &edits
+        )
+    }
+
+    private static func appendInsertion(
+        lines: [String],
+        values: [String: String],
+        indentation: String,
+        insertionPoint: (index: Int, requiresLeadingNewline: Bool),
+        edits: inout [(start: Int, end: Int, value: String)]
+    ) {
+        var inserted = lines
             .map { "\(indentation).\($0) = \(values[$0]!)," }
             .joined(separator: "\n") + "\n"
         if insertionPoint.requiresLeadingNewline {

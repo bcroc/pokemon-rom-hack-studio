@@ -3858,17 +3858,25 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_REQUIRED",
-                    message: "Platinum encounter JSON row operations require a top-level array key."
+                    message: "Gen IV encounter JSON row operations require a top-level array key."
+                )
+            )
+        } else if arrayKey.contains(".") || arrayKey.contains("/") || arrayKey.contains("\\") {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_PATH_BLOCKED",
+                    message: "Gen IV encounter JSON row operations require a single top-level array key; nested array paths remain blocked."
                 )
             )
         }
 
-        if let record, !isEligiblePlatinumEncounterJSONRecord(record, profile: catalog.profile) {
+        if let record, !isEligibleEncounterJSONRecord(record, profile: catalog.profile) {
             diagnostics.append(
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED",
-                    message: "Only local Platinum source-tree encounters:res/field/encounters/*.json object-array rows support encounter JSON row operations; scalar arrays, nested directories, non-JSON rows, HGSS/DP rows, containers, generated/reference rows, ROM rebuild/export/playtest, nested schema reshaping, broad schemas, and binary writes remain blocked.",
+                    message: "Only local Platinum direct-child encounters:res/field/encounters/*.json rows and HeartGold/SoulSilver encounters:files/fielddata/encountdata/**/*.json source-tree object-array rows support encounter JSON row operations; scalar arrays, missing or empty arrays, nested row values, mismatched or duplicate row keys, C anchors, non-JSON rows, nested array-key paths, Diamond/Pearl rows, containers, generated/reference rows, ROM rebuild/export/playtest, broad schema reshaping, and binary writes remain blocked.",
                     span: record.sourceSpan
                 )
             )
@@ -3957,19 +3965,28 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
         )
     }
 
-    private static func isEligiblePlatinumEncounterJSONRecord(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
-        guard profile == .pokeplatinum,
-              record.domain == .encounters,
+    private static func isEligibleEncounterJSONRecord(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
+        guard record.domain == .encounters,
               record.role == .sourceTree,
               record.format == .json
         else {
             return false
         }
-        let prefix = "res/field/encounters/"
         let lower = record.relativePath.lowercased()
-        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
-        let remainder = lower.dropFirst(prefix.count)
-        return !remainder.isEmpty && !remainder.contains("/")
+        switch profile {
+        case .pokeplatinum:
+            let prefix = "res/field/encounters/"
+            guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+            let remainder = lower.dropFirst(prefix.count)
+            return !remainder.isEmpty && !remainder.contains("/")
+        case .pokeheartgold:
+            let prefix = "files/fielddata/encountdata/"
+            guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+            let remainder = lower.dropFirst(prefix.count)
+            return !remainder.isEmpty
+        default:
+            return false
+        }
     }
 
     private static func parseEncounterArray(
@@ -3984,7 +4001,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_REQUIRED",
-                    message: "Platinum encounter JSON row operations require a top-level JSON object.",
+                    message: "Gen IV encounter JSON row operations require a top-level JSON object.",
                     span: record?.sourceSpan
                 )
             )
@@ -3996,7 +4013,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_JSON_MALFORMED",
-                    message: "Platinum encounter JSON must parse before row operations are planned.",
+                    message: "Gen IV encounter JSON must parse before row operations are planned.",
                     span: record?.sourceSpan
                 )
             )
@@ -4008,7 +4025,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING",
-                    message: "Platinum encounter JSON row operations require an existing top-level array named \(arrayKey).",
+                    message: "Gen IV encounter JSON row operations require an existing top-level array named \(arrayKey).",
                     span: record?.sourceSpan
                 )
             )
@@ -4021,7 +4038,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_REQUIRED",
-                    message: "Platinum encounter JSON field \(arrayKey) is not an array; nested schema reshaping remains blocked.",
+                    message: "Gen IV encounter JSON field \(arrayKey) is not an array; nested schema reshaping remains blocked.",
                     span: span(record: record, line: lineNumber(in: sourceText, before: valueRange.lowerBound))
                 )
             )
@@ -4363,7 +4380,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_JSON_KEY_DUPLICATE",
-                    message: "Platinum encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before row operations are planned.",
+                    message: "Gen IV encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before row operations are planned.",
                     span: record?.sourceSpan
                 )
             )

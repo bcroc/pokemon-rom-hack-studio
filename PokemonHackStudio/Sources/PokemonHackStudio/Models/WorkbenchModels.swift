@@ -835,6 +835,7 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
     case generatedArtifacts = "Generated Artifacts"
     case toolchain = "Toolchain Readiness"
     case healthMatrix = "Toolchain Health Matrix"
+    case mapRenderAudit = "Map Render Audit"
     case patchManifest = "Patch Manifest"
     case playtest = "Playtest Handoff"
     case diagnostics = "Diagnostics"
@@ -853,6 +854,8 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
             "wrench.and.screwdriver"
         case .healthMatrix:
             "checklist"
+        case .mapRenderAudit:
+            "map"
         case .patchManifest:
             "doc.badge.gearshape"
         case .playtest:
@@ -861,6 +864,58 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
             "exclamationmark.triangle"
         }
     }
+}
+
+enum MapRenderAuditLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(label: String, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No map render audit loaded"
+        case .loading:
+            "Loading map render audit"
+        case let .loaded(label, _):
+            "Map render audit loaded: \(label)"
+        case let .failed(message):
+            "Map render audit failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .idle:
+            .warning
+        case .loading:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .failed:
+            .error
+        }
+    }
+}
+
+struct MapRenderAuditReportViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let status: ValidationState
+    let statusLabel: String
+    let targetCount: Int
+    let auditedTargetCount: Int
+    let skippedTargetCount: Int
+    let mapCount: Int
+    let auditedMapCount: Int
+    let textureCount: Int
+    let warningCount: Int
+    let warningBucketCount: Int
+    let failureCount: Int
+    let rows: [BuildReportRow]
+    let diagnostics: [IndexedDiagnosticRow]
 }
 
 struct BuildPatchPlaytestReportViewState: Identifiable {
@@ -966,6 +1021,37 @@ enum PatchArtifactLibraryLoadStatus: Equatable {
             "\(count) BPS patch artifact\(count == 1 ? "" : "s") found"
         case let .failed(message):
             "Patch library failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
+enum PatchDistributionReadinessLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String, ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Patch distribution readiness not checked"
+        case .loading:
+            "Checking patch distribution readiness"
+        case let .loaded(label, _):
+            "Patch distribution readiness loaded: \(label)"
+        case let .failed(message):
+            "Patch distribution readiness failed: \(message)"
         }
     }
 
@@ -1093,6 +1179,18 @@ struct PatchArtifactLibraryViewState: Identifiable {
     let status: ValidationState
     let artifactRoot: String
     let items: [PatchArtifactLibraryItemViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchDistributionReadinessReportViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let statusLabel: String
+    let selectedPatchPath: String?
     let diagnostics: [IndexedDiagnosticRow]
     let rows: [BuildReportRow]
 }
@@ -2664,6 +2762,7 @@ struct NDSDataSemanticFieldViewState: Identifiable {
 enum NDSDataResourceRowOperationFamily: String, Identifiable {
     case textLines
     case itemCSVRows
+    case encounterJSONRows
 
     var id: String {
         rawValue
@@ -2675,6 +2774,8 @@ enum NDSDataResourceRowOperationFamily: String, Identifiable {
             "Text Lines"
         case .itemCSVRows:
             "Item CSV Rows"
+        case .encounterJSONRows:
+            "Encounter JSON Rows"
         }
     }
 
@@ -2684,6 +2785,8 @@ enum NDSDataResourceRowOperationFamily: String, Identifiable {
             "Line"
         case .itemCSVRows:
             "CSV Row"
+        case .encounterJSONRows:
+            "JSON Row"
         }
     }
 
@@ -2693,6 +2796,8 @@ enum NDSDataResourceRowOperationFamily: String, Identifiable {
             "Text"
         case .itemCSVRows:
             "CSV row"
+        case .encounterJSONRows:
+            #"{"level":4,"species":"SPECIES_SHINX"}"#
         }
     }
 }
@@ -2732,6 +2837,9 @@ enum NDSDataResourceRowOperationKind: String, CaseIterable, Identifiable {
 struct NDSDataResourceRowOperationEditorViewState {
     let family: NDSDataResourceRowOperationFamily
     let title: String
+    let targetOptions: [NDSDataResourceRowOperationTargetViewState]
+    let selectedTargetKey: String?
+    let canChangeTarget: Bool
     let stagedOperations: [NDSDataResourceRowOperationViewState]
     let beforeCount: Int?
     let afterCount: Int?
@@ -2751,6 +2859,16 @@ struct NDSDataResourceRowOperationEditorViewState {
             return "\(beforeCount)"
         }
         return "Pending"
+    }
+}
+
+struct NDSDataResourceRowOperationTargetViewState: Identifiable, Equatable {
+    let key: String
+    let title: String
+    let detail: String
+
+    var id: String {
+        key
     }
 }
 

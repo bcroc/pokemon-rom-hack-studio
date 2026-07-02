@@ -910,6 +910,216 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
     }
 
+    func testPatchArtifactLibraryScansOnlyDirectChildRegularBPSArtifacts() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+
+        let patchData = makeBPSPatch(source: baseData, target: builtData)
+        let patchRoot = root.appendingPathComponent(".pokemonhackstudio/patches")
+        let directPatch = patchRoot.appendingPathComponent("direct.bps")
+        let nestedPatch = patchRoot.appendingPathComponent("nested/nested.bps")
+        try write(patchData, to: directPatch)
+        try write(patchData, to: nestedPatch)
+        try FileManager.default.createDirectory(at: patchRoot.appendingPathComponent("directory.bps"), withIntermediateDirectories: true)
+        try write(Data(#"{"manifestOnly":true}"#.utf8), to: patchRoot.appendingPathComponent("manifest-only.bps.manifest.json"))
+
+        let manifest = PatchCreationArtifactManifest(
+            schemaVersion: 1,
+            action: "patch-create",
+            projectRoot: root.path,
+            baseROMPath: baseROM.path,
+            baseROMSHA1: pokemonHackSHA1Hex(baseData),
+            baseROMCRC32: pokemonHackCRC32Hex(baseData),
+            baseROMSizeBytes: UInt64(baseData.count),
+            matchedBaseROMCandidate: "rom.sha1",
+            builtOutputPath: builtOutput.path,
+            builtOutputRelativePath: "pokeemerald.gba",
+            builtOutputTargetID: "gba",
+            builtOutputSHA1: pokemonHackSHA1Hex(builtData),
+            builtOutputCRC32: pokemonHackCRC32Hex(builtData),
+            builtOutputSizeBytes: UInt64(builtData.count),
+            patchPath: directPatch.path,
+            patchSHA1: pokemonHackSHA1Hex(patchData),
+            patchCRC32: pokemonHackCRC32Hex(patchData),
+            patchSizeBytes: UInt64(patchData.count),
+            patchFormat: .bps,
+            headerPolicy: PatchArtifactHeaderPolicy(mode: "no-header-rewrite", detail: "test", shouldRewriteHeader: false),
+            diagnostics: []
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(to: URL(fileURLWithPath: directPatch.path + ".manifest.json"))
+        let beforeScanFiles = try FileManager.default.contentsOfDirectory(atPath: patchRoot.path).sorted()
+
+        let library = PatchArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertEqual(library.items.map(\.fileName), ["direct.bps"])
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .matched)
+        XCTAssertEqual(item.builtOutputStatus, .matched)
+        XCTAssertEqual(item.status, .valid)
+        XCTAssertFalse(library.items.contains { $0.relativePatchPath.contains("nested") })
+        XCTAssertFalse(library.items.contains { $0.relativePatchPath.contains("directory.bps") })
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: patchRoot.path).sorted(), beforeScanFiles)
+        XCTAssertEqual(try Data(contentsOf: nestedPatch), patchData)
+    }
+
+    func testPatchDistributionReadinessComposesSelectedPatchLibraryAndManualPlaytestReadinessWithoutWriting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let created = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let patchPath = try XCTUnwrap(created.patchPath)
+        let relativePatchPath = ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps"
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let packet = try PatchDistributionReadinessPacketBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            selectedPatchPath: relativePatchPath,
+            toolResolver: availableTools(["mgba": "/Applications/mGBA.app"])
+        )
+
+        XCTAssertTrue(packet.isReadOnly)
+        XCTAssertEqual(packet.status, .ready)
+        XCTAssertEqual(packet.selectedPatchPath, patchPath)
+        XCTAssertEqual(packet.selectedPatchRelativePath, relativePatchPath)
+        XCTAssertEqual(packet.selectedPatch?.status, .valid)
+        XCTAssertEqual(packet.patchArtifactLibrary.items.count, 1)
+        XCTAssertTrue(packet.patchCreationPreview.isReady)
+        XCTAssertEqual(packet.patchCreationPreview.headerPolicy.mode, "no-header-rewrite")
+        XCTAssertFalse(packet.patchCreationPreview.headerPolicy.shouldRewriteHeader)
+        XCTAssertTrue(packet.manualPlaytestReadiness.isRunnable)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "PATCH_DISTRIBUTION_REVIEW_ONLY" })
+        XCTAssertTrue(packet.blockedActions.contains("Patch file creation"))
+        XCTAssertTrue(packet.blockedActions.contains("Header rewrite"))
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+    }
+
+    func testPatchDistributionReadinessBlocksMissingExplicitPatchSelectionWithoutAutoSelecting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        _ = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let packet = try PatchDistributionReadinessPacketBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            selectedPatchPath: nil,
+            toolResolver: availableTools(["mgba": "/Applications/mGBA.app"])
+        )
+
+        XCTAssertEqual(packet.status, .blocked)
+        XCTAssertNil(packet.selectedPatch)
+        XCTAssertNil(packet.selectedPatchPath)
+        XCTAssertEqual(packet.patchArtifactLibrary.items.count, 1)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "PATCH_DISTRIBUTION_PATCH_NOT_SELECTED" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+    }
+
+    func testPatchDistributionReadinessReportsStaleLibraryInputsAsWarningsWithoutWriting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let changedBuiltData = Data("changed-built-output".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let created = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let patchPath = try XCTUnwrap(created.patchPath)
+        try write(changedBuiltData, to: builtOutput)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let packet = try PatchDistributionReadinessPacketBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            selectedPatchPath: patchPath,
+            toolResolver: availableTools(["mgba": "/Applications/mGBA.app"])
+        )
+
+        XCTAssertEqual(packet.status, .readyWithWarnings)
+        XCTAssertEqual(packet.selectedPatch?.status, .warning)
+        XCTAssertEqual(packet.selectedPatch?.builtOutputStatus, .mismatched)
+        XCTAssertTrue(packet.selectedPatch?.diagnostics.contains { $0.code == "PATCH_ARTIFACT_LIBRARY_BUILT_OUTPUT_HASH_MISMATCH" } == true)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), changedBuiltData)
+    }
+
+    func testPatchDistributionReadinessBlocksManifestHeaderRewritePolicy() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let created = try PatchCreationBuilder.create(projectPath: root.path, baseROMPath: baseROM.path)
+        let patchPath = try XCTUnwrap(created.patchPath)
+        let manifestPath = try XCTUnwrap(created.manifestPath)
+        try rewritePatchManifest(at: URL(fileURLWithPath: manifestPath)) { manifest in
+            PatchCreationArtifactManifest(
+                schemaVersion: manifest.schemaVersion,
+                action: manifest.action,
+                projectRoot: manifest.projectRoot,
+                baseROMPath: manifest.baseROMPath,
+                baseROMSHA1: manifest.baseROMSHA1,
+                baseROMCRC32: manifest.baseROMCRC32,
+                baseROMSizeBytes: manifest.baseROMSizeBytes,
+                matchedBaseROMCandidate: manifest.matchedBaseROMCandidate,
+                builtOutputPath: manifest.builtOutputPath,
+                builtOutputRelativePath: manifest.builtOutputRelativePath,
+                builtOutputTargetID: manifest.builtOutputTargetID,
+                builtOutputSHA1: manifest.builtOutputSHA1,
+                builtOutputCRC32: manifest.builtOutputCRC32,
+                builtOutputSizeBytes: manifest.builtOutputSizeBytes,
+                patchPath: manifest.patchPath,
+                patchSHA1: manifest.patchSHA1,
+                patchCRC32: manifest.patchCRC32,
+                patchSizeBytes: manifest.patchSizeBytes,
+                patchFormat: manifest.patchFormat,
+                headerPolicy: PatchArtifactHeaderPolicy(mode: "header-rewrite-required", detail: "test rewrite", shouldRewriteHeader: true),
+                verification: manifest.verification,
+                diagnostics: manifest.diagnostics
+            )
+        }
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let packet = try PatchDistributionReadinessPacketBuilder.build(
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            selectedPatchPath: patchPath,
+            toolResolver: availableTools(["mgba": "/Applications/mGBA.app"])
+        )
+
+        XCTAssertEqual(packet.status, .blocked)
+        XCTAssertEqual(packet.selectedPatch?.status, .valid)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "PATCH_DISTRIBUTION_MANIFEST_HEADER_REWRITE_BLOCKED" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+    }
+
     func testPatchManifestBuildsReadonlyBinaryDiffFreeSpaceAndRepointPreview() throws {
         let root = try makeTemporaryRoot()
         var bytes = [UInt8](repeating: 0xFF, count: 0x240)
@@ -1701,6 +1911,34 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
     private func writeExecutable(_ text: String, to url: URL) throws {
         try write(text, to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func rewritePatchManifest(
+        at url: URL,
+        transform: (PatchCreationArtifactManifest) throws -> PatchCreationArtifactManifest
+    ) throws {
+        let manifest = try JSONDecoder().decode(PatchCreationArtifactManifest.self, from: Data(contentsOf: url))
+        let rewritten = try transform(manifest)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(rewritten).write(to: url)
+    }
+
+    private func recursiveRelativeFiles(in root: URL) throws -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [String] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            files.append(String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)))
+        }
+        return files.sorted()
     }
 
     private func setModificationDate(_ date: Date, for url: URL) throws {

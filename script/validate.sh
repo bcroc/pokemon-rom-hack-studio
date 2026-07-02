@@ -78,6 +78,7 @@ run_quiet "$CLI_BIN" rom-graph "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet "$CLI_BIN" rom-inspect "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet "$CLI_BIN" playtest-debug-plan "$PATCH_SMOKE_DIR/test.gba" --json
 run_quiet "$CLI_BIN" migration-coverage "$PATCH_SMOKE_DIR/test.gba" --json
+run_quiet "$CLI_BIN" map-render-audit "$PATCH_SMOKE_DIR/test.gba" --json
 
 if fixture_available "pokeemerald" "$POKEEMERALD_DIR" "POKEEMERALD"; then
   run_quiet "$CLI_BIN" inspect "$POKEEMERALD_DIR" --json

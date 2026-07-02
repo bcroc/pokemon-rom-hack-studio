@@ -898,6 +898,59 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGenVGeneratedOutputFreshnessPacketStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let packetRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "gen-v/generated-output-freshness-packet" })
+        XCTAssertEqual(packetRow.kind, "unknown")
+        XCTAssertEqual(factValue("Gen V Source Role", in: packetRow.facts), "generatedOutputFreshnessPacket")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Packet", in: packetRow.facts), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Basis", in: packetRow.facts), "existingCatalogAndBuildValidationFactsOnly")
+        XCTAssertEqual(factValue("Gen V Generated Output Freshness Posture", in: packetRow.facts), "previewOnlyNoBuildNoGeneratedOutputWrites")
+        XCTAssertEqual(
+            factValue("Gen V Source Marker States", in: packetRow.facts),
+            "black.us=sourceMarkerPresent, white.us=sourceMarkerPresent, black2.us=sourceMarkerPresent, white2.us=unavailable"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Text States", in: packetRow.facts),
+            "black.us=valid, white.us=valid, black2.us=invalid, white2.us=missing"
+        )
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: packetRow.facts)?.contains("Makefile=present") == true)
+        XCTAssertTrue(factValue("Gen V Variant Readiness Summary", in: packetRow.facts)?.contains("packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Declared Generated Outputs", in: packetRow.facts)?.contains("pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: packetRow.facts)?.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Build Target Output Freshness", in: packetRow.facts)?.contains("freshness=outputMissing") == true)
+        XCTAssertNil(factValue("Migration Status", in: packetRow.facts))
+        XCTAssertNil(factValue("Text Bank Preview", in: packetRow.facts))
+
+        store.requestResourceAssetSelection(packetRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "resources:gen-v/generated-output-freshness-packet")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("gen-v/generated-output-freshness-packet").path))
+    }
+
+    @MainActor
     func testGenVNitroArchiveGroupInventoryStaysPreviewOnlyInResourcesSelection() async throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -2240,6 +2293,121 @@ final class MapEditorStoreTests: XCTestCase {
             try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8),
             "land_rate=15\n"
         )
+    }
+
+    @MainActor
+    func testPlatinumEncounterJSONRowOperationsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let encounterPath = "res/field/encounters/route201.json"
+        let nestedPath = "res/field/encounters/nested/route202.json"
+        let textPath = "res/field/encounters/route203.txt"
+        try write(
+            "{\"land_rate\":30,\"land_encounters\":[{\"level\":2,\"species\":\"SPECIES_STARLY\"},{\"level\":3,\"species\":\"SPECIES_BIDOOF\"}],\"swarms\":[\"SPECIES_DODUO\",\"SPECIES_DODUO\"],\"map_category\":{\"map_type\":\"field\",\"map_number\":12}}\n",
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("{\"land_encounters\":[{\"level\":2,\"species\":\"SPECIES_BIDOOF\"}]}\n", to: root.appendingPathComponent(nestedPath))
+        try write("land_rate=15\n", to: root.appendingPathComponent(textPath))
+        let originalNested = try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8)
+        let originalText = try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let encounterRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == encounterPath })
+        store.requestResourceAssetSelection(encounterRow.id)
+
+        var editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "encounters:\(encounterPath)")
+        XCTAssertEqual(editor.rowOperations?.family, .encounterJSONRows)
+        XCTAssertEqual(editor.rowOperations?.targetOptions.map(\.key), ["land_encounters"])
+        XCTAssertEqual(editor.rowOperations?.selectedTargetKey, "land_encounters")
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 0)
+        XCTAssertFalse(editor.rowOperations?.targetOptions.contains { $0.key == "swarms" } == true)
+
+        store.stageSelectedNDSDataRowOperation(
+            kind: .insert,
+            targetKey: "land_encounters",
+            index: 1,
+            insertValue: "{\"level\":4,\"species\":\"SPECIES_DISCARDED\"}"
+        )
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 1)
+        XCTAssertEqual(editor.rowOperations?.selectedTargetKey, "land_encounters")
+        XCTAssertEqual(editor.rowOperations?.canChangeTarget, false)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.updateSelectedNDSDataDraftText("raw replacement\n")
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 0)
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        store.discardNDSDataEdits()
+
+        store.stageSelectedNDSDataRowOperation(
+            kind: .insert,
+            targetKey: "land_encounters",
+            index: 1,
+            insertValue: "{\"level\":4,\"species\":\"SPECIES_SHINX\"}"
+        )
+        store.stageSelectedNDSDataRowOperation(kind: .delete, targetKey: "land_encounters", index: 0)
+        store.stageSelectedNDSDataRowOperation(kind: .reorder, targetKey: "land_encounters", fromIndex: 1, toIndex: 0)
+
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 3)
+        XCTAssertEqual(editor.rowOperations?.countSummary, "2 -> 2")
+        XCTAssertTrue(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.readiness.draft.value, "Dirty draft")
+        XCTAssertEqual(editor.readiness.mutationPlan.value, "Preview ready")
+
+        store.resourceAssetWorkflowFacet = .hiddenDrafts
+        XCTAssertTrue(store.filteredResourceAssetRows.contains { $0.id == encounterRow.id })
+        XCTAssertFalse(try XCTUnwrap(store.selectedNDSDataEditor).isHiddenByFilters)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+        let context = try XCTUnwrap(MutationPlanPanelContext.ndsData(
+            plan: store.latestNDSDataEditPlan,
+            result: store.latestNDSDataApplyResult,
+            editor: store.selectedNDSDataEditor
+        ))
+        XCTAssertEqual(context.operationCount, 3)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        let appliedChange = try XCTUnwrap(store.latestNDSDataApplyResult?.appliedChanges.first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: appliedChange.backupPath))
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"land_encounters\":[{\"level\":3,\"species\":\"SPECIES_BIDOOF\"},{\"level\":4,\"species\":\"SPECIES_SHINX\"}]"))
+        XCTAssertTrue(updated.contains("\"swarms\":[\"SPECIES_DODUO\",\"SPECIES_DODUO\"]"))
+        XCTAssertTrue(updated.contains("\"map_category\":{\"map_type\":\"field\",\"map_number\":12}"))
+
+        let nestedRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedPath })
+        store.requestResourceAssetSelection(nestedRow.id)
+        XCTAssertNil(store.selectedNDSDataEditor?.rowOperations)
+        store.stageSelectedNDSDataRowOperation(
+            kind: .insert,
+            targetKey: "land_encounters",
+            index: 0,
+            insertValue: "{\"level\":5,\"species\":\"SPECIES_NESTED\"}"
+        )
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(nestedPath), encoding: .utf8), originalNested)
+
+        let textRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == textPath })
+        store.requestResourceAssetSelection(textRow.id)
+        XCTAssertNil(store.selectedNDSDataEditor?.rowOperations)
+        store.stageSelectedNDSDataRowOperation(
+            kind: .insert,
+            targetKey: "land_encounters",
+            index: 0,
+            insertValue: "{\"level\":5,\"species\":\"SPECIES_TEXT\"}"
+        )
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8), originalText)
     }
 
     @MainActor
@@ -4032,6 +4200,57 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExpansionItemMissingUsageScalarsInsertThroughItemsEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        try writeExpansionItemInfoTable(to: root, includeUsageScalars: false)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.items, search: .replace("potion"))
+        let catalog = try await waitForSelectedItemCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestItemSelection("ITEM_POTION")
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+
+        var draft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertNil(draft.holdEffect)
+        XCTAssertNil(draft.holdEffectParam)
+        XCTAssertNil(draft.pocket)
+        XCTAssertNil(draft.type)
+        draft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+        draft.holdEffectParam = "60"
+        draft.pocket = "POCKET_MEDICINE"
+        draft.type = "ITEM_USE_PARTY_MENU"
+        store.updateSelectedItemDraft(draft)
+
+        XCTAssertTrue(store.selectedItemIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedItemMutationPlan)
+        store.previewSelectedItemMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestItemEditPlan)
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".holdEffect = HOLD_EFFECT_RESTORE_HP,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".holdEffectParam = 60,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".pocket = POCKET_MEDICINE,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".type = ITEM_USE_PARTY_MENU,") == true)
+        XCTAssertTrue(store.canApplySelectedItemMutationPlan)
+
+        store.applySelectedItemMutationPlan()
+
+        XCTAssertEqual(store.latestItemApplyResult?.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.latestItemApplyResult?.backupRootPath ?? ""))
+        XCTAssertFalse(store.selectedItemIsDirty)
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+        let editedDraft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertEqual(editedDraft.holdEffect, "HOLD_EFFECT_RESTORE_HP")
+        XCTAssertEqual(editedDraft.holdEffectParam, "60")
+        XCTAssertEqual(editedDraft.pocket, "POCKET_MEDICINE")
+        XCTAssertEqual(editedDraft.type, "ITEM_USE_PARTY_MENU")
+    }
+
+    @MainActor
     func testRubySapphireTrainerDraftPreviewApplyAndReloadsThroughStore() async throws {
         let root = try makeRubyPokemonProject()
         try writeRubyTrainerSources(to: root)
@@ -4687,6 +4906,83 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testMapRenderAuditLoadsIntoBuildWorkbenchAndCopiesJSONReadOnly() throws {
+        let root = try makeVisualProject()
+        let missingTileImage = root.appendingPathComponent("data/tilesets/secondary/route/tiles.png")
+        try FileManager.default.removeItem(at: missingTileImage)
+        let trackedSourceURLs = [
+            root.appendingPathComponent("data/maps/map_groups.json"),
+            root.appendingPathComponent("data/maps/Route1/map.json"),
+            root.appendingPathComponent("data/layouts/Route1/map.bin"),
+            root.appendingPathComponent("src/data/tilesets/graphics.h"),
+        ]
+        let sourceSnapshots = try Dictionary(uniqueKeysWithValues: trackedSourceURLs.map { ($0.path, try Data(contentsOf: $0)) })
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        XCTAssertNil(store.selectedMapRenderAuditReport)
+        XCTAssertEqual(store.mapRenderAuditLoadStatus, .idle)
+
+        store.loadSelectedMapRenderAudit()
+
+        let report = try XCTUnwrap(store.selectedMapRenderAuditReport)
+        XCTAssertEqual(report.targetCount, 1)
+        XCTAssertEqual(report.auditedTargetCount, 1)
+        XCTAssertEqual(report.skippedTargetCount, 0)
+        XCTAssertEqual(report.mapCount, 2)
+        XCTAssertEqual(report.auditedMapCount, 2)
+        XCTAssertGreaterThan(report.textureCount, 0)
+        XCTAssertGreaterThan(report.warningBucketCount, 0)
+        XCTAssertGreaterThan(report.warningCount, 0)
+        XCTAssertGreaterThan(report.failureCount, 0)
+        XCTAssertEqual(store.mapRenderAuditLoadStatus, .loaded(label: report.statusLabel, status: report.status))
+        XCTAssertTrue(store.filteredMapRenderAuditRows.contains { $0.title == "Map render audit" && $0.detail.contains("texture check") })
+        XCTAssertTrue(store.filteredMapRenderAuditRows.contains { $0.id.hasPrefix("map-render-audit:target:") })
+        XCTAssertTrue(store.filteredMapRenderAuditRows.contains { $0.id.hasPrefix("map-render-audit:warning-bucket:") })
+        XCTAssertTrue(store.filteredMapRenderAuditRows.contains { $0.id.hasPrefix("map-render-audit:failure:") })
+        XCTAssertTrue(store.filteredBuildRowsForSelectedTab.contains { $0.section == .mapRenderAudit })
+        XCTAssertTrue(store.selectedDiagnosticRows.contains { $0.id.hasPrefix("map-render-audit:") })
+
+        store.copyMapRenderAuditJSONToPasteboard()
+        var json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        var data = try XCTUnwrap(json.data(using: .utf8))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let summary = try XCTUnwrap(object["summary"] as? [String: Any])
+        XCTAssertEqual(summary["mapCount"] as? Int, report.mapCount)
+        XCTAssertEqual(summary["textureCount"] as? Int, report.textureCount)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        data = try XCTUnwrap(json.data(using: .utf8))
+        object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let exportedAudit = try XCTUnwrap(object["mapRenderAudit"] as? [String: Any])
+        XCTAssertEqual(exportedAudit["status"] as? String, "failed")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("screenshots").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("exports").path))
+        for (path, data) in sourceSnapshots {
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), data)
+        }
+
+        let romTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(romTemp)
+        let rom = romTemp.url.appendingPathComponent("standalone.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+
+        store.openProject(path: rom.path)
+        store.loadSelectedMapRenderAudit()
+
+        let skippedReport = try XCTUnwrap(store.selectedMapRenderAuditReport)
+        XCTAssertEqual(skippedReport.targetCount, 1)
+        XCTAssertEqual(skippedReport.auditedTargetCount, 0)
+        XCTAssertEqual(skippedReport.skippedTargetCount, 1)
+        XCTAssertTrue(skippedReport.rows.contains { $0.id.hasPrefix("map-render-audit:skipped:") })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: romTemp.url.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    @MainActor
     func testBuildReportSearchFiltersTargetsAndOutputPaths() throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -4933,6 +5229,84 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNotNil(reportObject?["patchCreationResult"] as? [String: Any])
         XCTAssertNotNil(reportObject?["patchArtifactLibrary"] as? [String: Any])
         XCTAssertNil(reportObject?["patchManifest"])
+    }
+
+    @MainActor
+    func testPatchDistributionReadinessRowsCopyJSONAndRequireExplicitPatchSelection() throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abxyz".utf8)
+        try write(baseData, to: baseROM)
+        try write(targetData, to: builtOutput)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+        store.requestBaseROMPath(baseROM.path)
+        store.loadSelectedPatchCreationPreview()
+        store.createSelectedBPSPatch()
+
+        let patchURL = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
+        XCTAssertEqual(store.selectedPatchArtifactLibraryItemID, patchURL.path)
+        XCTAssertEqual(store.selectedPatchDistributionReadinessPatchPath, "")
+        XCTAssertNil(store.selectedPatchDistributionReadinessReport)
+
+        let beforeReadinessFiles = try recursiveRelativeFiles(in: root)
+        store.loadSelectedPatchDistributionReadinessPacket()
+
+        let blockedReport = try XCTUnwrap(store.selectedPatchDistributionReadinessReport)
+        XCTAssertEqual(blockedReport.status, .error)
+        XCTAssertEqual(blockedReport.statusLabel, "blocked")
+        XCTAssertNil(blockedReport.selectedPatchPath)
+        XCTAssertTrue(blockedReport.rows.contains { $0.title == "Selected patch artifact" && $0.subtitle == "not selected" })
+        XCTAssertTrue(blockedReport.diagnostics.contains { $0.title == "PATCH_DISTRIBUTION_PATCH_NOT_SELECTED" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Patch distribution readiness" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeReadinessFiles)
+
+        store.requestPatchDistributionReadinessPatchSelection(patchURL.path)
+        XCTAssertNil(store.selectedPatchDistributionReadinessReport)
+        store.loadSelectedPatchDistributionReadinessPacket()
+
+        let report = try XCTUnwrap(store.selectedPatchDistributionReadinessReport)
+        XCTAssertNotEqual(report.status, .error)
+        XCTAssertEqual(report.selectedPatchPath, patchURL.path)
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Patch distribution readiness" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Selected patch artifact" && $0.subtitle == "valid" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Patch artifact library" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Base ROM identity" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Built output identity" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Header policy" && $0.subtitle == "no-header-rewrite" })
+        XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Manual playtest readiness" })
+        XCTAssertTrue(
+            store.filteredPatchDistributionReadinessRows.contains { $0.title == "Blocked actions" && $0.detail.contains("Patch file creation") },
+            store.filteredPatchDistributionReadinessRows.map { "\($0.title): \($0.detail)" }.joined(separator: "\n")
+        )
+        store.selectedBuildWorkbenchTab = .patch
+        XCTAssertTrue(store.filteredBuildRowsForSelectedTab.contains { $0.title == "Patch distribution readiness" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeReadinessFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+
+        NSPasteboard.general.clearContents()
+        store.copyPatchDistributionReadinessJSONToPasteboard()
+
+        let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
+        let packetObject = try JSONSerialization.jsonObject(with: packetData) as? [String: Any]
+        XCTAssertTrue(["ready", "readyWithWarnings"].contains(packetObject?["status"] as? String))
+        XCTAssertEqual(packetObject?["selectedPatchPath"] as? String, patchURL.path)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        let rawPacket = try XCTUnwrap(reportObject?["patchDistributionReadiness"] as? [String: Any])
+        XCTAssertEqual(rawPacket["selectedPatchPath"] as? String, patchURL.path)
     }
 
     @MainActor
@@ -8768,7 +9142,11 @@ final class MapEditorStoreTests: XCTestCase {
         )
     }
 
-    private func writeExpansionItemInfoTable(to root: URL, includeBehaviorScalars: Bool = true) throws {
+    private func writeExpansionItemInfoTable(
+        to root: URL,
+        includeUsageScalars: Bool = true,
+        includeBehaviorScalars: Bool = true
+    ) throws {
         var source = """
             const struct ItemInfo gItemsInfo[] =
             {
@@ -8776,15 +9154,33 @@ final class MapEditorStoreTests: XCTestCase {
                 {
                     .name = ITEM_NAME("Potion"),
                     .price = 300,
+            """
+        if includeUsageScalars {
+            source += """
                     .holdEffect = HOLD_EFFECT_NONE,
                     .holdEffectParam = 20,
+            """
+        }
+        source += """
                     .description = COMPOUND_STRING(
                                     "Restores HP."),
+            """
+        if includeUsageScalars {
+            source += """
                     .pocket = POCKET_ITEMS,
+            """
+        }
+        source += """
                     .importance = 0,
                     .registrability = 0,
                     .sortType = ITEM_TYPE_HEALTH_RECOVERY,
+            """
+        if includeUsageScalars {
+            source += """
                     .type = ITEM_USE_PARTY_MENU,
+            """
+        }
+        source += """
                     .exitsBagOnUse = FALSE,
                     .effect = ITEM_EFFECT_HEAL,
             """
@@ -9025,6 +9421,23 @@ final class MapEditorStoreTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func recursiveRelativeFiles(in root: URL) throws -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [String] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            files.append(String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)))
+        }
+        return files.sorted()
     }
 
     private func pokemonHackSHA1Hex(_ data: Data) -> String {

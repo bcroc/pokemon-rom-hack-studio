@@ -111,9 +111,11 @@ struct BuildWorkbenchView: View {
                 ndsToolchainOverview(report: report)
             }
 
+            mapRenderAuditSection(report: store.selectedMapRenderAuditReport, rows: store.filteredMapRenderAuditRows)
+
             let skippedSections: Set<BuildReportSection> = report.isNDS
-                ? [.diagnostics, .patchManifest, .healthMatrix]
-                : [.diagnostics, .patchManifest]
+                ? [.diagnostics, .mapRenderAudit, .patchManifest, .healthMatrix]
+                : [.diagnostics, .mapRenderAudit, .patchManifest]
             ForEach(BuildReportSection.allCases.filter { !skippedSections.contains($0) }) { section in
                 let sectionRows = rows.filter { $0.section == section }
                 EditorSection(title: section.rawValue) {
@@ -214,6 +216,62 @@ struct BuildWorkbenchView: View {
         }
     }
 
+    private func mapRenderAuditSection(
+        report: MapRenderAuditReportViewState?,
+        rows: [BuildReportRow]
+    ) -> some View {
+        EditorSection(title: "Map Render Audit") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.mapRenderAuditLoadStatus.validationState)
+                    Text(store.mapRenderAuditLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Re-check", systemImage: "arrow.clockwise") {
+                        store.loadSelectedMapRenderAudit()
+                    }
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyMapRenderAuditJSONToPasteboard()
+                    }
+                    .disabled(report == nil)
+                }
+
+                if let report {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                        MetricCard(title: "Targets", value: "\(report.targetCount)", detail: "\(report.auditedTargetCount) audited")
+                        MetricCard(title: "Maps", value: "\(report.auditedMapCount)", detail: "\(report.mapCount) discovered")
+                        MetricCard(title: "Textures", value: "\(report.textureCount)", detail: "Checks")
+                        MetricCard(title: "Warnings", value: "\(report.warningBucketCount)", detail: "\(report.warningCount) total")
+                        MetricCard(title: "Failures", value: "\(report.failureCount)", detail: report.statusLabel)
+                        MetricCard(title: "Skipped", value: "\(report.skippedTargetCount)", detail: "Targets")
+                    }
+
+                    if rows.isEmpty {
+                        ContentUnavailableView(
+                            "No Matching Audit Rows",
+                            systemImage: "magnifyingglass",
+                            description: Text("No map render audit rows match the current search.")
+                        )
+                    } else {
+                        ForEach(rows) { row in
+                            BuildReportRowView(
+                                row: row,
+                                copyAction: store.copyBuildReportRowActionToPasteboard
+                            )
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No Map Render Audit",
+                        systemImage: "map",
+                        description: Text("Run Re-check to load a read-only selected-project map render audit.")
+                    )
+                }
+            }
+        }
+    }
+
     private func patchSections(
         buildReport _: BuildPatchPlaytestReportViewState,
         report: PatchManifestReportViewState?,
@@ -284,6 +342,7 @@ struct BuildWorkbenchView: View {
                 resultRows: store.filteredPatchCreationResultRows
             )
             patchArtifactLibrarySection(rows: store.filteredPatchArtifactLibraryRows)
+            patchDistributionReadinessSection(rows: store.filteredPatchDistributionReadinessRows)
             binaryROMMutationDryRunSection(
                 rows: store.filteredBinaryROMMutationDryRunRows,
                 auditRows: store.filteredBinaryROMMutationApplyAuditRows,
@@ -528,6 +587,57 @@ struct BuildWorkbenchView: View {
         }
     }
 
+    private func patchDistributionReadinessSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Patch Distribution Readiness") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.patchDistributionReadinessLoadStatus.validationState)
+                    Text(store.patchDistributionReadinessLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        store.loadSelectedPatchDistributionReadinessPacket()
+                    }
+                    .disabled(store.selectedBaseROMPath.isEmpty)
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyPatchDistributionReadinessJSONToPasteboard()
+                    }
+                    .disabled(store.selectedPatchDistributionReadinessReport == nil)
+                }
+
+                Picker(
+                    "Distribution Patch",
+                    selection: Binding(
+                        get: { store.selectedPatchDistributionReadinessPatchPath },
+                        set: { store.requestPatchDistributionReadinessPatchSelection($0) }
+                    )
+                ) {
+                    Text("No patch selected").tag("")
+                    ForEach(store.selectedPatchArtifactLibrary?.items ?? []) { item in
+                        Text("\(item.title) - \(item.subtitle)").tag(item.patchPath)
+                    }
+                }
+                .frame(minWidth: 320)
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Readiness Packet",
+                        systemImage: "shippingbox",
+                        description: Text("Select a base ROM and explicit BPS artifact, then refresh.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     private func patchCreationPreviewSection(
         rows: [BuildReportRow],
         resultRows: [BuildReportRow]
@@ -706,6 +816,12 @@ struct BuildWorkbenchView: View {
                     "No Health Matrix Rows",
                     systemImage: section.systemImage,
                     description: Text("No toolchain health rows are available.")
+                )
+            case .mapRenderAudit:
+                ContentUnavailableView(
+                    "No Map Render Audit Rows",
+                    systemImage: section.systemImage,
+                    description: Text("Run Re-check to load the selected-project audit.")
                 )
             case .patchManifest:
                 emptyPatchManifest

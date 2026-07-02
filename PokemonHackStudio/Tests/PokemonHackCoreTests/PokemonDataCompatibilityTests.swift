@@ -396,10 +396,10 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(usageSource.status, .editable)
         XCTAssertEqual(usageSource.indexedCount, 1)
         XCTAssertEqual(usageSource.sourceRole, "editableUsageScalars")
-        XCTAssertEqual(usageSource.readiness, "editable existing usage/classification scalar fields")
+        XCTAssertEqual(usageSource.readiness, "editable existing usage/classification scalar fields; complete missing group insertion is anchor-gated")
         XCTAssertEqual(usageSource.blockedActions, [
             "constants-file edits/creation",
-            "missing-field insertion/removal",
+            "partial missing-field insertion/removal",
             "row insertion/removal/reorder",
             "generated outputs",
             "reference writes",
@@ -407,7 +407,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "binary writes",
             "broad schema rewrites"
         ])
-        XCTAssertTrue(usageSource.note?.contains("existing simple local source fields") == true)
+        XCTAssertTrue(usageSource.note?.contains("one complete anchored usage/classification group") == true)
         let behaviorSource = try XCTUnwrap(expansionItemSources.first {
             $0.path == "src/data/items.h"
                 && $0.tableSymbol == "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId"

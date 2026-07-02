@@ -387,6 +387,10 @@ struct PokemonHackCLI {
             return try references(arguments: Array(arguments.dropFirst()))
         case "patch":
             return try patch(arguments: Array(arguments.dropFirst()))
+        case "patch-library":
+            return try patchLibrary(arguments: Array(arguments.dropFirst()))
+        case "patch-distribution-readiness":
+            return try patchDistributionReadiness(arguments: Array(arguments.dropFirst()))
         case "patch-manifest":
             return try patchManifest(arguments: Array(arguments.dropFirst()))
         case "patch-artifact-plan":
@@ -401,6 +405,8 @@ struct PokemonHackCLI {
             return try romDiffPreview(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-manifest":
             return try romMutationManifest(arguments: Array(arguments.dropFirst()))
+        case "rom-mutation-audit":
+            return try romMutationAudit(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-apply":
             return try romMutationApply(arguments: Array(arguments.dropFirst()))
         case "build":
@@ -417,7 +423,7 @@ struct PokemonHackCLI {
     static func exitCode(arguments: [String], output: String) -> Int32 {
         guard let command = arguments.first else { return 0 }
         switch command {
-        case "patch-apply-export", "patch-create", "rom-mutation-apply":
+        case "patch-apply-export", "patch-create", "rom-mutation-audit", "rom-mutation-apply":
             guard let object = jsonObject(output) else { return 0 }
             return object["status"] as? String == "blocked" ? 1 : 0
         case "map-render-audit":
@@ -1158,6 +1164,68 @@ struct PokemonHackCLI {
         )
     }
 
+    private static func patchLibrary(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let project = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(PatchArtifactLibraryScanner.scan(projectPath: project))
+    }
+
+    private static func patchDistributionReadiness(arguments: [String]) throws -> String {
+        guard arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var targetID: String?
+        var selectedPatchPath: String?
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            switch argument {
+            case "--base-rom":
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            case "--target":
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                targetID = payload[nextIndex]
+                index += 2
+            case "--patch":
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                selectedPatchPath = payload[nextIndex]
+                index += 2
+            default:
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard positionals.count == 1, let project = positionals.first, let baseROMPath else {
+            throw CLIError.usage
+        }
+
+        return try encode(
+            PatchDistributionReadinessPacketBuilder.build(
+                projectPath: project,
+                baseROMPath: baseROMPath,
+                targetID: targetID,
+                selectedPatchPath: selectedPatchPath
+            )
+        )
+    }
+
     private static func romMutationManifest(arguments: [String]) throws -> String {
         guard arguments.count >= 2, let path = arguments.first, arguments.last == "--json" else {
             throw CLIError.usage
@@ -1165,6 +1233,20 @@ struct PokemonHackCLI {
 
         let request = try parseROMMutationManifestArguments(Array(arguments.dropFirst().dropLast()))
         return try encode(BinaryROMMutationDryRunManifestBuilder.build(path: path, request: request))
+    }
+
+    private static func romMutationAudit(arguments: [String]) throws -> String {
+        guard arguments.count >= 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        let options = try parseROMMutationAuditArguments(Array(arguments.dropFirst().dropLast()))
+        return try encode(
+            BinaryROMMutationApplier.audit(
+                path: path,
+                manifestPath: options.manifestPath,
+                workspaceRoot: options.workspaceRoot
+            )
+        )
     }
 
     private static func romMutationApply(arguments: [String]) throws -> String {
@@ -1179,6 +1261,38 @@ struct PokemonHackCLI {
                 workspaceRoot: options.workspaceRoot,
                 confirmationToken: options.confirmationToken
             )
+        )
+    }
+
+    private struct ROMMutationAuditOptions {
+        let manifestPath: String?
+        let workspaceRoot: String?
+    }
+
+    private static func parseROMMutationAuditArguments(_ arguments: [String]) throws -> ROMMutationAuditOptions {
+        var manifestPath: String?
+        var workspaceRoot: String?
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--manifest":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                manifestPath = arguments[index + 1]
+                index += 2
+            case "--workspace-root":
+                guard index + 1 < arguments.count else { throw CLIError.usage }
+                workspaceRoot = arguments[index + 1]
+                index += 2
+            default:
+                throw CLIError.usage
+            }
+        }
+
+        return ROMMutationAuditOptions(
+            manifestPath: manifestPath,
+            workspaceRoot: workspaceRoot
         )
     }
 
@@ -1624,11 +1738,13 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "nds-data-text-lines-apply", usage: "nds-data-text-lines-apply <project> <record-id> [--insert <index> <text> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe Platinum text line operations through backups and source freshness checks."),
         CLICommandMetadata(name: "nds-data-item-csv-rows-plan", usage: "nds-data-item-csv-rows-plan <project> <record-id> [--insert <index> <csv-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed HGSS item CSV row insert/delete/reorder operations."),
         CLICommandMetadata(name: "nds-data-item-csv-rows-apply", usage: "nds-data-item-csv-rows-apply <project> <record-id> [--insert <index> <csv-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe HGSS item CSV row operations through backups and source freshness checks."),
-        CLICommandMetadata(name: "nds-data-encounter-json-rows-plan", usage: "nds-data-encounter-json-rows-plan <project> <record-id> --array <array-key> [--insert <index> <json-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed Platinum encounter JSON object-row insert/delete/reorder operations."),
-        CLICommandMetadata(name: "nds-data-encounter-json-rows-apply", usage: "nds-data-encounter-json-rows-apply <project> <record-id> --array <array-key> [--insert <index> <json-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe Platinum encounter JSON object-row operations through backups and source freshness checks."),
+        CLICommandMetadata(name: "nds-data-encounter-json-rows-plan", usage: "nds-data-encounter-json-rows-plan <project> <record-id> --array <array-key> [--insert <index> <json-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Plan redacted source-backed Gen IV encounter JSON object-row insert/delete/reorder operations."),
+        CLICommandMetadata(name: "nds-data-encounter-json-rows-apply", usage: "nds-data-encounter-json-rows-apply <project> <record-id> --array <array-key> [--insert <index> <json-row> | --delete <index> | --reorder <from-index> <to-index>]... --json", summary: "Apply safe Gen IV encounter JSON object-row operations through backups and source freshness checks."),
         CLICommandMetadata(name: "toolchain-health", usage: "toolchain-health <path> --json", summary: "Emit toolchain readiness rows."),
         CLICommandMetadata(name: "references", usage: "references --json", summary: "Emit reference repository metadata."),
         CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
+        CLICommandMetadata(name: "patch-library", usage: "patch-library <project> --json", summary: "Scan ignored direct-child BPS patch artifacts and sibling manifests without applying or exporting patches."),
+        CLICommandMetadata(name: "patch-distribution-readiness", usage: "patch-distribution-readiness <project> --base-rom <path> [--target <build-target-id>] [--patch <bps-path>] --json", summary: "Emit copy-only BPS patch distribution readiness from existing creation preview, library, identity, header policy, and manual playtest facts."),
         CLICommandMetadata(name: "patch-manifest", usage: "patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json", summary: "Emit patch manifest compatibility data."),
         CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
         CLICommandMetadata(name: "patch-create-preview", usage: "patch-create-preview <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Preview BPS patch creation metadata from a selected base ROM to an existing built output without writing patch files."),
@@ -1636,6 +1752,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
         CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
         CLICommandMetadata(name: "rom-mutation-manifest", usage: "rom-mutation-manifest <rom-or-source-path> [--workspace-root <path>] [--expect-sha1 <sha1>] [--replace <offset:length:hex>] [--repoint <pointer-offset:new-target-offset>] [--allocate <byte-count[:alignment]>] --json", summary: "Emit a dry-run-only future binary ROM mutation manifest with canApply=false."),
+        CLICommandMetadata(name: "rom-mutation-audit", usage: "rom-mutation-audit <rom> --manifest <dry-run-json> --workspace-root <path> --json", summary: "Audit a binary ROM mutation dry-run manifest without confirmation, byte writes, backups, or artifacts."),
         CLICommandMetadata(name: "rom-mutation-apply", usage: "rom-mutation-apply <rom> --manifest <dry-run-json> --workspace-root <path> --confirm <review-token> --json", summary: "Apply reviewed replace-only binary ROM byte changes in place with ignored backup and manifest artifacts."),
         CLICommandMetadata(name: "build", usage: "build <path> --json", summary: "Emit build validation data without building."),
         CLICommandMetadata(name: "playtest", usage: "playtest <path> --headless --json | playtest <path> --launch --json | playtest <path> --screenshot --json | playtest <path> --savestate --json", summary: "Preview or run supported mGBA handoff actions."),

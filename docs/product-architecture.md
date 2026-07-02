@@ -23,6 +23,12 @@ The intended Swift package layout is:
 
 Keep UI state and platform integration in the app target. Keep file formats, data models, source mutations, patch generation, and validation in `PokemonHackCore`. The CLI should call the same core APIs as the app rather than reimplementing workflows.
 
+## Universal IDE Shell
+
+The SwiftUI app shell should behave like one dense ROM hack IDE rather than separate dashboard-first pages. The outer workbench owns a grouped Project Navigator, tabbed editor stack, right inspector modes, bottom activity console, and command palette. Those surfaces are app-target state only: they can navigate, focus, refresh, copy, reveal, preview/apply/discard through existing mutation plans, run existing guarded build/playtest/capture/patch actions, and show disabled commands with explicit reasons.
+
+The shell must not add new write authority by itself. Validation remains copy-only and terminal-guided. NDS build/playtest, NARC/container writes, generated/reference writes, broad ROM export, unsupported binary edits, and binary apply paths stay disabled unless an existing explicit core/app gate already permits that exact action.
+
 ## Reference-Driven Core Lanes
 
 Reference review is captured in `docs/reference-synthesis.md`. The implementation should grow through four cooperating lanes:
@@ -49,7 +55,7 @@ The app should make the source location visible for each editable object. For ex
 
 ## Binary ROM Mutation Safety
 
-Direct ROM mutation stays policy/proof-first. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract, `PHS-T79C` opens a CLI-reviewed in-place byte replacement writer, `PHS-T79D` opens the matching app-reviewed Build/Patch/Playtest surface for user-supplied local `.gba` inputs with no source-tree edit path, and `PHS-T79E` adds read-only pre-apply audit status for manifest identity, drift, backup/apply-manifest review, and artifact containment; repoint apply, allocation apply, checksum repair, export, emulator launch, app auto-apply, and patched-copy output remain blocked.
+Direct ROM mutation stays policy/proof-first. The baseline sequence remains `PHS-T17` read-only ROM graph, `PHS-T52` patch artifact planning, `PHS-T53` diff/repoint previews, and `PHS-T73` ignored patch export with backups/manifests. `PHS-T79` documents the minimum contract, `PHS-T79C` opens a CLI-reviewed in-place byte replacement writer, `PHS-T79D` opens the matching app-reviewed Build/Patch/Playtest surface for user-supplied local `.gba` inputs with no source-tree edit path, `PHS-T79E` adds read-only app pre-apply audit status for manifest identity, drift, backup/apply-manifest review, and artifact containment, and `PHS-T79F` exposes that audit model as read-only CLI JSON without confirmation or artifact writes; repoint apply, allocation apply, checksum repair, export, emulator launch, app auto-apply, and patched-copy output remain blocked.
 
 Patch creation is artifact verification, not patched-ROM export: `patch-create` may write ignored `.bps` plus `.bps.manifest.json` artifacts, then re-read the BPS and apply it in memory to compare SHA1, CRC32, size, and no-header-rewrite policy against the existing built output. It must not write a patched ROM, repair headers, auto-apply the patch, run a build/playtest, or change overwrite policy.
 

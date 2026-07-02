@@ -129,6 +129,316 @@ public struct PatchArtifactLibrary: Codable, Equatable {
     }
 }
 
+public enum PatchDistributionReadinessStatus: String, Codable, Equatable {
+    case ready
+    case readyWithWarnings
+    case blocked
+}
+
+public struct PatchDistributionReadinessPacket: Codable, Equatable {
+    public let schemaVersion: Int
+    public let status: PatchDistributionReadinessStatus
+    public let projectRoot: String
+    public let selectedPatchPath: String?
+    public let selectedPatchRelativePath: String?
+    public let selectedPatch: PatchArtifactLibraryItem?
+    public let patchCreationPreview: PatchCreationPreviewReport
+    public let patchArtifactLibrary: PatchArtifactLibrary
+    public let manualPlaytestReadiness: PlaytestHandoffReport
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+    public let isReadOnly: Bool
+
+    public init(
+        schemaVersion: Int,
+        status: PatchDistributionReadinessStatus,
+        projectRoot: String,
+        selectedPatchPath: String?,
+        selectedPatchRelativePath: String?,
+        selectedPatch: PatchArtifactLibraryItem?,
+        patchCreationPreview: PatchCreationPreviewReport,
+        patchArtifactLibrary: PatchArtifactLibrary,
+        manualPlaytestReadiness: PlaytestHandoffReport,
+        blockedActions: [String],
+        diagnostics: [Diagnostic],
+        isReadOnly: Bool
+    ) {
+        self.schemaVersion = schemaVersion
+        self.status = status
+        self.projectRoot = projectRoot
+        self.selectedPatchPath = selectedPatchPath
+        self.selectedPatchRelativePath = selectedPatchRelativePath
+        self.selectedPatch = selectedPatch
+        self.patchCreationPreview = patchCreationPreview
+        self.patchArtifactLibrary = patchArtifactLibrary
+        self.manualPlaytestReadiness = manualPlaytestReadiness
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+        self.isReadOnly = isReadOnly
+    }
+}
+
+public enum PatchDistributionReadinessPacketBuilder {
+    public static func build(
+        projectPath: String,
+        baseROMPath: String,
+        targetID: String? = nil,
+        selectedPatchPath: String? = nil,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
+    ) throws -> PatchDistributionReadinessPacket {
+        let index = try GameAdapterRegistry.index(path: projectPath)
+        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
+        let preview = try PatchCreationPreviewBuilder.build(
+            projectPath: projectPath,
+            baseROMPath: baseROMPath,
+            targetID: targetID,
+            fileManager: fileManager
+        )
+        let library = PatchArtifactLibraryScanner.scan(projectPath: projectPath, fileManager: fileManager)
+        let playtest = PlaytestHandoffReportBuilder.build(
+            index: index,
+            mode: .headless,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
+
+        var diagnostics: [Diagnostic] = [
+            diagnostic(
+                .info,
+                "PATCH_DISTRIBUTION_REVIEW_ONLY",
+                "Patch distribution readiness is copy-only and review-only; it does not create patch files, apply or export patches, write patched ROMs, run builds or playtests, auto-select patches, mutate source, rewrite headers, overwrite artifacts, or widen patch formats.",
+                root.path
+            )
+        ]
+        diagnostics.append(contentsOf: preview.diagnostics)
+        diagnostics.append(contentsOf: library.diagnostics)
+        diagnostics.append(contentsOf: playtest.diagnostics)
+
+        let selection = selectedPatch(
+            from: library.items,
+            selectedPatchPath: selectedPatchPath,
+            projectRoot: root
+        )
+        var blockingDiagnostics: [Diagnostic] = []
+
+        switch selection {
+        case .notSelected:
+            let diagnostic = diagnostic(
+                .error,
+                "PATCH_DISTRIBUTION_PATCH_NOT_SELECTED",
+                "Patch distribution readiness requires an explicit BPS patch artifact selection from the direct patch library.",
+                root.path
+            )
+            diagnostics.append(diagnostic)
+            blockingDiagnostics.append(diagnostic)
+
+        case let .notFound(path, relativePath):
+            let diagnostic = diagnostic(
+                .error,
+                "PATCH_DISTRIBUTION_PATCH_NOT_FOUND",
+                "Selected patch \(relativePath ?? path) was not found as a direct item in the patch artifact library.",
+                relativePath ?? path
+            )
+            diagnostics.append(diagnostic)
+            blockingDiagnostics.append(diagnostic)
+
+        case let .selected(item):
+            diagnostics.append(contentsOf: item.diagnostics)
+            if item.status == .error {
+                let diagnostic = diagnostic(
+                    .error,
+                    "PATCH_DISTRIBUTION_SELECTED_PATCH_ERROR",
+                    "Selected patch artifact \(item.relativePatchPath) has blocking library errors.",
+                    item.relativePatchPath
+                )
+                diagnostics.append(diagnostic)
+                blockingDiagnostics.append(diagnostic)
+            }
+            if item.baseROMStatus == .unavailable || item.builtOutputStatus == .unavailable {
+                let diagnostic = diagnostic(
+                    .error,
+                    "PATCH_DISTRIBUTION_SELECTED_INPUT_IDENTITY_UNAVAILABLE",
+                    "Selected patch artifact \(item.relativePatchPath) does not have available base ROM and built output identity facts.",
+                    item.relativePatchPath
+                )
+                diagnostics.append(diagnostic)
+                blockingDiagnostics.append(diagnostic)
+            }
+            if let manifest = item.manifest,
+               manifest.headerPolicy.shouldRewriteHeader || manifest.headerPolicy.mode != "no-header-rewrite" {
+                let diagnostic = diagnostic(
+                    .error,
+                    "PATCH_DISTRIBUTION_MANIFEST_HEADER_REWRITE_BLOCKED",
+                    "Selected patch artifact manifest requires header policy \(manifest.headerPolicy.mode); distribution readiness allows no-header-rewrite only.",
+                    item.relativeManifestPath
+                )
+                diagnostics.append(diagnostic)
+                blockingDiagnostics.append(diagnostic)
+            }
+        }
+
+        if !preview.isReady {
+            let diagnostic = diagnostic(
+                .error,
+                "PATCH_DISTRIBUTION_PREVIEW_NOT_READY",
+                "Patch creation preview is not ready because the selected base ROM or built output identity is unavailable.",
+                preview.absolutePlannedPatchPath
+            )
+            diagnostics.append(diagnostic)
+            blockingDiagnostics.append(diagnostic)
+        }
+        if preview.headerPolicy.shouldRewriteHeader || preview.headerPolicy.mode != "no-header-rewrite" {
+            let diagnostic = diagnostic(
+                .error,
+                "PATCH_DISTRIBUTION_HEADER_REWRITE_BLOCKED",
+                "Patch distribution readiness allows no-header-rewrite only; preview reported \(preview.headerPolicy.mode).",
+                preview.absolutePlannedPatchPath
+            )
+            diagnostics.append(diagnostic)
+            blockingDiagnostics.append(diagnostic)
+        }
+
+        let selectedItem = selection.item
+        let hasWarnings = selectedItem?.status == .warning
+            || !playtest.isRunnable
+            || library.diagnostics.contains { $0.severity == .warning }
+            || playtest.diagnostics.contains { $0.severity != .info }
+        let status: PatchDistributionReadinessStatus
+        if !blockingDiagnostics.isEmpty {
+            status = .blocked
+        } else if hasWarnings {
+            status = .readyWithWarnings
+        } else {
+            status = .ready
+        }
+
+        return PatchDistributionReadinessPacket(
+            schemaVersion: 1,
+            status: status,
+            projectRoot: root.path,
+            selectedPatchPath: selectedItem?.patchPath ?? selection.normalizedPatchPath,
+            selectedPatchRelativePath: selectedItem?.relativePatchPath ?? selection.normalizedRelativePath,
+            selectedPatch: selectedItem,
+            patchCreationPreview: preview,
+            patchArtifactLibrary: library,
+            manualPlaytestReadiness: playtest,
+            blockedActions: blockedActions,
+            diagnostics: diagnostics,
+            isReadOnly: true
+        )
+    }
+
+    private static let blockedActions = [
+        "Patch file creation",
+        "Patch apply/export",
+        "Patched ROM writes",
+        "Artifact overwrite",
+        "Build execution",
+        "Playtest launch or capture",
+        "Automatic patch selection",
+        "Source mutation",
+        "Header rewrite",
+        "Patch format widening"
+    ]
+
+    private enum PatchSelection {
+        case notSelected
+        case notFound(path: String, relativePath: String?)
+        case selected(PatchArtifactLibraryItem)
+
+        var item: PatchArtifactLibraryItem? {
+            if case let .selected(item) = self {
+                return item
+            }
+            return nil
+        }
+
+        var normalizedPatchPath: String? {
+            if case let .notFound(path, _) = self {
+                return path
+            }
+            return nil
+        }
+
+        var normalizedRelativePath: String? {
+            if case let .notFound(_, relativePath) = self {
+                return relativePath
+            }
+            return nil
+        }
+    }
+
+    private static func selectedPatch(
+        from items: [PatchArtifactLibraryItem],
+        selectedPatchPath: String?,
+        projectRoot: URL
+    ) -> PatchSelection {
+        guard let selectedPatchPath = selectedPatchPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !selectedPatchPath.isEmpty
+        else {
+            return .notSelected
+        }
+
+        let normalized = normalizedSelection(selectedPatchPath, projectRoot: projectRoot)
+        if let item = items.first(where: { item in
+            item.patchPath == normalized.absolutePath
+                || item.relativePatchPath == normalized.relativePath
+        }) {
+            return .selected(item)
+        }
+        return .notFound(path: normalized.absolutePath, relativePath: normalized.relativePath)
+    }
+
+    private static func normalizedSelection(
+        _ selectedPatchPath: String,
+        projectRoot: URL
+    ) -> (absolutePath: String, relativePath: String?) {
+        if selectedPatchPath.hasPrefix("/") {
+            let absolute = URL(fileURLWithPath: selectedPatchPath).standardizedFileURL.path
+            let rootPath = projectRoot.standardizedFileURL.path
+            let relativePath = absolute.hasPrefix(rootPath + "/")
+                ? String(absolute.dropFirst(rootPath.count + 1))
+                : nil
+            return (absolute, relativePath)
+        }
+
+        let trimmedRelative = selectedPatchPath
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .dropLeadingDotSlash()
+        return (
+            projectRoot.appendingPathComponent(trimmedRelative).standardizedFileURL.path,
+            trimmedRelative
+        )
+    }
+
+    private static func diagnostic(
+        _ severity: DiagnosticSeverity,
+        _ code: String,
+        _ message: String,
+        _ relativePath: String
+    ) -> Diagnostic {
+        Diagnostic(
+            id: "\(code):\(relativePath):\(message)",
+            severity: severity,
+            code: code,
+            message: message,
+            span: SourceSpan(relativePath: relativePath, startLine: 1)
+        )
+    }
+}
+
+private extension String {
+    func dropLeadingDotSlash() -> String {
+        var value = self
+        while value.hasPrefix("./") {
+            value.removeFirst(2)
+        }
+        return value
+    }
+}
+
 public enum PatchArtifactLibraryScanner {
     public static func scan(
         projectPath: String,
@@ -184,7 +494,11 @@ public enum PatchArtifactLibraryScanner {
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
             )
-            .filter { $0.pathExtension.lowercased() == "bps" }
+            .filter {
+                guard $0.pathExtension.lowercased() == "bps" else { return false }
+                let values = try? $0.resourceValues(forKeys: [.isRegularFileKey])
+                return values?.isRegularFile == true
+            }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         } catch {
             return PatchArtifactLibrary(

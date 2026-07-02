@@ -364,6 +364,73 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.secondaryId, "ITEM_ANTIDOTE")
     }
 
+    func testExpansionItemInfoMissingUsageScalarsInsertAsSplitAnchoredGroupBackUpReloadAndBlockDrift() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root, includeUsageScalars: false)
+        let sourcePath = root.appendingPathComponent("src/data/items.h")
+        let source = try String(contentsOf: sourcePath, encoding: .utf8)
+            .replacingOccurrences(
+                of: ".description =",
+                with: ".customBeforeUsage = CUSTOM_VALUE, // keep me\n                .description ="
+            )
+        try source.write(to: sourcePath, atomically: true, encoding: .utf8)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertNil(potion.holdEffect)
+        XCTAssertNil(potion.holdEffectParam)
+        XCTAssertNil(potion.pocket)
+        XCTAssertNil(potion.type)
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+        draft.holdEffectParam = "60"
+        draft.pocket = "POCKET_MEDICINE"
+        draft.type = "ITEM_USE_PARTY_MENU"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        let priceOffset = try XCTUnwrap(offset(of: ".price = (I_PRICE >= GEN_7) ? 200 : 300,", in: preview))
+        let holdEffectOffset = try XCTUnwrap(offset(of: ".holdEffect = HOLD_EFFECT_RESTORE_HP,", in: preview))
+        let holdParamOffset = try XCTUnwrap(offset(of: ".holdEffectParam = 60,", in: preview))
+        let customOffset = try XCTUnwrap(offset(of: ".customBeforeUsage = CUSTOM_VALUE, // keep me", in: preview))
+        let descriptionOffset = try XCTUnwrap(offset(of: ".description =", in: preview))
+        let pocketOffset = try XCTUnwrap(offset(of: ".pocket = POCKET_MEDICINE,", in: preview))
+        let importanceOffset = try XCTUnwrap(offset(of: ".importance = 0,", in: preview))
+        let sortTypeOffset = try XCTUnwrap(offset(of: ".sortType = ITEM_TYPE_HEALTH_RECOVERY,", in: preview))
+        let typeOffset = try XCTUnwrap(offset(of: ".type = ITEM_USE_PARTY_MENU,", in: preview))
+        let exitsOffset = try XCTUnwrap(offset(of: ".exitsBagOnUse = FALSE,", in: preview))
+        XCTAssertLessThan(priceOffset, holdEffectOffset)
+        XCTAssertLessThan(holdEffectOffset, holdParamOffset)
+        XCTAssertLessThan(holdParamOffset, customOffset)
+        XCTAssertLessThan(customOffset, descriptionOffset)
+        XCTAssertLessThan(descriptionOffset, pocketOffset)
+        XCTAssertLessThan(pocketOffset, importanceOffset)
+        XCTAssertLessThan(sortTypeOffset, typeOffset)
+        XCTAssertLessThan(typeOffset, exitsOffset)
+
+        let original = try String(contentsOf: sourcePath, encoding: .utf8)
+        try "\(original)\n// drift\n".write(to: sourcePath, atomically: true, encoding: .utf8)
+        let driftApplyability = plan.validateApplyability()
+        XCTAssertFalse(driftApplyability.isApplyable)
+        XCTAssertTrue(driftApplyability.diagnostics.contains { $0.code == "ITEM_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "ITEM_APPLY_ORIGINAL_HASH_MISMATCH" })
+        try original.write(to: sourcePath, atomically: true, encoding: .utf8)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.holdEffect, "HOLD_EFFECT_RESTORE_HP")
+        XCTAssertEqual(edited.holdEffectParam, "60")
+        XCTAssertEqual(edited.pocket, "POCKET_MEDICINE")
+        XCTAssertEqual(edited.type, "ITEM_USE_PARTY_MENU")
+    }
+
     func testExpansionItemInfoUsageScalarsRejectNonSimpleValuesRemovalAndMissingFields() throws {
         let root = try temporaryRoot()
         try makeExpansionItemInfoProject(at: root)
@@ -394,7 +461,37 @@ final class PokemonItemCatalogTests: XCTestCase {
         let missingPlan = ItemMutationPlanner.plan(catalog: missingCatalog, draft: missingDraft)
         XCTAssertTrue(missingPlan.changes.isEmpty)
         XCTAssertFalse(missingPlan.isApplyable)
-        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_NOT_EDITABLE" && $0.message.contains("missing-field insertion") })
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_INSERTION_REQUIRED" && $0.message.contains("together") })
+
+        let missingAnchorRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: missingAnchorRoot, includeUsageScalars: false, includeBagClassificationScalars: false)
+        let missingAnchorCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: missingAnchorRoot, profile: .pokeemeraldExpansion))
+        let missingAnchorPotion = try XCTUnwrap(missingAnchorCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var missingAnchorDraft = try XCTUnwrap(ItemEditDraft(detail: missingAnchorPotion))
+        missingAnchorDraft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+        missingAnchorDraft.holdEffectParam = "60"
+        missingAnchorDraft.pocket = "POCKET_MEDICINE"
+        missingAnchorDraft.type = "ITEM_USE_PARTY_MENU"
+
+        let missingAnchorPlan = ItemMutationPlanner.plan(catalog: missingAnchorCatalog, draft: missingAnchorDraft)
+        XCTAssertTrue(missingAnchorPlan.changes.isEmpty)
+        XCTAssertFalse(missingAnchorPlan.isApplyable)
+        XCTAssertTrue(missingAnchorPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_INSERTION_ANCHOR_MISSING" })
+
+        let partialExistingRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: partialExistingRoot, includeUsageScalars: false, includePartialUsageScalars: true)
+        let partialExistingCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: partialExistingRoot, profile: .pokeemeraldExpansion))
+        let partialExistingPotion = try XCTUnwrap(partialExistingCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var partialExistingDraft = try XCTUnwrap(ItemEditDraft(detail: partialExistingPotion))
+        partialExistingDraft.holdEffect = "HOLD_EFFECT_RESTORE_HP"
+        partialExistingDraft.holdEffectParam = "60"
+        partialExistingDraft.pocket = "POCKET_MEDICINE"
+        partialExistingDraft.type = "ITEM_USE_PARTY_MENU"
+
+        let partialExistingPlan = ItemMutationPlanner.plan(catalog: partialExistingCatalog, draft: partialExistingDraft)
+        XCTAssertTrue(partialExistingPlan.changes.isEmpty)
+        XCTAssertFalse(partialExistingPlan.isApplyable)
+        XCTAssertTrue(partialExistingPlan.diagnostics.contains { $0.code == "ITEM_USAGE_SCALAR_NOT_EDITABLE" && $0.message.contains("partial missing-field insertion") })
 
         let nonSimpleCurrentRoot = try temporaryRoot()
         try makeExpansionItemInfoProject(at: nonSimpleCurrentRoot, holdEffectValue: "HOLD_EFFECT_ALIAS(HOLD_EFFECT_NONE)")
@@ -801,6 +898,7 @@ final class PokemonItemCatalogTests: XCTestCase {
         sortTypeValue: String = "ITEM_TYPE_HEALTH_RECOVERY",
         fieldUseFuncValue: String = "ItemUseOutOfBattle_Medicine",
         includeUsageScalars: Bool = true,
+        includePartialUsageScalars: Bool = false,
         includeBehaviorScalars: Bool = true,
         includeBagClassificationScalars: Bool = true,
         includeIconPicAnchor: Bool = true
@@ -817,6 +915,10 @@ final class PokemonItemCatalogTests: XCTestCase {
             source += """
                     .holdEffect = \(holdEffectValue),
                     .holdEffectParam = 20,
+            """
+        } else if includePartialUsageScalars {
+            source += """
+                    .holdEffect = \(holdEffectValue),
             """
         }
         source += """

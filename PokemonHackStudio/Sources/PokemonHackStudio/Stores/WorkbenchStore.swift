@@ -17,6 +17,15 @@ private struct ResourceAssetRowsCache {
 private struct WorkbenchWorkflowContextState: Codable {
     let selection: String
     let sidebarMode: String?
+    let editorTabs: [WorkbenchEditorTab]?
+    let activeEditorTabID: String?
+    let navigatorSelectionID: String?
+    let expandedNavigatorNodeIDs: [String]?
+    let inspectorMode: String?
+    let bottomPanelMode: String?
+    let bottomPanelHeight: Double?
+    let recentCommandIDs: [String]?
+    let activityCategoryFilter: String?
     let selectedResourceAssetID: String?
     let selectedResourceLibraryEntryID: String
     let selectedResourceLibraryMode: String
@@ -87,9 +96,11 @@ private struct BuildPatchPlaytestReportExportPayload: Codable {
     let patchCreationPreview: PokemonHackCore.PatchCreationPreviewReport?
     let patchCreationResult: PokemonHackCore.PatchCreationResult?
     let patchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
+    let patchDistributionReadiness: PokemonHackCore.PatchDistributionReadinessPacket?
     let binaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     let binaryROMMutationApplyAudit: PokemonHackCore.BinaryROMMutationApplyAuditReport?
     let binaryROMMutationApplyResult: PokemonHackCore.BinaryROMMutationApplyResult?
+    let mapRenderAudit: PokemonHackCore.MapRenderAuditReport?
     let playtest: PlaytestReportExportPayload?
 }
 
@@ -213,11 +224,48 @@ struct WorkbenchToolbarMutationState: Equatable {
 
 @MainActor
 final class WorkbenchStore: ObservableObject {
-    @Published var selection: WorkbenchModule = .dashboard {
+    @Published var selection: WorkbenchModule = .maps {
         didSet { persistWorkflowContext() }
     }
 
     @Published var sidebarMode: WorkbenchSidebarMode = .browse {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var editorTabs: [WorkbenchEditorTab] = WorkbenchStore.defaultEditorTabs {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var activeEditorTabID: WorkbenchEditorTab.ID = WorkbenchStore.defaultEditorTabs.first?.id ?? WorkbenchModule.maps.id {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var navigatorSelectionID: WorkbenchNavigatorNode.ID = WorkbenchModule.maps.id {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var expandedNavigatorNodeIDs: Set<WorkbenchNavigatorNode.ID> = Set(WorkbenchNavigatorGroup.allCases.map(\.id)) {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var inspectorMode: WorkbenchInspectorMode = .selection {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var bottomPanelMode: WorkbenchBottomPanelMode = .activity {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var bottomPanelHeight: Double = 210 {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var commandPaletteState = WorkbenchCommandPaletteState()
+    @Published var recentCommandIDs: [WorkbenchCommand.ID] = [] {
+        didSet { persistWorkflowContext() }
+    }
+
+    @Published var activityCategoryFilter: WorkbenchActivityCategory? {
         didSet { persistWorkflowContext() }
     }
 
@@ -333,10 +381,15 @@ final class WorkbenchStore: ObservableObject {
     @Published private(set) var patchArtifactLibraryLoadStatus: PatchArtifactLibraryLoadStatus = .idle
     @Published private(set) var selectedPatchArtifactLibrary: PatchArtifactLibraryViewState?
     @Published var selectedPatchArtifactLibraryItemID: String?
+    @Published var selectedPatchDistributionReadinessPatchPath: String = ""
+    @Published private(set) var patchDistributionReadinessLoadStatus: PatchDistributionReadinessLoadStatus = .idle
+    @Published private(set) var selectedPatchDistributionReadinessReport: PatchDistributionReadinessReportViewState?
     @Published private(set) var binaryROMMutationDryRunLoadStatus: BinaryROMMutationDryRunLoadStatus = .idle
     @Published private(set) var selectedBinaryROMMutationDryRunReport: BinaryROMMutationDryRunReportViewState?
     @Published private(set) var selectedBinaryROMMutationApplyAuditReport: BinaryROMMutationApplyAuditReportViewState?
     @Published private(set) var selectedBinaryROMMutationApplyResultReport: BinaryROMMutationApplyResultViewState?
+    @Published private(set) var mapRenderAuditLoadStatus: MapRenderAuditLoadStatus = .idle
+    @Published private(set) var selectedMapRenderAuditReport: MapRenderAuditReportViewState?
     @Published private(set) var latestPatchCreationResult: PokemonHackCore.PatchCreationResult?
     @Published private(set) var latestPatchApplyExportResult: PokemonHackCore.PatchApplyExportResult?
     @Published private(set) var rawBinaryROMMutationApplyAuditReport: PokemonHackCore.BinaryROMMutationApplyAuditReport?
@@ -365,6 +418,7 @@ final class WorkbenchStore: ObservableObject {
     @Published private var ndsDataDraftsByKey: [String: PokemonHackCore.NDSDataEditDraft] = [:]
     @Published private var ndsDataTextLineOperationDraftsByKey: [String: PokemonHackCore.NDSDataTextLineOperationDraft] = [:]
     @Published private var ndsDataItemCSVRowOperationDraftsByKey: [String: PokemonHackCore.NDSDataItemCSVRowOperationDraft] = [:]
+    @Published private var ndsDataEncounterJSONRowOperationDraftsByKey: [String: PokemonHackCore.NDSDataEncounterJSONRowOperationDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
     @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
     @Published private var buildRunResultsByID: [String: BuildRunResultViewState] = [:]
@@ -388,7 +442,9 @@ final class WorkbenchStore: ObservableObject {
     private var rawPatchManifestReport: PokemonHackCore.PatchManifestReport?
     private var rawPatchCreationPreviewReport: PokemonHackCore.PatchCreationPreviewReport?
     private var rawPatchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
+    private var rawPatchDistributionReadinessPacket: PokemonHackCore.PatchDistributionReadinessPacket?
     private var rawBinaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
+    private var rawMapRenderAuditReport: PokemonHackCore.MapRenderAuditReport?
     private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
     private var graphicsReportsByID: [String: GraphicsDiagnosticsReportViewState] = [:]
     private var mapCatalogsByID: [String: PokemonHackCore.ProjectMapCatalog] = [:]
@@ -436,6 +492,14 @@ final class WorkbenchStore: ObservableObject {
     private static let workflowContextKey = "PokemonHackStudio.workflowContext"
     private static let autosaveDelayNanoseconds: UInt64 = 600_000_000
     static let allResourceAssetCategories = "All"
+    static let defaultEditorTabs: [WorkbenchEditorTab] = [
+        .module(.maps),
+        .module(.resources),
+        .module(.pokemon),
+        .module(.graphics),
+        .module(.build),
+        .module(.issues),
+    ]
 
     private static let workspaceSavedDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -493,6 +557,34 @@ final class WorkbenchStore: ObservableObject {
         if let sidebarMode = state.sidebarMode.flatMap(WorkbenchSidebarMode.init(rawValue:)) {
             self.sidebarMode = sidebarMode
         }
+        if let restoredTabs = state.editorTabs, !restoredTabs.isEmpty {
+            editorTabs = restoredTabs
+        }
+        if let activeEditorTabID = state.activeEditorTabID,
+           editorTabs.contains(where: { $0.id == activeEditorTabID })
+        {
+            self.activeEditorTabID = activeEditorTabID
+        } else {
+            activeEditorTabID = editorTabs.first { $0.module == selection }?.id ?? editorTabs.first?.id ?? WorkbenchModule.maps.id
+        }
+        if let activeTab = editorTabs.first(where: { $0.id == activeEditorTabID }) {
+            selection = activeTab.module
+        }
+        navigatorSelectionID = state.navigatorSelectionID ?? activeEditorTabID
+        if let expandedNavigatorNodeIDs = state.expandedNavigatorNodeIDs {
+            self.expandedNavigatorNodeIDs = Set(expandedNavigatorNodeIDs)
+        }
+        if let inspectorMode = state.inspectorMode.flatMap(WorkbenchInspectorMode.init(rawValue:)) {
+            self.inspectorMode = inspectorMode
+        } else {
+            inspectorMode = Self.defaultIDEInspectorMode(for: selection)
+        }
+        if let bottomPanelMode = state.bottomPanelMode.flatMap(WorkbenchBottomPanelMode.init(rawValue:)) {
+            self.bottomPanelMode = bottomPanelMode
+        }
+        bottomPanelHeight = state.bottomPanelHeight ?? bottomPanelHeight
+        recentCommandIDs = state.recentCommandIDs ?? []
+        activityCategoryFilter = state.activityCategoryFilter.flatMap(WorkbenchActivityCategory.init(rawValue:))
         selectedResourceAssetID = state.selectedResourceAssetID
         selectedResourceLibraryEntryID = state.selectedResourceLibraryEntryID
         selectedResourceLibraryMode = ResourceLibraryMode(rawValue: state.selectedResourceLibraryMode) ?? .assets
@@ -515,6 +607,15 @@ final class WorkbenchStore: ObservableObject {
         let state = WorkbenchWorkflowContextState(
             selection: selection.rawValue,
             sidebarMode: sidebarMode.rawValue,
+            editorTabs: editorTabs,
+            activeEditorTabID: activeEditorTabID,
+            navigatorSelectionID: navigatorSelectionID,
+            expandedNavigatorNodeIDs: Array(expandedNavigatorNodeIDs).sorted(),
+            inspectorMode: inspectorMode.rawValue,
+            bottomPanelMode: bottomPanelMode.rawValue,
+            bottomPanelHeight: bottomPanelHeight,
+            recentCommandIDs: recentCommandIDs,
+            activityCategoryFilter: activityCategoryFilter?.rawValue,
             selectedResourceAssetID: selectedResourceAssetID,
             selectedResourceLibraryEntryID: selectedResourceLibraryEntryID,
             selectedResourceLibraryMode: selectedResourceLibraryMode.rawValue,
@@ -1413,9 +1514,11 @@ final class WorkbenchStore: ObservableObject {
         let patchCreationResultDiagnostics = selectedPatchCreationResultReport?.diagnostics ?? []
         let patchArtifactLibraryDiagnostics = selectedPatchArtifactLibrary?.diagnostics ?? []
             + (selectedPatchArtifactLibrary?.items.flatMap(\.diagnostics) ?? [])
+        let patchDistributionReadinessDiagnostics = selectedPatchDistributionReadinessReport?.diagnostics ?? []
         let binaryROMMutationDryRunDiagnostics = selectedBinaryROMMutationDryRunReport?.diagnostics ?? []
         let binaryROMMutationApplyAuditDiagnostics = selectedBinaryROMMutationApplyAuditReport?.diagnostics ?? []
         let binaryROMMutationApplyDiagnostics = selectedBinaryROMMutationApplyResultReport?.diagnostics ?? []
+        let mapRenderAuditDiagnostics = selectedMapRenderAuditReport?.diagnostics ?? []
         let scriptReadinessDiagnostics = selectedScriptReadinessReport?.diagnostics ?? []
         let graphicsDiagnostics = selectedGraphicsReport?.diagnostics ?? []
         let speciesDiagnostics = selectedSpeciesCatalog?.diagnostics.map {
@@ -1438,9 +1541,11 @@ final class WorkbenchStore: ObservableObject {
             + patchCreationDiagnostics
             + patchCreationResultDiagnostics
             + patchArtifactLibraryDiagnostics
+            + patchDistributionReadinessDiagnostics
             + binaryROMMutationDryRunDiagnostics
             + binaryROMMutationApplyAuditDiagnostics
             + binaryROMMutationApplyDiagnostics
+            + mapRenderAuditDiagnostics
             + scriptReadinessDiagnostics
             + graphicsDiagnostics
             + speciesDiagnostics
@@ -1828,6 +1933,11 @@ final class WorkbenchStore: ObservableObject {
         return filter(buildRows: selectedPatchArtifactLibrary.rows + reviewRows)
     }
 
+    var filteredPatchDistributionReadinessRows: [BuildReportRow] {
+        guard let selectedPatchDistributionReadinessReport else { return [] }
+        return filter(buildRows: selectedPatchDistributionReadinessReport.rows)
+    }
+
     var filteredBinaryROMMutationDryRunRows: [BuildReportRow] {
         guard let selectedBinaryROMMutationDryRunReport else { return [] }
         return filter(buildRows: selectedBinaryROMMutationDryRunReport.rows)
@@ -1841,6 +1951,11 @@ final class WorkbenchStore: ObservableObject {
     var filteredBinaryROMMutationApplyResultRows: [BuildReportRow] {
         guard let selectedBinaryROMMutationApplyResultReport else { return [] }
         return filter(buildRows: selectedBinaryROMMutationApplyResultReport.rows)
+    }
+
+    var filteredMapRenderAuditRows: [BuildReportRow] {
+        guard let selectedMapRenderAuditReport else { return [] }
+        return filter(buildRows: selectedMapRenderAuditReport.rows)
     }
 
     var canApplySelectedBinaryROMMutationReview: Bool {
@@ -2085,11 +2200,13 @@ final class WorkbenchStore: ObservableObject {
         switch selectedBuildWorkbenchTab {
         case .build:
             return filteredBuildReportRows.filter { $0.section != .diagnostics && $0.section != .patchManifest }
+                + filteredMapRenderAuditRows
         case .patch:
             return filteredPatchManifestRows
                 + filteredPatchCreationPreviewRows
                 + filteredPatchCreationResultRows
                 + filteredPatchArtifactLibraryRows
+                + filteredPatchDistributionReadinessRows
         case .playtest:
             guard let selectedBuildReport else { return [] }
             return [BuildReportRow(playtest: selectedBuildReport.playtest)]
@@ -2193,6 +2310,7 @@ final class WorkbenchStore: ObservableObject {
             catalog: catalog,
             recordID: recordID,
             record: record,
+            sourceText: sourceText,
             canEdit: canEdit
         )
         let lensSummary: String
@@ -2457,6 +2575,9 @@ final class WorkbenchStore: ObservableObject {
         if let draft = ndsDataItemCSVRowOperationDraftsByKey[key] {
             return draft.operations.count
         }
+        if let draft = ndsDataEncounterJSONRowOperationDraftsByKey[key] {
+            return draft.operations.count
+        }
         return 0
     }
 
@@ -2468,6 +2589,9 @@ final class WorkbenchStore: ObservableObject {
         }
         if let draft = ndsDataItemCSVRowOperationDraftsByKey[key], !draft.operations.isEmpty {
             return PokemonHackCore.NDSDataItemCSVRowOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager).editPlan
+        }
+        if let draft = ndsDataEncounterJSONRowOperationDraftsByKey[key], !draft.operations.isEmpty {
+            return PokemonHackCore.NDSDataEncounterJSONRowOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager).editPlan
         }
         return nil
     }
@@ -2569,18 +2693,24 @@ final class WorkbenchStore: ObservableObject {
         catalog: PokemonHackCore.ProjectNDSDataCatalog,
         recordID: String,
         record: PokemonHackCore.NDSDataCatalogRecord,
+        sourceText: String,
         canEdit: Bool
     ) -> NDSDataResourceRowOperationEditorViewState? {
         guard canEdit, let family = ndsDataRowOperationFamily(catalog: catalog, record: record) else {
             return nil
         }
         let key = selectedIndexedProject.map { ndsDataDraftKey(projectID: $0.id, recordID: recordID) }
+        var targetOptions: [NDSDataResourceRowOperationTargetViewState] = []
+        let selectedTargetKey: String?
+        let canChangeTarget: Bool
         let stagedOperations: [NDSDataResourceRowOperationViewState]
         let beforeCount: Int?
         let afterCount: Int?
 
         switch family {
         case .textLines:
+            selectedTargetKey = nil
+            canChangeTarget = true
             let draft = key.flatMap { ndsDataTextLineOperationDraftsByKey[$0] }
             stagedOperations = (draft?.operations ?? []).enumerated().map { index, operation in
                 textLineOperationViewState(operation, index: index)
@@ -2595,6 +2725,8 @@ final class WorkbenchStore: ObservableObject {
             }
 
         case .itemCSVRows:
+            selectedTargetKey = nil
+            canChangeTarget = true
             let draft = key.flatMap { ndsDataItemCSVRowOperationDraftsByKey[$0] }
             stagedOperations = (draft?.operations ?? []).enumerated().map { index, operation in
                 itemCSVRowOperationViewState(operation, index: index)
@@ -2607,15 +2739,52 @@ final class WorkbenchStore: ObservableObject {
                 beforeCount = nil
                 afterCount = nil
             }
+
+        case .encounterJSONRows:
+            let draft = key.flatMap { ndsDataEncounterJSONRowOperationDraftsByKey[$0] }
+            targetOptions = encounterJSONRowOperationTargetOptions(
+                sourceText: sourceText,
+                recordID: recordID,
+                record: record
+            )
+            if let draft,
+               !draft.operations.isEmpty,
+               !targetOptions.contains(where: { $0.key == draft.arrayKey })
+            {
+                targetOptions.append(
+                    NDSDataResourceRowOperationTargetViewState(
+                        key: draft.arrayKey,
+                        title: rowOperationTargetTitle(for: draft.arrayKey),
+                        detail: "Staged target"
+                    )
+                )
+            }
+            guard !targetOptions.isEmpty else { return nil }
+            selectedTargetKey = draft?.arrayKey ?? targetOptions.first?.key
+            canChangeTarget = draft?.operations.isEmpty ?? true
+            stagedOperations = (draft?.operations ?? []).enumerated().map { index, operation in
+                encounterJSONRowOperationViewState(operation, index: index)
+            }
+            if let draft, !draft.operations.isEmpty {
+                let plan = PokemonHackCore.NDSDataEncounterJSONRowOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+                beforeCount = plan.beforeRowCount
+                afterCount = plan.afterRowCount
+            } else {
+                beforeCount = nil
+                afterCount = nil
+            }
         }
 
         return NDSDataResourceRowOperationEditorViewState(
             family: family,
             title: family.title,
+            targetOptions: targetOptions,
+            selectedTargetKey: selectedTargetKey,
+            canChangeTarget: canChangeTarget,
             stagedOperations: stagedOperations,
             beforeCount: beforeCount,
             afterCount: afterCount,
-            canStage: true,
+            canStage: family != .encounterJSONRows || selectedTargetKey != nil,
             canRemoveLast: !stagedOperations.isEmpty,
             canClear: !stagedOperations.isEmpty
         )
@@ -2653,6 +2822,23 @@ final class WorkbenchStore: ObservableObject {
                !remainder.contains("/")
             {
                 return .itemCSVRows
+            }
+        }
+
+        if catalog.profile == .pokeplatinum,
+           record.domain == .encounters,
+           record.role == .sourceTree,
+           record.format == .json
+        {
+            let prefix = "res/field/encounters/"
+            let lower = record.relativePath.lowercased()
+            let remainder = lower.dropFirst(prefix.count)
+            if lower.hasPrefix(prefix),
+               lower.hasSuffix(".json"),
+               !remainder.isEmpty,
+               !remainder.contains("/")
+            {
+                return .encounterJSONRows
             }
         }
 
@@ -2715,6 +2901,76 @@ final class WorkbenchStore: ObservableObject {
                 detail: nil
             )
         }
+    }
+
+    private func encounterJSONRowOperationViewState(
+        _ operation: PokemonHackCore.NDSDataEncounterJSONRowOperation,
+        index: Int
+    ) -> NDSDataResourceRowOperationViewState {
+        switch operation.kind {
+        case .insert:
+            return NDSDataResourceRowOperationViewState(
+                id: "encounter-json-row-operation-\(index)",
+                kind: .insert,
+                summary: "Insert at \(operation.index ?? 0)",
+                detail: operation.rowText
+            )
+        case .delete:
+            return NDSDataResourceRowOperationViewState(
+                id: "encounter-json-row-operation-\(index)",
+                kind: .delete,
+                summary: "Delete \(operation.index ?? 0)",
+                detail: nil
+            )
+        case .reorder:
+            return NDSDataResourceRowOperationViewState(
+                id: "encounter-json-row-operation-\(index)",
+                kind: .reorder,
+                summary: "Move \(operation.fromIndex ?? 0) to \(operation.toIndex ?? 0)",
+                detail: nil
+            )
+        }
+    }
+
+    private func encounterJSONRowOperationTargetOptions(
+        sourceText: String,
+        recordID: String,
+        record: PokemonHackCore.NDSDataCatalogRecord
+    ) -> [NDSDataResourceRowOperationTargetViewState] {
+        let fields = PokemonHackCore.NDSDataSemanticEditor.fields(
+            sourceText: sourceText,
+            recordID: recordID,
+            record: record
+        )
+        var rowIndexesByArrayKey: [String: Set<Int>] = [:]
+        for field in fields {
+            let components = field.key.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            guard components.count >= 3,
+                  let rowIndex = Int(components[1]),
+                  rowIndex >= 0
+            else {
+                continue
+            }
+            rowIndexesByArrayKey[components[0], default: []].insert(rowIndex)
+        }
+
+        return rowIndexesByArrayKey.keys.sorted().map { key in
+            let rowCount = rowIndexesByArrayKey[key]?.count ?? 0
+            return NDSDataResourceRowOperationTargetViewState(
+                key: key,
+                title: rowOperationTargetTitle(for: key),
+                detail: "\(rowCount) row(s)"
+            )
+        }
+    }
+
+    private func rowOperationTargetTitle(for key: String) -> String {
+        key.split(separator: "_")
+            .map { word in
+                guard let first = word.first else { return "" }
+                return String(first).uppercased() + String(word.dropFirst())
+            }
+            .joined(separator: " ")
     }
 
     var selectedDiagnosticBucketSummary: DiagnosticBucketSummary {
@@ -3137,6 +3393,10 @@ final class WorkbenchStore: ObservableObject {
             guard key.hasPrefix(prefix) else { return nil }
             return String(key.dropFirst(prefix.count))
         })
+        recordIDs.formUnion(ndsDataEncounterJSONRowOperationDraftsByKey.keys.compactMap { key in
+            guard key.hasPrefix(prefix) else { return nil }
+            return String(key.dropFirst(prefix.count))
+        })
         return recordIDs
     }
 
@@ -3149,7 +3409,10 @@ final class WorkbenchStore: ObservableObject {
         let itemCSVCount = ndsDataItemCSVRowOperationDraftsByKey.filter { key, draft in
             key.hasPrefix(prefix) && !draft.operations.isEmpty
         }.count
-        return textLineCount + itemCSVCount
+        let encounterJSONCount = ndsDataEncounterJSONRowOperationDraftsByKey.filter { key, draft in
+            key.hasPrefix(prefix) && !draft.operations.isEmpty
+        }.count
+        return textLineCount + itemCSVCount + encounterJSONCount
     }
 
     private static func resourceAssetNDSDataRecordID(from assetID: String) -> String? {
@@ -3383,6 +3646,7 @@ final class WorkbenchStore: ObservableObject {
         ndsDataDraftsByKey = ndsDataDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
         ndsDataTextLineOperationDraftsByKey = ndsDataTextLineOperationDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
         ndsDataItemCSVRowOperationDraftsByKey = ndsDataItemCSVRowOperationDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
+        ndsDataEncounterJSONRowOperationDraftsByKey = ndsDataEncounterJSONRowOperationDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
         resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
     }
@@ -3401,6 +3665,7 @@ final class WorkbenchStore: ObservableObject {
                     selectedBuildReport?.status ?? Self.validationStatus(for: buildSteps.map(\.status)),
                     patchManifestLoadStatus.validationState,
                     selectedPatchManifestReport?.status ?? .valid,
+                    selectedMapRenderAuditReport?.status ?? .valid,
                 ]
             )
         case .issues:
@@ -3545,6 +3810,7 @@ final class WorkbenchStore: ObservableObject {
         romInspectorTask?.cancel()
         cancelSelectedDecompBuild()
         pendingScriptAssetTargetID = nil
+        resetMapRenderAuditForProjectChange()
         clearSelectedMapVisualDocument()
         updateLazyLoadStatusesForSelection()
     }
@@ -3669,12 +3935,31 @@ final class WorkbenchStore: ObservableObject {
         openProject(path: url.standardizedFileURL.path)
     }
 
+    @discardableResult
+    func openEditorTab(
+        for module: WorkbenchModule,
+        targetID: String? = nil,
+        activate: Bool
+    ) -> WorkbenchEditorTab {
+        let tab = WorkbenchEditorTab.module(module, targetID: targetID)
+        if !editorTabs.contains(where: { $0.id == tab.id }) {
+            editorTabs.append(tab)
+        }
+        if activate {
+            activeEditorTabID = tab.id
+            inspectorMode = Self.defaultIDEInspectorMode(for: module)
+        }
+        return tab
+    }
+
     func selectWorkbenchModule(
         _ module: WorkbenchModule,
         focus: WorkbenchFocusTarget? = nil,
         search: WorkbenchSearchBehavior = .restoreModule
     ) {
         storeSearchTextForCurrentModule()
+        openEditorTab(for: module, targetID: focus?.rawIdentifier, activate: true)
+        navigatorSelectionID = focus?.id ?? module.id
         selection = module
         applySearchBehavior(search, for: module, targetIdentifier: focus?.rawIdentifier)
         recordRecentModule(module)
@@ -4078,6 +4363,13 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchArtifactLibraryItemID = itemID
     }
 
+    func requestPatchDistributionReadinessPatchSelection(_ path: String) {
+        selectedPatchDistributionReadinessPatchPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        rawPatchDistributionReadinessPacket = nil
+        selectedPatchDistributionReadinessReport = nil
+        patchDistributionReadinessLoadStatus = .idle
+    }
+
     func requestBaseROMPath(_ path: String) {
         let shouldReloadPatchCreationPreview = selectedPatchCreationPreviewReport != nil
         selectedBaseROMPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4128,6 +4420,9 @@ final class WorkbenchStore: ObservableObject {
         rawPatchArtifactLibrary = nil
         selectedPatchArtifactLibrary = nil
         selectedPatchArtifactLibraryItemID = nil
+        selectedPatchDistributionReadinessPatchPath = ""
+        rawPatchDistributionReadinessPacket = nil
+        selectedPatchDistributionReadinessReport = nil
         rawBinaryROMMutationDryRunManifest = nil
         selectedBinaryROMMutationDryRunReport = nil
         rawBinaryROMMutationApplyAuditReport = nil
@@ -4138,7 +4433,14 @@ final class WorkbenchStore: ObservableObject {
         patchManifestLoadStatus = .idle
         patchCreationPreviewLoadStatus = .idle
         patchArtifactLibraryLoadStatus = .idle
+        patchDistributionReadinessLoadStatus = .idle
         binaryROMMutationDryRunLoadStatus = .idle
+    }
+
+    private func resetMapRenderAuditForProjectChange() {
+        rawMapRenderAuditReport = nil
+        selectedMapRenderAuditReport = nil
+        mapRenderAuditLoadStatus = .idle
     }
 
     private func resetPatchCreationPreviewForInputChange() {
@@ -4146,7 +4448,10 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchCreationPreviewReport = nil
         latestPatchCreationResult = nil
         selectedPatchCreationResultReport = nil
+        rawPatchDistributionReadinessPacket = nil
+        selectedPatchDistributionReadinessReport = nil
         patchCreationPreviewLoadStatus = selectedBaseROMPath.isEmpty ? .idle : .idle
+        patchDistributionReadinessLoadStatus = .idle
     }
 
     private func resetGraphicsImportPackagePlanForProjectChange() {
@@ -4179,6 +4484,26 @@ final class WorkbenchStore: ObservableObject {
         selectedGraphicsImportPackagePlan = nil
         graphicsImportPackagePlanStatus = .idle
         mapViewportRequest = nil
+    }
+
+    func loadSelectedMapRenderAudit() {
+        guard let selectedIndexedProject else {
+            rawMapRenderAuditReport = nil
+            selectedMapRenderAuditReport = nil
+            mapRenderAuditLoadStatus = .idle
+            return
+        }
+
+        mapRenderAuditLoadStatus = .loading
+        let report = MapRenderAuditBuilder.build(path: selectedIndexedProject.rootPath, fileManager: fileManager)
+        let viewState = Self.mapRenderAuditReportViewState(
+            from: report,
+            project: selectedIndexedProject,
+            rootPath: selectedIndexedProject.rootPath
+        )
+        rawMapRenderAuditReport = report
+        selectedMapRenderAuditReport = viewState
+        mapRenderAuditLoadStatus = .loaded(label: viewState.statusLabel, status: viewState.status)
     }
 
     func loadSelectedPatchManifestReport() {
@@ -4291,6 +4616,45 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    func loadSelectedPatchDistributionReadinessPacket() {
+        guard !selectedBaseROMPath.isEmpty,
+              let projectRoot = selectedIndexedProject?.rootPath
+        else {
+            rawPatchDistributionReadinessPacket = nil
+            selectedPatchDistributionReadinessReport = nil
+            patchDistributionReadinessLoadStatus = .idle
+            return
+        }
+
+        patchDistributionReadinessLoadStatus = .loading
+
+        do {
+            let targetID = selectedEffectiveDecompBuildTargetID
+            let selectedPatch = selectedPatchDistributionReadinessPatchPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            let packet = try PatchDistributionReadinessPacketBuilder.build(
+                projectPath: projectRoot,
+                baseROMPath: selectedBaseROMPath,
+                targetID: targetID.isEmpty ? nil : targetID,
+                selectedPatchPath: selectedPatch.isEmpty ? nil : selectedPatch,
+                fileManager: fileManager,
+                toolResolver: toolResolver
+            )
+            rawPatchDistributionReadinessPacket = packet
+            selectedPatchDistributionReadinessReport = Self.patchDistributionReadinessReportViewState(
+                from: packet,
+                rootPath: projectRoot
+            )
+            patchDistributionReadinessLoadStatus = .loaded(
+                packet.status.rawValue,
+                selectedPatchDistributionReadinessReport?.status ?? .warning
+            )
+        } catch {
+            rawPatchDistributionReadinessPacket = nil
+            selectedPatchDistributionReadinessReport = nil
+            patchDistributionReadinessLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
     func createSelectedBPSPatch() {
         guard !selectedBaseROMPath.isEmpty,
               let projectRoot = selectedIndexedProject?.rootPath
@@ -4314,6 +4678,9 @@ final class WorkbenchStore: ObservableObject {
             if result.status == .created, let patchPath = result.patchPath {
                 loadSelectedPatchArtifactLibrary(selectingPatchPath: patchPath)
             }
+            rawPatchDistributionReadinessPacket = nil
+            selectedPatchDistributionReadinessReport = nil
+            patchDistributionReadinessLoadStatus = .idle
         } catch {
             let result = PatchCreationResult(
                 status: .blocked,
@@ -4663,6 +5030,7 @@ final class WorkbenchStore: ObservableObject {
 
     func stageSelectedNDSDataRowOperation(
         kind: NDSDataResourceRowOperationKind,
+        targetKey: String? = nil,
         index: Int? = nil,
         insertValue: String = "",
         fromIndex: Int? = nil,
@@ -4702,6 +5070,7 @@ final class WorkbenchStore: ObservableObject {
             operations.append(operation)
             ndsDataTextLineOperationDraftsByKey[key] = PokemonHackCore.NDSDataTextLineOperationDraft(recordID: recordID, operations: operations)
             ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+            ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
 
         case .itemCSVRows:
             let operation: PokemonHackCore.NDSDataItemCSVRowOperation?
@@ -4723,6 +5092,56 @@ final class WorkbenchStore: ObservableObject {
             operations.append(operation)
             ndsDataItemCSVRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataItemCSVRowOperationDraft(recordID: recordID, operations: operations)
             ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+            ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
+
+        case .encounterJSONRows:
+            let sourceText = PokemonHackCore.NDSDataMutationPlanner.sourceText(
+                catalog: catalog,
+                recordID: recordID,
+                fileManager: fileManager
+            ) ?? ""
+            let targetOptions = encounterJSONRowOperationTargetOptions(
+                sourceText: sourceText,
+                recordID: recordID,
+                record: record
+            )
+            let existingDraft = ndsDataEncounterJSONRowOperationDraftsByKey[key]
+            let arrayKey: String?
+            if let existingDraft, !existingDraft.operations.isEmpty {
+                arrayKey = existingDraft.arrayKey
+            } else {
+                arrayKey = targetKey ?? existingDraft?.arrayKey ?? targetOptions.first?.key
+            }
+            guard let arrayKey,
+                  targetOptions.contains(where: { $0.key == arrayKey })
+            else {
+                return
+            }
+
+            let operation: PokemonHackCore.NDSDataEncounterJSONRowOperation?
+            switch kind {
+            case .insert:
+                operation = index.map { .insert(index: $0, rowText: insertValue) }
+            case .delete:
+                operation = index.map { .delete(index: $0) }
+            case .reorder:
+                if let fromIndex, let toIndex {
+                    operation = .reorder(fromIndex: fromIndex, toIndex: toIndex)
+                } else {
+                    operation = nil
+                }
+            }
+            guard let operation else { return }
+            ndsDataDraftsByKey.removeValue(forKey: key)
+            var operations = existingDraft?.operations ?? []
+            operations.append(operation)
+            ndsDataEncounterJSONRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataEncounterJSONRowOperationDraft(
+                recordID: recordID,
+                arrayKey: arrayKey,
+                operations: operations
+            )
+            ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+            ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
         }
 
         resourceAssetRowsCache = nil
@@ -4749,6 +5168,18 @@ final class WorkbenchStore: ObservableObject {
             } else {
                 ndsDataItemCSVRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataItemCSVRowOperationDraft(recordID: recordID, operations: operations)
             }
+        } else if let draft = ndsDataEncounterJSONRowOperationDraftsByKey[key] {
+            var operations = draft.operations
+            _ = operations.popLast()
+            if operations.isEmpty {
+                ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
+            } else {
+                ndsDataEncounterJSONRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataEncounterJSONRowOperationDraft(
+                    recordID: recordID,
+                    arrayKey: draft.arrayKey,
+                    operations: operations
+                )
+            }
         }
         resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
@@ -4760,6 +5191,7 @@ final class WorkbenchStore: ObservableObject {
         let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
         ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
         ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
         resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
         latestNDSDataApplyResult = nil
@@ -4770,6 +5202,7 @@ final class WorkbenchStore: ObservableObject {
         let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
         ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
         ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
         guard selectedNDSDataCanEditSourceText else {
             ndsDataDraftsByKey.removeValue(forKey: key)
             resourceAssetRowsCache = nil
@@ -4820,6 +5253,7 @@ final class WorkbenchStore: ObservableObject {
         ndsDataDraftsByKey.removeValue(forKey: key)
         ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
         ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
         resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
         latestNDSDataApplyResult = nil
@@ -4860,6 +5294,7 @@ final class WorkbenchStore: ObservableObject {
                 ndsDataDraftsByKey.removeValue(forKey: key)
                 ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
                 ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+                ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
                 resourceAssetRowsCache = nil
             }
             ndsDataCatalogsByID.removeValue(forKey: projectIDBeforeApply)
@@ -5135,6 +5570,7 @@ final class WorkbenchStore: ObservableObject {
         removeDrafts(from: &ndsDataDraftsByKey, withPrefix: ndsDataPrefix)
         removeDrafts(from: &ndsDataTextLineOperationDraftsByKey, withPrefix: ndsDataPrefix)
         removeDrafts(from: &ndsDataItemCSVRowOperationDraftsByKey, withPrefix: ndsDataPrefix)
+        removeDrafts(from: &ndsDataEncounterJSONRowOperationDraftsByKey, withPrefix: ndsDataPrefix)
         resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
         if selectedProjectID == projectID {
@@ -7121,9 +7557,11 @@ final class WorkbenchStore: ObservableObject {
             patchCreationPreview: rawPatchCreationPreviewReport,
             patchCreationResult: latestPatchCreationResult,
             patchArtifactLibrary: rawPatchArtifactLibrary,
+            patchDistributionReadiness: rawPatchDistributionReadinessPacket,
             binaryROMMutationDryRunManifest: rawBinaryROMMutationDryRunManifest,
             binaryROMMutationApplyAudit: rawBinaryROMMutationApplyAuditReport,
             binaryROMMutationApplyResult: latestBinaryROMMutationApplyResult,
+            mapRenderAudit: rawMapRenderAuditReport,
             playtest: report.map(Self.exportPayload(fromPlaytest:))
         )
         let encoder = JSONEncoder()
@@ -7160,6 +7598,26 @@ final class WorkbenchStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(rawPatchArtifactLibrary), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copyPatchDistributionReadinessJSONToPasteboard() {
+        guard let rawPatchDistributionReadinessPacket else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawPatchDistributionReadinessPacket), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copyMapRenderAuditJSONToPasteboard() {
+        guard let rawMapRenderAuditReport else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawMapRenderAuditReport), let json = String(data: data, encoding: .utf8) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
@@ -9335,6 +9793,198 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    private static func mapRenderAuditReportViewState(
+        from report: PokemonHackCore.MapRenderAuditReport,
+        project: IndexedProjectSummary,
+        rootPath: String
+    ) -> MapRenderAuditReportViewState {
+        let status = validationState(for: report.status)
+        let label = report.status.rawValue.capitalized
+        let summary = report.summary
+        let targetPaths = Dictionary(uniqueKeysWithValues: report.targets.map { ($0.targetID, $0.path) })
+        let auditIssues = report.targets.flatMap { $0.warnings + $0.failures }
+        let issueDiagnostics = auditIssues.enumerated().map { index, issue in
+            mapRenderAuditIssueDiagnostic(from: issue, index: index, rootPath: rootPath, targetPaths: targetPaths)
+        }
+        let diagnostics = report.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) } + issueDiagnostics
+
+        var rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "map-render-audit:summary",
+                section: .mapRenderAudit,
+                title: "Map render audit",
+                subtitle: "\(label) · \(summary.auditedTargetCount) audited target\(summary.auditedTargetCount == 1 ? "" : "s")",
+                detail: "Read-only selected-project audit: \(summary.auditedMapCount) map(s), \(summary.textureCount) texture check(s), \(summary.warningCount) warning(s), \(summary.failureCount) failure(s), \(summary.skippedTargetCount) skipped target(s).",
+                status: status,
+                source: SourceLocation(path: report.path ?? report.workspaceRoot ?? rootPath, symbol: "map-render-audit", line: 1),
+                tags: [
+                    report.status.rawValue,
+                    "targets:\(summary.targetCount)",
+                    "maps:\(summary.auditedMapCount)",
+                    "textures:\(summary.textureCount)",
+                    "warnings:\(summary.warningCount)",
+                    "failures:\(summary.failureCount)",
+                    "skipped:\(summary.skippedTargetCount)",
+                ]
+            )
+        ]
+
+        rows.append(contentsOf: report.targets.map { target in
+            BuildReportRow(
+                id: "map-render-audit:target:\(target.targetID)",
+                section: .mapRenderAudit,
+                title: target.title,
+                subtitle: "\(target.status.rawValue) · \(target.auditedMapCount) map(s) · \(target.textureCount) texture check(s)",
+                detail: target.skippedTarget.map(\.reason)
+                    ?? "\(target.warningCount) warning(s), \(target.failureCount) failure(s), profile \(target.profile.rawValue), role \(target.role.rawValue).",
+                status: validationState(for: target.status),
+                source: SourceLocation(path: target.path, symbol: target.targetID, line: 1),
+                tags: [
+                    target.targetID,
+                    target.path,
+                    target.profile.rawValue,
+                    target.platform.rawValue,
+                    target.role.rawValue,
+                    target.parseStatus.rawValue,
+                    "maps:\(target.auditedMapCount)",
+                    "textures:\(target.textureCount)",
+                    "warnings:\(target.warningCount)",
+                    "failures:\(target.failureCount)",
+                ]
+            )
+        })
+
+        rows.append(contentsOf: report.warningBuckets.map { bucket in
+            BuildReportRow(
+                id: "map-render-audit:warning-bucket:\(bucket.code)",
+                section: .mapRenderAudit,
+                title: "Warning bucket",
+                subtitle: "\(bucket.code) · \(bucket.count)",
+                detail: "\(bucket.count) audit warning\(bucket.count == 1 ? "" : "s") share this code.",
+                status: .warning,
+                source: SourceLocation(path: report.path ?? rootPath, symbol: bucket.code, line: 1),
+                tags: [bucket.code, "count:\(bucket.count)"]
+            )
+        })
+
+        rows.append(contentsOf: report.failures.prefix(50).enumerated().map { index, issue in
+            BuildReportRow(
+                id: "map-render-audit:failure:\(index):\(issue.id)",
+                section: .mapRenderAudit,
+                title: issue.code,
+                subtitle: issue.mapID ?? issue.targetID ?? "Audit failure",
+                detail: issue.message,
+                status: .error,
+                source: mapRenderAuditIssueSource(issue, rootPath: rootPath, targetPaths: targetPaths),
+                tags: [issue.code, issue.targetID ?? "", issue.mapID ?? "", issue.path ?? ""]
+            )
+        })
+
+        rows.append(contentsOf: report.skippedTargets.map { skipped in
+            BuildReportRow(
+                id: "map-render-audit:skipped:\(skipped.targetID)",
+                section: .mapRenderAudit,
+                title: "Skipped \(skipped.title)",
+                subtitle: skipped.reasonCode,
+                detail: skipped.reason,
+                status: .warning,
+                source: SourceLocation(path: skipped.path, symbol: skipped.targetID, line: 1),
+                tags: [
+                    skipped.targetID,
+                    skipped.path,
+                    skipped.reasonCode,
+                    skipped.profile.rawValue,
+                    skipped.platform.rawValue,
+                    skipped.role.rawValue,
+                    skipped.parseStatus.rawValue,
+                ]
+            )
+        })
+
+        if report.failures.count > 50 {
+            rows.append(
+                BuildReportRow(
+                    id: "map-render-audit:failure:truncated",
+                    section: .mapRenderAudit,
+                    title: "Additional failures",
+                    subtitle: "\(report.failures.count - 50) not shown",
+                    detail: "Copy JSON for the complete failure list.",
+                    status: .error,
+                    source: SourceLocation(path: report.path ?? rootPath, symbol: "map-render-audit", line: 1),
+                    tags: ["map-render-audit", "failures:\(report.failures.count)"]
+                )
+            )
+        }
+
+        rows.append(contentsOf: report.diagnostics.map { diagnostic -> BuildReportRow in
+            let row = Self.diagnostic(from: diagnostic, rootPath: rootPath)
+            return BuildReportRow(
+                id: "map-render-audit:diagnostic:\(row.id)",
+                section: .mapRenderAudit,
+                title: row.title,
+                subtitle: row.source.path,
+                detail: row.message,
+                status: row.severity,
+                source: row.source,
+                tags: [row.title, row.message]
+            )
+        })
+
+        return MapRenderAuditReportViewState(
+            id: "map-render-audit:\(project.id)",
+            projectTitle: project.title,
+            rootPath: rootPath,
+            status: status,
+            statusLabel: label,
+            targetCount: summary.targetCount,
+            auditedTargetCount: summary.auditedTargetCount,
+            skippedTargetCount: summary.skippedTargetCount,
+            mapCount: summary.mapCount,
+            auditedMapCount: summary.auditedMapCount,
+            textureCount: summary.textureCount,
+            warningCount: summary.warningCount,
+            warningBucketCount: report.warningBuckets.count,
+            failureCount: summary.failureCount,
+            rows: rows,
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func mapRenderAuditIssueDiagnostic(
+        from issue: PokemonHackCore.MapRenderAuditIssue,
+        index: Int,
+        rootPath: String,
+        targetPaths: [String: String]
+    ) -> IndexedDiagnosticRow {
+        IndexedDiagnosticRow(
+            id: "map-render-audit:\(index):\(issue.id)",
+            title: issue.code,
+            message: issue.message,
+            severity: validationState(for: issue.severity),
+            source: mapRenderAuditIssueSource(issue, rootPath: rootPath, targetPaths: targetPaths)
+        )
+    }
+
+    private static func mapRenderAuditIssueSource(
+        _ issue: PokemonHackCore.MapRenderAuditIssue,
+        rootPath: String,
+        targetPaths: [String: String]
+    ) -> SourceLocation {
+        let path = issue.path ?? issue.targetID.flatMap { targetPaths[$0] } ?? rootPath
+        return SourceLocation(path: path, symbol: issue.mapID ?? issue.targetID ?? issue.code, line: 1)
+    }
+
+    private static func validationState(for status: PokemonHackCore.MapRenderAuditStatus) -> ValidationState {
+        switch status {
+        case .passed:
+            .valid
+        case .failed:
+            .error
+        case .skipped:
+            .warning
+        }
+    }
+
     private static func patchCreationPreviewReportViewState(
         from report: PokemonHackCore.PatchCreationPreviewReport,
         rootPath: String
@@ -9586,6 +10236,130 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func patchDistributionReadinessReportViewState(
+        from packet: PokemonHackCore.PatchDistributionReadinessPacket,
+        rootPath: String
+    ) -> PatchDistributionReadinessReportViewState {
+        let diagnostics = packet.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status = validationState(for: packet.status)
+        let selected = packet.selectedPatch
+        let validCount = packet.patchArtifactLibrary.items.filter { $0.status == .valid }.count
+        let warningCount = packet.patchArtifactLibrary.items.filter { $0.status == .warning }.count
+        let errorCount = packet.patchArtifactLibrary.items.filter { $0.status == .error }.count
+        let libraryCount = packet.patchArtifactLibrary.items.count
+        let base = packet.patchCreationPreview.baseROM
+        let builtOutput = packet.patchCreationPreview.builtOutput
+        let playtest = packet.manualPlaytestReadiness
+        let playtestROM = playtest.romCandidate
+        let selectedPath = selected?.patchPath ?? packet.selectedPatchPath ?? packet.projectRoot
+        let selectedRelativePath = selected?.relativePatchPath ?? packet.selectedPatchRelativePath ?? "No patch selected"
+
+        let rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-distribution-readiness:summary",
+                section: .patchManifest,
+                title: "Patch distribution readiness",
+                subtitle: packet.status.rawValue,
+                detail: "Copy-only packet assembled from existing patch creation preview, patch library, selected identity, no-header-rewrite policy, and manual playtest readiness.",
+                status: status,
+                source: SourceLocation(path: selectedPath, symbol: "patch-distribution-readiness", line: 1),
+                tags: [packet.status.rawValue, selectedRelativePath, "copy-only", "review-only"]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:selected-patch",
+                section: .patchManifest,
+                title: "Selected patch artifact",
+                subtitle: selected?.status.rawValue ?? "not selected",
+                detail: selected.map { "\($0.relativePatchPath); \($0.verificationSummary)" } ?? "No explicit BPS patch artifact is selected for distribution readiness.",
+                status: selected.map { validationState(for: $0.status) } ?? .warning,
+                source: SourceLocation(path: selectedPath, symbol: "selected-bps-patch", line: 1),
+                tags: [selectedRelativePath, selected?.patchPath ?? "", selected?.status.rawValue ?? "not-selected"]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:library",
+                section: .patchManifest,
+                title: "Patch artifact library",
+                subtitle: "\(libraryCount) BPS artifact\(libraryCount == 1 ? "" : "s")",
+                detail: "\(validCount) valid; \(warningCount) warning; \(errorCount) error. Direct-child ignored .bps files only.",
+                status: validationStatus(for: packet.patchArtifactLibrary.items.map { validationState(for: $0.status) } + packet.patchArtifactLibrary.diagnostics.map { validationState(for: $0.severity) }),
+                source: SourceLocation(path: packet.patchArtifactLibrary.artifactRoot, symbol: "patch-library", line: 1),
+                tags: [packet.patchArtifactLibrary.artifactRoot, "\(validCount)", "\(warningCount)", "\(errorCount)"]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:base-rom",
+                section: .patchManifest,
+                title: "Base ROM identity",
+                subtitle: "\(patchCreationByteSummary(base.sizeBytes)); \(patchCreationSHA1Summary(base.sha1))",
+                detail: base.exists ? "Selected base ROM identity is available at \(base.absolutePath)." : "Selected base ROM is missing at \(base.absolutePath).",
+                status: base.exists && base.sha1 != nil ? .valid : .error,
+                source: SourceLocation(path: base.absolutePath, symbol: "base-rom", line: 1),
+                tags: [base.path, base.absolutePath, base.sha1 ?? ""]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:built-output",
+                section: .patchManifest,
+                title: "Built output identity",
+                subtitle: [
+                    builtOutput?.targetID ?? "target unavailable",
+                    patchCreationByteSummary(builtOutput?.sizeBytes),
+                    patchCreationSHA1Summary(builtOutput?.sha1),
+                ].joined(separator: " · "),
+                detail: builtOutput?.exists == true
+                    ? "Built output identity is available at \(builtOutput?.absolutePath ?? "")."
+                    : "Built output identity is unavailable for the selected target.",
+                status: builtOutput?.exists == true && builtOutput?.sha1 != nil ? .valid : .error,
+                source: SourceLocation(path: builtOutput?.absolutePath ?? packet.projectRoot, symbol: builtOutput?.targetID ?? "built-output", line: 1),
+                tags: [builtOutput?.targetID ?? "", builtOutput?.relativePath ?? "", builtOutput?.absolutePath ?? "", builtOutput?.sha1 ?? ""]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:header-policy",
+                section: .patchManifest,
+                title: "Header policy",
+                subtitle: packet.patchCreationPreview.headerPolicy.mode,
+                detail: packet.patchCreationPreview.headerPolicy.detail,
+                status: packet.patchCreationPreview.headerPolicy.shouldRewriteHeader || packet.patchCreationPreview.headerPolicy.mode != "no-header-rewrite" ? .error : .valid,
+                source: SourceLocation(path: base.absolutePath, symbol: "header-policy", line: 1),
+                tags: [
+                    packet.patchCreationPreview.headerPolicy.mode,
+                    "\(packet.patchCreationPreview.headerPolicy.shouldRewriteHeader)",
+                    packet.patchCreationPreview.headerPolicy.detail,
+                ]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:manual-playtest",
+                section: .patchManifest,
+                title: "Manual playtest readiness",
+                subtitle: playtest.isRunnable ? "runnable" : "not runnable",
+                detail: "\(playtest.emulator.name): \(playtest.emulator.isAvailable ? "available" : "missing"); ROM \(playtestROM?.absolutePath ?? "unavailable").",
+                status: playtest.isRunnable ? .valid : .warning,
+                source: SourceLocation(path: playtestROM?.absolutePath ?? packet.projectRoot, symbol: "manual-playtest", line: 1),
+                tags: [playtest.emulator.name, "\(playtest.emulator.isAvailable)", playtestROM?.absolutePath ?? ""]
+            ),
+            BuildReportRow(
+                id: "patch-distribution-readiness:blocked-actions",
+                section: .patchManifest,
+                title: "Blocked actions",
+                subtitle: "\(packet.blockedActions.count) write or execution path\(packet.blockedActions.count == 1 ? "" : "s") blocked",
+                detail: packet.blockedActions.joined(separator: "; "),
+                status: .valid,
+                source: SourceLocation(path: selectedPath, symbol: "blocked-actions", line: 1),
+                tags: packet.blockedActions
+            ),
+        ] + diagnostics.map(BuildReportRow.init(diagnostic:))
+
+        return PatchDistributionReadinessReportViewState(
+            id: "patch-distribution-readiness:\(selectedPath)",
+            title: "Patch Distribution Readiness",
+            subtitle: packet.status.rawValue,
+            detail: "Copy-only distribution packet for \(selectedRelativePath).",
+            status: status,
+            statusLabel: packet.status.rawValue,
+            selectedPatchPath: packet.selectedPatchPath,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
     private static func patchArtifactLibraryItemViewState(
         from item: PokemonHackCore.PatchArtifactLibraryItem,
         rootPath: String
@@ -9733,6 +10507,19 @@ final class WorkbenchStore: ObservableObject {
         case .warning:
             .warning
         case .error:
+            .error
+        }
+    }
+
+    private static func validationState(
+        for status: PokemonHackCore.PatchDistributionReadinessStatus
+    ) -> ValidationState {
+        switch status {
+        case .ready:
+            .valid
+        case .readyWithWarnings:
+            .warning
+        case .blocked:
             .error
         }
     }

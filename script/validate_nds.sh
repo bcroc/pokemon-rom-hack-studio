@@ -45,6 +45,7 @@ nds_test_filters=(
   "PokemonHackCLITests/testNDSDataTextLineOperationCommands"
   "PokemonHackCLITests/testNDSDataItemCSVRowOperationCommands"
   "PokemonHackCLITests/testNDSDataEncounterJSONRowOperationCommands"
+  "PokemonHackCLITests/testNDSDataEncounterJSONRowOperationCommandsHeartGoldSoulSilver"
   "PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyPlatinumTextJSONStringLeaves"
   "PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyPlatinumEncounterJSONFields"
   "PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyHeartGoldSoulSilverItemCSVFields"

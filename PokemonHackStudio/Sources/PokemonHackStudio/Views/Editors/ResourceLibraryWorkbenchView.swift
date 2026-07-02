@@ -29,7 +29,7 @@ struct ResourceLibraryWorkbenchView: View {
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
-    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, String?, Int?, String, Int?, Int?) -> Void
     let onRemoveLastNDSDataRowOperation: () -> Void
     let onClearNDSDataRowOperations: () -> Void
     let onPreviewNDSDataMutationPlan: () -> Void
@@ -716,7 +716,7 @@ private struct ResourceAssetDetailPane: View {
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
-    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, String?, Int?, String, Int?, Int?) -> Void
     let onRemoveLastNDSDataRowOperation: () -> Void
     let onClearNDSDataRowOperations: () -> Void
     let onPreviewNDSDataMutationPlan: () -> Void
@@ -818,7 +818,7 @@ private struct NDSDataRecordEditor: View {
     let editor: NDSDataResourceEditorViewState?
     let onUpdateDraft: (String) -> Void
     let onUpdateSemanticField: (String, String) -> Void
-    let onStageRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onStageRowOperation: (NDSDataResourceRowOperationKind, String?, Int?, String, Int?, Int?) -> Void
     let onRemoveLastRowOperation: () -> Void
     let onClearRowOperations: () -> Void
     let onPreview: () -> Void
@@ -830,6 +830,7 @@ private struct NDSDataRecordEditor: View {
     @State private var rowOperationFromIndex = ""
     @State private var rowOperationToIndex = ""
     @State private var rowOperationInsertValue = ""
+    @State private var rowOperationTargetKey = ""
 
     var body: some View {
         EditorSection(title: "NDS Editing Lens") {
@@ -973,6 +974,20 @@ private struct NDSDataRecordEditor: View {
                 if rowOperations.stagedCount > 0 {
                     ResourceTag(text: "\(rowOperations.stagedCount) staged")
                 }
+                if let targetKey = selectedRowOperationTargetKey(rowOperations) {
+                    ResourceTag(text: targetKey)
+                }
+            }
+
+            if !rowOperations.targetOptions.isEmpty {
+                Picker("Array", selection: rowOperationTargetSelectionBinding(rowOperations)) {
+                    ForEach(rowOperations.targetOptions) { option in
+                        Text("\(option.title) (\(option.detail))").tag(option.key)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(!rowOperations.canChangeTarget)
+                .help(rowOperations.canChangeTarget ? "Choose the encounter array for staged row operations" : "Clear staged operations before changing the encounter array")
             }
 
             Picker("Operation", selection: $rowOperationKind) {
@@ -1006,6 +1021,7 @@ private struct NDSDataRecordEditor: View {
                 Button("Stage", systemImage: rowOperationKind.systemImage) {
                     onStageRowOperation(
                         rowOperationKind,
+                        selectedRowOperationTargetKey(rowOperations),
                         parsedRowOperationIndex,
                         rowOperationInsertValue,
                         parsedRowOperationFromIndex,
@@ -1080,8 +1096,31 @@ private struct NDSDataRecordEditor: View {
         Int(rowOperationToIndex.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    private func rowOperationTargetSelectionBinding(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> Binding<String> {
+        Binding(
+            get: {
+                selectedRowOperationTargetKey(rowOperations) ?? ""
+            },
+            set: { newValue in
+                rowOperationTargetKey = newValue
+            }
+        )
+    }
+
+    private func selectedRowOperationTargetKey(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> String? {
+        if !rowOperationTargetKey.isEmpty,
+           rowOperations.targetOptions.contains(where: { $0.key == rowOperationTargetKey })
+        {
+            return rowOperationTargetKey
+        }
+        return rowOperations.selectedTargetKey ?? rowOperations.targetOptions.first?.key
+    }
+
     private func stageRowOperationDisabled(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> Bool {
         guard rowOperations.canStage else { return true }
+        if !rowOperations.targetOptions.isEmpty, selectedRowOperationTargetKey(rowOperations) == nil {
+            return true
+        }
         switch rowOperationKind {
         case .insert, .delete:
             return parsedRowOperationIndex == nil
