@@ -1249,7 +1249,9 @@ final class WorkbenchStore: ObservableObject {
 
     var dirtySpeciesBatchDrafts: [PokemonHackCore.SpeciesEditDraft] {
         guard let selectedIndexedProject, let catalog = selectedSpeciesCatalog else { return [] }
+        var seenSpeciesIDs: Set<String> = []
         return catalog.species.compactMap { detail in
+            guard seenSpeciesIDs.insert(detail.speciesID).inserted else { return nil }
             let key = speciesDraftKey(projectID: selectedIndexedProject.id, speciesID: detail.speciesID)
             guard
                 let draft = speciesDraftsByKey[key],
@@ -2098,6 +2100,10 @@ final class WorkbenchStore: ObservableObject {
         return filter(buildRows: selectedPatchArtifactLibrary.rows + reviewRows)
     }
 
+    var filteredAllLearnablesRegenerationReviewRows: [BuildReportRow] {
+        filter(buildRows: allLearnablesRegenerationReviewRows)
+    }
+
     var filteredPatchDistributionReadinessRows: [BuildReportRow] {
         guard let selectedPatchDistributionReadinessReport else { return [] }
         return filter(buildRows: selectedPatchDistributionReadinessReport.rows)
@@ -2346,11 +2352,9 @@ final class WorkbenchStore: ObservableObject {
             sortMode: resourceAssetSortMode
         )
         let rows = baseRows.filter {
-            Self.resourceAsset(
+            resourceAsset(
                 $0,
-                matches: resourceAssetWorkflowFacet,
-                hiddenDraftRecordIDs: hiddenDraftRecordIDs,
-                ndsEditableRecordIDs: []
+                matches: resourceAssetWorkflowFacet
             )
         }
         resourceAssetRowsCache = ResourceAssetRowsCache(
@@ -2506,6 +2510,138 @@ final class WorkbenchStore: ObservableObject {
         case .all, .editableSource, .previewOnly, .related, .generatedReference:
             .valid
         }
+    }
+
+    private var allLearnablesRegenerationReviewRows: [BuildReportRow] {
+        guard let selectedIndexedProject, let selectedAssetCatalog else { return [] }
+        guard selectedIndexedProject.profile == Self.expansionAllLearnablesProfile
+            || selectedAssetCatalog.profile == Self.expansionAllLearnablesProfile
+        else { return [] }
+
+        let learnablesRows = selectedAssetCatalog.rows.filter(Self.resourceAssetIsAllLearnablesRegenerationReview)
+        guard let first = learnablesRows.first else { return [] }
+
+        let coverageMismatches = Self.factValue("Coverage Mismatches", in: first.facts) ?? "0"
+        let moveMismatches = Self.factValue("Move-set Mismatches", in: first.facts) ?? "0"
+        let staleSources = Self.factValue("Stale Source Files", in: first.facts) ?? "0"
+        let posture = Self.factValue("Regeneration Posture", in: first.facts) ?? "copy/report-only"
+        let buckets = Self.factValue("Regeneration Source Buckets", in: first.facts) ?? "levelUp, tmhm, tutor, egg"
+        let sourceOnly = Self.factValue("Regeneration Source-only Move IDs", in: first.facts) ?? "none"
+        let generatedOnly = Self.factValue("Regeneration Generated-only Move IDs", in: first.facts) ?? "none"
+        let guidance = Self.factValue("Regeneration Guidance", in: first.facts)
+            ?? "Review compatibility and asset-index JSON; PokemonHackStudio will not run regeneration or write generated JSON."
+        let commands = Self.factValue("Regeneration Report Commands", in: first.facts)
+            ?? Self.expansionAllLearnablesReportCommands.joined(separator: "\n")
+        let reviewSummary = Self.allLearnablesRegenerationReviewSummary(
+            row: first,
+            rowCount: learnablesRows.count,
+            coverageMismatches: coverageMismatches,
+            moveMismatches: moveMismatches,
+            staleSources: staleSources,
+            posture: posture,
+            buckets: buckets,
+            sourceOnly: sourceOnly,
+            generatedOnly: generatedOnly,
+            guidance: guidance,
+            commands: commands
+        )
+
+        return [
+            BuildReportRow(
+                id: "all-learnables-regeneration-review:summary",
+                section: .patchManifest,
+                title: "All Learnables Regeneration Review",
+                subtitle: "\(learnablesRows.count) generated row\(learnablesRows.count == 1 ? "" : "s"); \(coverageMismatches) coverage mismatch\(coverageMismatches == "1" ? "" : "es")",
+                detail: "\(first.path) remains \(posture). Mismatches: \(coverageMismatches) coverage, \(moveMismatches) move-set, \(staleSources) stale source file\(staleSources == "1" ? "" : "s"). Buckets: \(buckets). \(guidance)",
+                status: Self.allLearnablesRegenerationReviewStatus(row: first),
+                source: first.source,
+                tags: [
+                    "all-learnables-regeneration-review",
+                    "app-only",
+                    "copy-report-only",
+                    first.path,
+                    "coverage:\(coverageMismatches)",
+                    "move-mismatch:\(moveMismatches)",
+                    "stale:\(staleSources)",
+                ],
+                actions: [
+                    BuildReportRowAction(
+                        id: "all-learnables-regeneration-review:copy-path",
+                        kind: .copyPath,
+                        title: "Copy generated path",
+                        detail: "Copy the generated all_learnables.json path for manual review.",
+                        command: nil,
+                        payload: first.path
+                    ),
+                    BuildReportRowAction(
+                        id: "all-learnables-regeneration-review:copy-commands",
+                        kind: .copyCommand,
+                        title: "Copy report commands",
+                        detail: "Copy compatibility and asset-index report commands; the app does not execute them.",
+                        command: commands.replacingOccurrences(of: "; ", with: "\n"),
+                        payload: nil
+                    ),
+                    BuildReportRowAction(
+                        id: "all-learnables-regeneration-review:copy-summary",
+                        kind: .copyValue,
+                        title: "Copy review summary",
+                        detail: "Copy the generated/source disagreement and regeneration-plan summary.",
+                        command: nil,
+                        payload: reviewSummary
+                    ),
+                ]
+            ),
+        ]
+    }
+
+    private static let expansionAllLearnablesProfile = "pokeemeraldExpansion"
+    private static let expansionAllLearnablesPath = "src/data/pokemon/all_learnables.json"
+    private static let expansionAllLearnablesReportCommands = [
+        "swift run --package-path PokemonHackStudio pokemonhack-cli pokemon-compatibility <project-root> --json",
+        "swift run --package-path PokemonHackStudio pokemonhack-cli asset-index <project-root> --json",
+    ]
+
+    private static func resourceAssetIsAllLearnablesRegenerationReview(_ row: ResourceAssetRowViewState) -> Bool {
+        row.path == expansionAllLearnablesPath
+            && row.facts.contains { $0.label == "Regeneration Posture" }
+            && row.facts.contains { $0.label == "Regeneration Report Commands" || $0.label == "Regeneration Guidance" }
+    }
+
+    private static func allLearnablesRegenerationReviewStatus(row: ResourceAssetRowViewState) -> ValidationState {
+        if row.status == .error { return .error }
+        let mismatchCount = Int(factValue("Coverage Mismatches", in: row.facts) ?? "0") ?? 0
+        let staleCount = Int(factValue("Stale Source Files", in: row.facts) ?? "0") ?? 0
+        return mismatchCount > 0 || staleCount > 0 ? .warning : .valid
+    }
+
+    private static func allLearnablesRegenerationReviewSummary(
+        row: ResourceAssetRowViewState,
+        rowCount: Int,
+        coverageMismatches: String,
+        moveMismatches: String,
+        staleSources: String,
+        posture: String,
+        buckets: String,
+        sourceOnly: String,
+        generatedOnly: String,
+        guidance: String,
+        commands: String
+    ) -> String {
+        [
+            "All Learnables Regeneration Review",
+            "Generated path: \(row.path)",
+            "Generated Resources rows: \(rowCount)",
+            "Posture: \(posture)",
+            "Coverage mismatches: \(coverageMismatches)",
+            "Move-set mismatches: \(moveMismatches)",
+            "Stale source files: \(staleSources)",
+            "Source buckets: \(buckets)",
+            "Source-only move IDs: \(sourceOnly)",
+            "Generated-only move IDs: \(generatedOnly)",
+            "Guidance: \(guidance)",
+            "Report commands:",
+            commands.replacingOccurrences(of: "; ", with: "\n"),
+        ].joined(separator: "\n")
     }
 
     private static let genVBridgeProfile = "pokeblack"
@@ -2728,6 +2864,7 @@ final class WorkbenchStore: ObservableObject {
                 + filteredPatchCreationPreviewRows
                 + filteredPatchCreationResultRows
                 + filteredPatchArtifactLibraryRows
+                + filteredAllLearnablesRegenerationReviewRows
                 + filteredPatchDistributionReadinessRows
                 + filteredPatchApplyExportAuditRows
         case .playtest:
@@ -3459,7 +3596,7 @@ final class WorkbenchStore: ObservableObject {
             }
         }
 
-        if catalog.profile == .pokeheartgold,
+        if [.pokeheartgold, .pokediamond].contains(catalog.profile),
            record.domain == .encounters,
            record.role == .sourceTree,
            record.format == .json

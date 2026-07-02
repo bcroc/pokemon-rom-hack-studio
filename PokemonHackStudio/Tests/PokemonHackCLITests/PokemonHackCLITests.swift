@@ -1225,6 +1225,18 @@ final class PokemonHackCLITests: XCTestCase {
     }
 
     func testResourcesSummaryCommandEmitsShallowEntries() throws {
+        let workspace = try makeTemporaryDirectory()
+        let sourceRoot = workspace.appendingPathComponent("pokeemerald")
+        try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: sourceRoot.appendingPathComponent("Makefile"))
+        try write("{\"group_order\":[]}\n", to: sourceRoot.appendingPathComponent("data/maps/map_groups.json"))
+        try write("{\"layouts_table_label\":\"gMapLayouts\",\"layouts\":[]}\n", to: sourceRoot.appendingPathComponent("data/layouts/layouts.json"))
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("include"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sourceRoot.appendingPathComponent("graphics/pokenav"), withIntermediateDirectories: true)
+        let previousDirectory = FileManager.default.currentDirectoryPath
+        XCTAssertTrue(FileManager.default.changeCurrentDirectoryPath(workspace.path))
+        defer { FileManager.default.changeCurrentDirectoryPath(previousDirectory) }
+
         let result = try decodeJSON(
             PokemonHackCLI.run(arguments: ["resources", "--summary", "--json"])
         )
@@ -2326,6 +2338,61 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
     }
 
+    func testNDSDataCatalogCommandEmitsPokeBlackBlockedActionAuditPacketJSON() throws {
+        let root = try makeTestBlackDecompRoot()
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", root.path, "--json"])
+        )
+
+        let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
+        let packet = try XCTUnwrap(records.first { $0["id"] as? String == "resources:gen-v/blocked-action-audit-packet" })
+        XCTAssertEqual(packet["domain"] as? String, "resources")
+        XCTAssertEqual(packet["relativePath"] as? String, "gen-v/blocked-action-audit-packet")
+        XCTAssertEqual(packet["format"] as? String, "unknown")
+        XCTAssertEqual(packet["role"] as? String, "metadataPacket")
+        XCTAssertEqual(packet["exists"] as? Bool, true)
+        let readiness = try XCTUnwrap(packet["readiness"] as? [String: Any])
+        XCTAssertEqual(readiness["status"] as? String, "partial")
+        let facts = try XCTUnwrap(packet["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: facts), "blockedActionAuditPacket")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Packet", in: facts), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Basis", in: facts), "existingReadinessBlockedActionsAndDiagnosticsOnly")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Posture", in: facts), "previewOnlyNoParserNoWritesNoExecution")
+        XCTAssertTrue(factValue("Gen V Readiness Status Summary", in: facts)?.contains("partial=") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Status Summary", in: facts)?.contains("blocked=") == true)
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: facts)?.contains("binary write") == true)
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: facts)?.contains("source writes") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Blocked Reason Summary", in: facts)?.contains("domainInventoryPreviewOnly=") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Blocked Reason Summary", in: facts)?.contains("memberMetadataPreviewOnly=") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Severity Summary", in: facts)?.contains("warning=") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Code Summary", in: facts)?.contains("NDS_GEN_V_WRITE_BLOCKED=") == true)
+        XCTAssertTrue(factValue("Gen V Prior Packet Coverage", in: facts)?.contains("gen-v/variant-readiness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Prior Packet Coverage", in: facts)?.contains("gen-v/generated-output-freshness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: facts)?.contains("binary write") == true)
+        XCTAssertNil(packet["migrationPlan"])
+        XCTAssertNil(packet["textBankPreview"])
+        let diagnostics = try XCTUnwrap(packet["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_BLOCKED_ACTION_AUDIT_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let resourceIndex = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
+        )
+        let items = try XCTUnwrap(resourceIndex["items"] as? [[String: Any]])
+        let packetItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "gen-v/blocked-action-audit-packet" })
+        XCTAssertEqual(packetItem["kind"] as? String, "unknown")
+        let itemFacts = try XCTUnwrap(packetItem["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: itemFacts), "blockedActionAuditPacket")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Packet", in: itemFacts), "previewOnly")
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: itemFacts)?.contains("binary write") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Code Summary", in: itemFacts)?.contains("NDS_GEN_V_WRITE_BLOCKED") == true)
+        XCTAssertNil(factValue("Migration Status", in: itemFacts))
+        XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
+    }
+
     func testNDSDataCatalogCommandEmitsPokeBlackArchiveGroupInventoryJSON() throws {
         let root = try makeTestBlackDecompRoot()
 
@@ -3149,6 +3216,132 @@ final class PokemonHackCLITests: XCTestCase {
         )
         let narcDiagnostics = try XCTUnwrap(blockedNARC["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(narcDiagnostics.contains { $0["code"] as? String == "NDS_DATA_EDIT_CONTAINER_BLOCKED" })
+    }
+
+    func testNDSDataEditCommandsKeepUnsupportedRowsBlocked() throws {
+        let draftFile = try makeTemporaryDirectory().appendingPathComponent("blocked-draft.txt")
+        try "blocked\n".write(to: draftFile, atomically: true, encoding: .utf8)
+
+        func assertBlockedEditPlan(
+            root: URL,
+            recordID: String,
+            expectedCodes: [String],
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws {
+            let plan = try decodeJSON(
+                PokemonHackCLI.run(arguments: [
+                    "nds-data-edit-plan",
+                    root.path,
+                    recordID,
+                    "--draft-file",
+                    draftFile.path,
+                    "--json"
+                ])
+            )
+            let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]], file: file, line: line)
+            XCTAssertEqual(changes.count, 0, recordID, file: file, line: line)
+            let diagnostics = try XCTUnwrap(plan["diagnostics"] as? [[String: Any]], file: file, line: line)
+            let diagnosticCodes = diagnostics.compactMap { $0["code"] as? String }
+            for expectedCode in expectedCodes {
+                XCTAssertTrue(
+                    diagnosticCodes.contains(expectedCode),
+                    "\(recordID) missing \(expectedCode); saw \(diagnosticCodes.joined(separator: ", "))",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+
+        func assertBlockedSemanticPlan(
+            root: URL,
+            recordID: String,
+            expectedCodes: [String],
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws {
+            let plan = try decodeJSON(
+                PokemonHackCLI.run(arguments: [
+                    "nds-data-semantic-plan",
+                    root.path,
+                    recordID,
+                    "--set",
+                    "blocked=value",
+                    "--json"
+                ])
+            )
+            let changes = try XCTUnwrap(plan["changes"] as? [[String: Any]], file: file, line: line)
+            XCTAssertEqual(changes.count, 0, recordID, file: file, line: line)
+            let diagnostics = try XCTUnwrap(plan["diagnostics"] as? [[String: Any]], file: file, line: line)
+            let diagnosticCodes = diagnostics.compactMap { $0["code"] as? String }
+            for expectedCode in expectedCodes {
+                XCTAssertTrue(
+                    diagnosticCodes.contains(expectedCode),
+                    "\(recordID) missing \(expectedCode); saw \(diagnosticCodes.joined(separator: ", "))",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+
+        let black = try makeTestBlackDecompRoot()
+        try assertBlockedEditPlan(
+            root: black,
+            recordID: "encounters:data/encounters/route_1.txt",
+            expectedCodes: ["NDS_GEN_V_WRITE_BLOCKED"]
+        )
+        try assertBlockedSemanticPlan(
+            root: black,
+            recordID: "encounters:data/encounters/route_1.txt",
+            expectedCodes: ["NDS_GEN_V_WRITE_BLOCKED", "NDS_DATA_SEMANTIC_PROFILE_BLOCKED"]
+        )
+
+        let rom = try makeTestNDSROM()
+        try assertBlockedEditPlan(
+            root: rom,
+            recordID: "resources:sub/child.narc",
+            expectedCodes: ["NDS_DATA_EDIT_BINARY_ROM_BLOCKED"]
+        )
+
+        let platinum = try makeTestNDSDecompRoot()
+        try write("SPECIES_ABRA\n", to: platinum.appendingPathComponent("generated/species.txt"))
+        try assertBlockedEditPlan(
+            root: platinum,
+            recordID: "personal:res/prebuilt/poketool/personal/personal.narc",
+            expectedCodes: [
+                "NDS_DATA_EDIT_ROLE_BLOCKED",
+                "NDS_DATA_EDIT_FORMAT_BLOCKED",
+                "NDS_DATA_EDIT_CONTAINER_BLOCKED"
+            ]
+        )
+        try assertBlockedEditPlan(
+            root: platinum,
+            recordID: "resources:generated/species.txt",
+            expectedCodes: ["NDS_DATA_EDIT_ROLE_BLOCKED"]
+        )
+
+        let referenceSource = try makeTestNDSDecompRoot()
+        let referenceContainer = try makeTemporaryDirectory()
+        let referenceRoot = referenceContainer.appendingPathComponent("references/pokeplatinum")
+        try FileManager.default.createDirectory(at: referenceRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: referenceSource, to: referenceRoot)
+        try assertBlockedEditPlan(
+            root: referenceRoot,
+            recordID: "species:res/pokemon/abra/data.json",
+            expectedCodes: ["NDS_DATA_EDIT_REFERENCE_BLOCKED"]
+        )
+
+        let pmdSky = try makeTestPMDSkyDecompRoot()
+        try assertBlockedEditPlan(
+            root: pmdSky,
+            recordID: "resources:files/MESSAGE/text_us.str",
+            expectedCodes: ["NDS_DATA_EDIT_SPINOFF_BLOCKED"]
+        )
+        try assertBlockedSemanticPlan(
+            root: pmdSky,
+            recordID: "resources:files/MESSAGE/text_us.str",
+            expectedCodes: ["NDS_DATA_EDIT_SPINOFF_BLOCKED", "NDS_DATA_SEMANTIC_PROFILE_BLOCKED"]
+        )
     }
 
     func testNDSDataSemanticCommandsPlanAndApplyJSONFields() throws {
@@ -8528,6 +8721,23 @@ final class PokemonHackCLITests: XCTestCase {
         try write("ignored\n", to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/.knarcignore"))
         try write(Data("NCLR".utf8), to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/narc_0000.nclr"))
         try write(Data([0x03]), to: root.appendingPathComponent("files/fielddata/script/scr_seq_release/narc_0001.bin"))
+        return root
+    }
+
+    private func makeTestPMDSkyDecompRoot() throws -> URL {
+        let root = try makeTemporaryDirectory().appendingPathComponent("pmd-sky")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try write("GAME_CODE := C2S\nGAME_LANGUAGE ?= NORTH_AMERICA\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM := $(BUILD_DIR)/$(buildname).nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("HostRoot files/\n", to: root.appendingPathComponent("rom.rsf"))
+        try write("NITROFS_FILES_FILE := nitrofs_files.txt\n", to: root.appendingPathComponent("filesystem.mk"))
+        try write("files/MESSAGE/text_us.str\n", to: root.appendingPathComponent("nitrofs_files.txt"))
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pmdsky.us.nds\n", to: root.appendingPathComponent("pmdsky.us/rom.sha1"))
+        try write("hello\n", to: root.appendingPathComponent("files/MESSAGE/text_us.str"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/MONSTER/monster.md"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/BALANCE/item.dat"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/TABLEDAT/table.dat"))
+        try write(Data([0x00]), to: root.appendingPathComponent("files/DUNGEON/dungeon.bin"))
         return root
     }
 

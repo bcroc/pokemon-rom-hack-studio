@@ -136,11 +136,11 @@ PokemonHackStudio remains one Swift/macOS app with `PokemonHackCore` and `pokemo
 
 ## V8C Gen IV Encounter JSON Row Operations
 
-- `NDSDataEncounterJSONRowOperationPlanner` adds planning-first insert/delete/reorder operations for existing local Platinum direct-child `res/field/encounters/*.json` top-level object arrays such as `land_encounters` and local HeartGold/SoulSilver `files/fielddata/encountdata/**/*.json` top-level object arrays such as `slots`. Operations are zero-based and sequential; reorder destinations are interpreted after removing the source row.
+- `NDSDataEncounterJSONRowOperationPlanner` adds planning-first insert/delete/reorder operations for existing local Platinum direct-child `res/field/encounters/*.json` top-level object arrays such as `land_encounters` and local HeartGold/SoulSilver and Diamond/Pearl `files/fielddata/encountdata/**/*.json` top-level object arrays such as `slots`. Operations are zero-based and sequential; reorder destinations are interpreted after removing the source row.
 - Insert accepts exactly one raw JSON object row, rejects raw newlines, requires scalar-only values, and requires the inserted object to match the existing row key set. Delete/reorder operate only on bounded existing object rows.
 - Safe encounter JSON row-operation drafts lower to the existing `NDSDataEditPlan` and `NDSDataMutationApplier` path for source hash/size freshness checks, explicit apply, atomic writes, and backups. Blocked drafts preserve the original source text and return a non-applyable mutation plan with diagnostics.
 - `pokemonhack-cli nds-data-encounter-json-rows-plan` reports record ID, array key, operation kinds/indexes, inserted field count, row counts, diagnostics, redacted change metadata, mutation-plan state, and backup root without emitting inserted JSON row text, replacement bytes, `textPreview`, or full edited text. `nds-data-encounter-json-rows-apply` is a thin adapter over the same guarded plan.
-- Scalar arrays such as `swarms`, missing or empty arrays, object rows with mismatched or duplicate keys, nested row values, nested array-key paths such as `metadata.slots`, C anchors, non-JSON rows, Diamond/Pearl rows, generated/reference/container rows, ROM rebuild/export/playtest, broad schema reshaping, and binary paths remain blocked/read-only.
+- Scalar arrays such as `swarms`, missing or empty arrays, object rows with mismatched or duplicate keys, nested row values, nested array-key paths such as `metadata.slots`, C anchors, non-JSON rows, generated/reference/container rows, ROM rebuild/export/playtest, broad schema reshaping, and binary paths remain blocked/read-only.
 
 ## V8 Map/Script/Text Readiness
 

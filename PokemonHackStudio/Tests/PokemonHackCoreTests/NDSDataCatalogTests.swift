@@ -1025,6 +1025,65 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
     }
 
+    func testPokeBlackCatalogSurfacesGenVBlockedActionAuditPacket() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let packet = try XCTUnwrap(catalog.records.first { $0.id == "resources:gen-v/blocked-action-audit-packet" })
+        XCTAssertEqual(packet.domain, .resources)
+        XCTAssertEqual(packet.relativePath, "gen-v/blocked-action-audit-packet")
+        XCTAssertEqual(packet.format, .unknown)
+        XCTAssertEqual(packet.role, .metadataPacket)
+        XCTAssertTrue(packet.exists)
+        XCTAssertEqual(packet.readiness?.status, .partial)
+        XCTAssertEqual(factValue("Gen V Source Role", in: packet), "blockedActionAuditPacket")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Packet", in: packet), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Basis", in: packet), "existingReadinessBlockedActionsAndDiagnosticsOnly")
+        XCTAssertEqual(factValue("Gen V Blocked Action Audit Posture", in: packet), "previewOnlyNoParserNoWritesNoExecution")
+        XCTAssertTrue(factValue("Gen V Readiness Status Summary", in: packet)?.contains("partial=") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Status Summary", in: packet)?.contains("blocked=") == true)
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: packet)?.contains("binary write") == true)
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: packet)?.contains("source writes") == true)
+        XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: packet)?.contains("NARC packing") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Blocked Reason Summary", in: packet)?.contains("domainInventoryPreviewOnly=") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Blocked Reason Summary", in: packet)?.contains("memberMetadataPreviewOnly=") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Severity Summary", in: packet)?.contains("info=") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Severity Summary", in: packet)?.contains("warning=") == true)
+        XCTAssertTrue(factValue("Gen V Diagnostic Code Summary", in: packet)?.contains("NDS_GEN_V_WRITE_BLOCKED=") == true)
+        XCTAssertTrue(
+            factValue("Gen V Prior Packet Coverage", in: packet)?.contains("gen-v/variant-readiness-packet=present") == true
+        )
+        XCTAssertTrue(
+            factValue("Gen V Prior Packet Coverage", in: packet)?.contains("gen-v/generated-output-freshness-packet=present") == true
+        )
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: packet)?.contains("binary write") == true)
+        XCTAssertNil(packet.textBankPreview)
+        XCTAssertNil(packet.migrationPlan)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_BLOCKED_ACTION_AUDIT_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let plan = NDSDataMutationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEditDraft(recordID: packet.id, editedText: "changed\n")
+        )
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_ROLE_BLOCKED" })
+
+        let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
+        let packetItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "gen-v/blocked-action-audit-packet" })
+        XCTAssertEqual(packetItem.kind, "unknown")
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Source Role" && $0.value == "blockedActionAuditPacket" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Blocked Action Audit Packet" && $0.value == "previewOnly" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Unique Blocked Actions" && $0.value.contains("binary write") })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Diagnostic Code Summary" && $0.value.contains("NDS_GEN_V_WRITE_BLOCKED") })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
+    }
+
     func testPokeBlackCatalogSurfacesGenVArchiveGroupInventoryFacts() throws {
         let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
 
@@ -5264,6 +5323,110 @@ final class NDSDataCatalogTests: XCTestCase {
         )
         XCTAssertTrue(nonUTF8Plan.changes.isEmpty)
         XCTAssertTrue(nonUTF8Plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_SOURCE_NOT_UTF8" })
+    }
+
+    func testNDSBlockedEditabilityRegressionKeepsUnsupportedRowsNonApplyable() throws {
+        func assertBlockedPlan(
+            catalog: ProjectNDSDataCatalog,
+            recordID: String,
+            editedText: String = "blocked\n",
+            expectedDiagnostics: [String],
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            let plan = NDSDataMutationPlanner.plan(
+                catalog: catalog,
+                draft: NDSDataEditDraft(recordID: recordID, editedText: editedText)
+            )
+
+            XCTAssertTrue(plan.changes.isEmpty, recordID, file: file, line: line)
+            XCTAssertFalse(plan.validateApplyability().isApplyable, recordID, file: file, line: line)
+            for expectedCode in expectedDiagnostics {
+                XCTAssertTrue(
+                    plan.diagnostics.contains { $0.code == expectedCode },
+                    "\(recordID) missing \(expectedCode); saw \(plan.diagnostics.map(\.code).joined(separator: ", "))",
+                    file: file,
+                    line: line
+                )
+            }
+        }
+
+        let black = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        let blackCatalog = try NDSDataCatalogBuilder.build(path: black.path)
+        assertBlockedPlan(
+            catalog: blackCatalog,
+            recordID: "encounters:data/encounters/route_1.txt",
+            expectedDiagnostics: ["NDS_GEN_V_WRITE_BLOCKED"]
+        )
+        let genVSnapshot = NDSDataSemanticEditor.snapshot(
+            catalog: blackCatalog,
+            recordID: "encounters:data/encounters/route_1.txt"
+        )
+        XCTAssertFalse(genVSnapshot.canEdit)
+        XCTAssertTrue(genVSnapshot.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+        XCTAssertTrue(genVSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
+        let genVSemanticPlan = NDSDataSemanticEditor.plan(
+            catalog: blackCatalog,
+            draft: NDSDataSemanticEditDraft(
+                recordID: "encounters:data/encounters/route_1.txt",
+                fieldEdits: [NDSDataSemanticFieldEdit(key: "route", value: "2")]
+            )
+        )
+        XCTAssertTrue(genVSemanticPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(genVSemanticPlan.editPlan.validateApplyability().isApplyable)
+        XCTAssertTrue(genVSemanticPlan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let romTemp = try NDSDataCatalogTemporaryDirectory()
+        temporaryDirectories.append(romTemp)
+        let rom = romTemp.url.appendingPathComponent("diamond.nds")
+        try syntheticNDSROM().write(to: rom)
+        let romCatalog = try NDSDataCatalogBuilder.build(path: rom.path)
+        assertBlockedPlan(
+            catalog: romCatalog,
+            recordID: "resources:sub/child.narc",
+            expectedDiagnostics: ["NDS_DATA_EDIT_BINARY_ROM_BLOCKED"]
+        )
+
+        let platinum = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let platinumCatalog = try NDSDataCatalogBuilder.build(path: platinum.path)
+        assertBlockedPlan(
+            catalog: platinumCatalog,
+            recordID: "personal:res/prebuilt/poketool/personal/personal.narc",
+            expectedDiagnostics: [
+                "NDS_DATA_EDIT_ROLE_BLOCKED",
+                "NDS_DATA_EDIT_FORMAT_BLOCKED",
+                "NDS_DATA_EDIT_CONTAINER_BLOCKED"
+            ]
+        )
+        assertBlockedPlan(
+            catalog: platinumCatalog,
+            recordID: "resources:generated/species.txt",
+            expectedDiagnostics: ["NDS_DATA_EDIT_ROLE_BLOCKED"]
+        )
+
+        let referenceRoot = try makeRoot(name: "references/pokeplatinum", configure: makePlatinumFixture)
+        let referenceCatalog = try NDSDataCatalogBuilder.build(path: referenceRoot.path)
+        assertBlockedPlan(
+            catalog: referenceCatalog,
+            recordID: "species:res/pokemon/abra/data.json",
+            editedText: "{\"base_hp\":26}\n",
+            expectedDiagnostics: ["NDS_DATA_EDIT_REFERENCE_BLOCKED"]
+        )
+
+        let pmd = try makeRoot(name: "pmd-sky", configure: makePMDSkyFixture)
+        let pmdCatalog = try NDSDataCatalogBuilder.build(path: pmd.path)
+        assertBlockedPlan(
+            catalog: pmdCatalog,
+            recordID: "resources:files/MESSAGE/text_us.str",
+            expectedDiagnostics: ["NDS_DATA_EDIT_SPINOFF_BLOCKED"]
+        )
+        let pmdSnapshot = NDSDataSemanticEditor.snapshot(
+            catalog: pmdCatalog,
+            recordID: "resources:files/MESSAGE/text_us.str"
+        )
+        XCTAssertFalse(pmdSnapshot.canEdit)
+        XCTAssertTrue(pmdSnapshot.diagnostics.contains { $0.code == "NDS_DATA_EDIT_SPINOFF_BLOCKED" })
+        XCTAssertTrue(pmdSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
     }
 
     func testNDSDataMutationPlanBlocksReferenceRoots() throws {

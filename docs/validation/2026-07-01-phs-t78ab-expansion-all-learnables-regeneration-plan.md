@@ -20,12 +20,9 @@
 
 ## Proof
 
-- Live checkout attempts with the requested focused SwiftPM filter were blocked by unrelated active dirty work in adjacent lanes:
-  - `NDSDataCatalog.swift` duplicate `factValue` and modified-during-build guard.
-  - `PokemonDataCompatibility.swift` modified during build.
-  - `PokemonSpeciesCatalog.swift` temporarily missing cry-audio helper definitions.
-  - `PokemonHackCLI.swift` missing `NDSDataEncounterJSONRowCLIRequest`.
-  - `PokemonItemCatalog.swift` modified during build on the final live retry.
+- Current live checkout proof passed with the requested focused SwiftPM filter:
+  - `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78ab-live-proof-20260702 --jobs 1 --filter 'PokemonDataCompatibilityTests/testExpansionAllLearnablesCoverageCountsGeneratedSourceAndMoveMismatches|SourceIndexTests/testExpansionMovedDataShapesIndexWithoutRequiredDescriptorWarnings|GenIIIAssetCatalogTests|PokemonHackCLITests/testPokemonCompatibilityAndAssetIndexCommandsEmitExpansionAllLearnablesFacts'`
+  - Passed; 10 selected tests, 0 failures.
 - Isolated row-only proof passed in `/tmp/phs-t78ab-clean.lqUwM6`, a clean archive of `HEAD` with only the PHS-T78AB source/test patch applied:
   - `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78ab-clean-proof-swiftpm --jobs 1 --filter 'PokemonDataCompatibilityTests/testExpansionAllLearnablesCoverageCountsGeneratedSourceAndMoveMismatches|SourceIndexTests/testExpansionMovedDataShapesIndexWithoutRequiredDescriptorWarnings|GenIIIAssetCatalogTests|PokemonHackCLITests/testPokemonCompatibilityAndAssetIndexCommandsEmitExpansionAllLearnablesFacts'`
   - Passed; 10 selected tests, 0 failures.

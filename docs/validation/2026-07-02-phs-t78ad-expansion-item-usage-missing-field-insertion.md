@@ -31,9 +31,8 @@ The live checkout already had unrelated dirty work before this row, and addition
 - `swift test --package-path PokemonHackStudio --scratch-path /tmp/phs-t78ad-core-compat --jobs 1 --filter 'PokemonItemCatalogTests|PokemonDataCompatibilityTests'`
   - Passed; 34 selected tests, 0 failures.
   - This rerun followed an initial fixture assertion fix and covers the core/catalog plus compatibility surfaces without the dirty CLI target.
-- `POKEMONHACKSTUDIO_SKIP_BUNDLE_ASSETS=1 xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath /tmp/PokemonHackStudio-PHST78AD-ItemUsageInsertion -destination 'platform=macOS,arch=arm64' -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testExpansionItemMissingUsageScalarsInsertThroughItemsEditor test`
-  - Blocked before the selected test by unrelated active app dirty work: `PokemonHackStudio/Sources/PokemonHackStudio/Stores/WorkbenchStore.swift:4533:61` reported `type 'Self' has no member 'patchDistributionReadinessReportViewState'`.
-  - Existing `allowedFileTypes` deprecation warnings were also emitted before the compile failure.
+- `POKEMONHACKSTUDIO_SKIP_BUNDLE_ASSETS=1 xcodebuild -quiet -project PokemonHackStudio/PokemonHackStudio.xcodeproj -scheme PokemonHackStudio -configuration Debug -derivedDataPath /tmp/PokemonHackStudio-PHST78AD-ItemUsageInsertion-Rerun -destination 'platform=macOS,arch=arm64' -only-testing:PokemonHackStudioTests/MapEditorStoreTests/testExpansionItemMissingUsageScalarsInsertThroughItemsEditor test`
+  - Passed on current rerun; existing `allowedFileTypes`, ad-hoc signing, and bundle-script warnings only.
 - `git diff --check`
   - Passed.
 - `./script/check_validation_docs.sh`

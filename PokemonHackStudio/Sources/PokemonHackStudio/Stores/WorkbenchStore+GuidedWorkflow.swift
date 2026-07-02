@@ -19,11 +19,14 @@ extension WorkbenchStore {
     }
 
     var dashboardMapMetric: (value: String, detail: String) {
+        let sourceMapCount = records(for: .maps).count
         if let catalog = selectedMapCatalog {
+            if catalog.mapCount == 0, sourceMapCount > 0 {
+                return ("\(sourceMapCount)", "Source index, open Maps for layouts")
+            }
             return ("\(catalog.mapCount)", mapCatalogStatus.label)
         }
 
-        let sourceMapCount = records(for: .maps).count
         if sourceMapCount > 0 {
             switch mapCatalogStatus {
             case .loading:

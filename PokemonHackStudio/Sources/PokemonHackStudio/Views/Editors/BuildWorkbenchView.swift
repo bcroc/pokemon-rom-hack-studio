@@ -391,6 +391,7 @@ struct BuildWorkbenchView: View {
                 resultRows: store.filteredPatchCreationResultRows
             )
             patchArtifactLibrarySection(rows: store.filteredPatchArtifactLibraryRows)
+            allLearnablesRegenerationReviewSection(rows: store.filteredAllLearnablesRegenerationReviewRows)
             patchDistributionReadinessSection(rows: store.filteredPatchDistributionReadinessRows)
             patchApplyExportAuditSection(rows: store.filteredPatchApplyExportAuditRows)
             binaryROMMutationDryRunSection(
@@ -559,6 +560,26 @@ struct BuildWorkbenchView: View {
                 if !resultRows.isEmpty {
                     Divider()
                     ForEach(resultRows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func allLearnablesRegenerationReviewSection(rows: [BuildReportRow]) -> some View {
+        if !rows.isEmpty {
+            EditorSection(title: "All Learnables Regeneration Review") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Existing compatibility and asset-index facts only; this review surface is copy/report-only.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(rows) { row in
                         BuildReportRowView(
                             row: row,
                             copyAction: store.copyBuildReportRowActionToPasteboard

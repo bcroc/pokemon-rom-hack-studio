@@ -764,6 +764,25 @@ private struct ResourceAssetDetailPane: View {
 
                     FactGrid(facts: detailFacts(for: asset))
 
+                    if let review = allLearnablesRegenerationReview(for: asset) {
+                        EditorSection(title: "All Learnables Regeneration Review") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(spacing: 8) {
+                                    ResourceTag(text: review.posture)
+                                    ResourceTag(text: "\(review.coverageMismatches) mismatches")
+                                    ResourceTag(text: "\(review.staleSourceFiles) stale")
+                                }
+
+                                Text(review.guidance)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+
+                                FactGrid(facts: review.facts)
+                            }
+                        }
+                    }
+
                     if !asset.facts.isEmpty {
                         EditorSection(title: "Facts") {
                             FactGrid(facts: asset.facts)
@@ -830,6 +849,55 @@ private struct ResourceAssetDetailPane: View {
             Fact(label: "Source Line", value: "\(asset.source.line)"),
         ]
     }
+
+    private func allLearnablesRegenerationReview(
+        for asset: ResourceAssetRowViewState
+    ) -> AllLearnablesRegenerationReview? {
+        guard asset.path == "src/data/pokemon/all_learnables.json",
+              let posture = factValue("Regeneration Posture", in: asset.facts)
+        else {
+            return nil
+        }
+
+        let focusedLabels = [
+            "Coverage Status",
+            "Coverage Mismatches",
+            "Move-set Mismatches",
+            "Generated-only Species",
+            "Source-only Species",
+            "Stale Source Files",
+            "Newest Stale Source",
+            "Regeneration Source Buckets",
+            "Regeneration Source Paths",
+            "Regeneration Source-only Move IDs",
+            "Regeneration Generated-only Move IDs",
+            "Regeneration Report Commands",
+        ]
+        let facts = focusedLabels.compactMap { label -> Fact? in
+            factValue(label, in: asset.facts).map { Fact(label: label, value: $0) }
+        }
+        let guidance = factValue("Regeneration Guidance", in: asset.facts)
+            ?? "Review compatibility and asset-index JSON; PokemonHackStudio will not run regeneration or write generated JSON."
+        return AllLearnablesRegenerationReview(
+            posture: posture,
+            coverageMismatches: factValue("Coverage Mismatches", in: asset.facts) ?? "0",
+            staleSourceFiles: factValue("Stale Source Files", in: asset.facts) ?? "0",
+            guidance: guidance,
+            facts: facts
+        )
+    }
+
+    private func factValue(_ label: String, in facts: [Fact]) -> String? {
+        facts.first { $0.label == label }?.value
+    }
+}
+
+private struct AllLearnablesRegenerationReview {
+    let posture: String
+    let coverageMismatches: String
+    let staleSourceFiles: String
+    let guidance: String
+    let facts: [Fact]
 }
 
 private struct NDSDataRecordEditor: View {

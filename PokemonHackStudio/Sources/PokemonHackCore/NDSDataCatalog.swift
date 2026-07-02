@@ -1506,7 +1506,11 @@ public enum NDSDataCatalogBuilder {
             existingRelativePaths: existingRelativePaths,
             buildReport: BuildValidationReportBuilder.build(index: index, fileManager: fileManager)
         )
-        return (enriched + [variantReadinessPacket, generatedOutputFreshnessPacket]).sorted(by: recordSort)
+        let blockedActionAuditPacket = genVBlockedActionAuditPacketRecord(
+            records: enriched + [variantReadinessPacket, generatedOutputFreshnessPacket],
+            existingRelativePaths: existingRelativePaths
+        )
+        return (enriched + [variantReadinessPacket, generatedOutputFreshnessPacket, blockedActionAuditPacket]).sorted(by: recordSort)
     }
 
     private static let maxMapReviewRelatedRecords = 8
@@ -2602,6 +2606,40 @@ public enum NDSDataCatalogBuilder {
         )
     }
 
+    private static func genVBlockedActionAuditPacketRecord(
+        records: [NDSDataCatalogRecord],
+        existingRelativePaths: Set<String>
+    ) -> NDSDataCatalogRecord {
+        let relativePath = genVBlockedActionAuditPacketPath
+        let sourceSpan = SourceSpan(relativePath: relativePath, startLine: 1)
+        let base = NDSDataCatalogRecord(
+            id: "resources:\(relativePath)",
+            domain: .resources,
+            title: "Gen V blocked-action audit packet",
+            relativePath: relativePath,
+            format: .unknown,
+            role: .metadataPacket,
+            exists: true,
+            sourceSpan: sourceSpan,
+            facts: genVBlockedActionAuditPacketFacts(records: records),
+            preview: "Preview-only aggregate of existing Gen V blocked-action and diagnostic facts.",
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_GEN_V_BLOCKED_ACTION_AUDIT_PACKET_PREVIEW_ONLY",
+                    message: "Gen V blocked-action audit packet aggregates existing readiness, blocked-action, and diagnostic metadata only; no parser, decoded preview, semantic control, source write, extraction, NARC packing, build, playtest, export, mutation apply, or binary write path is enabled.",
+                    span: sourceSpan
+                )
+            ]
+        )
+        let readiness = genVReadinessSummary(for: base)
+        return base.copy(
+            facts: base.facts + genVReadinessFacts(for: base, existingRelativePaths: existingRelativePaths),
+            readiness: .some(readiness),
+            diagnostics: base.diagnostics + genVReadinessDiagnostics(for: base, readiness: readiness)
+        )
+    }
+
     private static func genVVariantReadinessPacketFacts(records: [NDSDataCatalogRecord]) -> [SourceIndexFact] {
         var facts = [
             SourceIndexFact(label: "Gen V Variant Readiness Packet", value: "previewOnly"),
@@ -2638,6 +2676,74 @@ public enum NDSDataCatalogBuilder {
             SourceIndexFact(label: "Gen V Declared Generated Outputs", value: genVDeclaredGeneratedOutputSummary(buildReport: buildReport)),
             SourceIndexFact(label: "Gen V Build Target Output Freshness", value: genVBuildTargetOutputFreshnessSummary(buildReport: buildReport))
         ]
+    }
+
+    private static func genVBlockedActionAuditPacketFacts(records: [NDSDataCatalogRecord]) -> [SourceIndexFact] {
+        [
+            SourceIndexFact(label: "Gen V Blocked Action Audit Packet", value: "previewOnly"),
+            SourceIndexFact(label: "Gen V Blocked Action Audit Basis", value: "existingReadinessBlockedActionsAndDiagnosticsOnly"),
+            SourceIndexFact(label: "Gen V Blocked Action Audit Posture", value: "previewOnlyNoParserNoWritesNoExecution"),
+            SourceIndexFact(label: "Gen V Blocked Action Audit Catalog Rows", value: "\(records.count)"),
+            SourceIndexFact(label: "Gen V Readiness Status Summary", value: genVReadinessStatusSummary(records: records)),
+            SourceIndexFact(label: "Gen V Unique Blocked Actions", value: genVUniqueBlockedActionsSummary(records: records)),
+            SourceIndexFact(label: "Gen V Source Data Blocked Reason Summary", value: genVSourceDataBlockedReasonSummary(records: records)),
+            SourceIndexFact(label: "Gen V Diagnostic Severity Summary", value: genVDiagnosticSeveritySummary(records: records)),
+            SourceIndexFact(label: "Gen V Diagnostic Code Summary", value: genVDiagnosticCodeSummary(records: records)),
+            SourceIndexFact(label: "Gen V Prior Packet Coverage", value: genVPriorPacketCoverageSummary(records: records))
+        ]
+    }
+
+    private static func genVReadinessStatusSummary(records: [NDSDataCatalogRecord]) -> String {
+        let statuses = records.compactMap { $0.readiness?.status.rawValue }
+        return genVCountSummary(statuses)
+    }
+
+    private static func genVUniqueBlockedActionsSummary(records: [NDSDataCatalogRecord]) -> String {
+        var actions: Set<String> = []
+        for record in records {
+            actions.formUnion(record.readiness?.blockedActions ?? [])
+            actions.formUnion(record.facts
+                .filter { ["Gen V Blocked Actions", "Gen V Source Data Blocked Actions"].contains($0.label) }
+                .flatMap { genVCommaSeparatedValues($0.value) })
+        }
+        guard !actions.isEmpty else { return "none" }
+        return actions.sorted().joined(separator: ", ")
+    }
+
+    private static func genVSourceDataBlockedReasonSummary(records: [NDSDataCatalogRecord]) -> String {
+        let reasons = records.compactMap { genVFactValue("Gen V Source Data Blocked Reason", in: $0) }
+        return genVCountSummary(reasons)
+    }
+
+    private static func genVDiagnosticSeveritySummary(records: [NDSDataCatalogRecord]) -> String {
+        genVCountSummary(records.flatMap { $0.diagnostics.map { $0.severity.rawValue } })
+    }
+
+    private static func genVDiagnosticCodeSummary(records: [NDSDataCatalogRecord]) -> String {
+        genVCountSummary(records.flatMap { $0.diagnostics.map(\.code) })
+    }
+
+    private static func genVPriorPacketCoverageSummary(records: [NDSDataCatalogRecord]) -> String {
+        [
+            "\(genVVariantReadinessPacketPath)=\(records.contains { $0.relativePath.lowercased() == genVVariantReadinessPacketPath } ? "present" : "missing")",
+            "\(genVGeneratedOutputFreshnessPacketPath)=\(records.contains { $0.relativePath.lowercased() == genVGeneratedOutputFreshnessPacketPath } ? "present" : "missing")"
+        ].joined(separator: ", ")
+    }
+
+    private static func genVCountSummary(_ values: [String], maxEntries: Int = .max) -> String {
+        guard !values.isEmpty else { return "none" }
+        let counts = Dictionary(values.map { ($0, 1) }, uniquingKeysWith: +)
+        let entries = counts.keys.sorted().map { "\($0)=\(counts[$0] ?? 0)" }
+        guard entries.count > maxEntries else {
+            return entries.joined(separator: ", ")
+        }
+        return (Array(entries.prefix(maxEntries)) + ["+\(entries.count - maxEntries) more"]).joined(separator: ", ")
+    }
+
+    private static func genVCommaSeparatedValues(_ value: String) -> [String] {
+        value.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private static func genVVariantMarkerStates(records: [NDSDataCatalogRecord]) -> String {
@@ -3212,6 +3318,9 @@ public enum NDSDataCatalogBuilder {
         if lower == genVGeneratedOutputFreshnessPacketPath {
             return "generatedOutputFreshnessPacket"
         }
+        if lower == genVBlockedActionAuditPacketPath {
+            return "blockedActionAuditPacket"
+        }
         if lower.hasPrefix("data/encounters/") {
             return "encounterPreview"
         }
@@ -3343,6 +3452,10 @@ public enum NDSDataCatalogBuilder {
         switch role {
         case "variantReadinessPacket":
             return "The Gen V variant readiness packet aggregates existing catalog facts for orientation only."
+        case "generatedOutputFreshnessPacket":
+            return "The Gen V generated-output freshness packet aggregates existing catalog and build-validation facts for orientation only."
+        case "blockedActionAuditPacket":
+            return "The Gen V blocked-action audit packet aggregates existing readiness, blocker, and diagnostic facts for orientation only."
         case "encounterPreview":
             return "Encounter data is indexed for preview-only record facts."
         case "dataInventory":
@@ -4770,6 +4883,7 @@ public enum NDSDataCatalogBuilder {
     private static let maxContainerSampleMembers = 8
     private static let genVVariantReadinessPacketPath = "gen-v/variant-readiness-packet"
     private static let genVGeneratedOutputFreshnessPacketPath = "gen-v/generated-output-freshness-packet"
+    private static let genVBlockedActionAuditPacketPath = "gen-v/blocked-action-audit-packet"
     private static let maxMemberFingerprintBytes = 32
     private static let maxMemberMagicBytes = 8
     private static let maxTextBankPreviewBytes = 65536
