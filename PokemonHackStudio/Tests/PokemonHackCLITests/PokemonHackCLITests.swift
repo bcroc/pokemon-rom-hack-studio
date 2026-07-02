@@ -17,13 +17,16 @@ final class PokemonHackCLITests: XCTestCase {
     func testHelpUsesCommandMetadataForTextAndJSON() throws {
         let text = try PokemonHackCLI.run(arguments: ["--help"])
         XCTAssertTrue(text.contains("nds-data-semantic-plan <project> <record-id>"))
+        XCTAssertTrue(text.contains("nds-data-semantic-coverage <path> --json"))
         XCTAssertTrue(text.contains("nds-data-item-csv-rows-plan <project> <record-id>"))
         XCTAssertTrue(text.contains("nds-data-encounter-json-rows-plan <project> <record-id>"))
         XCTAssertTrue(text.contains("patch-create-preview <project> --base-rom <path>"))
         XCTAssertTrue(text.contains("patch-create <project> --base-rom <path>"))
         XCTAssertTrue(text.contains("patch-library <project> --json"))
+        XCTAssertTrue(text.contains("patch-export-library <project> --json"))
         XCTAssertTrue(text.contains("patch-distribution-readiness <project> --base-rom <path>"))
         XCTAssertTrue(text.contains("rom-mutation-manifest <rom-or-source-path>"))
+        XCTAssertTrue(text.contains("rom-mutation-library <workspace-root> --json"))
         XCTAssertTrue(text.contains("rom-mutation-audit <rom> --manifest <dry-run-json>"))
         XCTAssertTrue(text.contains("rom-mutation-apply <rom> --manifest <dry-run-json>"))
         XCTAssertTrue(text.contains("validation-tiers --json"))
@@ -34,13 +37,16 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(json["executable"] as? String, "pokemonhack-cli")
         let commands = try XCTUnwrap(json["commands"] as? [[String: Any]])
         XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-semantic-plan" && ($0["usage"] as? String)?.contains("--set <field=value>") == true })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-semantic-coverage" && $0["usage"] as? String == "nds-data-semantic-coverage <path> --json" })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-item-csv-rows-plan" && ($0["usage"] as? String)?.contains("--insert <index> <csv-row>") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "nds-data-encounter-json-rows-plan" && ($0["usage"] as? String)?.contains("--array <array-key>") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-create-preview" && ($0["usage"] as? String)?.contains("[--target <build-target-id>]") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-create" && ($0["usage"] as? String)?.contains("[--target <build-target-id>]") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-library" && $0["usage"] as? String == "patch-library <project> --json" })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-export-library" && $0["usage"] as? String == "patch-export-library <project> --json" })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "patch-distribution-readiness" && ($0["usage"] as? String)?.contains("[--patch <bps-path>]") == true })
         XCTAssertTrue(commands.contains { $0["name"] as? String == "rom-mutation-manifest" && ($0["usage"] as? String)?.contains("--replace <offset:length:hex>") == true })
+        XCTAssertTrue(commands.contains { $0["name"] as? String == "rom-mutation-library" && $0["usage"] as? String == "rom-mutation-library <workspace-root> --json" })
         let auditMetadata = try XCTUnwrap(commands.first { $0["name"] as? String == "rom-mutation-audit" })
         let auditUsage = try XCTUnwrap(auditMetadata["usage"] as? String)
         XCTAssertTrue(auditUsage.contains("--manifest <dry-run-json>"))
@@ -83,6 +89,76 @@ final class PokemonHackCLITests: XCTestCase {
         let strictNDS = try XCTUnwrap(rows.first { $0["tier"] as? String == "centralNDSReferences" })
         let strictNDSCauses = try XCTUnwrap(strictNDS["skippedReferenceCauses"] as? [[String: Any]])
         XCTAssertTrue(strictNDSCauses.allSatisfy { $0["behavior"] as? String == "failsWhenMissing" })
+    }
+
+    func testReferencesCommandEmitsVisibilityStatusJSON() throws {
+        let workspace = try makeTemporaryDirectory()
+        try write(
+            """
+            /references/*
+            !/references/manifest.json
+            """,
+            to: workspace.appendingPathComponent(".gitignore")
+        )
+        try write(
+            """
+            {
+              "repositories": [
+                {
+                  "name": "porymap",
+                  "path": "references/porymap",
+                  "modules": ["maps"]
+                }
+              ]
+            }
+            """,
+            to: workspace.appendingPathComponent("references/manifest.json")
+        )
+        let resolvedTarget = workspace.appendingPathComponent("central/repos/huderlem__porymap")
+        try FileManager.default.createDirectory(at: resolvedTarget, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("references/porymap"),
+            withDestinationURL: resolvedTarget
+        )
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("references/missing-reference"),
+            withDestinationURL: workspace.appendingPathComponent("central/repos/missing-reference")
+        )
+        try runGit(["init"], in: workspace)
+        try runGit(["add", "references/manifest.json"], in: workspace)
+
+        let previousDirectory = FileManager.default.currentDirectoryPath
+        XCTAssertTrue(FileManager.default.changeCurrentDirectoryPath(workspace.path))
+        defer { FileManager.default.changeCurrentDirectoryPath(previousDirectory) }
+
+        let json = try decodeJSON(PokemonHackCLI.run(arguments: ["references", "--json"]))
+        let repositories = try XCTUnwrap(json["repositories"] as? [[String: Any]])
+        XCTAssertEqual(repositories.first?["name"] as? String, "porymap")
+
+        let centralIndex = try XCTUnwrap(json["centralReferenceIndex"] as? [String: Any])
+        XCTAssertEqual(centralIndex["path"] as? String, "/Users/bryan/projects/reference-repos/docs/index.json")
+        XCTAssertNotNil(centralIndex["exists"] as? Bool)
+        XCTAssertNotNil(centralIndex["status"] as? String)
+
+        let aliasSummary = try XCTUnwrap(json["referenceAliases"] as? [String: Any])
+        XCTAssertEqual(aliasSummary["ignoredByPolicy"] as? Bool, true)
+        XCTAssertEqual(aliasSummary["totalCount"] as? Int, 2)
+        XCTAssertEqual(aliasSummary["resolvedCount"] as? Int, 1)
+        XCTAssertEqual(aliasSummary["danglingCount"] as? Int, 1)
+        let aliases = try XCTUnwrap(aliasSummary["aliases"] as? [[String: Any]])
+        XCTAssertTrue(aliases.contains { $0["name"] as? String == "porymap" && $0["status"] as? String == "resolved" })
+        XCTAssertTrue(aliases.contains { $0["name"] as? String == "missing-reference" && $0["status"] as? String == "dangling" })
+
+        let tiers = try XCTUnwrap(json["validationTiersAffected"] as? [[String: Any]])
+        XCTAssertTrue(tiers.contains { $0["tier"] as? String == "ndsSyntheticAndOptionalReferences" && $0["command"] as? String == "make validate-nds" })
+        XCTAssertTrue(tiers.contains { $0["tier"] as? String == "centralNDSReferences" && $0["command"] as? String == "make validate-nds-strict" })
+
+        let tracking = try XCTUnwrap(json["tracking"] as? [String: Any])
+        XCTAssertEqual(tracking["source"] as? String, "git")
+        XCTAssertEqual(tracking["gitTrackedPathsAvailable"] as? Bool, true)
+        XCTAssertEqual(tracking["trackedPaths"] as? [String], ["references/manifest.json"])
+        XCTAssertEqual(tracking["onlyReferencesManifestTracked"] as? Bool, true)
+        XCTAssertEqual(tracking["status"] as? String, "manifestOnly")
     }
 
     func testBlockedApplyExportOutputsMapToNonzeroExecutableExitCode() throws {
@@ -415,7 +491,9 @@ final class PokemonHackCLITests: XCTestCase {
         let headerPolicy = try XCTUnwrap(result["headerPolicy"] as? [String: Any])
         XCTAssertEqual(headerPolicy["shouldRewriteHeader"] as? Bool, false)
         let blockedActions = try XCTUnwrap(result["blockedActions"] as? [String])
-        XCTAssertTrue(blockedActions.contains("BPS/IPS patch file writes"))
+        XCTAssertTrue(blockedActions.contains("BPS/IPS patch file writes from preview"))
+        XCTAssertTrue(blockedActions.contains("manifest writes from preview"))
+        XCTAssertFalse(blockedActions.contains("BPS/IPS patch file writes"))
         let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_CREATION_PREVIEW_ONLY" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps").path))
@@ -537,6 +615,67 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
     }
 
+    func testPatchExportLibraryHelpMetadataUsesReadOnlyCommand() throws {
+        let text = try PokemonHackCLI.run(arguments: ["--help"])
+        XCTAssertTrue(text.contains("patch-export-library <project> --json"))
+
+        let json = try decodeJSON(PokemonHackCLI.run(arguments: ["help", "--json"]))
+        let commands = try XCTUnwrap(json["commands"] as? [[String: Any]])
+        let metadata = try XCTUnwrap(commands.first { $0["name"] as? String == "patch-export-library" })
+        XCTAssertEqual(metadata["usage"] as? String, "patch-export-library <project> --json")
+        XCTAssertTrue((metadata["summary"] as? String)?.contains("without applying patches") == true)
+    }
+
+    func testPatchExportLibraryCommandEmitsEmptyReadOnlyJSONWithoutCreatingDirectories() throws {
+        let root = try makeEmeraldProject()
+
+        let output = try PokemonHackCLI.run(arguments: ["patch-export-library", root.path, "--json"])
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["relativeArtifactRoot"] as? String, ".pokemonhackstudio/patches")
+        XCTAssertEqual((result["items"] as? [[String: Any]])?.count, 0)
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_EXPORT_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-export-library", root.path, "--json"], output: output), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testPatchExportLibraryCommandEmitsExportArtifactJSONReadOnly() throws {
+        let root = try makeEmeraldProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patch = root.appendingPathComponent("cleanroom.ips")
+        let outputROM = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-cleanroom.gba")
+        try write(Data("abc".utf8), to: baseROM)
+        try write(Data("patch".utf8), to: patch)
+        try write(Data("adc".utf8), to: outputROM)
+        try writePatchExportManifestJSON(outputURL: outputROM, patchURL: patch, baseROMURL: baseROM)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let output = try PokemonHackCLI.run(arguments: ["patch-export-library", root.path, "--json"])
+        let result = try decodeJSON(output)
+
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["relativeArtifactRoot"] as? String, ".pokemonhackstudio/patches")
+        let items = try XCTUnwrap(result["items"] as? [[String: Any]])
+        XCTAssertEqual(items.count, 1)
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(item["fileName"] as? String, "clean-base-cleanroom.gba")
+        XCTAssertEqual(item["status"] as? String, "valid")
+        XCTAssertEqual(item["manifestStatus"] as? String, "matched")
+        XCTAssertEqual(item["outputChecksumStatus"] as? String, "matched")
+        XCTAssertEqual(item["baseROMStatus"] as? String, "matched")
+        XCTAssertEqual(item["patchChecksumStatus"] as? String, "matched")
+        XCTAssertEqual(item["backupStatus"] as? String, "noneRecorded")
+        let outputIdentity = try XCTUnwrap(item["outputIdentity"] as? [String: Any])
+        XCTAssertEqual(outputIdentity["sha1"] as? String, "aa3159afc1d353ecf7d91cbd242724ce1f99d443")
+        let patchIdentity = try XCTUnwrap(item["patchIdentity"] as? [String: Any])
+        XCTAssertEqual(patchIdentity["sha1"] as? String, "d75b3b528276d7a9f30a04b8bccaf74e1d61f67a")
+        XCTAssertTrue((item["verificationSummary"] as? String)?.contains("no apply/export was attempted") == true)
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-export-library", root.path, "--json"], output: output), 0)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+    }
+
     func testPatchDistributionReadinessCommandBlocksNoSelectionJSONWithoutCreatingArtifacts() throws {
         let root = try makeEmeraldProject()
         let baseROM = root.appendingPathComponent("clean-base.gba")
@@ -604,8 +743,10 @@ final class PokemonHackCLITests: XCTestCase {
         let headerPolicy = try XCTUnwrap(preview["headerPolicy"] as? [String: Any])
         XCTAssertEqual(headerPolicy["mode"] as? String, "no-header-rewrite")
         let blockedActions = try XCTUnwrap(result["blockedActions"] as? [String])
-        XCTAssertTrue(blockedActions.contains("Patch file creation"))
-        XCTAssertTrue(blockedActions.contains("Patch apply/export"))
+        XCTAssertTrue(blockedActions.contains("Patch file creation from readiness packet"))
+        XCTAssertTrue(blockedActions.contains("Patch apply/export from readiness packet"))
+        XCTAssertFalse(blockedActions.contains("Patch file creation"))
+        XCTAssertFalse(blockedActions.contains("Patch apply/export"))
         XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness", root.path, "--base-rom", baseROM.path, "--patch", relativePatchPath, "--json"], output: output), 0)
         XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
     }
@@ -690,6 +831,92 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "BINARY_ROM_MUTATION_IGNORED_OUTPUT_GUIDANCE" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
+    }
+
+    func testROMMutationLibraryCommandEmitsEmptyReadOnlyJSONWithoutCreatingDirectories() throws {
+        let root = try makeTemporaryDirectory()
+
+        let output = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-library",
+            root.path,
+            "--json"
+        ])
+        let library = try decodeJSON(output)
+
+        XCTAssertEqual(library["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(library["relativeArtifactRoot"] as? String, ".pokemonhackstudio/rom-mutations")
+        let items = try XCTUnwrap(library["items"] as? [[String: Any]])
+        XCTAssertTrue(items.isEmpty)
+        let diagnostics = try XCTUnwrap(library["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "ROM_MUTATION_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+
+        XCTAssertThrowsError(
+            try PokemonHackCLI.run(arguments: [
+                "rom-mutation-library",
+                root.path,
+                "--confirm",
+                "romreplace-token",
+                "--json"
+            ])
+        ) { error in
+            XCTAssertEqual(error as? CLIError, .usage)
+        }
+    }
+
+    func testROMMutationLibraryCommandEmitsCreatedArtifactJSONWithoutRawReviewToken() throws {
+        let rom = try makeTestROM()
+        let root = rom.deletingLastPathComponent()
+        let dryRunJSON = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-manifest",
+            rom.path,
+            "--workspace-root",
+            root.path,
+            "--replace",
+            "0x120:2:AABB",
+            "--json"
+        ])
+        let dryRun = try decodeJSON(dryRunJSON)
+        let reviewToken = try XCTUnwrap((dryRun["applyReview"] as? [String: Any])?["reviewToken"] as? String)
+        let manifestURL = root.appendingPathComponent("dry-run.json")
+        try dryRunJSON.write(to: manifestURL, atomically: true, encoding: .utf8)
+        let apply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "rom-mutation-apply",
+                rom.path,
+                "--manifest",
+                manifestURL.path,
+                "--workspace-root",
+                root.path,
+                "--confirm",
+                reviewToken,
+                "--json"
+            ])
+        )
+        XCTAssertEqual(apply["status"] as? String, "applied")
+
+        let output = try PokemonHackCLI.run(arguments: [
+            "rom-mutation-library",
+            root.path,
+            "--json"
+        ])
+        let library = try decodeJSON(output)
+
+        XCTAssertFalse(output.contains(reviewToken))
+        XCTAssertEqual(library["isReadOnly"] as? Bool, true)
+        let items = try XCTUnwrap(library["items"] as? [[String: Any]])
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(item["status"] as? String, "valid")
+        XCTAssertEqual(item["manifestStatus"] as? String, "matched")
+        XCTAssertEqual(item["backupStatus"] as? String, "matched")
+        XCTAssertEqual(item["operationKind"] as? String, "replaceBytesInPlace")
+        XCTAssertEqual(item["replacementCount"] as? Int, 1)
+        let confirmation = try XCTUnwrap(item["confirmation"] as? [String: Any])
+        XCTAssertEqual(confirmation["method"] as? String, "dry-run-review-token")
+        XCTAssertEqual(confirmation["hasReviewToken"] as? Bool, true)
+        XCTAssertEqual(confirmation["reviewTokenSuffix"] as? String, String(reviewToken.suffix(8)))
+        XCTAssertNil(confirmation["reviewToken"])
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
     }
 
@@ -1082,7 +1309,8 @@ final class PokemonHackCLITests: XCTestCase {
         let applyExportState = try XCTUnwrap(result["applyExportState"] as? [String: Any])
         XCTAssertEqual(applyExportState["canExport"] as? Bool, true)
         let blockedActions = try XCTUnwrap(result["blockedActions"] as? [String])
-        XCTAssertTrue(blockedActions.contains("Patched ROM writes"))
+        XCTAssertTrue(blockedActions.contains("Patched ROM writes from audit report"))
+        XCTAssertFalse(blockedActions.contains("Patched ROM writes"))
         let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_APPLY_EXPORT_AUDIT_READ_ONLY" })
         XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
@@ -1358,6 +1586,64 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(romAudioPreview["format"] as? String, "nitroSoundArchive")
         let romDiagnostics = try XCTUnwrap(romCatalog["diagnostics"] as? [[String: Any]])
         XCTAssertTrue(romDiagnostics.contains { $0["code"] as? String == "NDS_DATA_CATALOG_BINARY_SUMMARY_READ_ONLY" })
+    }
+
+    func testNDSDataSemanticCoverageCommandEmitsRedactedJSON() throws {
+        let root = try makeTestNDSDecompRoot()
+
+        let output = try PokemonHackCLI.run(arguments: ["nds-data-semantic-coverage", root.path, "--json"])
+        let report = try decodeJSON(output)
+
+        XCTAssertEqual(report["profile"] as? String, "pokeplatinum")
+        XCTAssertEqual(report["family"] as? String, "platinum")
+        XCTAssertEqual(report["rootPath"] as? String, root.path)
+        let summary = try XCTUnwrap(report["summary"] as? [String: Any])
+        XCTAssertGreaterThan(summary["catalogRows"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["scannedRows"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["eligibleRows"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["eligibleFields"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["blockedRows"] as? Int ?? 0, 0)
+        XCTAssertGreaterThan(summary["skippedRows"] as? Int ?? 0, 0)
+
+        let fieldKindCounts = try XCTUnwrap(report["fieldKindCounts"] as? [[String: Any]])
+        XCTAssertTrue(fieldKindCounts.contains { $0["kind"] as? String == "number" && ($0["count"] as? Int ?? 0) > 0 })
+        XCTAssertTrue(fieldKindCounts.contains { $0["kind"] as? String == "string" && ($0["count"] as? Int ?? 0) > 0 })
+        XCTAssertTrue(fieldKindCounts.contains { $0["kind"] as? String == "bool" && ($0["count"] as? Int ?? 0) > 0 })
+
+        let domainSummaries = try XCTUnwrap(report["domainSummaries"] as? [[String: Any]])
+        XCTAssertTrue(domainSummaries.contains { $0["domain"] as? String == "species" && ($0["eligibleFields"] as? Int ?? 0) > 0 })
+
+        let rows = try XCTUnwrap(report["rows"] as? [[String: Any]])
+        let speciesRow = try XCTUnwrap(rows.first { $0["id"] as? String == "species:res/pokemon/abra/data.json" })
+        XCTAssertEqual(speciesRow["status"] as? String, "eligible")
+        XCTAssertGreaterThan(speciesRow["fieldCount"] as? Int ?? 0, 0)
+        XCTAssertNil(speciesRow["skipReason"])
+
+        let textRow = try XCTUnwrap(rows.first { $0["id"] as? String == "text:res/text/route201.txt" })
+        XCTAssertEqual(textRow["status"] as? String, "eligible")
+        let textKindCounts = try XCTUnwrap(textRow["fieldKindCounts"] as? [[String: Any]])
+        XCTAssertTrue(textKindCounts.contains { $0["kind"] as? String == "string" && ($0["count"] as? Int ?? 0) > 0 })
+
+        let containerRow = try XCTUnwrap(rows.first { $0["id"] as? String == "personal:res/prebuilt/poketool/personal/personal.narc" })
+        XCTAssertEqual(containerRow["status"] as? String, "skipped")
+        XCTAssertEqual(containerRow["fieldCount"] as? Int, 0)
+        XCTAssertEqual(containerRow["skipReason"] as? String, "containerOrNARC")
+
+        let buckets = try XCTUnwrap(report["blockedReasonBuckets"] as? [[String: Any]])
+        XCTAssertTrue(buckets.contains { $0["reason"] as? String == "containerOrNARC" && ($0["rowCount"] as? Int ?? 0) > 0 })
+        XCTAssertTrue(buckets.contains { $0["reason"] as? String == "generatedReference" && ($0["rowCount"] as? Int ?? 0) > 0 })
+
+        XCTAssertNil(report["snapshot"])
+        XCTAssertFalse(output.contains("\"snapshot\""))
+        XCTAssertFalse(output.contains("\"textDraft\""))
+        XCTAssertFalse(output.contains("\"mutationPlan\""))
+        XCTAssertFalse(output.contains("\"textPreview\""))
+        XCTAssertFalse(output.contains("SPECIES_KADABRA"))
+        XCTAssertFalse(output.contains("EVO_LEVEL"))
+        XCTAssertFalse(output.contains("hello"))
+        XCTAssertFalse(output.contains("world"))
+        XCTAssertFalse(output.contains("I like shorts!"))
+        XCTAssertFalse(output.contains("POTION"))
     }
 
     func testNDSDataCatalogCommandEmitsPlatinumMapInventoryJSON() throws {
@@ -2389,6 +2675,59 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertEqual(factValue("Gen V Blocked Action Audit Packet", in: itemFacts), "previewOnly")
         XCTAssertTrue(factValue("Gen V Unique Blocked Actions", in: itemFacts)?.contains("binary write") == true)
         XCTAssertTrue(factValue("Gen V Diagnostic Code Summary", in: itemFacts)?.contains("NDS_GEN_V_WRITE_BLOCKED") == true)
+        XCTAssertNil(factValue("Migration Status", in: itemFacts))
+        XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
+    }
+
+    func testNDSDataCatalogCommandEmitsPokeBlackReadinessDigestPacketJSON() throws {
+        let root = try makeTestBlackDecompRoot()
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["nds-data-catalog", root.path, "--json"])
+        )
+
+        let records = try XCTUnwrap(catalog["records"] as? [[String: Any]])
+        let packet = try XCTUnwrap(records.first { $0["id"] as? String == "resources:gen-v/readiness-digest-packet" })
+        XCTAssertEqual(packet["domain"] as? String, "resources")
+        XCTAssertEqual(packet["relativePath"] as? String, "gen-v/readiness-digest-packet")
+        XCTAssertEqual(packet["format"] as? String, "unknown")
+        XCTAssertEqual(packet["role"] as? String, "metadataPacket")
+        XCTAssertEqual(packet["exists"] as? Bool, true)
+        let readiness = try XCTUnwrap(packet["readiness"] as? [String: Any])
+        XCTAssertEqual(readiness["status"] as? String, "partial")
+        let facts = try XCTUnwrap(packet["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: facts), "readinessDigestPacket")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Packet", in: facts), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Basis", in: facts), "existingCatalogPacketFactsOnly")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Posture", in: facts), "previewOnlyNoParserNoWritesNoExecution")
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: facts)?.contains("gen-v/variant-readiness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: facts)?.contains("gen-v/generated-output-freshness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: facts)?.contains("gen-v/blocked-action-audit-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Digest Variant Readiness Summary", in: facts)?.contains("black.us=sourceMarkerPresent") == true)
+        XCTAssertTrue(factValue("Gen V Digest Generated Output Summary", in: facts)?.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Digest Blocked Action Summary", in: facts)?.contains("binary write") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Coverage Summary", in: facts)?.contains("roots=8, members=8, variantCoverage=3/4") == true)
+        XCTAssertTrue(factValue("Gen V Manual Build Readiness Summary", in: facts)?.contains("targetFreshness=black-rom:pokeblack.nds=missing") == true)
+        XCTAssertEqual(factValue("Gen V Readiness Digest Copy Guidance", in: facts), "copyOnlyUseBuildPatchPlaytestReportRowsForManualReview")
+        XCTAssertNil(packet["migrationPlan"])
+        XCTAssertNil(packet["textBankPreview"])
+        let diagnostics = try XCTUnwrap(packet["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_READINESS_DIGEST_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let resourceIndex = try decodeJSON(
+            PokemonHackCLI.run(arguments: ["resource-index", root.path, "--json"])
+        )
+        let items = try XCTUnwrap(resourceIndex["items"] as? [[String: Any]])
+        let packetItem = try XCTUnwrap(items.first { $0["category"] as? String == "NDS Data resources" && $0["path"] as? String == "gen-v/readiness-digest-packet" })
+        XCTAssertEqual(packetItem["kind"] as? String, "unknown")
+        let itemFacts = try XCTUnwrap(packetItem["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: itemFacts), "readinessDigestPacket")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Packet", in: itemFacts), "previewOnly")
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: itemFacts)?.contains("blocked-action-audit-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Manual Build Readiness Summary", in: itemFacts)?.contains("pokeblack.nds=missing") == true)
         XCTAssertNil(factValue("Migration Status", in: itemFacts))
         XCTAssertNil(factValue("Text Bank Preview", in: itemFacts))
     }
@@ -7545,6 +7884,11 @@ final class PokemonHackCLITests: XCTestCase {
         let sourceTables = try XCTUnwrap(forms["sourceTables"] as? [[String: Any]])
         XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/pokemon/form_species_tables.h" && $0["indexedCount"] as? Int == 1 && $0["status"] as? String == "readOnly" })
         XCTAssertTrue(sourceTables.contains { $0["path"] as? String == "src/data/pokemon/form_change_tables.h" && $0["indexedCount"] as? Int == 1 && $0["status"] as? String == "readOnly" })
+        let candidateDigest = try compatibilityCandidateDigest(in: result)
+        XCTAssertEqual(candidateDigest["status"] as? String, "candidates")
+        XCTAssertTrue((candidateDigest["summary"] as? String)?.contains("report-only source-backed candidate seam") == true)
+        try assertCompatibilityCandidate(in: candidateDigest, surface: "items", path: "src/data/items.h", tableSymbol: "gItems")
+        assertNoBlockedGateCompatibilityCandidates(in: candidateDigest)
     }
 
     func testPokemonCompatibilityCommandEmitsModernEmeraldMetadataJSON() throws {
@@ -8079,6 +8423,23 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(blockedActions.contains("reference writes"))
         XCTAssertTrue(blockedActions.contains("ROM writes"))
         XCTAssertTrue(blockedActions.contains("binary writes"))
+        let candidateDigest = try compatibilityCandidateDigest(in: result)
+        XCTAssertEqual(candidateDigest["status"] as? String, "candidates")
+        let tmhmCandidate = try assertCompatibilityCandidate(
+            in: candidateDigest,
+            surface: "moves",
+            path: "src/data/pokemon/tmhm_learnsets.h",
+            tableSymbol: "gTMHMLearnsets"
+        )
+        XCTAssertEqual(tmhmCandidate["sourceRole"] as? String, "editableTMHMLearnsets")
+        XCTAssertEqual(tmhmCandidate["mutationPlanGate"] as? String, "Move mutation-plan gate")
+        try assertCompatibilityCandidate(
+            in: candidateDigest,
+            surface: "moves",
+            path: "src/data/pokemon/tutor_learnsets.h",
+            tableSymbol: "sTutorLearnsets/gTutorLearnsets"
+        )
+        assertNoBlockedGateCompatibilityCandidates(in: candidateDigest)
     }
 
     func testPokemonCompatibilityCommandEmitsExpansionContestScalarsEditableJSON() throws {
@@ -9503,6 +9864,56 @@ final class PokemonHackCLITests: XCTestCase {
         try data.write(to: url)
     }
 
+    private func writePatchExportManifestJSON(
+        outputURL: URL,
+        patchURL: URL,
+        baseROMURL: URL,
+        backupPath: String? = nil
+    ) throws {
+        var manifest: [String: Any] = [
+            "schemaVersion": 1,
+            "action": "patch-apply-export",
+            "patchPath": patchURL.path,
+            "baseROMPath": baseROMURL.path,
+            "outputPath": outputURL.path,
+            "patchFormat": "ips",
+            "baseROMSHA1": "a9993e364706816aba3e25717850c26c9cd0d89d",
+            "outputROMSHA1": "aa3159afc1d353ecf7d91cbd242724ce1f99d443",
+            "baseROMCRC32": "352441c2",
+            "outputROMCRC32": "637ee644",
+            "patchCRC32": "e22b9636",
+            "checksumPolicy": "test checksum policy",
+            "headerPolicy": [
+                "mode": "no-header-rewrite",
+                "detail": "test no header rewrite",
+                "shouldRewriteHeader": false,
+            ],
+            "diagnostics": [],
+        ]
+        manifest["backupPath"] = backupPath ?? NSNull()
+        let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+        try write(data, to: URL(fileURLWithPath: outputURL.path + ".manifest.json"))
+    }
+
+    private func runGit(_ arguments: [String], in directory: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.currentDirectoryURL = directory
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let error = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            XCTFail("git \(arguments.joined(separator: " ")) failed: \(output)\(error)")
+        }
+    }
+
     private func recursiveRelativeFiles(in root: URL) throws -> [String] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
@@ -9648,6 +10059,53 @@ final class PokemonHackCLITests: XCTestCase {
         data.append(UInt8((value >> 8) & 0xff))
         data.append(UInt8((value >> 16) & 0xff))
         data.append(UInt8((value >> 24) & 0xff))
+    }
+
+    private func compatibilityCandidateDigest(
+        in result: [String: Any],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> [String: Any] {
+        try XCTUnwrap(result["candidateDigest"] as? [String: Any], file: file, line: line)
+    }
+
+    @discardableResult
+    private func assertCompatibilityCandidate(
+        in digest: [String: Any],
+        surface: String,
+        path: String,
+        tableSymbol: String?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> [String: Any] {
+        let candidates = try XCTUnwrap(digest["candidates"] as? [[String: Any]], file: file, line: line)
+        return try XCTUnwrap(
+            candidates.first { candidate in
+                candidate["surface"] as? String == surface
+                    && candidate["path"] as? String == path
+                    && candidate["tableSymbol"] as? String == tableSymbol
+            },
+            "Missing compatibility candidate \(surface) \(path) \(tableSymbol ?? "<none>")",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertNoBlockedGateCompatibilityCandidates(
+        in digest: [String: Any],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let candidates = digest["candidates"] as? [[String: Any]] ?? []
+        for candidate in candidates {
+            let path = candidate["path"] as? String
+            XCTAssertFalse(path == "generated", file: file, line: line)
+            XCTAssertFalse(path?.hasPrefix("generated/") == true, file: file, line: line)
+            XCTAssertFalse(path == "src/data/pokemon/all_learnables.json", file: file, line: line)
+            XCTAssertFalse(path?.hasPrefix("references/") == true, file: file, line: line)
+            XCTAssertFalse(path?.hasPrefix("include/constants/") == true, file: file, line: line)
+            XCTAssertFalse(path == "ROM output", file: file, line: line)
+        }
     }
 
     private func decodeJSON(_ json: String) throws -> [String: Any] {

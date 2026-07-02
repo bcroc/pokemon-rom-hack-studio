@@ -215,6 +215,8 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(mapHeader.relatedRecords.contains { $0.recordID == "maps:files/fielddata/mapmatrix" && $0.label == "Matrix" })
         XCTAssertTrue(mapHeader.relatedRecords.contains { $0.recordID == "maps:files/fielddata/maptable" && $0.label == "Map header" })
         XCTAssertTrue(factValue("Gen IV Action State", in: mapHeader)?.contains("integer-literal sMapHeaders scalars") == true)
+        XCTAssertFalse(factValue("Gen IV Blocked Actions", in: mapHeader)?.contains("semantic editing") == true)
+        XCTAssertFalse(factValue("Gen IV Blocked Actions", in: mapHeader)?.contains("raw C-anchor write") == true)
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: mapHeader)?.contains("non-integer C scalar write") == true)
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: mapHeader)?.contains("binary write") == true)
         XCTAssertTrue(mapHeader.diagnostics.contains { $0.code == "NDS_DATA_HGSS_MAP_HEADER_SEMANTIC_SCALARS" })
@@ -223,6 +225,8 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(mapHeaderPacket.component, "mapHeader")
         XCTAssertEqual(mapHeaderPacket.sourceRole, "hgssMapHeaderInventory")
         XCTAssertTrue(mapHeaderPacket.blockedActions.contains("binary write"))
+        XCTAssertFalse(mapHeaderPacket.blockedActions.contains("semantic editing"))
+        XCTAssertFalse(mapHeaderPacket.blockedActions.contains("raw C-anchor write"))
         XCTAssertTrue(mapHeaderPacket.includedRecords.contains { $0.recordID == "maps:files/fielddata/mapmatrix" })
         XCTAssertTrue(mapHeaderPacket.includedRecords.contains { $0.recordID == "maps:files/fielddata/maptable" })
         XCTAssertEqual(factValue("Gen IV Map Review Component", in: mapHeader), "mapHeader")
@@ -1080,6 +1084,60 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Blocked Action Audit Packet" && $0.value == "previewOnly" })
         XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Unique Blocked Actions" && $0.value.contains("binary write") })
         XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Diagnostic Code Summary" && $0.value.contains("NDS_GEN_V_WRITE_BLOCKED") })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
+    }
+
+    func testPokeBlackCatalogSurfacesGenVReadinessDigestPacket() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let packet = try XCTUnwrap(catalog.records.first { $0.id == "resources:gen-v/readiness-digest-packet" })
+        XCTAssertEqual(packet.domain, .resources)
+        XCTAssertEqual(packet.relativePath, "gen-v/readiness-digest-packet")
+        XCTAssertEqual(packet.format, .unknown)
+        XCTAssertEqual(packet.role, .metadataPacket)
+        XCTAssertTrue(packet.exists)
+        XCTAssertEqual(packet.readiness?.status, .partial)
+        XCTAssertEqual(factValue("Gen V Source Role", in: packet), "readinessDigestPacket")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Packet", in: packet), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Basis", in: packet), "existingCatalogPacketFactsOnly")
+        XCTAssertEqual(factValue("Gen V Readiness Digest Posture", in: packet), "previewOnlyNoParserNoWritesNoExecution")
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: packet)?.contains("gen-v/variant-readiness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: packet)?.contains("gen-v/generated-output-freshness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: packet)?.contains("gen-v/blocked-action-audit-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Digest Variant Readiness Summary", in: packet)?.contains("Gen V Variant Marker States=black.us=sourceMarkerPresent") == true)
+        XCTAssertTrue(factValue("Gen V Digest Generated Output Summary", in: packet)?.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(factValue("Gen V Digest Blocked Action Summary", in: packet)?.contains("Gen V Unique Blocked Actions=") == true)
+        XCTAssertTrue(factValue("Gen V Digest Blocked Action Summary", in: packet)?.contains("binary write") == true)
+        XCTAssertTrue(factValue("Gen V Source Data Coverage Summary", in: packet)?.contains("roots=8, members=8, variantCoverage=3/4") == true)
+        XCTAssertTrue(factValue("Gen V Manual Build Readiness Summary", in: packet)?.contains("metadata=Makefile=present") == true)
+        XCTAssertTrue(factValue("Gen V Manual Build Readiness Summary", in: packet)?.contains("targetFreshness=black-rom:pokeblack.nds=missing") == true)
+        XCTAssertEqual(factValue("Gen V Readiness Digest Copy Guidance", in: packet), "copyOnlyUseBuildPatchPlaytestReportRowsForManualReview")
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: packet)?.contains("binary write") == true)
+        XCTAssertNil(packet.textBankPreview)
+        XCTAssertNil(packet.migrationPlan)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_READINESS_DIGEST_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let plan = NDSDataMutationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEditDraft(recordID: packet.id, editedText: "changed\n")
+        )
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_ROLE_BLOCKED" })
+
+        let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
+        let packetItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "gen-v/readiness-digest-packet" })
+        XCTAssertEqual(packetItem.kind, "unknown")
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Source Role" && $0.value == "readinessDigestPacket" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Readiness Digest Packet" && $0.value == "previewOnly" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Readiness Digest Inputs" && $0.value.contains("blocked-action-audit-packet=present") })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Manual Build Readiness Summary" && $0.value.contains("pokeblack.nds=missing") })
         XCTAssertFalse(packetItem.facts.contains { $0.label == "Migration Status" })
         XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
     }
@@ -4262,6 +4320,36 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(diamondReferencePlan.editPlan.changes.isEmpty)
     }
 
+    func testNDSDataEncounterJSONRowOperationsPreserveUnknownFieldsObjectOrderAndOuterFormatting() throws {
+        try assertEncounterJSONRowOperationsPreserveUnknownFieldsObjectOrderAndOuterFormatting(
+            rootName: "pokeplatinum",
+            configure: makePlatinumFixture,
+            encounterPath: "res/field/encounters/route201.json",
+            arrayKey: "land_encounters",
+            firstRow: #"{"level": 2, "species": "SPECIES_STARLY", "unknown_note": "first", "enabled": true}"#,
+            secondRow: #"{"level": 3, "species": "SPECIES_BIDOOF", "unknown_note": "second", "enabled": false}"#,
+            insertedRow: #"{"level": 4, "species": "SPECIES_SHINX", "unknown_note": "inserted", "enabled": true}"#
+        )
+        try assertEncounterJSONRowOperationsPreserveUnknownFieldsObjectOrderAndOuterFormatting(
+            rootName: "pokeheartgold",
+            configure: makeHeartGoldFixture,
+            encounterPath: "files/fielddata/encountdata/johto/route29.json",
+            arrayKey: "slots",
+            firstRow: #"{"species": "RATTATA", "rate": 30, "enabled": true, "unknown_note": "first"}"#,
+            secondRow: #"{"species": "PIDGEY", "rate": 20, "enabled": false, "unknown_note": "second"}"#,
+            insertedRow: #"{"species": "HOOTHOOT", "rate": 25, "enabled": true, "unknown_note": "inserted"}"#
+        )
+        try assertEncounterJSONRowOperationsPreserveUnknownFieldsObjectOrderAndOuterFormatting(
+            rootName: "pokediamond",
+            configure: makeDiamondFixture,
+            encounterPath: "files/fielddata/encountdata/sinnoh/route201.json",
+            arrayKey: "slots",
+            firstRow: #"{"species": "BIDOOF", "rate": 30, "enabled": true, "unknown_note": "first"}"#,
+            secondRow: #"{"species": "STARLY", "rate": 20, "enabled": false, "unknown_note": "second"}"#,
+            insertedRow: #"{"species": "SHINX", "rate": 25, "enabled": true, "unknown_note": "inserted"}"#
+        )
+    }
+
     func testNDSDataSemanticEditorPlansDiamondPearlPersonalJSONScalars() throws {
         let root = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         try write("{\"personal\":2,\"growth_rate\":\"medium\",\"forms\":[{\"id\":1}]}\n", to: root.appendingPathComponent("files/poketool/personal_pearl/personal.json"))
@@ -5248,6 +5336,75 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(pmdSnapshot.diagnostics.contains { $0.code == "NDS_DATA_SEMANTIC_PROFILE_BLOCKED" })
     }
 
+    func testNDSDataSemanticCoverageReportSummarizesEligibleCountsAndBlockedBuckets() throws {
+        let platinum = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let platinumCatalog = try NDSDataCatalogBuilder.build(path: platinum.path)
+
+        let report = NDSDataSemanticCoverageReportBuilder.build(catalog: platinumCatalog)
+
+        XCTAssertEqual(report.profile, .pokeplatinum)
+        XCTAssertEqual(report.family, .platinum)
+        XCTAssertEqual(report.rootPath, platinum.path)
+        XCTAssertEqual(report.summary.catalogRows, platinumCatalog.records.count)
+        XCTAssertGreaterThan(report.summary.scannedRows, 0)
+        XCTAssertGreaterThan(report.summary.eligibleRows, 0)
+        XCTAssertGreaterThan(report.summary.eligibleFields, 0)
+        XCTAssertGreaterThan(report.summary.blockedRows, 0)
+        XCTAssertGreaterThan(report.summary.skippedRows, 0)
+        XCTAssertGreaterThan(report.fieldKindCounts.first { $0.kind == .number }?.count ?? 0, 0)
+        XCTAssertGreaterThan(report.fieldKindCounts.first { $0.kind == .string }?.count ?? 0, 0)
+        XCTAssertGreaterThan(report.fieldKindCounts.first { $0.kind == .bool }?.count ?? 0, 0)
+        XCTAssertTrue(report.domainSummaries.contains { $0.domain == .species && $0.eligibleRows > 0 && $0.eligibleFields > 0 })
+
+        let speciesRow = try XCTUnwrap(report.rows.first { $0.id == "species:res/pokemon/abra/data.json" })
+        XCTAssertEqual(speciesRow.status, .eligible)
+        XCTAssertGreaterThan(speciesRow.fieldCount, 0)
+        XCTAssertGreaterThan(speciesRow.fieldKindCounts.first { $0.kind == .number }?.count ?? 0, 0)
+        XCTAssertNil(speciesRow.skipReason)
+
+        let textRow = try XCTUnwrap(report.rows.first { $0.id == "text:res/text/route201.txt" })
+        XCTAssertEqual(textRow.status, .eligible)
+        XCTAssertGreaterThan(textRow.fieldKindCounts.first { $0.kind == .string }?.count ?? 0, 0)
+
+        let containerRow = try XCTUnwrap(report.rows.first { $0.id == "personal:res/prebuilt/poketool/personal/personal.narc" })
+        XCTAssertEqual(containerRow.status, .skipped)
+        XCTAssertEqual(containerRow.fieldCount, 0)
+        XCTAssertEqual(containerRow.skipReason, "containerOrNARC")
+
+        let generatedRow = try XCTUnwrap(report.rows.first { $0.id == "resources:generated/species.txt" })
+        XCTAssertEqual(generatedRow.status, .skipped)
+        XCTAssertEqual(generatedRow.fieldCount, 0)
+        XCTAssertEqual(generatedRow.skipReason, "generatedReference")
+
+        XCTAssertTrue(report.blockedReasonBuckets.contains { $0.reason == "containerOrNARC" && $0.rowCount > 0 && $0.sampleRecordIDs.contains(containerRow.id) })
+        XCTAssertTrue(report.blockedReasonBuckets.contains { $0.reason == "generatedReference" && $0.rowCount > 0 && $0.sampleRecordIDs.contains(generatedRow.id) })
+
+        let encoded = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("SPECIES_KADABRA"))
+        XCTAssertFalse(encoded.contains("hello\\nworld"))
+        XCTAssertFalse(encoded.contains("I like shorts!"))
+        XCTAssertFalse(encoded.contains("NDSDataSemanticSnapshot"))
+
+        let referenceRoot = try makeRoot(name: "references/pokeplatinum", configure: makePlatinumFixture)
+        let referenceReport = NDSDataSemanticCoverageReportBuilder.build(
+            catalog: try NDSDataCatalogBuilder.build(path: referenceRoot.path)
+        )
+        XCTAssertEqual(referenceReport.summary.scannedRows, 0)
+        XCTAssertEqual(referenceReport.summary.eligibleRows, 0)
+        XCTAssertTrue(referenceReport.rows.allSatisfy { $0.status == .skipped && $0.skipReason == "referenceRoot" })
+        XCTAssertTrue(referenceReport.blockedReasonBuckets.contains { $0.reason == "referenceRoot" && $0.rowCount == referenceReport.summary.catalogRows })
+
+        let black = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        let blackReport = NDSDataSemanticCoverageReportBuilder.build(
+            catalog: try NDSDataCatalogBuilder.build(path: black.path)
+        )
+        XCTAssertEqual(blackReport.profile, .pokeblack)
+        XCTAssertEqual(blackReport.summary.scannedRows, 0)
+        XCTAssertEqual(blackReport.summary.eligibleRows, 0)
+        XCTAssertTrue(blackReport.rows.allSatisfy { $0.status == .skipped && $0.skipReason == "genVReadOnly" })
+        XCTAssertTrue(blackReport.blockedReasonBuckets.contains { $0.reason == "genVReadOnly" && $0.rowCount == blackReport.summary.catalogRows })
+    }
+
     func testNDSDataMutationPlanBlocksHashMismatchBeforeApply() throws {
         let root = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
         let catalog = try NDSDataCatalogBuilder.build(path: root.path)
@@ -5506,6 +5663,78 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(result.diagnostics.contains { $0.code == "NDS_DATA_APPLY_PATH_SYMLINK_OUTSIDE_ROOT" })
         XCTAssertEqual(try Data(contentsOf: outsideFile), original)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups/test").path))
+    }
+
+    private func assertEncounterJSONRowOperationsPreserveUnknownFieldsObjectOrderAndOuterFormatting(
+        rootName: String,
+        configure: (URL) throws -> Void,
+        encounterPath: String,
+        arrayKey: String,
+        firstRow: String,
+        secondRow: String,
+        insertedRow: String
+    ) throws {
+        let root = try makeRoot(name: rootName, configure: configure)
+        let source = """
+        {
+          "zeta_unknown": "kept-before",
+          "\(arrayKey)": [
+            \(firstRow),
+            \(secondRow)
+          ],
+          "swarms": [
+            "UNCHANGED_ONE",
+            "UNCHANGED_TWO"
+          ],
+          "map_category": {
+            "map_type": "field",
+            "map_number": 12
+          },
+          "alpha_unknown": "kept-after"
+        }
+
+        """
+        try write(source, to: root.appendingPathComponent(encounterPath))
+        let original = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        let prefixMarker = "  \"\(arrayKey)\": "
+        let suffixMarker = ",\n  \"swarms\":"
+        let originalPrefixEnd = try XCTUnwrap(original.range(of: prefixMarker)?.upperBound)
+        let originalSuffixStart = try XCTUnwrap(original.range(of: suffixMarker, range: originalPrefixEnd..<original.endIndex)?.lowerBound)
+        let originalPrefix = String(original[..<originalPrefixEnd])
+        let originalSuffix = String(original[originalSuffixStart...])
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let plan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: arrayKey,
+                operations: [
+                    .insert(index: 1, rowText: insertedRow),
+                    .delete(index: 0),
+                    .reorder(fromIndex: 1, toIndex: 0)
+                ]
+            )
+        )
+
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.beforeRowCount, 2)
+        XCTAssertEqual(plan.afterRowCount, 2)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        let updatedPrefixEnd = try XCTUnwrap(updated.range(of: prefixMarker)?.upperBound)
+        let updatedSuffixStart = try XCTUnwrap(updated.range(of: suffixMarker, range: updatedPrefixEnd..<updated.endIndex)?.lowerBound)
+
+        XCTAssertEqual(String(updated[..<updatedPrefixEnd]), originalPrefix)
+        XCTAssertEqual(String(updated[updatedSuffixStart...]), originalSuffix)
+        let expectedArray = "  \"\(arrayKey)\": [\n    \(secondRow),\n    \(insertedRow)\n  ]"
+        XCTAssertTrue(
+            updated.contains(expectedArray),
+            updated
+        )
     }
 
     private func makeRoot(name: String, configure: (URL) throws -> Void) throws -> URL {

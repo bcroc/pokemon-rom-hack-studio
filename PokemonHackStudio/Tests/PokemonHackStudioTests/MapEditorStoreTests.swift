@@ -639,6 +639,20 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertFalse(editor.canApply)
         XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
         XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+        XCTAssertNil(store.selectedResourceReadinessPacketCopyDisabledReason)
+
+        NSPasteboard.general.clearContents()
+        store.copySelectedResourceReadinessPacketJSONToPasteboard()
+        let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
+        let packetObject = try JSONSerialization.jsonObject(with: packetData) as? [String: Any]
+        let assetObject = try XCTUnwrap(packetObject?["asset"] as? [String: Any])
+        XCTAssertEqual(assetObject["path"] as? String, "files")
+        let readinessObject = try XCTUnwrap(packetObject?["ndsReadiness"] as? [String: Any])
+        XCTAssertEqual(readinessObject["recordID"] as? String, "resources:files")
+        XCTAssertEqual(readinessObject["canEdit"] as? Bool, false)
+        XCTAssertEqual(readinessObject["canPreview"] as? Bool, false)
+        XCTAssertEqual(readinessObject["canApply"] as? Bool, false)
 
         store.updateSelectedNDSDataDraftText("changed\n")
         XCTAssertNil(store.selectedNDSDataDraft)
@@ -897,9 +911,10 @@ final class MapEditorStoreTests: XCTestCase {
 
         let copyCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:resource-readiness-packet-json" })
         XCTAssertTrue(copyCommand.availability.isEnabled)
+        XCTAssertNil(store.selectedResourceReadinessPacketCopyDisabledReason)
 
         NSPasteboard.general.clearContents()
-        store.executeCommand(copyCommand)
+        store.copySelectedResourceReadinessPacketJSONToPasteboard()
 
         let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
@@ -968,9 +983,10 @@ final class MapEditorStoreTests: XCTestCase {
 
         let copyCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:resource-readiness-packet-json" })
         XCTAssertTrue(copyCommand.availability.isEnabled)
+        XCTAssertNil(store.selectedResourceReadinessPacketCopyDisabledReason)
 
         NSPasteboard.general.clearContents()
-        store.executeCommand(copyCommand)
+        store.copySelectedResourceReadinessPacketJSONToPasteboard()
 
         let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
@@ -1031,9 +1047,10 @@ final class MapEditorStoreTests: XCTestCase {
 
         let copyCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:resource-readiness-packet-json" })
         XCTAssertTrue(copyCommand.availability.isEnabled)
+        XCTAssertNil(store.selectedResourceReadinessPacketCopyDisabledReason)
 
         NSPasteboard.general.clearContents()
-        store.executeCommand(copyCommand)
+        store.copySelectedResourceReadinessPacketJSONToPasteboard()
 
         let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
@@ -1691,6 +1708,74 @@ final class MapEditorStoreTests: XCTestCase {
         store.focusGenVGeneratedOutputFreshnessPacketForBridge()
         XCTAssertEqual(store.selection, .resources)
         XCTAssertEqual(store.selectedResourceAsset?.path, "gen-v/generated-output-freshness-packet")
+    }
+
+    @MainActor
+    func testGenVReadinessDigestRowsCopyExistingCatalogAndBuildFacts() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let digestAsset = try XCTUnwrap(assetCatalog.rows.first { $0.path == "gen-v/readiness-digest-packet" })
+
+        let digestRows = store.genVReadinessDigestRows
+        XCTAssertEqual(
+            Set(digestRows.map(\.id)),
+            [
+                "gen-v-readiness-digest:summary",
+                "gen-v-readiness-digest:variant-readiness",
+                "gen-v-readiness-digest:generated-output-freshness",
+                "gen-v-readiness-digest:blocked-action-audit",
+                "gen-v-readiness-digest:source-data-manual-build",
+            ]
+        )
+        XCTAssertTrue(digestRows.allSatisfy { $0.section == .healthMatrix })
+        XCTAssertTrue(
+            digestRows.flatMap(\.actions).allSatisfy { action in
+                action.kind == .copyPath || action.kind == .copyValue || action.kind == .copyCommand || action.kind == .rerunGuidance
+            }
+        )
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:summary" }?.detail.contains("gen-v/blocked-action-audit-packet=present") == true)
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:variant-readiness" }?.detail.contains("black.us=sourceMarkerPresent") == true)
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:generated-output-freshness" }?.detail.contains("black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:blocked-action-audit" }?.detail.contains("binary write") == true)
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:source-data-manual-build" }?.detail.contains("roots=8, members=8, variantCoverage=3/4") == true)
+        XCTAssertTrue(digestRows.first { $0.id == "gen-v-readiness-digest:source-data-manual-build" }?.detail.contains("targetFreshness=black-rom:pokeblack.nds=missing") == true)
+        XCTAssertTrue(store.selectedRunnableBuildTargets.isEmpty)
+        XCTAssertFalse(store.canRunSelectedDecompBuild)
+        XCTAssertFalse(store.canLaunchSelectedPlaytest)
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        let buildRows = try XCTUnwrap(reportObject?["buildRows"] as? [[String: Any]])
+        XCTAssertTrue(buildRows.contains { $0["title"] as? String == "Gen V Readiness Digest" && ($0["detail"] as? String)?.contains("copy/report-only") == true })
+        XCTAssertTrue(buildRows.contains { $0["title"] as? String == "Generated-output freshness facts" && ($0["detail"] as? String)?.contains("pokeblack.nds=missing") == true })
+        XCTAssertTrue(buildRows.contains { $0["title"] as? String == "Source-data and manual build readiness" && ($0["detail"] as? String)?.contains("roots=8") == true })
+
+        store.requestResourceAssetSelection(digestAsset.id)
+        XCTAssertNil(store.selectedResourceReadinessPacketCopyDisabledReason)
+        store.copySelectedResourceReadinessPacketJSONToPasteboard()
+        let packetJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let packetData = try XCTUnwrap(packetJSON.data(using: .utf8))
+        let packetObject = try JSONSerialization.jsonObject(with: packetData) as? [String: Any]
+        let assetObject = try XCTUnwrap(packetObject?["asset"] as? [String: Any])
+        XCTAssertEqual(assetObject["path"] as? String, "gen-v/readiness-digest-packet")
+        let facts = try XCTUnwrap(assetObject["facts"] as? [[String: Any]])
+        XCTAssertEqual(factValue("Gen V Source Role", in: facts), "readinessDigestPacket")
+        XCTAssertTrue(factValue("Gen V Readiness Digest Inputs", in: facts)?.contains("gen-v/generated-output-freshness-packet=present") == true)
+        XCTAssertTrue(factValue("Gen V Manual Build Readiness Summary", in: facts)?.contains("pokeblack.nds=missing") == true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("gen-v/readiness-digest-packet").path))
     }
 
     @MainActor
@@ -3012,7 +3097,10 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNotNil(platinumBridge.rows.first { $0.id == "blocked-actions" && $0.detail?.contains("mutation apply") == true })
 
         NSPasteboard.general.clearContents()
-        platinumStore.copySelectedNDSMapReviewPacketJSONToPasteboard()
+        let mapReviewCommand = try XCTUnwrap(platinumStore.workbenchCommands.first { $0.id == "copy:gen-iv-map-review-json" })
+        XCTAssertEqual(mapReviewCommand.action, .copySelectedNDSMapReviewPacketJSON)
+        XCTAssertTrue(mapReviewCommand.availability.isEnabled)
+        platinumStore.executeCommand(mapReviewCommand)
         let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         XCTAssertEqual(payload["recordID"] as? String, "maps:res/field/maps/route201/map.bin")
@@ -5592,6 +5680,73 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testNDSSemanticCoverageLoadsIntoBuildWorkbenchAndCopiesJSONReadOnly() throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let buildReport = try XCTUnwrap(store.selectedBuildReport)
+        XCTAssertTrue(buildReport.isNDS)
+        XCTAssertNil(store.selectedNDSSemanticCoverageReport)
+        XCTAssertEqual(store.ndsSemanticCoverageLoadStatus, .idle)
+
+        let unloadedCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:nds-semantic-coverage-json" })
+        XCTAssertEqual(unloadedCommand.action, .copyNDSSemanticCoverageJSON)
+        XCTAssertFalse(unloadedCommand.availability.isEnabled)
+
+        store.loadSelectedNDSSemanticCoverageReport()
+
+        let report = try XCTUnwrap(store.selectedNDSSemanticCoverageReport)
+        XCTAssertGreaterThan(report.catalogRows, 0)
+        XCTAssertGreaterThan(report.scannedRows, 0)
+        XCTAssertGreaterThan(report.eligibleRows, 0)
+        XCTAssertGreaterThan(report.eligibleFields, 0)
+        XCTAssertGreaterThan(report.blockedRows, 0)
+        XCTAssertGreaterThan(report.skippedRows, 0)
+        XCTAssertGreaterThan(report.bucketCount, 0)
+        XCTAssertEqual(store.ndsSemanticCoverageLoadStatus, .loaded(label: report.statusLabel, status: report.status))
+        XCTAssertTrue(store.filteredNDSSemanticCoverageRows.contains { $0.title == "NDS semantic coverage" && $0.detail.contains("write-blocked") })
+        XCTAssertTrue(store.filteredNDSSemanticCoverageRows.contains { $0.id == "nds-semantic-coverage:domain:species" && $0.detail.contains("write-blocked") })
+        XCTAssertTrue(store.filteredNDSSemanticCoverageRows.contains { $0.id == "nds-semantic-coverage:field-kind:number" })
+        XCTAssertTrue(store.filteredNDSSemanticCoverageRows.contains { $0.title == "Blocked/skipped bucket" && $0.subtitle.contains("containerOrNARC") })
+        XCTAssertTrue(store.filteredBuildRowsForSelectedTab.contains { $0.section == .ndsSemanticCoverage })
+
+        NSPasteboard.general.clearContents()
+        store.copyNDSSemanticCoverageJSONToPasteboard()
+        var json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertFalse(json.contains("SPECIES_KADABRA"))
+        XCTAssertFalse(json.contains("hello\\nworld"))
+        var data = try XCTUnwrap(json.data(using: .utf8))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["profile"] as? String, "pokeplatinum")
+        let summary = try XCTUnwrap(object["summary"] as? [String: Any])
+        XCTAssertEqual(summary["eligibleFields"] as? Int, report.eligibleFields)
+        let buckets = try XCTUnwrap(object["blockedReasonBuckets"] as? [[String: Any]])
+        XCTAssertTrue(buckets.contains { $0["reason"] as? String == "containerOrNARC" })
+
+        let loadedCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:nds-semantic-coverage-json" })
+        XCTAssertTrue(loadedCommand.availability.isEnabled)
+        NSPasteboard.general.clearContents()
+        store.executeCommand(loadedCommand)
+        XCTAssertNotNil(NSPasteboard.general.string(forType: .string))
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        data = try XCTUnwrap(json.data(using: .utf8))
+        object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let exportedCoverage = try XCTUnwrap(object["ndsSemanticCoverage"] as? [String: Any])
+        let exportedSummary = try XCTUnwrap(exportedCoverage["summary"] as? [String: Any])
+        XCTAssertEqual(exportedSummary["eligibleFields"] as? Int, report.eligibleFields)
+
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("screenshots").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("exports").path))
+    }
+
+    @MainActor
     func testBuildReportSearchFiltersTargetsAndOutputPaths() throws {
         let root = try makeSourceIndexProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -5695,8 +5850,9 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(preview.hashesMatch, false)
         XCTAssertEqual(preview.plannedPatchPath, ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
         XCTAssertEqual(preview.absolutePlannedPatchPath, root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps").path)
-        XCTAssertTrue(preview.blockedActions.contains("BPS/IPS patch file writes"))
-        XCTAssertTrue(preview.blockedActions.contains("ROM export"))
+        XCTAssertTrue(preview.blockedActions.contains("BPS/IPS patch file writes from preview"))
+        XCTAssertTrue(preview.blockedActions.contains("ROM export from preview"))
+        XCTAssertFalse(preview.blockedActions.contains("BPS/IPS patch file writes"))
         XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "Patch creation preview" && $0.detail.contains("no patch files") })
         XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "ROM comparison" && $0.subtitle.contains("+1 bytes") })
         XCTAssertTrue(store.filteredPatchCreationPreviewRows.contains { $0.title == "Header policy" && $0.subtitle == "no-header-rewrite" })
@@ -5841,6 +5997,92 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPatchExportArtifactLibraryRowsCopyJSONWithoutWritingArtifacts() throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let output = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-cleanroom.gba")
+        let backup = root.appendingPathComponent(".pokemonhackstudio/backups/token/patches/clean-base-cleanroom.gba")
+        let baseData = Data("abc".utf8)
+        let outputData = Data("adc".utf8)
+        let backupData = Data("previous-output".utf8)
+        let patchData = makeBPSPatch(source: baseData, target: outputData)
+        try write(baseData, to: baseROM)
+        try write(patchData, to: patch)
+        try write(outputData, to: output)
+        try write(backupData, to: backup)
+        try writePatchExportManifest(
+            outputURL: output,
+            patchURL: patch,
+            baseROMURL: baseROM,
+            backupPath: backup.path,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        store.recheckPatchExportArtifactLibrary()
+
+        let library = try XCTUnwrap(store.selectedPatchExportArtifactLibrary)
+        XCTAssertEqual(store.patchExportArtifactLibraryLoadStatus, .loaded(count: 1, status: .valid))
+        XCTAssertEqual(library.items.count, 1)
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.outputPath, output.path)
+        XCTAssertEqual(item.manifestPath, output.path + ".manifest.json")
+        XCTAssertEqual(item.manifestStatus, PatchArtifactLibraryManifestStatus.matched.rawValue)
+        XCTAssertEqual(item.outputChecksumStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.baseROMStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.patchChecksumStatus, PatchArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.backupStatus, PatchExportArtifactBackupStatus.available.rawValue)
+        XCTAssertTrue(item.canReveal)
+        XCTAssertEqual(store.selectedPatchExportArtifactLibraryItemID, output.path)
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Patched ROM output" })
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Export manifest" })
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Base ROM status" })
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Patch checksum status" })
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Overwrite backup posture" && $0.subtitle == "available" })
+        XCTAssertTrue(store.filteredPatchExportArtifactLibraryRows.contains { $0.title == "Blocked actions" && $0.detail.contains("No patch apply/export") })
+        store.selectedBuildWorkbenchTab = .patch
+        XCTAssertTrue(store.filteredBuildRowsForSelectedTab.contains { $0.title == "Patched ROM output" })
+        XCTAssertNil(store.latestPatchApplyExportResult)
+        XCTAssertFalse(store.canApplyExportSelectedPatch)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+
+        let outputRow = try XCTUnwrap(store.filteredPatchExportArtifactLibraryRows.first { $0.title == "Patched ROM output" })
+        let outputCopy = try XCTUnwrap(outputRow.actions.first)
+        store.copyBuildReportRowActionToPasteboard(outputCopy)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), output.path)
+
+        NSPasteboard.general.clearContents()
+        store.copyPatchExportArtifactLibraryJSONToPasteboard()
+
+        let libraryJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let libraryData = try XCTUnwrap(libraryJSON.data(using: .utf8))
+        let libraryObject = try JSONSerialization.jsonObject(with: libraryData) as? [String: Any]
+        XCTAssertEqual(libraryObject?["isReadOnly"] as? Bool, true)
+        let rawItems = try XCTUnwrap(libraryObject?["items"] as? [[String: Any]])
+        XCTAssertEqual(rawItems.count, 1)
+        XCTAssertEqual(rawItems.first?["outputPath"] as? String, output.path)
+        XCTAssertEqual(rawItems.first?["backupStatus"] as? String, "available")
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        XCTAssertNotNil(reportObject?["patchExportArtifactLibrary"] as? [String: Any])
+        XCTAssertNil(reportObject?["patchManifest"])
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertEqual(try Data(contentsOf: output), outputData)
+        XCTAssertEqual(try Data(contentsOf: backup), backupData)
+    }
+
+    @MainActor
     func testPatchDistributionReadinessRowsCopyJSONAndRequireExplicitPatchSelection() throws {
         let root = try makeSourceIndexProject()
         let baseROM = root.appendingPathComponent("clean-base.gba")
@@ -5907,8 +6149,11 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Built output identity" })
         XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Header policy" && $0.subtitle == "no-header-rewrite" })
         XCTAssertTrue(store.filteredPatchDistributionReadinessRows.contains { $0.title == "Manual playtest readiness" })
+        let blockedActionsRow = try XCTUnwrap(store.filteredPatchDistributionReadinessRows.first { $0.title == "Blocked actions" })
+        XCTAssertTrue(blockedActionsRow.tags.contains("Patch file creation from readiness packet"))
+        XCTAssertFalse(blockedActionsRow.tags.contains("Patch file creation"))
         XCTAssertTrue(
-            store.filteredPatchDistributionReadinessRows.contains { $0.title == "Blocked actions" && $0.detail.contains("Patch file creation") },
+            store.filteredPatchDistributionReadinessRows.contains { $0.title == "Blocked actions" && $0.detail.contains("Patch file creation from readiness packet") },
             store.filteredPatchDistributionReadinessRows.map { "\($0.title): \($0.detail)" }.joined(separator: "\n")
         )
         store.selectedBuildWorkbenchTab = .patch
@@ -5953,6 +6198,14 @@ final class MapEditorStoreTests: XCTestCase {
         let builtOutput = root.appendingPathComponent("pokeemerald.gba")
         try write(Data("abc".utf8), to: baseROM)
         try write(Data("abcd".utf8), to: builtOutput)
+        try write(
+            """
+            {
+              "repositories": []
+            }
+            """,
+            to: root.appendingPathComponent("references/manifest.json")
+        )
         let binaryTemp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(binaryTemp)
         let rom = binaryTemp.url.appendingPathComponent("dry-run.gba")
@@ -5964,15 +6217,18 @@ final class MapEditorStoreTests: XCTestCase {
         let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
         store.selectedDecompBuildTargetID = targetID
         store.requestBaseROMPath(baseROM.path)
+        let beforeProjectFiles = try recursiveRelativeFiles(in: root)
+        let beforeROMFiles = try recursiveRelativeFiles(in: binaryTemp.url)
         store.loadSelectedPatchCreationPreview()
         store.recheckPatchArtifactLibrary()
+        store.recheckPatchExportArtifactLibrary()
+        store.recheckROMMutationArtifactLibrary()
+        store.loadSelectedReferenceStatusReport()
         store.loadSelectedPatchDistributionReadinessPacket()
         store.loadSelectedMapRenderAudit()
         store.requestBinaryROMMutationDryRunPath(rom.path)
         store.loadSelectedBinaryROMMutationDryRunManifest()
 
-        let beforeProjectFiles = try recursiveRelativeFiles(in: root)
-        let beforeROMFiles = try recursiveRelativeFiles(in: binaryTemp.url)
         let digest = try XCTUnwrap(store.selectedShipPreviewDigest)
 
         XCTAssertEqual(digest.title, "Ship Preview Digest")
@@ -5982,7 +6238,11 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(digest.rows.first { $0.area == .patchCreation }?.detail.contains("preview-only") == true)
         XCTAssertTrue(digest.rows.first { $0.area == .patchLibrary }?.detail.contains("Read-only") == true)
         XCTAssertTrue(digest.rows.first { $0.area == .patchDistribution }?.subtitle.contains("blocked") == true)
+        XCTAssertTrue(digest.rows.first { $0.area == .romMutationLibrary }?.detail.contains("no apply") == true)
+        XCTAssertTrue(digest.rows.first { $0.area == .patchedROMExportLibrary }?.detail.contains("no patch apply/export") == true)
+        XCTAssertTrue(digest.rows.first { $0.area == .referenceStatus }?.detail.contains("reference repositories") == true)
         XCTAssertTrue(digest.rows.first { $0.area == .mapRenderAudit }?.subtitle.contains("maps") == true)
+        XCTAssertTrue(digest.rows.first { $0.area == .ndsSemanticCoverage }?.detail.contains("No NDS semantic coverage report is loaded") == true)
         XCTAssertTrue(digest.rows.first { $0.area == .playtest }?.detail.isEmpty == false)
         XCTAssertTrue(digest.rows.first { $0.area == .binaryMutationAudit }?.detail.contains("Dry-run manifest") == true)
 
@@ -5997,6 +6257,36 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertNil(store.latestBinaryROMMutationApplyResult)
         XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeProjectFiles)
         XCTAssertEqual(try recursiveRelativeFiles(in: binaryTemp.url), beforeROMFiles)
+    }
+
+    @MainActor
+    func testShipPreviewDigestSummarizesLoadedNDSSemanticCoverageWithoutWriting() throws {
+        let root = try makeNDSSourceProject()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+        store.loadSelectedNDSSemanticCoverageReport()
+
+        let digest = try XCTUnwrap(store.selectedShipPreviewDigest)
+        let coverage = try XCTUnwrap(digest.rows.first { $0.area == .ndsSemanticCoverage })
+        XCTAssertTrue(coverage.subtitle.contains("eligible"))
+        XCTAssertTrue(coverage.detail.contains("catalog rows"))
+        XCTAssertTrue(coverage.detail.contains("write-blocked"))
+        XCTAssertNotNil(coverage.targetRowID)
+
+        store.copyShipPreviewDigestJSONToPasteboard()
+        let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertTrue(json.contains(ShipPreviewDigestArea.ndsSemanticCoverage.rawValue))
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        let reportJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let reportData = try XCTUnwrap(reportJSON.data(using: .utf8))
+        let reportObject = try JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+        XCTAssertNotNil(reportObject?["ndsSemanticCoverage"] as? [String: Any])
+        XCTAssertNil(store.latestNDSDataApplyResult)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
     }
 
     @MainActor
@@ -6024,7 +6314,10 @@ final class MapEditorStoreTests: XCTestCase {
 
         let digest = try XCTUnwrap(store.selectedShipPreviewDigest)
         NSPasteboard.general.clearContents()
-        store.copyShipPreviewDigestJSONToPasteboard()
+        let jsonCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:ship-preview-digest-json" })
+        XCTAssertEqual(jsonCommand.action, .copyShipPreviewDigestJSON)
+        XCTAssertTrue(jsonCommand.availability.isEnabled)
+        store.executeCommand(jsonCommand)
 
         let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let data = try XCTUnwrap(json.data(using: .utf8))
@@ -6035,7 +6328,10 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(rows.first?["area"] as? String, ShipPreviewDigestArea.validation.rawValue)
         XCTAssertTrue(rows.contains { $0["targetTab"] as? String == BuildWorkbenchTab.patch.rawValue })
 
-        store.copyShipPreviewDigestMarkdownToPasteboard()
+        let markdownCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:ship-preview-digest-markdown" })
+        XCTAssertEqual(markdownCommand.action, .copyShipPreviewDigestMarkdown)
+        XCTAssertTrue(markdownCommand.availability.isEnabled)
+        store.executeCommand(markdownCommand)
         let markdown = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         XCTAssertTrue(markdown.contains("# Ship Preview Digest"))
         XCTAssertTrue(markdown.contains("Patch creation state"))
@@ -6054,6 +6350,107 @@ final class MapEditorStoreTests: XCTestCase {
         store.openShipPreviewDigestRow(playtestRow)
         XCTAssertEqual(store.selectedBuildWorkbenchTab, .playtest)
         XCTAssertEqual(store.selectedBuildReportRowID, playtestTarget)
+    }
+
+    @MainActor
+    func testIDEActivityEventsSurfaceLoadedArtifactsWithoutWritingOutputs() async throws {
+        let root = try makeSourceIndexProject()
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abd".utf8)
+        try write(baseData, to: baseROM)
+        try write(Data("abcd".utf8), to: builtOutput)
+        try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        let binaryTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(binaryTemp)
+        let rom = binaryTemp.url.appendingPathComponent("activity-dry-run.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: binaryTemp.url.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let manifestURL = binaryTemp.url.appendingPathComponent("activity-dry-run.json")
+        try writeBinaryMutationManifest(manifest, to: manifestURL)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedAssetCatalogIfNeeded()
+        _ = try await waitForSelectedAssetCatalog(store)
+        let targetID = try XCTUnwrap(store.selectedRunnableBuildTargets.first?.id)
+        store.selectedDecompBuildTargetID = targetID
+        store.requestBaseROMPath(baseROM.path)
+        store.loadSelectedPatchCreationPreview()
+        store.loadSelectedPatchDistributionReadinessPacket()
+        store.requestPatchPath(patch.path)
+        store.loadSelectedPatchApplyExportAudit()
+        store.loadSelectedMapRenderAudit()
+        store.requestBinaryROMMutationDryRunPath(rom.path)
+        store.requestBinaryROMMutationDryRunManifestPath(manifestURL.path)
+        store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
+
+        let beforeProjectFiles = try recursiveRelativeFiles(in: root)
+        let beforeROMFiles = try recursiveRelativeFiles(in: binaryTemp.url)
+        let events = store.currentIDEActivityEvents
+
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("build-report:") && $0.category == .build })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("resource-catalog:") && $0.category == .resources })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("patch-creation-preview:") && $0.category == .patch })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("patch-distribution:") && $0.category == .patch })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("patch-apply-export-audit:") && $0.category == .patch })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("map-render-audit:") && $0.category == .diagnostics })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("ship-preview-digest:") && $0.category == .diagnostics })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("binary-dry-run:") && $0.category == .mutation })
+        XCTAssertTrue(events.contains { $0.id.hasPrefix("binary-apply-audit:") && $0.category == .mutation })
+
+        store.bottomPanelMode = .artifacts
+        XCTAssertFalse(store.visibleIDEActivityEvents.isEmpty)
+        XCTAssertTrue(store.visibleIDEActivityEvents.allSatisfy { $0.category == .patch || $0.category == .resources })
+
+        XCTAssertNil(store.selectedBuildRunResult)
+        XCTAssertNil(store.selectedPlaytestLaunchResult)
+        XCTAssertNil(store.selectedPlaytestCaptureResult)
+        XCTAssertNil(store.latestPatchCreationResult)
+        XCTAssertNil(store.latestPatchApplyExportResult)
+        XCTAssertNil(store.latestBinaryROMMutationApplyResult)
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeProjectFiles)
+        XCTAssertEqual(try recursiveRelativeFiles(in: binaryTemp.url), beforeROMFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-cleanroom.gba").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("screenshots").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("exports").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: binaryTemp.url.appendingPathComponent(".pokemonhackstudio").path))
+
+        let ndsTemp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(ndsTemp)
+        let ndsRoot = ndsTemp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: ndsRoot)
+        let resourceDefaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let resourceStore = WorkbenchStore(userDefaults: resourceDefaults, autoLoadProjects: false)
+
+        resourceStore.openProject(path: ndsRoot.path)
+        resourceStore.selectWorkbenchModule(.resources)
+        resourceStore.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(resourceStore)
+        let packetRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "gen-v/variant-readiness-packet" })
+        resourceStore.requestResourceAssetSelection(packetRow.id)
+
+        let beforeNDSFiles = try recursiveRelativeFiles(in: ndsRoot)
+        let resourceEvents = resourceStore.currentIDEActivityEvents
+
+        XCTAssertTrue(resourceEvents.contains { $0.id.hasPrefix("resource-catalog:") && $0.category == .resources })
+        XCTAssertTrue(resourceEvents.contains { $0.id == "resource-readiness:\(packetRow.id)" && $0.category == .resources })
+        XCTAssertEqual(try recursiveRelativeFiles(in: ndsRoot), beforeNDSFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ndsRoot.appendingPathComponent("gen-v/variant-readiness-packet").path))
     }
 
     @MainActor
@@ -6491,6 +6888,80 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testROMMutationArtifactLibraryRowsCopyRedactedJSONWithoutWritingArtifacts() throws {
+        let root = try makeSourceIndexProject()
+        let fixture = try writeROMMutationApplyArtifactFixture(in: root)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+        let beforeROMData = try Data(contentsOf: fixture.rom)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        let missingCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:rom-mutation-library-json" })
+        XCTAssertEqual(missingCommand.action, .copyROMMutationArtifactLibraryJSON)
+        XCTAssertFalse(missingCommand.availability.isEnabled)
+
+        store.recheckROMMutationArtifactLibrary()
+
+        let library = try XCTUnwrap(store.selectedROMMutationArtifactLibrary)
+        XCTAssertEqual(store.romMutationArtifactLibraryLoadStatus, .loaded(count: 1, status: .valid))
+        XCTAssertEqual(library.items.count, 1)
+        XCTAssertEqual(store.selectedROMMutationArtifactLibraryItemID, fixture.applyManifest.path)
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.applyManifestPath, fixture.applyManifest.path)
+        XCTAssertEqual(item.manifestStatus, ROMMutationArtifactLibraryManifestStatus.matched.rawValue)
+        XCTAssertEqual(item.backupStatus, ROMMutationArtifactLibraryCheckStatus.matched.rawValue)
+        XCTAssertEqual(item.baseBeforeStatus, "recorded")
+        XCTAssertEqual(item.baseAfterStatus, "recorded")
+        XCTAssertEqual(item.replacementSummary, "1 replace-only replacement")
+        XCTAssertFalse(item.reviewTokenSummary.contains(fixture.reviewToken))
+        XCTAssertTrue(item.reviewTokenSummary.contains(String(fixture.reviewToken.suffix(8))))
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Apply manifest" })
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Base before apply" })
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Base after apply" })
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Original ROM backup" && $0.subtitle.contains("matched") })
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Replacement review" && $0.detail.contains("review token redacted") })
+        XCTAssertTrue(store.filteredROMMutationArtifactLibraryRows.contains { $0.title == "Blocked actions" && $0.detail.contains("No apply") })
+        let libraryBlockedActionsRow = try XCTUnwrap(library.rows.first { $0.title == "Blocked actions" })
+        XCTAssertTrue(libraryBlockedActionsRow.tags.contains("Apply binary ROM mutations from library scan"))
+        XCTAssertFalse(libraryBlockedActionsRow.tags.contains("Apply binary ROM mutations"))
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertEqual(try Data(contentsOf: fixture.rom), beforeROMData)
+
+        NSPasteboard.general.clearContents()
+        let copyCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:rom-mutation-library-json" })
+        XCTAssertEqual(copyCommand.action, .copyROMMutationArtifactLibraryJSON)
+        XCTAssertTrue(copyCommand.availability.isEnabled)
+        store.executeCommand(copyCommand)
+
+        let libraryJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertFalse(libraryJSON.contains(fixture.reviewToken))
+        let libraryData = try XCTUnwrap(libraryJSON.data(using: .utf8))
+        let libraryObject = try JSONSerialization.jsonObject(with: libraryData) as? [String: Any]
+        let rawItems = try XCTUnwrap(libraryObject?["items"] as? [[String: Any]])
+        XCTAssertEqual(rawItems.count, 1)
+        let rawConfirmation = try XCTUnwrap(rawItems.first?["confirmation"] as? [String: Any])
+        XCTAssertEqual(rawConfirmation["hasReviewToken"] as? Bool, true)
+        XCTAssertEqual(rawConfirmation["reviewTokenSuffix"] as? String, String(fixture.reviewToken.suffix(8)))
+        XCTAssertNil(rawConfirmation["reviewToken"])
+
+        NSPasteboard.general.clearContents()
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+
+        let aggregateJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertFalse(aggregateJSON.contains(fixture.reviewToken))
+        let aggregateData = try XCTUnwrap(aggregateJSON.data(using: .utf8))
+        let aggregateObject = try JSONSerialization.jsonObject(with: aggregateData) as? [String: Any]
+        let rawLibrary = try XCTUnwrap(aggregateObject?["romMutationArtifactLibrary"] as? [String: Any])
+        XCTAssertEqual((rawLibrary["items"] as? [[String: Any]])?.count, 1)
+        XCTAssertNil(store.latestBinaryROMMutationApplyResult)
+        XCTAssertNil(store.latestPatchApplyExportResult)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/phs-t144/phs-t144-patched.gba").path))
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertEqual(try Data(contentsOf: fixture.rom), beforeROMData)
+    }
+
+    @MainActor
     func testPatchApplyExportAuditRowsCopyJSONWithoutWritingArtifacts() throws {
         let root = try makeSourceIndexProject()
         let baseROM = root.appendingPathComponent("pokeemerald.gba")
@@ -6523,14 +6994,20 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(store.filteredPatchApplyExportAuditRows.contains { $0.title == "Header policy" && $0.subtitle == "preserve-selected-base-rom-header" })
         XCTAssertTrue(store.filteredPatchApplyExportAuditRows.contains { $0.title == "Manifest compatibility" && $0.subtitle == "Base ROM matched" })
         XCTAssertTrue(store.filteredPatchApplyExportAuditRows.contains { $0.title == "Supported patch format" && $0.subtitle == "BPS" })
-        XCTAssertTrue(store.filteredPatchApplyExportAuditRows.contains { $0.title == "Blocked actions" && $0.detail.contains("Patched ROM writes") })
+        let blockedActionsRow = try XCTUnwrap(store.filteredPatchApplyExportAuditRows.first { $0.title == "Blocked actions" })
+        XCTAssertTrue(blockedActionsRow.tags.contains("Patched ROM writes from audit report"))
+        XCTAssertFalse(blockedActionsRow.tags.contains("Patched ROM writes"))
+        XCTAssertTrue(store.filteredPatchApplyExportAuditRows.contains { $0.title == "Blocked actions" && $0.detail.contains("Patched ROM writes from audit report") })
 
         store.selectedBuildWorkbenchTab = .patch
         XCTAssertTrue(store.filteredBuildRowsForSelectedTab.contains { $0.title == "Patch Apply/Export Audit" })
         XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
 
         NSPasteboard.general.clearContents()
-        store.copyPatchApplyExportAuditJSONToPasteboard()
+        let auditCommand = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:patch-apply-export-audit-json" })
+        XCTAssertEqual(auditCommand.action, .copyPatchApplyExportAuditJSON)
+        XCTAssertTrue(auditCommand.availability.isEnabled)
+        store.executeCommand(auditCommand)
 
         let auditJSON = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         let auditData = try XCTUnwrap(auditJSON.data(using: .utf8))
@@ -10328,6 +10805,118 @@ final class MapEditorStoreTests: XCTestCase {
         try write(encoder.encode(manifest), to: url)
     }
 
+    private func writeROMMutationApplyArtifactFixture(
+        in root: URL
+    ) throws -> (
+        rom: URL,
+        backup: URL,
+        applyManifest: URL,
+        reviewToken: String
+    ) {
+        let rom = root.appendingPathComponent("phs-t144.gba")
+        try writeBinaryMutationSyntheticGBA(to: rom)
+        let originalData = try Data(contentsOf: rom)
+        var mutatedData = originalData
+        mutatedData[0x120] = 0xAA
+        mutatedData[0x121] = 0xBB
+        try write(mutatedData, to: rom)
+
+        let artifactRoot = root.appendingPathComponent(".pokemonhackstudio/rom-mutations/phs-t144/2026-token")
+        let backup = artifactRoot.appendingPathComponent("phs-t144-original.gba")
+        let applyManifestURL = artifactRoot.appendingPathComponent("apply-manifest.json")
+        let dryRunManifest = artifactRoot.appendingPathComponent("dry-run.json")
+        let dryRunData = Data(#"{"dryRun":true}"#.utf8)
+        let reviewToken = "romreplace-super-secret-token"
+        try write(originalData, to: backup)
+        try write(dryRunData, to: dryRunManifest)
+
+        let baseBefore = BinaryROMMutationBaseIdentity(
+            path: rom.path,
+            data: originalData,
+            graph: BinaryROMGraphBuilder.build(path: rom.path, data: originalData)
+        )
+        let baseAfter = BinaryROMMutationBaseIdentity(
+            path: rom.path,
+            data: mutatedData,
+            graph: BinaryROMGraphBuilder.build(path: rom.path, data: mutatedData)
+        )
+        let originalSpan = originalData.subdata(in: 0x120 ..< 0x122)
+        let replacementBytes = Data([0xAA, 0xBB])
+        let manifest = BinaryROMMutationApplyManifest(
+            inputPath: rom.path,
+            backupPath: backup.path,
+            baseBefore: baseBefore,
+            baseAfter: baseAfter,
+            replacements: [
+                BinaryROMMutationAppliedReplacement(
+                    id: "replace-0x120",
+                    offset: 0x120,
+                    length: 2,
+                    originalPreviewHex: "11 22",
+                    originalSpanSHA1: pokemonHackSHA1Hex(originalSpan),
+                    replacementPreviewHex: "aa bb",
+                    replacementSHA1: pokemonHackSHA1Hex(replacementBytes)
+                ),
+            ],
+            confirmation: BinaryROMMutationApplyConfirmation(
+                method: "dry-run-review-token",
+                reviewToken: reviewToken,
+                dryRunManifestPath: dryRunManifest.path,
+                dryRunManifestSHA1: pokemonHackSHA1Hex(dryRunData)
+            ),
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "TEST_ROM_MUTATION_APPLY_MANIFEST_FIXTURE",
+                    message: "Synthetic ignored apply manifest fixture."
+                ),
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try write(encoder.encode(manifest), to: applyManifestURL)
+        return (rom, backup, applyManifestURL, reviewToken)
+    }
+
+    private func writePatchExportManifest(
+        outputURL: URL,
+        patchURL: URL,
+        baseROMURL: URL,
+        backupPath: String? = nil,
+        baseData: Data,
+        outputData: Data,
+        patchData: Data
+    ) throws {
+        let manifest = PatchApplyExportManifest(
+            schemaVersion: 1,
+            action: "patch-apply-export",
+            patchPath: patchURL.path,
+            baseROMPath: baseROMURL.path,
+            outputPath: outputURL.path,
+            backupPath: backupPath,
+            patchFormat: .bps,
+            baseROMSHA1: pokemonHackSHA1Hex(baseData),
+            outputROMSHA1: pokemonHackSHA1Hex(outputData),
+            baseROMCRC32: crc32Hex(baseData),
+            outputROMCRC32: crc32Hex(outputData),
+            patchCRC32: crc32Hex(patchData),
+            checksumPolicy: "test checksum policy",
+            headerPolicy: PatchArtifactHeaderPolicy(
+                mode: "preserve-selected-base-rom-header",
+                detail: "test preserves selected base ROM header",
+                shouldRewriteHeader: false
+            ),
+            diagnostics: []
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try write(encoder.encode(manifest), to: URL(fileURLWithPath: outputURL.path + ".manifest.json"))
+    }
+
+    private func crc32Hex(_ data: Data) -> String {
+        String(format: "%08x", crc32(data))
+    }
+
     private func writeMinimalEmeraldSourceTree(at root: URL) throws {
         try write("TITLE := POKEMON EMER\nGAME_CODE := BPEE\n", to: root.appendingPathComponent("Makefile"))
         try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
@@ -10573,6 +11162,10 @@ final class MapEditorStoreTests: XCTestCase {
 
     private func factValue(_ label: String, in facts: [Fact]) -> String? {
         facts.first { $0.label == label }?.value
+    }
+
+    private func factValue(_ label: String, in facts: [[String: Any]]) -> String? {
+        facts.first { $0["label"] as? String == label }?["value"] as? String
     }
 
     private func assertNoGenVSourceDataSemanticFacts(_ facts: [Fact], file: StaticString = #filePath, line: UInt = #line) {

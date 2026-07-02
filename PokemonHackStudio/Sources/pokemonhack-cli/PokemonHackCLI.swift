@@ -361,6 +361,8 @@ struct PokemonHackCLI {
             return try narcInspect(arguments: Array(arguments.dropFirst()))
         case "nds-data-catalog":
             return try ndsDataCatalog(arguments: Array(arguments.dropFirst()))
+        case "nds-data-semantic-coverage":
+            return try ndsDataSemanticCoverage(arguments: Array(arguments.dropFirst()))
         case "nds-data-edit-plan":
             return try ndsDataEditPlan(arguments: Array(arguments.dropFirst()))
         case "nds-data-edit-apply":
@@ -389,6 +391,8 @@ struct PokemonHackCLI {
             return try patch(arguments: Array(arguments.dropFirst()))
         case "patch-library":
             return try patchLibrary(arguments: Array(arguments.dropFirst()))
+        case "patch-export-library":
+            return try patchExportLibrary(arguments: Array(arguments.dropFirst()))
         case "patch-distribution-readiness":
             return try patchDistributionReadiness(arguments: Array(arguments.dropFirst()))
         case "patch-manifest":
@@ -407,6 +411,8 @@ struct PokemonHackCLI {
             return try romDiffPreview(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-manifest":
             return try romMutationManifest(arguments: Array(arguments.dropFirst()))
+        case "rom-mutation-library":
+            return try romMutationLibrary(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-audit":
             return try romMutationAudit(arguments: Array(arguments.dropFirst()))
         case "rom-mutation-apply":
@@ -755,6 +761,13 @@ struct PokemonHackCLI {
         return try encode(NDSDataCatalogBuilder.build(path: path))
     }
 
+    private static func ndsDataSemanticCoverage(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let path = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(try NDSDataSemanticCoverageReportBuilder.build(path: path))
+    }
+
     private static func ndsDataEditPlan(arguments: [String]) throws -> String {
         guard let request = try parseNDSDataEditArguments(arguments) else {
             throw CLIError.usage
@@ -1063,7 +1076,7 @@ struct PokemonHackCLI {
         guard arguments == ["--json"] else {
             throw CLIError.usage
         }
-        return try encode(ReferenceManifestLoader.load())
+        return try encode(ReferenceStatusReportBuilder.build())
     }
 
     private static func patch(arguments: [String]) throws -> String {
@@ -1176,6 +1189,13 @@ struct PokemonHackCLI {
         return try encode(PatchArtifactLibraryScanner.scan(projectPath: project))
     }
 
+    private static func patchExportLibrary(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let project = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(PatchExportArtifactLibraryScanner.scan(projectPath: project))
+    }
+
     private static func patchDistributionReadiness(arguments: [String]) throws -> String {
         guard arguments.last == "--json" else {
             throw CLIError.usage
@@ -1238,6 +1258,13 @@ struct PokemonHackCLI {
 
         let request = try parseROMMutationManifestArguments(Array(arguments.dropFirst().dropLast()))
         return try encode(BinaryROMMutationDryRunManifestBuilder.build(path: path, request: request))
+    }
+
+    private static func romMutationLibrary(arguments: [String]) throws -> String {
+        guard arguments.count == 2, let workspaceRoot = arguments.first, arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+        return try encode(ROMMutationArtifactLibraryScanner.scan(workspaceRoot: workspaceRoot))
     }
 
     private static func romMutationAudit(arguments: [String]) throws -> String {
@@ -1788,6 +1815,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "nds-files", usage: "nds-files <rom> --json", summary: "Emit NDS filesystem rows."),
         CLICommandMetadata(name: "narc-inspect", usage: "narc-inspect <narc> --json", summary: "Inspect a NARC container."),
         CLICommandMetadata(name: "nds-data-catalog", usage: "nds-data-catalog <path> --json", summary: "Emit the NDS data catalog."),
+        CLICommandMetadata(name: "nds-data-semantic-coverage", usage: "nds-data-semantic-coverage <path> --json", summary: "Emit redacted read-only coverage counts for existing NDS semantic editor snapshots."),
         CLICommandMetadata(name: "nds-data-edit-plan", usage: "nds-data-edit-plan <project> <record-id> --draft-file <path> --json", summary: "Plan a raw source-backed NDS data edit."),
         CLICommandMetadata(name: "nds-data-edit-apply", usage: "nds-data-edit-apply <project> <record-id> --draft-file <path> --json", summary: "Apply a raw source-backed NDS data edit through backups and safety checks."),
         CLICommandMetadata(name: "nds-data-semantic-plan", usage: "nds-data-semantic-plan <project> <record-id> --set <field=value> [--set <field=value>] --json", summary: "Plan redacted field-level NDS semantic edits."),
@@ -1802,6 +1830,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "references", usage: "references --json", summary: "Emit reference repository metadata."),
         CLICommandMetadata(name: "patch", usage: "patch <patch> --json", summary: "Validate patch metadata."),
         CLICommandMetadata(name: "patch-library", usage: "patch-library <project> --json", summary: "Scan ignored direct-child BPS patch artifacts and sibling manifests without applying or exporting patches."),
+        CLICommandMetadata(name: "patch-export-library", usage: "patch-export-library <project> --json", summary: "Scan ignored direct-child patched ROM exports and sibling manifests without applying patches, exporting ROMs, or creating backups."),
         CLICommandMetadata(name: "patch-distribution-readiness", usage: "patch-distribution-readiness <project> --base-rom <path> [--target <build-target-id>] [--patch <bps-path>] --json", summary: "Emit copy-only BPS patch distribution readiness from existing creation preview, library, identity, header policy, and manual playtest facts."),
         CLICommandMetadata(name: "patch-manifest", usage: "patch-manifest <patch> [--base-rom <path>] --json | patch-manifest <project> <patch> [--base-rom <path>] --json", summary: "Emit patch manifest compatibility data."),
         CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
@@ -1811,6 +1840,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
         CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
         CLICommandMetadata(name: "rom-mutation-manifest", usage: "rom-mutation-manifest <rom-or-source-path> [--workspace-root <path>] [--expect-sha1 <sha1>] [--replace <offset:length:hex>] [--repoint <pointer-offset:new-target-offset>] [--allocate <byte-count[:alignment]>] --json", summary: "Emit a dry-run-only future binary ROM mutation manifest with canApply=false."),
+        CLICommandMetadata(name: "rom-mutation-library", usage: "rom-mutation-library <workspace-root> --json", summary: "Scan ignored ROM mutation apply manifests and backups without creating artifacts or applying bytes."),
         CLICommandMetadata(name: "rom-mutation-audit", usage: "rom-mutation-audit <rom> --manifest <dry-run-json> --workspace-root <path> --json", summary: "Audit a binary ROM mutation dry-run manifest without confirmation, byte writes, backups, or artifacts."),
         CLICommandMetadata(name: "rom-mutation-apply", usage: "rom-mutation-apply <rom> --manifest <dry-run-json> --workspace-root <path> --confirm <review-token> --json", summary: "Apply reviewed replace-only binary ROM byte changes in place with ignored backup and manifest artifacts."),
         CLICommandMetadata(name: "build", usage: "build <path> --json", summary: "Emit build validation data without building."),

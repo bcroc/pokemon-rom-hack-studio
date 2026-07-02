@@ -83,6 +83,8 @@ struct ModuleDetailView: View {
                     store.loadResourceEntryDetails(entry)
                 },
                 onNavigateToAsset: store.navigateToAsset,
+                resourceReadinessPacketCopyDisabledReason: store.selectedResourceReadinessPacketCopyDisabledReason,
+                onCopyResourceReadinessPacketJSON: store.copySelectedResourceReadinessPacketJSONToPasteboard,
                 ndsDataEditor: store.selectedNDSDataEditor,
                 onUpdateNDSDataDraft: store.updateSelectedNDSDataDraftText,
                 onUpdateNDSDataSemanticField: store.updateSelectedNDSDataSemanticField,

@@ -17,6 +17,7 @@ root_dir = Path(sys.argv[1])
 validation_dir = root_dir / "docs" / "validation"
 readme_path = validation_dir / "README.md"
 planning_path = root_dir / "docs" / "planning-and-progress.md"
+makefile_path = root_dir / "Makefile"
 validate_nds_path = root_dir / "script" / "validate_nds.sh"
 cli_tests_path = root_dir / "PokemonHackStudio" / "Tests" / "PokemonHackCLITests" / "PokemonHackCLITests.swift"
 cli_source_path = root_dir / "PokemonHackStudio" / "Sources" / "pokemonhack-cli" / "PokemonHackCLI.swift"
@@ -29,6 +30,12 @@ active_done_pattern = re.compile(r"^\|\s*(?P<row>PHS-T[^|\s]+)\s*\|\s*Done\s*\|\
 coverage_skip_row_pattern = re.compile(
     r"^\|\s*`(?P<skip_id>(?:pokemonhack-cli|PokemonHackCLITests)/[^`]+)`\s*\|"
 )
+tier_command_row_pattern = re.compile(
+    r"^\|\s*(?P<tier>[^|]+?)\s*\|\s*`(?P<command>make\s+[^`]+)`\s*\|"
+)
+make_target_pattern = re.compile(r"^(?P<targets>[A-Za-z0-9_.-]+(?:\s+[A-Za-z0-9_.-]+)*)\s*:(?!=)")
+nds_repo_ids_pattern = re.compile(r"^NDS reference repo IDs:\s*(?P<body>.+)$", re.MULTILINE)
+validate_nds_repo_loop_pattern = re.compile(r"for\s+repo_id\s+in\s+(?P<body>[^;\n]+);\s+do")
 cli_command_metadata_pattern = re.compile(r'CLICommandMetadata\(\s*name:\s*"(?P<name>[^"]+)"')
 swift_test_pattern = re.compile(r"(?m)^\s*func\s+(?P<name>test\w+)\s*\(")
 
@@ -105,6 +112,52 @@ def extract_validate_nds_filters(text):
     return re.findall(r'"([^"]+)"', match.group("body"))
 
 
+def extract_makefile_targets(text):
+    targets = set()
+    for line in text.splitlines():
+        match = make_target_pattern.match(line)
+        if match is None:
+            continue
+        for target in match.group("targets").split():
+            if target.startswith("."):
+                continue
+            targets.add(target)
+    return targets
+
+
+def extract_validation_tier_commands(readme_text):
+    tier_section = section(readme_text, "## Tiers", "## NDS Validate Coverage Skips")
+    commands = []
+    for line in tier_section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if stripped in {"| Tier | Command | Purpose | Skips And Blockers |", "| --- | --- | --- | --- |"}:
+            continue
+        match = tier_command_row_pattern.match(stripped)
+        if match is None:
+            errors.append(f"malformed validation tier row: {stripped}")
+            continue
+        commands.append((match.group("tier").strip(), match.group("command").strip()))
+    return commands
+
+
+def extract_documented_nds_repo_ids(readme_text):
+    match = nds_repo_ids_pattern.search(readme_text)
+    if match is None:
+        errors.append("missing NDS reference repo IDs line in docs/validation/README.md")
+        return []
+    return re.findall(r"`([^`]+)`", match.group("body"))
+
+
+def extract_validate_nds_repo_ids(text):
+    match = validate_nds_repo_loop_pattern.search(text)
+    if match is None:
+        errors.append("missing NDS reference repo loop in script/validate_nds.sh")
+        return []
+    return match.group("body").split()
+
+
 def extract_cli_reference_smoke_commands(text):
     return set(re.findall(r"pokemonhack-cli\s+([a-z0-9-]+)", text))
 
@@ -155,6 +208,38 @@ def extract_nds_coverage_skips(readme_text):
             errors.append(f"duplicate NDS validate coverage skip row: {skip_id}")
         skip_ids.add(skip_id)
     return skip_ids
+
+
+def check_validation_tier_make_targets(readme_text):
+    makefile_text = read_text(makefile_path)
+    if not makefile_text:
+        return
+
+    targets = extract_makefile_targets(makefile_text)
+    for tier, command in extract_validation_tier_commands(readme_text):
+        parts = command.split()
+        if len(parts) != 2 or parts[0] != "make":
+            errors.append(f"validation tier {tier} command is not a simple make target: {command}")
+            continue
+        target = parts[1]
+        if target not in targets:
+            errors.append(f"validation tier {tier} documents missing Makefile target: {command}")
+
+
+def check_nds_reference_repo_ids(readme_text):
+    validate_nds_text = read_text(validate_nds_path)
+    if not validate_nds_text:
+        return
+
+    documented_repo_ids = extract_documented_nds_repo_ids(readme_text)
+    validate_nds_repo_ids = extract_validate_nds_repo_ids(validate_nds_text)
+    if not documented_repo_ids or not validate_nds_repo_ids:
+        return
+    if documented_repo_ids != validate_nds_repo_ids:
+        errors.append(
+            "documented NDS reference repo IDs do not match script/validate_nds.sh repo loop: "
+            f"docs={', '.join(documented_repo_ids)}; script={', '.join(validate_nds_repo_ids)}"
+        )
 
 
 def check_nds_validate_coverage(readme_text):
@@ -286,6 +371,8 @@ for row_id in sorted(done_rows):
         docs = ", ".join(docs_by_row[row_id])
         errors.append(f"completed board row {row_id} has validation doc(s) but is missing from proof index: {docs}")
 
+check_validation_tier_make_targets(readme_text)
+check_nds_reference_repo_ids(readme_text)
 check_nds_validate_coverage(readme_text)
 
 if errors:
@@ -294,5 +381,5 @@ if errors:
         print(f"- {error}", file=sys.stderr)
     sys.exit(1)
 
-print("Validation docs proof index and NDS coverage checks passed.")
+print("Validation docs proof index, tier drift, and NDS coverage checks passed.")
 PY

@@ -884,13 +884,14 @@ public enum PatchCreationPreviewBuilder {
             absolutePlannedPatchPath: absolutePlannedPatchPath,
             headerPolicy: headerPolicy,
             blockedActions: [
-                "BPS/IPS patch file writes",
-                "source mutation",
-                "build execution",
-                "playtest launch",
-                "header rewrite",
-                "ROM export",
-                "binary writes"
+                "BPS/IPS patch file writes from preview",
+                "manifest writes from preview",
+                "source mutation from preview",
+                "build execution from preview",
+                "playtest launch from preview",
+                "header rewrite from preview",
+                "ROM export from preview",
+                "binary writes from preview"
             ],
             diagnostics: diagnostics
         )
@@ -1293,6 +1294,22 @@ public enum PatchCreationBuilder {
         targetID: String? = nil,
         fileManager: FileManager = .default
     ) throws -> PatchCreationResult {
+        return try create(
+            projectPath: projectPath,
+            baseROMPath: baseROMPath,
+            targetID: targetID,
+            fileManager: fileManager,
+            fileCoordinator: PatchCreationWriteCoordinator.live(fileManager: fileManager)
+        )
+    }
+
+    static func create(
+        projectPath: String,
+        baseROMPath: String,
+        targetID: String? = nil,
+        fileManager: FileManager = .default,
+        fileCoordinator: PatchCreationWriteCoordinator
+    ) throws -> PatchCreationResult {
         let index = try GameAdapterRegistry.index(path: projectPath)
         let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
         let buildReport = BuildValidationReportBuilder.build(
@@ -1375,7 +1392,7 @@ public enum PatchCreationBuilder {
         if let writeFailure = writePatchArtifact(
             patchData: patchData,
             patchURL: patchURL,
-            fileManager: fileManager
+            fileCoordinator: fileCoordinator
         ) {
             return blockedResult(
                 patchURL: patchURL,
@@ -1437,7 +1454,7 @@ public enum PatchCreationBuilder {
             manifestData: manifestData,
             patchURL: patchURL,
             manifestURL: manifestURL,
-            fileManager: fileManager
+            fileCoordinator: fileCoordinator
         ) {
             return blockedResult(
                 patchURL: patchURL,
@@ -1594,17 +1611,17 @@ public enum PatchCreationBuilder {
     private static func writePatchArtifact(
         patchData: Data,
         patchURL: URL,
-        fileManager: FileManager
+        fileCoordinator: PatchCreationWriteCoordinator
     ) -> Diagnostic? {
         let directory = patchURL.deletingLastPathComponent()
         let patchTempURL = directory.appendingPathComponent(".\(patchURL.lastPathComponent).\(UUID().uuidString).tmp")
         do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try patchData.write(to: patchTempURL, options: .atomic)
-            try fileManager.moveItem(at: patchTempURL, to: patchURL)
+            try fileCoordinator.createDirectory(directory)
+            try fileCoordinator.writeData(patchData, patchTempURL, .atomic)
+            try fileCoordinator.moveItem(patchTempURL, patchURL)
             return nil
         } catch {
-            try? fileManager.removeItem(at: patchTempURL)
+            try? fileCoordinator.removeItem(patchTempURL)
             return Diagnostic(severity: .error, code: "PATCH_CREATION_WRITE_FAILED", message: "BPS patch creation failed while writing ignored artifacts: \(error.localizedDescription)")
         }
     }
@@ -1613,18 +1630,18 @@ public enum PatchCreationBuilder {
         manifestData: Data,
         patchURL: URL,
         manifestURL: URL,
-        fileManager: FileManager
+        fileCoordinator: PatchCreationWriteCoordinator
     ) -> Diagnostic? {
         let directory = manifestURL.deletingLastPathComponent()
         let manifestTempURL = directory.appendingPathComponent(".\(manifestURL.lastPathComponent).\(UUID().uuidString).tmp")
         do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            try manifestData.write(to: manifestTempURL, options: .atomic)
-            try fileManager.moveItem(at: manifestTempURL, to: manifestURL)
+            try fileCoordinator.createDirectory(directory)
+            try fileCoordinator.writeData(manifestData, manifestTempURL, .atomic)
+            try fileCoordinator.moveItem(manifestTempURL, manifestURL)
             return nil
         } catch {
-            try? fileManager.removeItem(at: manifestTempURL)
-            try? fileManager.removeItem(at: patchURL)
+            try? fileCoordinator.removeItem(manifestTempURL)
+            try? fileCoordinator.removeItem(patchURL)
             return Diagnostic(severity: .error, code: "PATCH_CREATION_WRITE_FAILED", message: "BPS patch creation failed while writing ignored artifacts: \(error.localizedDescription)")
         }
     }
@@ -1641,6 +1658,30 @@ public enum PatchCreationBuilder {
             patchSHA1: nil,
             diagnostics: diagnostics,
             manifest: nil
+        )
+    }
+}
+
+struct PatchCreationWriteCoordinator {
+    var createDirectory: (URL) throws -> Void
+    var removeItem: (URL) throws -> Void
+    var moveItem: (URL, URL) throws -> Void
+    var writeData: (Data, URL, Data.WritingOptions) throws -> Void
+
+    static func live(fileManager: FileManager) -> PatchCreationWriteCoordinator {
+        PatchCreationWriteCoordinator(
+            createDirectory: { url in
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            },
+            removeItem: { url in
+                try fileManager.removeItem(at: url)
+            },
+            moveItem: { source, destination in
+                try fileManager.moveItem(at: source, to: destination)
+            },
+            writeData: { data, url, options in
+                try data.write(to: url, options: options)
+            }
         )
     }
 }
@@ -2550,16 +2591,16 @@ public enum PatchManifestBuilder {
     }
 
     private static let patchApplyExportAuditBlockedActions = [
-        "Patch apply/export writer",
-        "Patched ROM writes",
-        "Backup creation",
-        "Manifest writes",
-        "Patch creation",
-        "Build execution",
-        "Playtest launch or capture",
-        "Source mutation",
-        "Header rewrite",
-        "Patch format widening"
+        "Patch apply/export from audit report",
+        "Patched ROM writes from audit report",
+        "Backup creation from audit report",
+        "Manifest writes from audit report",
+        "Patch creation from audit report",
+        "Build execution from audit report",
+        "Playtest launch or capture from audit report",
+        "Source mutation from audit report",
+        "Header rewrite from audit report",
+        "Patch format widening from audit report"
     ]
 
     private static func applyExportBlockers(_ report: PatchManifestReport) -> [Diagnostic] {

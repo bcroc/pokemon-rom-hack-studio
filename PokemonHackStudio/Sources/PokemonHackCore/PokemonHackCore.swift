@@ -92,7 +92,7 @@ public struct SourceLocation: Codable, Equatable {
     }
 }
 
-public struct ReferenceRepo: Codable, Equatable {
+public struct ReferenceRepo: Codable, Equatable, Sendable {
     public let name: String
     public let path: String
     public let url: String?
@@ -204,7 +204,7 @@ public struct ReferenceLicense: Codable, Equatable {
     public let notes: String?
 }
 
-public enum EditorModule: String, Codable, Equatable, CaseIterable {
+public enum EditorModule: String, Codable, Equatable, CaseIterable, Sendable {
     case maps
     case scripts
     case graphics

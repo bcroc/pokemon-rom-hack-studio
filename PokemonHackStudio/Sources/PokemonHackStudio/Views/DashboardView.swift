@@ -23,6 +23,7 @@ struct DashboardView: View {
         workspaceSaveSection
         workflowHub
         diagnosticsHub
+        referenceStatusSection
 
         if let library = store.resourceLibrary {
             resourceLibrarySection(library)
@@ -142,6 +143,43 @@ struct DashboardView: View {
         EditorSection(title: "Project Health") {
             DiagnosticSummaryStrip(summary: store.diagnosticSummary) {
                 store.selectWorkbenchModule(.issues)
+            }
+        }
+    }
+
+    private var referenceStatusSection: some View {
+        EditorSection(title: "Reference Status") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    StatusPill(state: store.referenceStatus?.status ?? store.referenceStatusLoadStatus.validationState)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(store.referenceStatus?.subtitle ?? store.referenceStatusLoadStatus.label)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("Read-only report; reference clones, ignored aliases, tracking policy, validation behavior, builds, exports, sources, and ROMs stay unchanged.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyReferenceStatusJSONToPasteboard()
+                    }
+                    .disabled(!store.canCopyReferenceStatusJSON)
+                }
+
+                if let referenceStatus = store.referenceStatus {
+                    FactGrid(facts: referenceStatus.facts)
+
+                    if !referenceStatus.diagnostics.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(referenceStatus.diagnostics) { diagnostic in
+                                IndexedDiagnosticRowView(diagnostic: diagnostic) {
+                                    store.route(to: diagnostic)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

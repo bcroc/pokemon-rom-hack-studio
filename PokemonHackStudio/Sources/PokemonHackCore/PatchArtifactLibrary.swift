@@ -129,6 +129,106 @@ public struct PatchArtifactLibrary: Codable, Equatable {
     }
 }
 
+public enum PatchExportArtifactBackupStatus: String, Codable, Equatable {
+    case noneRecorded
+    case available
+    case missing
+    case unreadable
+    case unavailable
+}
+
+public struct PatchExportArtifactLibraryItem: Codable, Equatable, Identifiable {
+    public let id: String
+    public let fileName: String
+    public let relativeOutputPath: String
+    public let outputPath: String
+    public let relativeManifestPath: String
+    public let manifestPath: String
+    public let outputIdentity: PatchArtifactLibraryFileIdentity
+    public let manifest: PatchApplyExportManifest?
+    public let manifestStatus: PatchArtifactLibraryManifestStatus
+    public let outputChecksumStatus: PatchArtifactLibraryCheckStatus
+    public let baseROMStatus: PatchArtifactLibraryCheckStatus
+    public let patchChecksumStatus: PatchArtifactLibraryCheckStatus
+    public let backupStatus: PatchExportArtifactBackupStatus
+    public let baseROMIdentity: PatchArtifactLibraryFileIdentity?
+    public let patchIdentity: PatchArtifactLibraryFileIdentity?
+    public let backupIdentity: PatchArtifactLibraryFileIdentity?
+    public let backupPostureSummary: String
+    public let verificationSummary: String
+    public let status: PatchArtifactLibraryItemStatus
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        id: String,
+        fileName: String,
+        relativeOutputPath: String,
+        outputPath: String,
+        relativeManifestPath: String,
+        manifestPath: String,
+        outputIdentity: PatchArtifactLibraryFileIdentity,
+        manifest: PatchApplyExportManifest?,
+        manifestStatus: PatchArtifactLibraryManifestStatus,
+        outputChecksumStatus: PatchArtifactLibraryCheckStatus,
+        baseROMStatus: PatchArtifactLibraryCheckStatus,
+        patchChecksumStatus: PatchArtifactLibraryCheckStatus,
+        backupStatus: PatchExportArtifactBackupStatus,
+        baseROMIdentity: PatchArtifactLibraryFileIdentity?,
+        patchIdentity: PatchArtifactLibraryFileIdentity?,
+        backupIdentity: PatchArtifactLibraryFileIdentity?,
+        backupPostureSummary: String,
+        verificationSummary: String,
+        status: PatchArtifactLibraryItemStatus,
+        diagnostics: [Diagnostic]
+    ) {
+        self.id = id
+        self.fileName = fileName
+        self.relativeOutputPath = relativeOutputPath
+        self.outputPath = outputPath
+        self.relativeManifestPath = relativeManifestPath
+        self.manifestPath = manifestPath
+        self.outputIdentity = outputIdentity
+        self.manifest = manifest
+        self.manifestStatus = manifestStatus
+        self.outputChecksumStatus = outputChecksumStatus
+        self.baseROMStatus = baseROMStatus
+        self.patchChecksumStatus = patchChecksumStatus
+        self.backupStatus = backupStatus
+        self.baseROMIdentity = baseROMIdentity
+        self.patchIdentity = patchIdentity
+        self.backupIdentity = backupIdentity
+        self.backupPostureSummary = backupPostureSummary
+        self.verificationSummary = verificationSummary
+        self.status = status
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct PatchExportArtifactLibrary: Codable, Equatable {
+    public let projectRoot: String
+    public let artifactRoot: String
+    public let relativeArtifactRoot: String
+    public let items: [PatchExportArtifactLibraryItem]
+    public let diagnostics: [Diagnostic]
+    public let isReadOnly: Bool
+
+    public init(
+        projectRoot: String,
+        artifactRoot: String,
+        relativeArtifactRoot: String,
+        items: [PatchExportArtifactLibraryItem],
+        diagnostics: [Diagnostic],
+        isReadOnly: Bool
+    ) {
+        self.projectRoot = projectRoot
+        self.artifactRoot = artifactRoot
+        self.relativeArtifactRoot = relativeArtifactRoot
+        self.items = items
+        self.diagnostics = diagnostics
+        self.isReadOnly = isReadOnly
+    }
+}
+
 public enum PatchDistributionReadinessStatus: String, Codable, Equatable {
     case ready
     case readyWithWarnings
@@ -330,16 +430,16 @@ public enum PatchDistributionReadinessPacketBuilder {
     }
 
     private static let blockedActions = [
-        "Patch file creation",
-        "Patch apply/export",
-        "Patched ROM writes",
-        "Artifact overwrite",
-        "Build execution",
-        "Playtest launch or capture",
-        "Automatic patch selection",
-        "Source mutation",
-        "Header rewrite",
-        "Patch format widening"
+        "Patch file creation from readiness packet",
+        "Patch apply/export from readiness packet",
+        "Patched ROM writes from readiness packet",
+        "Artifact overwrite from readiness packet",
+        "Build execution from readiness packet",
+        "Playtest launch or capture from readiness packet",
+        "Automatic patch selection from readiness packet",
+        "Source mutation from readiness packet",
+        "Header rewrite from readiness packet",
+        "Patch format widening from readiness packet"
     ]
 
     private enum PatchSelection {
@@ -986,6 +1086,685 @@ public enum PatchArtifactLibraryScanner {
             .info,
             "PATCH_ARTIFACT_LIBRARY_READ_ONLY",
             "Patch artifact library scans ignored .bps artifacts and manifests only; it does not apply patches, export ROMs, run builds, launch playtests, overwrite artifacts, mutate source, or rewrite headers.",
+            relativePath
+        )
+    }
+
+    private static func diagnostic(
+        _ severity: DiagnosticSeverity,
+        _ code: String,
+        _ message: String,
+        _ relativePath: String
+    ) -> Diagnostic {
+        Diagnostic(
+            id: "\(code):\(relativePath):\(message)",
+            severity: severity,
+            code: code,
+            message: message,
+            span: SourceSpan(relativePath: relativePath, startLine: 1)
+        )
+    }
+}
+
+public enum PatchExportArtifactLibraryScanner {
+    public static func scan(
+        projectPath: String,
+        fileManager: FileManager = .default
+    ) -> PatchExportArtifactLibrary {
+        let projectRoot = URL(fileURLWithPath: projectPath).standardizedFileURL
+        let relativeArtifactRoot = ".pokemonhackstudio/patches"
+        let artifactRoot = projectRoot.appendingPathComponent(relativeArtifactRoot).standardizedFileURL
+        var isDirectory: ObjCBool = false
+
+        guard fileManager.fileExists(atPath: artifactRoot.path, isDirectory: &isDirectory) else {
+            return PatchExportArtifactLibrary(
+                projectRoot: projectRoot.path,
+                artifactRoot: artifactRoot.path,
+                relativeArtifactRoot: relativeArtifactRoot,
+                items: [],
+                diagnostics: [
+                    diagnostic(
+                        .info,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_EMPTY",
+                        "No ignored patched ROM export artifacts were found under \(relativeArtifactRoot).",
+                        relativeArtifactRoot
+                    ),
+                    readOnlyDiagnostic(relativeArtifactRoot)
+                ],
+                isReadOnly: true
+            )
+        }
+
+        guard isDirectory.boolValue else {
+            return PatchExportArtifactLibrary(
+                projectRoot: projectRoot.path,
+                artifactRoot: artifactRoot.path,
+                relativeArtifactRoot: relativeArtifactRoot,
+                items: [],
+                diagnostics: [
+                    diagnostic(
+                        .error,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_ROOT_NOT_DIRECTORY",
+                        "Patch export artifact library root exists but is not a directory: \(artifactRoot.path).",
+                        relativeArtifactRoot
+                    ),
+                    readOnlyDiagnostic(relativeArtifactRoot)
+                ],
+                isReadOnly: true
+            )
+        }
+
+        let outputURLs: [URL]
+        do {
+            outputURLs = try fileManager.contentsOfDirectory(
+                at: artifactRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            )
+            .filter {
+                guard $0.pathExtension.lowercased() == "gba" else { return false }
+                let values = try? $0.resourceValues(forKeys: [.isRegularFileKey])
+                return values?.isRegularFile == true
+            }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        } catch {
+            return PatchExportArtifactLibrary(
+                projectRoot: projectRoot.path,
+                artifactRoot: artifactRoot.path,
+                relativeArtifactRoot: relativeArtifactRoot,
+                items: [],
+                diagnostics: [
+                    diagnostic(
+                        .error,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_READ_FAILED",
+                        "Patch export artifact library could not be read: \(error.localizedDescription)",
+                        relativeArtifactRoot
+                    ),
+                    readOnlyDiagnostic(relativeArtifactRoot)
+                ],
+                isReadOnly: true
+            )
+        }
+
+        let items = outputURLs.map {
+            item(for: $0, projectRoot: projectRoot, fileManager: fileManager)
+        }
+        return PatchExportArtifactLibrary(
+            projectRoot: projectRoot.path,
+            artifactRoot: artifactRoot.path,
+            relativeArtifactRoot: relativeArtifactRoot,
+            items: items,
+            diagnostics: [readOnlyDiagnostic(relativeArtifactRoot)],
+            isReadOnly: true
+        )
+    }
+
+    private static func item(
+        for outputURL: URL,
+        projectRoot: URL,
+        fileManager: FileManager
+    ) -> PatchExportArtifactLibraryItem {
+        let outputURL = outputURL.standardizedFileURL
+        let manifestURL = URL(fileURLWithPath: outputURL.path + ".manifest.json").standardizedFileURL
+        let relativeOutputPath = relativePath(for: outputURL, root: projectRoot)
+        let relativeManifestPath = relativePath(for: manifestURL, root: projectRoot)
+        var diagnostics: [Diagnostic] = []
+
+        let outputIdentity = fileIdentity(path: outputURL.path, fileManager: fileManager)
+        let manifestRead = readManifest(
+            at: manifestURL,
+            relativePath: relativeManifestPath,
+            outputURL: outputURL,
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: manifestRead.diagnostics)
+
+        let outputStatus = checksumStatus(
+            actual: outputIdentity,
+            expectedSHA1: manifestRead.manifest?.outputROMSHA1,
+            expectedCRC32: manifestRead.manifest?.outputROMCRC32
+        )
+        appendChecksumDiagnostics(
+            status: outputStatus,
+            codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_OUTPUT",
+            label: "Patched ROM output",
+            path: outputURL.path,
+            relativeOutputPath: relativeOutputPath,
+            diagnostics: &diagnostics
+        )
+
+        let baseIdentity: PatchArtifactLibraryFileIdentity?
+        let baseStatus: PatchArtifactLibraryCheckStatus
+        if let manifest = manifestRead.manifest {
+            let result = containedManifestIdentity(
+                path: manifest.baseROMPath,
+                projectRoot: projectRoot,
+                relativeOutputPath: relativeOutputPath,
+                codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_BASE_ROM",
+                label: "Base ROM",
+                fileManager: fileManager
+            )
+            diagnostics.append(contentsOf: result.diagnostics)
+            baseIdentity = result.identity
+            if let status = result.status {
+                baseStatus = status
+            } else {
+                baseStatus = checksumStatus(
+                    actual: baseIdentity,
+                    expectedSHA1: manifest.baseROMSHA1,
+                    expectedCRC32: manifest.baseROMCRC32
+                )
+                appendChecksumDiagnostics(
+                    status: baseStatus,
+                    codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_BASE_ROM",
+                    label: "Base ROM",
+                    path: manifest.baseROMPath,
+                    relativeOutputPath: relativeOutputPath,
+                    diagnostics: &diagnostics
+                )
+            }
+        } else {
+            baseIdentity = nil
+            baseStatus = .unavailable
+        }
+
+        let patchIdentity: PatchArtifactLibraryFileIdentity?
+        let patchStatus: PatchArtifactLibraryCheckStatus
+        if let manifest = manifestRead.manifest {
+            let result = containedManifestIdentity(
+                path: manifest.patchPath,
+                projectRoot: projectRoot,
+                relativeOutputPath: relativeOutputPath,
+                codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_PATCH",
+                label: "Patch",
+                fileManager: fileManager
+            )
+            diagnostics.append(contentsOf: result.diagnostics)
+            patchIdentity = result.identity
+            if let status = result.status {
+                patchStatus = status
+            } else {
+                patchStatus = crc32Status(
+                    actual: patchIdentity,
+                    expectedCRC32: manifest.patchCRC32
+                )
+                appendChecksumDiagnostics(
+                    status: patchStatus,
+                    codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_PATCH",
+                    label: "Patch",
+                    path: manifest.patchPath,
+                    relativeOutputPath: relativeOutputPath,
+                    diagnostics: &diagnostics
+                )
+            }
+        } else {
+            patchIdentity = nil
+            patchStatus = .unavailable
+        }
+
+        let backup = backupIdentity(
+            path: manifestRead.manifest?.backupPath,
+            projectRoot: projectRoot,
+            relativeOutputPath: relativeOutputPath,
+            fileManager: fileManager
+        )
+        diagnostics.append(contentsOf: backup.diagnostics)
+        appendBackupDiagnostics(
+            status: backup.status,
+            path: manifestRead.manifest?.backupPath,
+            relativeOutputPath: relativeOutputPath,
+            diagnostics: &diagnostics
+        )
+
+        let status = itemStatus(
+            diagnostics: diagnostics,
+            manifestStatus: manifestRead.status,
+            outputChecksumStatus: outputStatus,
+            baseROMStatus: baseStatus,
+            patchChecksumStatus: patchStatus,
+            backupStatus: backup.status
+        )
+        let summary = verificationSummary(
+            status: status,
+            manifestStatus: manifestRead.status,
+            outputChecksumStatus: outputStatus,
+            baseROMStatus: baseStatus,
+            patchChecksumStatus: patchStatus,
+            backupStatus: backup.status
+        )
+
+        return PatchExportArtifactLibraryItem(
+            id: outputURL.path,
+            fileName: outputURL.lastPathComponent,
+            relativeOutputPath: relativeOutputPath,
+            outputPath: outputURL.path,
+            relativeManifestPath: relativeManifestPath,
+            manifestPath: manifestURL.path,
+            outputIdentity: outputIdentity,
+            manifest: manifestRead.manifest,
+            manifestStatus: manifestRead.status,
+            outputChecksumStatus: outputStatus,
+            baseROMStatus: baseStatus,
+            patchChecksumStatus: patchStatus,
+            backupStatus: backup.status,
+            baseROMIdentity: baseIdentity,
+            patchIdentity: patchIdentity,
+            backupIdentity: backup.identity,
+            backupPostureSummary: backup.summary,
+            verificationSummary: summary,
+            status: status,
+            diagnostics: diagnostics
+        )
+    }
+
+    private struct ManifestIdentityResult {
+        let identity: PatchArtifactLibraryFileIdentity?
+        let status: PatchArtifactLibraryCheckStatus?
+        let diagnostics: [Diagnostic]
+    }
+
+    private static func containedManifestIdentity(
+        path: String,
+        projectRoot: URL,
+        relativeOutputPath: String,
+        codePrefix: String,
+        label: String,
+        fileManager: FileManager
+    ) -> ManifestIdentityResult {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let standardizedRoot = projectRoot.standardizedFileURL
+        let resolvedRoot = standardizedRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+        guard isContained(url, in: standardizedRoot),
+              isContained(resolvedURL, in: resolvedRoot) else {
+            return ManifestIdentityResult(
+                identity: PatchArtifactLibraryFileIdentity(path: url.path, exists: false),
+                status: .unavailable,
+                diagnostics: [
+                    diagnostic(
+                        .warning,
+                        "\(codePrefix)_PATH_OUTSIDE_PROJECT",
+                        "\(label) recorded in the export manifest is outside the selected project root or resolves through a symlink outside it; Patch Export Library did not read \(url.path).",
+                        relativeOutputPath
+                    )
+                ]
+            )
+        }
+
+        return ManifestIdentityResult(
+            identity: fileIdentity(path: url.path, fileManager: fileManager),
+            status: nil,
+            diagnostics: []
+        )
+    }
+
+    private struct BackupIdentityResult {
+        let identity: PatchArtifactLibraryFileIdentity?
+        let status: PatchExportArtifactBackupStatus
+        let summary: String
+        let diagnostics: [Diagnostic]
+    }
+
+    private static func backupIdentity(
+        path: String?,
+        projectRoot: URL,
+        relativeOutputPath: String,
+        fileManager: FileManager
+    ) -> BackupIdentityResult {
+        guard let path, !path.isEmpty else {
+            return BackupIdentityResult(
+                identity: nil,
+                status: .noneRecorded,
+                summary: "No overwrite backup was recorded in the export manifest.",
+                diagnostics: []
+            )
+        }
+
+        let result = containedManifestIdentity(
+            path: path,
+            projectRoot: projectRoot,
+            relativeOutputPath: relativeOutputPath,
+            codePrefix: "PATCH_EXPORT_ARTIFACT_LIBRARY_BACKUP",
+            label: "Overwrite backup",
+            fileManager: fileManager
+        )
+        if result.status == .unavailable {
+            return BackupIdentityResult(
+                identity: result.identity,
+                status: .unavailable,
+                summary: "Overwrite backup path is outside the selected project and was not read.",
+                diagnostics: result.diagnostics
+            )
+        }
+
+        guard let identity = result.identity else {
+            return BackupIdentityResult(
+                identity: nil,
+                status: .unavailable,
+                summary: "Overwrite backup identity is unavailable.",
+                diagnostics: result.diagnostics
+            )
+        }
+        guard identity.exists else {
+            return BackupIdentityResult(
+                identity: identity,
+                status: .missing,
+                summary: "Overwrite backup was recorded but is missing.",
+                diagnostics: result.diagnostics
+            )
+        }
+        guard identity.sha1 != nil, identity.crc32 != nil else {
+            return BackupIdentityResult(
+                identity: identity,
+                status: .unreadable,
+                summary: "Overwrite backup was recorded but could not be read.",
+                diagnostics: result.diagnostics
+            )
+        }
+        return BackupIdentityResult(
+            identity: identity,
+            status: .available,
+            summary: "Overwrite backup is recorded and available.",
+            diagnostics: result.diagnostics
+        )
+    }
+
+    private struct ManifestReadResult {
+        let manifest: PatchApplyExportManifest?
+        let status: PatchArtifactLibraryManifestStatus
+        let diagnostics: [Diagnostic]
+    }
+
+    private static func readManifest(
+        at manifestURL: URL,
+        relativePath: String,
+        outputURL: URL,
+        fileManager: FileManager
+    ) -> ManifestReadResult {
+        guard fileManager.fileExists(atPath: manifestURL.path) else {
+            return ManifestReadResult(
+                manifest: nil,
+                status: .missing,
+                diagnostics: [
+                    diagnostic(
+                        .warning,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_MISSING",
+                        "No sibling export manifest exists for \(outputURL.lastPathComponent).",
+                        relativePath
+                    )
+                ]
+            )
+        }
+
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let manifest = try JSONDecoder().decode(PatchApplyExportManifest.self, from: data)
+            var diagnostics: [Diagnostic] = []
+            var status: PatchArtifactLibraryManifestStatus = .matched
+
+            if manifest.action != "patch-apply-export" {
+                diagnostics.append(
+                    diagnostic(
+                        .warning,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_ACTION_MISMATCH",
+                        "Export manifest action is \(manifest.action), not patch-apply-export.",
+                        relativePath
+                    )
+                )
+                status = .mismatched
+            }
+            if manifest.patchFormat != .bps && manifest.patchFormat != .ips {
+                diagnostics.append(
+                    diagnostic(
+                        .warning,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_FORMAT_UNSUPPORTED",
+                        "Export manifest format is \(manifest.patchFormat.rawValue), not an existing patch-apply-export writer format.",
+                        relativePath
+                    )
+                )
+                status = .mismatched
+            }
+            let manifestOutputPath = URL(fileURLWithPath: manifest.outputPath).standardizedFileURL.path
+            if manifestOutputPath != outputURL.path {
+                diagnostics.append(
+                    diagnostic(
+                        .warning,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_OUTPUT_PATH_MISMATCH",
+                        "Export manifest points at \(manifest.outputPath), not \(outputURL.path).",
+                        relativePath
+                    )
+                )
+                status = .mismatched
+            }
+
+            return ManifestReadResult(manifest: manifest, status: status, diagnostics: diagnostics)
+        } catch {
+            return ManifestReadResult(
+                manifest: nil,
+                status: .unreadable,
+                diagnostics: [
+                    diagnostic(
+                        .warning,
+                        "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_UNREADABLE",
+                        "Export manifest could not be decoded: \(error.localizedDescription)",
+                        relativePath
+                    )
+                ]
+            )
+        }
+    }
+
+    private static func fileIdentity(
+        path: String,
+        fileManager: FileManager
+    ) -> PatchArtifactLibraryFileIdentity {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard fileManager.fileExists(atPath: url.path) else {
+            return PatchArtifactLibraryFileIdentity(path: url.path, exists: false)
+        }
+        guard let data = try? Data(contentsOf: url) else {
+            return PatchArtifactLibraryFileIdentity(path: url.path, exists: true)
+        }
+        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+        return PatchArtifactLibraryFileIdentity(
+            path: url.path,
+            exists: true,
+            sizeBytes: fileSize(from: attributes) ?? UInt64(data.count),
+            sha1: pokemonHackSHA1Hex(data),
+            crc32: pokemonHackCRC32Hex(data)
+        )
+    }
+
+    private static func checksumStatus(
+        actual: PatchArtifactLibraryFileIdentity?,
+        expectedSHA1: String?,
+        expectedCRC32: String?
+    ) -> PatchArtifactLibraryCheckStatus {
+        guard let actual else { return .unavailable }
+        guard actual.exists else { return .missing }
+        guard let sha1 = actual.sha1, let crc32 = actual.crc32 else {
+            return .unreadable
+        }
+        guard let expectedSHA1, let expectedCRC32 else {
+            return .unavailable
+        }
+        let shaMatches = sha1.caseInsensitiveCompare(expectedSHA1) == .orderedSame
+        let crcMatches = crc32.caseInsensitiveCompare(expectedCRC32) == .orderedSame
+        return shaMatches && crcMatches ? .matched : .mismatched
+    }
+
+    private static func crc32Status(
+        actual: PatchArtifactLibraryFileIdentity?,
+        expectedCRC32: String?
+    ) -> PatchArtifactLibraryCheckStatus {
+        guard let actual else { return .unavailable }
+        guard actual.exists else { return .missing }
+        guard let crc32 = actual.crc32 else {
+            return .unreadable
+        }
+        guard let expectedCRC32 else {
+            return .unavailable
+        }
+        return crc32.caseInsensitiveCompare(expectedCRC32) == .orderedSame ? .matched : .mismatched
+    }
+
+    private static func appendChecksumDiagnostics(
+        status: PatchArtifactLibraryCheckStatus,
+        codePrefix: String,
+        label: String,
+        path: String,
+        relativeOutputPath: String,
+        diagnostics: inout [Diagnostic]
+    ) {
+        switch status {
+        case .matched, .unavailable:
+            return
+        case .missing:
+            diagnostics.append(
+                diagnostic(
+                    .warning,
+                    "\(codePrefix)_MISSING",
+                    "\(label) recorded in the export manifest is missing at \(path).",
+                    relativeOutputPath
+                )
+            )
+        case .unreadable:
+            diagnostics.append(
+                diagnostic(
+                    .warning,
+                    "\(codePrefix)_UNREADABLE",
+                    "\(label) recorded in the export manifest could not be read at \(path).",
+                    relativeOutputPath
+                )
+            )
+        case .mismatched:
+            diagnostics.append(
+                diagnostic(
+                    .warning,
+                    "\(codePrefix)_HASH_MISMATCH",
+                    "\(label) hash or CRC32 no longer matches the export manifest.",
+                    relativeOutputPath
+                )
+            )
+        }
+    }
+
+    private static func appendBackupDiagnostics(
+        status: PatchExportArtifactBackupStatus,
+        path: String?,
+        relativeOutputPath: String,
+        diagnostics: inout [Diagnostic]
+    ) {
+        switch status {
+        case .noneRecorded, .available, .unavailable:
+            return
+        case .missing:
+            diagnostics.append(
+                diagnostic(
+                    .warning,
+                    "PATCH_EXPORT_ARTIFACT_LIBRARY_BACKUP_MISSING",
+                    "Overwrite backup recorded in the export manifest is missing at \(path ?? "").",
+                    relativeOutputPath
+                )
+            )
+        case .unreadable:
+            diagnostics.append(
+                diagnostic(
+                    .warning,
+                    "PATCH_EXPORT_ARTIFACT_LIBRARY_BACKUP_UNREADABLE",
+                    "Overwrite backup recorded in the export manifest could not be read at \(path ?? "").",
+                    relativeOutputPath
+                )
+            )
+        }
+    }
+
+    private static func itemStatus(
+        diagnostics: [Diagnostic],
+        manifestStatus: PatchArtifactLibraryManifestStatus,
+        outputChecksumStatus: PatchArtifactLibraryCheckStatus,
+        baseROMStatus: PatchArtifactLibraryCheckStatus,
+        patchChecksumStatus: PatchArtifactLibraryCheckStatus,
+        backupStatus: PatchExportArtifactBackupStatus
+    ) -> PatchArtifactLibraryItemStatus {
+        if diagnostics.contains(where: { $0.severity == .error }) {
+            return .error
+        }
+        if manifestStatus != .matched
+            || outputChecksumStatus != .matched
+            || baseROMStatus != .matched
+            || patchChecksumStatus != .matched
+            || backupStatus == .missing
+            || backupStatus == .unreadable
+            || backupStatus == .unavailable
+            || diagnostics.contains(where: { $0.severity == .warning }) {
+            return .warning
+        }
+        return .valid
+    }
+
+    private static func verificationSummary(
+        status: PatchArtifactLibraryItemStatus,
+        manifestStatus: PatchArtifactLibraryManifestStatus,
+        outputChecksumStatus: PatchArtifactLibraryCheckStatus,
+        baseROMStatus: PatchArtifactLibraryCheckStatus,
+        patchChecksumStatus: PatchArtifactLibraryCheckStatus,
+        backupStatus: PatchExportArtifactBackupStatus
+    ) -> String {
+        if manifestStatus == .missing {
+            return "Patched ROM exists, but no sibling export manifest is available; no apply/export was attempted."
+        }
+        if manifestStatus == .unreadable {
+            return "Patched ROM exists, but the sibling export manifest is unreadable; no apply/export was attempted."
+        }
+        if status == .valid {
+            return "Patched ROM, manifest, base ROM, and patch CRC32 match current files; no apply/export was attempted."
+        }
+
+        let issueCount = [
+            outputChecksumStatus,
+            baseROMStatus,
+            patchChecksumStatus
+        ].filter { $0 != .matched }.count
+            + (manifestStatus == .matched ? 0 : 1)
+            + (backupStatus == .missing || backupStatus == .unreadable || backupStatus == .unavailable ? 1 : 0)
+        return "Patch export library found \(issueCount) metadata issue\(issueCount == 1 ? "" : "s"); no apply/export was attempted."
+    }
+
+    private static func relativePath(for url: URL, root: URL) -> String {
+        let path = url.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/") else {
+            return path
+        }
+        return String(path.dropFirst(rootPath.count + 1))
+    }
+
+    private static func isContained(_ url: URL, in root: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path
+        return path == rootPath || path.hasPrefix(rootPath + "/")
+    }
+
+    private static func fileSize(from attributes: [FileAttributeKey: Any]?) -> UInt64? {
+        guard let value = attributes?[.size] else { return nil }
+        if let size = value as? UInt64 {
+            return size
+        }
+        if let size = value as? Int {
+            return UInt64(size)
+        }
+        if let size = value as? NSNumber {
+            return size.uint64Value
+        }
+        return nil
+    }
+
+    private static func readOnlyDiagnostic(_ relativePath: String) -> Diagnostic {
+        diagnostic(
+            .info,
+            "PATCH_EXPORT_ARTIFACT_LIBRARY_READ_ONLY",
+            "Patch export artifact library scans ignored direct-child .gba exports and manifests only; it does not apply patches, export ROMs, create backups, run builds, launch playtests, overwrite artifacts, mutate source, widen formats, or rewrite headers.",
             relativePath
         )
     }

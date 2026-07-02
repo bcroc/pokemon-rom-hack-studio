@@ -29,6 +29,7 @@ public struct PokemonDataCompatibilityReport: Codable, Equatable {
     public let adapterName: String
     public let summary: PokemonDataCompatibilitySummary
     public let entries: [PokemonDataCompatibilityEntry]
+    public let candidateDigest: PokemonDataCompatibilityCandidateDigest?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -37,6 +38,7 @@ public struct PokemonDataCompatibilityReport: Codable, Equatable {
         adapterID: String,
         adapterName: String,
         entries: [PokemonDataCompatibilityEntry],
+        candidateDigest: PokemonDataCompatibilityCandidateDigest? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.root = root
@@ -45,6 +47,7 @@ public struct PokemonDataCompatibilityReport: Codable, Equatable {
         self.adapterName = adapterName
         self.summary = PokemonDataCompatibilitySummary(entries: entries)
         self.entries = entries
+        self.candidateDigest = candidateDigest
         self.diagnostics = diagnostics
     }
 }
@@ -62,6 +65,91 @@ public struct PokemonDataCompatibilitySummary: Codable, Equatable {
         self.readOnlyCount = entries.filter { $0.status == .readOnly }.count
         self.indexedCount = entries.filter { $0.status == .indexed }.count
         self.blockedCount = entries.filter { $0.status == .blocked }.count
+    }
+}
+
+public enum PokemonDataCompatibilityCandidateDigestStatus: String, Codable, Equatable, CaseIterable, Sendable {
+    case candidates
+    case none
+}
+
+public enum PokemonDataCompatibilityStopReasonKind: String, Codable, Equatable, CaseIterable, Sendable {
+    case generatedOnly
+    case referenceOnly
+    case constantsIdentityOnly
+    case romOnly
+    case noIndexedSourceData
+}
+
+public struct PokemonDataCompatibilityCandidateDigest: Codable, Equatable {
+    public let status: PokemonDataCompatibilityCandidateDigestStatus
+    public let summary: String
+    public let candidates: [PokemonDataCompatibilityCandidateSeam]
+    public let stopReasons: [PokemonDataCompatibilityStopReason]
+
+    public init(
+        status: PokemonDataCompatibilityCandidateDigestStatus,
+        summary: String,
+        candidates: [PokemonDataCompatibilityCandidateSeam],
+        stopReasons: [PokemonDataCompatibilityStopReason]
+    ) {
+        self.status = status
+        self.summary = summary
+        self.candidates = candidates
+        self.stopReasons = stopReasons
+    }
+}
+
+public struct PokemonDataCompatibilityCandidateSeam: Codable, Equatable {
+    public let surface: PokemonDataCompatibilitySurface
+    public let path: String
+    public let tableSymbol: String?
+    public let indexedCount: Int
+    public let editableCount: Int
+    public let sourceRole: String?
+    public let readiness: String?
+    public let mutationPlanGate: String
+    public let blockedActions: [String]
+
+    public init(
+        surface: PokemonDataCompatibilitySurface,
+        path: String,
+        tableSymbol: String?,
+        indexedCount: Int,
+        editableCount: Int,
+        sourceRole: String? = nil,
+        readiness: String? = nil,
+        mutationPlanGate: String,
+        blockedActions: [String] = []
+    ) {
+        self.surface = surface
+        self.path = path
+        self.tableSymbol = tableSymbol
+        self.indexedCount = indexedCount
+        self.editableCount = editableCount
+        self.sourceRole = sourceRole
+        self.readiness = readiness
+        self.mutationPlanGate = mutationPlanGate
+        self.blockedActions = blockedActions
+    }
+}
+
+public struct PokemonDataCompatibilityStopReason: Codable, Equatable {
+    public let kind: PokemonDataCompatibilityStopReasonKind
+    public let message: String
+    public let surfaces: [PokemonDataCompatibilitySurface]
+    public let paths: [String]
+
+    public init(
+        kind: PokemonDataCompatibilityStopReasonKind,
+        message: String,
+        surfaces: [PokemonDataCompatibilitySurface],
+        paths: [String]
+    ) {
+        self.kind = kind
+        self.message = message
+        self.surfaces = surfaces
+        self.paths = paths
     }
 }
 
@@ -487,6 +575,7 @@ public enum PokemonDataCompatibilityReportBuilder {
             + (itemCatalog?.diagnostics ?? [])
             + assetCatalog.diagnostics
             + entries.flatMap(\.diagnostics)
+        let digest = candidateDigest(for: entries, profile: index.profile, rootPath: index.root.path)
 
         return PokemonDataCompatibilityReport(
             root: index.root,
@@ -494,8 +583,314 @@ public enum PokemonDataCompatibilityReportBuilder {
             adapterID: index.adapterID,
             adapterName: index.adapterName,
             entries: entries,
+            candidateDigest: digest,
             diagnostics: diagnostics
         )
+    }
+
+    private static func candidateDigest(
+        for entries: [PokemonDataCompatibilityEntry],
+        profile: GameProfile,
+        rootPath: String
+    ) -> PokemonDataCompatibilityCandidateDigest {
+        var candidates: [PokemonDataCompatibilityCandidateSeam] = []
+        for entry in entries {
+            let tableCandidates = sourceTableCandidates(for: entry)
+            candidates.append(contentsOf: tableCandidates)
+            if tableCandidates.isEmpty, let entryCandidate = entryLevelCandidate(for: entry) {
+                candidates.append(entryCandidate)
+            }
+            candidates.append(contentsOf: cryAudioCandidates(for: entry))
+        }
+
+        let uniqueCandidates = uniqueCandidateSeams(candidates)
+        if uniqueCandidates.isEmpty {
+            return PokemonDataCompatibilityCandidateDigest(
+                status: .none,
+                summary: "No report-only source-backed candidate seams were found; stop reasons explain why compatibility remains blocked.",
+                candidates: [],
+                stopReasons: candidateStopReasons(for: entries, profile: profile, rootPath: rootPath)
+            )
+        }
+
+        return PokemonDataCompatibilityCandidateDigest(
+            status: .candidates,
+            summary: "Found \(uniqueCandidates.count) report-only source-backed candidate seam(s) from existing compatibility data.",
+            candidates: uniqueCandidates,
+            stopReasons: []
+        )
+    }
+
+    private static func sourceTableCandidates(
+        for entry: PokemonDataCompatibilityEntry
+    ) -> [PokemonDataCompatibilityCandidateSeam] {
+        guard let sourceTables = entry.sourceTables else { return [] }
+        return sourceTables.compactMap { table in
+            guard table.status == .editable,
+                  isLocalCandidatePath(table.path),
+                  table.indexedCount > 0 || entry.editableCount > 0
+            else {
+                return nil
+            }
+            if table.indexedCount == 0 && !hasEditableParentSource(for: table, in: entry) {
+                return nil
+            }
+            return PokemonDataCompatibilityCandidateSeam(
+                surface: entry.surface,
+                path: table.path,
+                tableSymbol: table.tableSymbol,
+                indexedCount: table.indexedCount,
+                editableCount: table.indexedCount > 0 ? table.indexedCount : entry.editableCount,
+                sourceRole: table.sourceRole,
+                readiness: table.readiness,
+                mutationPlanGate: mutationPlanGate(for: entry.surface),
+                blockedActions: table.blockedActions ?? []
+            )
+        }
+    }
+
+    private static func entryLevelCandidate(
+        for entry: PokemonDataCompatibilityEntry
+    ) -> PokemonDataCompatibilityCandidateSeam? {
+        guard entry.status == .editable,
+              entry.editableCount > 0,
+              let sourcePath = entry.sourcePath,
+              isLocalCandidatePath(sourcePath)
+        else {
+            return nil
+        }
+        return PokemonDataCompatibilityCandidateSeam(
+            surface: entry.surface,
+            path: sourcePath,
+            tableSymbol: entry.tableSymbol,
+            indexedCount: entry.indexedCount,
+            editableCount: entry.editableCount,
+            sourceRole: "entrySource",
+            readiness: "editable \(entry.editableCount) existing \(entry.surface.rawValue) row(s)",
+            mutationPlanGate: mutationPlanGate(for: entry.surface),
+            blockedActions: entry.unsupportedFields
+        )
+    }
+
+    private static func cryAudioCandidates(
+        for entry: PokemonDataCompatibilityEntry
+    ) -> [PokemonDataCompatibilityCandidateSeam] {
+        guard entry.surface == .cries,
+              let plan = entry.cryAudioPlan,
+              let gate = plan.replacementGate,
+              gate.status == .editable,
+              !plan.sourceFiles.isEmpty
+        else {
+            return []
+        }
+        return plan.sourceFiles.map { sourceFile in
+            PokemonDataCompatibilityCandidateSeam(
+                surface: .cries,
+                path: sourceFile.path,
+                tableSymbol: sourceFile.kind,
+                indexedCount: 1,
+                editableCount: 1,
+                sourceRole: "editableCryAudioSource",
+                readiness: gate.summary,
+                mutationPlanGate: mutationPlanGate(for: .cries),
+                blockedActions: gate.blockedActions
+            )
+        }
+    }
+
+    private static func uniqueCandidateSeams(
+        _ candidates: [PokemonDataCompatibilityCandidateSeam]
+    ) -> [PokemonDataCompatibilityCandidateSeam] {
+        var seen: Set<String> = []
+        var unique: [PokemonDataCompatibilityCandidateSeam] = []
+        for candidate in candidates {
+            let key = [
+                candidate.surface.rawValue,
+                candidate.path,
+                candidate.tableSymbol ?? "",
+                candidate.sourceRole ?? ""
+            ].joined(separator: "\u{1F}")
+            if seen.insert(key).inserted {
+                unique.append(candidate)
+            }
+        }
+        return unique
+    }
+
+    private static func candidateStopReasons(
+        for entries: [PokemonDataCompatibilityEntry],
+        profile: GameProfile,
+        rootPath: String
+    ) -> [PokemonDataCompatibilityStopReason] {
+        if profile == .binaryROM {
+            let surfaces = entries.map(\.surface)
+            return [
+                PokemonDataCompatibilityStopReason(
+                    kind: .romOnly,
+                    message: "The input is ROM-only; source mutation, build/export artifacts, and binary writes remain blocked.",
+                    surfaces: surfaces,
+                    paths: [rootPath]
+                ),
+                PokemonDataCompatibilityStopReason(
+                    kind: .noIndexedSourceData,
+                    message: "No editable local source-backed compatibility seam with indexed source data and an existing mutation-plan gate was found.",
+                    surfaces: surfaces,
+                    paths: []
+                )
+            ]
+        }
+
+        var generated = StopReasonBucket()
+        var references = StopReasonBucket()
+        var constants = StopReasonBucket()
+        var rom = StopReasonBucket()
+        var noIndexedSource = StopReasonBucket()
+
+        for entry in entries {
+            if entry.editableCount == 0 {
+                noIndexedSource.add(surface: entry.surface, path: entry.sourcePath)
+            }
+            if entry.unsupportedFields.contains(where: { $0.localizedCaseInsensitiveContains("binary ROM") })
+                || entry.blockedReason?.localizedCaseInsensitiveContains("ROM") == true {
+                rom.add(surface: entry.surface, path: entry.sourcePath)
+            }
+            for table in entry.sourceTables ?? [] {
+                if isGeneratedOnlyPath(table.path) || table.sourceRole == "generatedAllLearnablesIndex" {
+                    generated.add(surface: entry.surface, path: table.path)
+                }
+                if table.path.hasPrefix("references/") || table.sourceRole == "referenceOnly" {
+                    references.add(surface: entry.surface, path: table.path)
+                }
+                if table.path.hasPrefix("include/constants/") || table.sourceRole?.localizedCaseInsensitiveContains("constants") == true {
+                    constants.add(surface: entry.surface, path: table.path)
+                }
+                if table.path == "ROM output" {
+                    rom.add(surface: entry.surface, path: table.path)
+                }
+                if table.status == .blocked && table.indexedCount == 0 && isLocalPotentialSourcePath(table.path) {
+                    noIndexedSource.add(surface: entry.surface, path: table.path)
+                }
+            }
+        }
+
+        var reasons: [PokemonDataCompatibilityStopReason] = []
+        appendStopReason(
+            kind: .generatedOnly,
+            message: "Only generated/report-only compatibility gates were observed; generated JSON/output writes remain blocked.",
+            bucket: generated,
+            to: &reasons
+        )
+        appendStopReason(
+            kind: .referenceOnly,
+            message: "Only reference-only compatibility gates were observed; reference alias repair and reference writes remain blocked.",
+            bucket: references,
+            to: &reasons
+        )
+        appendStopReason(
+            kind: .constantsIdentityOnly,
+            message: "Only constants or identity guidance gates were observed; constants creation, renames, and identity edits remain blocked.",
+            bucket: constants,
+            to: &reasons
+        )
+        appendStopReason(
+            kind: .romOnly,
+            message: "The input is ROM-only or ROM/export-gated; source mutation, build/export artifacts, and binary writes remain blocked.",
+            bucket: rom,
+            to: &reasons
+        )
+        appendStopReason(
+            kind: .noIndexedSourceData,
+            message: "No editable local source-backed compatibility seam with indexed source data and an existing mutation-plan gate was found.",
+            bucket: noIndexedSource,
+            to: &reasons
+        )
+        if reasons.isEmpty {
+            return [
+                PokemonDataCompatibilityStopReason(
+                    kind: .noIndexedSourceData,
+                    message: "No editable local source-backed compatibility seam with indexed source data and an existing mutation-plan gate was found.",
+                    surfaces: entries.map(\.surface),
+                    paths: []
+                )
+            ]
+        }
+        return reasons
+    }
+
+    private struct StopReasonBucket {
+        var surfaces: Set<PokemonDataCompatibilitySurface> = []
+        var paths: Set<String> = []
+
+        mutating func add(surface: PokemonDataCompatibilitySurface, path: String?) {
+            surfaces.insert(surface)
+            if let path, !path.isEmpty {
+                paths.insert(path)
+            }
+        }
+    }
+
+    private static func appendStopReason(
+        kind: PokemonDataCompatibilityStopReasonKind,
+        message: String,
+        bucket: StopReasonBucket,
+        to reasons: inout [PokemonDataCompatibilityStopReason]
+    ) {
+        guard !bucket.surfaces.isEmpty || !bucket.paths.isEmpty else { return }
+        let surfaces = PokemonDataCompatibilitySurface.allCases.filter { bucket.surfaces.contains($0) }
+        reasons.append(
+            PokemonDataCompatibilityStopReason(
+                kind: kind,
+                message: message,
+                surfaces: surfaces,
+                paths: bucket.paths.sorted()
+            )
+        )
+    }
+
+    private static func hasEditableParentSource(
+        for table: PokemonDataCompatibilitySourceTable,
+        in entry: PokemonDataCompatibilityEntry
+    ) -> Bool {
+        if entry.sourcePath == table.path && entry.editableCount > 0 {
+            return true
+        }
+        return entry.sourceTables?.contains { candidate in
+            candidate.path == table.path
+                && candidate.status == .editable
+                && candidate.indexedCount > 0
+        } == true
+    }
+
+    private static func isLocalCandidatePath(_ path: String) -> Bool {
+        isLocalPotentialSourcePath(path)
+            && !isGeneratedOnlyPath(path)
+            && !path.hasPrefix("references/")
+            && !path.hasPrefix("include/constants/")
+            && path != "ROM output"
+    }
+
+    private static func isLocalPotentialSourcePath(_ path: String) -> Bool {
+        path.hasPrefix("src/")
+            || path.hasPrefix("sound/")
+            || path.hasPrefix("graphics/")
+            || path.hasPrefix("data/")
+    }
+
+    private static func isGeneratedOnlyPath(_ path: String) -> Bool {
+        path == "generated"
+            || path.hasPrefix("generated/")
+            || path == "src/data/pokemon/all_learnables.json"
+    }
+
+    private static func mutationPlanGate(for surface: PokemonDataCompatibilitySurface) -> String {
+        switch surface {
+        case .moves:
+            return "Move mutation-plan gate"
+        case .items:
+            return "Item mutation-plan gate"
+        case .assets, .cries, .species, .levelUpLearnsets, .tmhmLearnsets, .eggMoves, .evolutions, .pokedex, .tutorLearnsets, .forms:
+            return "Species mutation-plan gate"
+        }
     }
 
     private static func speciesEntry(

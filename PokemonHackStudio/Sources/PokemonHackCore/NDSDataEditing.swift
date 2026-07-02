@@ -10,7 +10,7 @@ public struct NDSDataEditDraft: Codable, Equatable {
     }
 }
 
-public enum NDSDataSemanticFieldValueKind: String, Codable, Equatable {
+public enum NDSDataSemanticFieldValueKind: String, Codable, Equatable, Sendable {
     case string
     case number
     case bool
@@ -4394,8 +4394,68 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
         rowTexts: [String]
     ) -> String {
         var editedText = sourceText
-        editedText.replaceSubrange(arrayRange, with: "[\(rowTexts.joined(separator: ","))]")
+        let originalArrayText = String(sourceText[arrayRange])
+        editedText.replaceSubrange(
+            arrayRange,
+            with: renderArrayPreservingTrivia(originalArrayText, rowTexts: rowTexts)
+        )
         return editedText
+    }
+
+    private static func renderArrayPreservingTrivia(
+        _ originalArrayText: String,
+        rowTexts: [String]
+    ) -> String {
+        guard originalArrayText.first == "[",
+              originalArrayText.last == "]",
+              !rowTexts.isEmpty
+        else {
+            return "[\(rowTexts.joined(separator: ","))]"
+        }
+
+        let open = originalArrayText.startIndex
+        let close = originalArrayText.index(before: originalArrayText.endIndex)
+        var cursor = originalArrayText.index(after: open)
+        var rowRanges: [Range<String.Index>] = []
+
+        while cursor < close {
+            skipWhitespace(originalArrayText, index: &cursor)
+            guard cursor < close else { break }
+            if originalArrayText[cursor] == "," {
+                cursor = originalArrayText.index(after: cursor)
+                continue
+            }
+            guard originalArrayText[cursor] == "{",
+                  let rowEnd = matchingEnd(originalArrayText, start: cursor, open: "{", close: "}")
+            else {
+                break
+            }
+            rowRanges.append(cursor..<rowEnd)
+            cursor = rowEnd
+            skipWhitespace(originalArrayText, index: &cursor)
+            if cursor < close, originalArrayText[cursor] == "," {
+                cursor = originalArrayText.index(after: cursor)
+            }
+        }
+
+        guard let firstRowRange = rowRanges.first,
+              let lastRowRange = rowRanges.last
+        else {
+            return "[\(rowTexts.joined(separator: ","))]"
+        }
+
+        let leadingTrivia = String(originalArrayText[originalArrayText.index(after: open)..<firstRowRange.lowerBound])
+        let trailingTrivia = String(originalArrayText[lastRowRange.upperBound..<close])
+        let separator: String
+        if rowRanges.count > 1 {
+            separator = String(originalArrayText[rowRanges[0].upperBound..<rowRanges[1].lowerBound])
+        } else if leadingTrivia.isEmpty {
+            separator = ","
+        } else {
+            separator = ",\(leadingTrivia)"
+        }
+
+        return "[\(leadingTrivia)\(rowTexts.joined(separator: separator))\(trailingTrivia)]"
     }
 
     private static func invalidOperationDiagnostic(operationIndex: Int, detail: String) -> Diagnostic {

@@ -143,6 +143,57 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
     }
 
     @MainActor
+    func testReferenceStatusFeedsProjectHubFactsAndDiagnostics() throws {
+        let workspace = try WorkbenchIDEFoundationTests.makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        try WorkbenchIDEFoundationTests.write(
+            """
+            /references/*
+            !/references/manifest.json
+            """,
+            to: workspace.appendingPathComponent(".gitignore")
+        )
+        try WorkbenchIDEFoundationTests.write(
+            """
+            {
+              "repositories": [
+                {
+                  "name": "porymap",
+                  "path": "references/porymap",
+                  "modules": ["maps"]
+                }
+              ]
+            }
+            """,
+            to: workspace.appendingPathComponent("references/manifest.json")
+        )
+        try FileManager.default.createDirectory(
+            at: workspace.appendingPathComponent("references"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: workspace.appendingPathComponent("references/porymap"),
+            withDestinationURL: workspace.appendingPathComponent("central/repos/missing-porymap")
+        )
+        try WorkbenchIDEFoundationTests.runGit(["init"], in: workspace)
+        try WorkbenchIDEFoundationTests.runGit(["add", "references/manifest.json"], in: workspace)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, workspaceRoot: workspace, autoLoadProjects: false)
+        store.refreshReferenceStatus(from: workspace.path)
+
+        let status = try XCTUnwrap(store.referenceStatus)
+        XCTAssertEqual(status.title, "Reference Status")
+        XCTAssertEqual(status.facts.map(\.label), ["Central Index", "Ignored Aliases", "Validation Tiers", "Git Tracking"])
+        XCTAssertTrue(status.facts.first { $0.label == "Ignored Aliases" }?.value.contains("1 dangling") == true)
+        XCTAssertTrue(status.facts.first { $0.label == "Validation Tiers" }?.value.contains("NDS") == true)
+        XCTAssertTrue(status.facts.first { $0.label == "Git Tracking" }?.value.contains("references/manifest.json") == true)
+        XCTAssertTrue(status.diagnostics.contains { $0.title == "REFERENCE_ALIASES_DANGLING" })
+        XCTAssertTrue(store.selectedDiagnosticRows.contains { $0.title == "REFERENCE_ALIASES_DANGLING" })
+        XCTAssertEqual(store.referenceStatusLoadStatus.validationState, status.status)
+    }
+
+    @MainActor
     func testUniversalIDENavigatorGroupsCoreSurfaces() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "WorkbenchIDEFoundationTests.\(UUID().uuidString)"))
         let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
@@ -271,11 +322,41 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
         XCTAssertFalse(patchDistribution.availability.isEnabled)
         XCTAssertEqual(patchDistribution.availability.disabledReason, "Refresh patch distribution readiness before copying JSON.")
 
+        let ndsSemanticCoverage = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:nds-semantic-coverage-json" })
+        XCTAssertEqual(ndsSemanticCoverage.scope, "Copy")
+        XCTAssertEqual(ndsSemanticCoverage.action, .copyNDSSemanticCoverageJSON)
+        XCTAssertFalse(ndsSemanticCoverage.availability.isEnabled)
+        XCTAssertEqual(ndsSemanticCoverage.availability.disabledReason, "Refresh NDS semantic coverage before copying JSON.")
+
+        let shipDigestJSON = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:ship-preview-digest-json" })
+        XCTAssertEqual(shipDigestJSON.scope, "Copy")
+        XCTAssertEqual(shipDigestJSON.action, .copyShipPreviewDigestJSON)
+        XCTAssertFalse(shipDigestJSON.availability.isEnabled)
+        XCTAssertEqual(shipDigestJSON.availability.disabledReason, "Open or index a project before copying Ship Preview Digest JSON.")
+
+        let shipDigestMarkdown = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:ship-preview-digest-markdown" })
+        XCTAssertEqual(shipDigestMarkdown.scope, "Copy")
+        XCTAssertEqual(shipDigestMarkdown.action, .copyShipPreviewDigestMarkdown)
+        XCTAssertFalse(shipDigestMarkdown.availability.isEnabled)
+        XCTAssertEqual(shipDigestMarkdown.availability.disabledReason, "Open or index a project before copying Ship Preview Digest Markdown.")
+
+        let patchApplyExportAudit = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:patch-apply-export-audit-json" })
+        XCTAssertEqual(patchApplyExportAudit.scope, "Copy")
+        XCTAssertEqual(patchApplyExportAudit.action, .copyPatchApplyExportAuditJSON)
+        XCTAssertFalse(patchApplyExportAudit.availability.isEnabled)
+        XCTAssertEqual(patchApplyExportAudit.availability.disabledReason, "Refresh Patch Apply/Export Audit before copying JSON.")
+
         let binaryAudit = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:binary-rom-mutation-apply-audit-json" })
         XCTAssertEqual(binaryAudit.scope, "Copy")
         XCTAssertEqual(binaryAudit.action, .copyBinaryROMMutationApplyAuditJSON)
         XCTAssertFalse(binaryAudit.availability.isEnabled)
         XCTAssertEqual(binaryAudit.availability.disabledReason, "Load a binary mutation review before copying audit JSON.")
+
+        let genIVMapReview = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:gen-iv-map-review-json" })
+        XCTAssertEqual(genIVMapReview.scope, "Copy")
+        XCTAssertEqual(genIVMapReview.action, .copySelectedNDSMapReviewPacketJSON)
+        XCTAssertFalse(genIVMapReview.availability.isEnabled)
+        XCTAssertEqual(genIVMapReview.availability.disabledReason, "Load the Resources asset catalog before copying Gen IV Map Review JSON.")
 
         let resourceReadiness = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:resource-readiness-packet-json" })
         XCTAssertEqual(resourceReadiness.scope, "Copy")
@@ -285,7 +366,18 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
 
         NSPasteboard.general.clearContents()
         let recentCommands = store.recentCommandIDs
-        store.executeCommand(patchDistribution)
+        for command in [
+            patchDistribution,
+            ndsSemanticCoverage,
+            shipDigestJSON,
+            shipDigestMarkdown,
+            patchApplyExportAudit,
+            binaryAudit,
+            genIVMapReview,
+            resourceReadiness,
+        ] {
+            store.executeCommand(command)
+        }
         XCTAssertNil(NSPasteboard.general.string(forType: .string))
         XCTAssertEqual(store.recentCommandIDs, recentCommands)
     }
@@ -325,5 +417,36 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
 
         store.bottomPanelMode = .artifacts
         XCTAssertTrue(store.visibleIDEActivityEvents.allSatisfy { $0.category == .patch || $0.category == .resources })
+    }
+
+    private static func makeTemporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkbenchIDEFoundationTests")
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private static func write(_ text: String, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static func runGit(_ arguments: [String], in directory: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-C", directory.path] + arguments
+        let stderr = Pipe()
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(decoding: stderr.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            throw NSError(
+                domain: "WorkbenchIDEFoundationTests.git",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
     }
 }

@@ -182,9 +182,15 @@ enum WorkbenchCommandAction: Hashable {
     case captureSavestate
     case copyValidationCommand(String)
     case copyReportJSON
+    case copyShipPreviewDigestJSON
+    case copyShipPreviewDigestMarkdown
     case copyMapRenderAuditJSON
+    case copyNDSSemanticCoverageJSON
     case copyPatchDistributionReadinessJSON
+    case copyPatchApplyExportAuditJSON
     case copyBinaryROMMutationApplyAuditJSON
+    case copyROMMutationArtifactLibraryJSON
+    case copySelectedNDSMapReviewPacketJSON
     case copySelectedResourceReadinessPacketJSON
 }
 

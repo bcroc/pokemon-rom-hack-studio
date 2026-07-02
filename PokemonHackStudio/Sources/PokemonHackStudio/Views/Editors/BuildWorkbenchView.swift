@@ -149,6 +149,11 @@ struct BuildWorkbenchView: View {
 
             if report.isNDS {
                 ndsToolchainOverview(report: report)
+                ndsSemanticCoverageSection(report: store.selectedNDSSemanticCoverageReport, rows: store.filteredNDSSemanticCoverageRows)
+                let readinessDigestRows = store.filteredGenVReadinessDigestRows
+                if !readinessDigestRows.isEmpty {
+                    genVReadinessDigestSection(rows: readinessDigestRows)
+                }
                 let bridgeRows = store.filteredGenVResourcesToBuildBridgeRows
                 if !bridgeRows.isEmpty {
                     genVResourcesToBuildBridgeSection(rows: bridgeRows)
@@ -158,8 +163,8 @@ struct BuildWorkbenchView: View {
             mapRenderAuditSection(report: store.selectedMapRenderAuditReport, rows: store.filteredMapRenderAuditRows)
 
             let skippedSections: Set<BuildReportSection> = report.isNDS
-                ? [.diagnostics, .mapRenderAudit, .patchManifest, .healthMatrix]
-                : [.diagnostics, .mapRenderAudit, .patchManifest]
+                ? [.diagnostics, .mapRenderAudit, .ndsSemanticCoverage, .patchManifest, .healthMatrix]
+                : [.diagnostics, .mapRenderAudit, .ndsSemanticCoverage, .patchManifest]
             ForEach(BuildReportSection.allCases.filter { !skippedSections.contains($0) }) { section in
                 let sectionRows = rows.filter { $0.section == section }
                 EditorSection(title: section.rawValue) {
@@ -321,6 +326,60 @@ struct BuildWorkbenchView: View {
         }
     }
 
+    private func ndsSemanticCoverageSection(
+        report: NDSSemanticCoverageReportViewState?,
+        rows: [BuildReportRow]
+    ) -> some View {
+        EditorSection(title: "NDS Semantic Coverage") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.ndsSemanticCoverageLoadStatus.validationState)
+                    Text(store.ndsSemanticCoverageLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        store.loadSelectedNDSSemanticCoverageReport()
+                    }
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyNDSSemanticCoverageJSONToPasteboard()
+                    }
+                    .disabled(report == nil)
+                }
+
+                if let report {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], spacing: 10) {
+                        MetricCard(title: "Catalog Rows", value: "\(report.catalogRows)", detail: "\(report.scannedRows) scanned")
+                        MetricCard(title: "Eligible Rows", value: "\(report.eligibleRows)", detail: "\(report.eligibleFields) fields")
+                        MetricCard(title: "Write-Blocked", value: "\(report.blockedRows)", detail: "\(report.bucketCount) buckets")
+                        MetricCard(title: "Skipped", value: "\(report.skippedRows)", detail: "\(report.domainCount) domains")
+                    }
+
+                    if rows.isEmpty {
+                        ContentUnavailableView(
+                            "No Matching Coverage Rows",
+                            systemImage: "magnifyingglass",
+                            description: Text("No NDS semantic coverage rows match the current search.")
+                        )
+                    } else {
+                        ForEach(rows) { row in
+                            BuildReportRowView(
+                                row: row,
+                                copyAction: store.copyBuildReportRowActionToPasteboard
+                            )
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "No NDS Semantic Coverage",
+                        systemImage: "chart.bar.doc.horizontal",
+                        description: Text("Refresh to load redacted read-only coverage counts for the selected NDS source root.")
+                    )
+                }
+            }
+        }
+    }
+
     private func patchSections(
         buildReport _: BuildPatchPlaytestReportViewState,
         report: PatchManifestReportViewState?,
@@ -391,6 +450,8 @@ struct BuildWorkbenchView: View {
                 resultRows: store.filteredPatchCreationResultRows
             )
             patchArtifactLibrarySection(rows: store.filteredPatchArtifactLibraryRows)
+            patchExportArtifactLibrarySection(rows: store.filteredPatchExportArtifactLibraryRows)
+            romMutationArtifactLibrarySection(rows: store.filteredROMMutationArtifactLibraryRows)
             allLearnablesRegenerationReviewSection(rows: store.filteredAllLearnablesRegenerationReviewRows)
             patchDistributionReadinessSection(rows: store.filteredPatchDistributionReadinessRows)
             patchApplyExportAuditSection(rows: store.filteredPatchApplyExportAuditRows)
@@ -659,6 +720,132 @@ struct BuildWorkbenchView: View {
                 store.recheckPatchArtifactLibrary()
             }
             store.loadSelectedAssetCatalogIfNeeded()
+        }
+    }
+
+    private func patchExportArtifactLibrarySection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Patched ROM Export Library") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.patchExportArtifactLibraryLoadStatus.validationState)
+                    Text(store.patchExportArtifactLibraryLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Re-check", systemImage: "arrow.clockwise") {
+                        store.recheckPatchExportArtifactLibrary()
+                    }
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyPatchExportArtifactLibraryJSONToPasteboard()
+                    }
+                    .disabled(store.selectedPatchExportArtifactLibrary == nil)
+                    Button("Reveal", systemImage: "folder") {
+                        if let item = store.selectedPatchExportArtifactLibraryItem {
+                            store.revealPatchExportArtifactLibraryItem(item)
+                        }
+                    }
+                    .disabled(store.selectedPatchExportArtifactLibraryItem?.canReveal != true)
+                }
+
+                if let library = store.selectedPatchExportArtifactLibrary, !library.items.isEmpty {
+                    Picker(
+                        "Export",
+                        selection: Binding(
+                            get: { store.selectedPatchExportArtifactLibraryItemID ?? library.items.first?.id ?? "" },
+                            set: { store.requestPatchExportArtifactLibraryItemSelection($0.isEmpty ? nil : $0) }
+                        )
+                    ) {
+                        ForEach(library.items) { item in
+                            Text("\(item.title) - \(item.subtitle)").tag(item.id)
+                        }
+                    }
+                    .frame(minWidth: 320)
+
+                    if let selected = store.selectedPatchExportArtifactLibraryItem {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checklist")
+                            Text(selected.verificationSummary)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Patched ROM Exports",
+                        systemImage: "tray",
+                        description: Text("Ignored .pokemonhackstudio/patches/*.gba exports will appear here after re-check.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func romMutationArtifactLibrarySection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "ROM Mutation Library") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.romMutationArtifactLibraryLoadStatus.validationState)
+                    Text(store.romMutationArtifactLibraryLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Re-check", systemImage: "arrow.clockwise") {
+                        store.recheckROMMutationArtifactLibrary()
+                    }
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyROMMutationArtifactLibraryJSONToPasteboard()
+                    }
+                    .disabled(store.selectedROMMutationArtifactLibrary == nil)
+                }
+
+                if let library = store.selectedROMMutationArtifactLibrary, !library.items.isEmpty {
+                    Picker(
+                        "Apply Manifest",
+                        selection: Binding(
+                            get: { store.selectedROMMutationArtifactLibraryItemID ?? library.items.first?.id ?? "" },
+                            set: { store.requestROMMutationArtifactLibraryItemSelection($0.isEmpty ? nil : $0) }
+                        )
+                    ) {
+                        ForEach(library.items) { item in
+                            Text("\(item.title) - \(item.subtitle)").tag(item.id)
+                        }
+                    }
+                    .frame(minWidth: 320)
+
+                    if let selected = store.selectedROMMutationArtifactLibraryItem {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checklist")
+                            Text("\(selected.manifestStatus); backup \(selected.backupStatus); \(selected.replacementSummary); \(selected.reviewTokenSummary)")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No ROM Mutation Apply Manifests",
+                        systemImage: "tray",
+                        description: Text("Ignored .pokemonhackstudio/rom-mutations/**/apply-manifest.json files will appear here after re-check.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -935,6 +1122,12 @@ struct BuildWorkbenchView: View {
                     systemImage: section.systemImage,
                     description: Text("Run Re-check to load the selected-project audit.")
                 )
+            case .ndsSemanticCoverage:
+                ContentUnavailableView(
+                    "No NDS Semantic Coverage Rows",
+                    systemImage: section.systemImage,
+                    description: Text("Refresh NDS semantic coverage to load redacted counts.")
+                )
             case .patchManifest:
                 emptyPatchManifest
             case .playtest:
@@ -1048,6 +1241,19 @@ struct BuildWorkbenchView: View {
                     Spacer()
                 }
 
+                ForEach(rows) { row in
+                    BuildReportRowView(
+                        row: row,
+                        copyAction: store.copyBuildReportRowActionToPasteboard
+                    )
+                }
+            }
+        }
+    }
+
+    private func genVReadinessDigestSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Gen V Readiness Digest") {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(rows) { row in
                     BuildReportRowView(
                         row: row,

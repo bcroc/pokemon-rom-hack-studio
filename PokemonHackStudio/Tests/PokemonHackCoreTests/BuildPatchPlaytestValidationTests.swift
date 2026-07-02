@@ -506,7 +506,9 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(report.plannedPatchPath, ".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps")
         XCTAssertEqual(report.absolutePlannedPatchPath, root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps").path)
         XCTAssertFalse(report.headerPolicy.shouldRewriteHeader)
-        XCTAssertTrue(report.blockedActions.contains("BPS/IPS patch file writes"))
+        XCTAssertTrue(report.blockedActions.contains("BPS/IPS patch file writes from preview"))
+        XCTAssertTrue(report.blockedActions.contains("manifest writes from preview"))
+        XCTAssertFalse(report.blockedActions.contains("BPS/IPS patch file writes"))
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_CREATION_PREVIEW_ONLY" })
         XCTAssertTrue(report.diagnostics.contains { $0.code == "PATCH_CREATION_BUILD_OUTPUT_CHECKSUM_FACT" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: report.absolutePlannedPatchPath))
@@ -590,6 +592,53 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_VERIFICATION_PASSED" })
         XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_WRITTEN" })
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-to-pokeemerald.gba").path))
+        XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
+    }
+
+    func testPatchCreationManifestWriteFailureRemovesCreatedBPSPatch() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let builtData = Data("abxyz".utf8)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let builtOutput = root.appendingPathComponent("pokeemerald.gba")
+        try write(baseData, to: baseROM)
+        try write(builtData, to: builtOutput)
+        try write("\(pokemonHackSHA1Hex(baseData))  clean-base.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        var coordinator = PatchCreationWriteCoordinator.live(fileManager: .default)
+        let liveWriteData = coordinator.writeData
+        coordinator.writeData = { data, url, options in
+            if url.lastPathComponent.contains(".bps.manifest.json") {
+                throw NSError(
+                    domain: "PatchCreationWriteCoordinatorTest",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Injected manifest write failure"]
+                )
+            }
+            try liveWriteData(data, url, options)
+        }
+
+        let result = try PatchCreationBuilder.create(
+            projectPath: root.path,
+            baseROMPath: baseROM.path,
+            fileCoordinator: coordinator
+        )
+
+        XCTAssertEqual(result.status, .blocked)
+        let patchPath = try XCTUnwrap(result.patchPath)
+        let manifestPath = try XCTUnwrap(result.manifestPath)
+        XCTAssertTrue(patchPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps"))
+        XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/clean-base-to-pokeemerald.bps.manifest.json"))
+        XCTAssertTrue(result.diagnostics.contains { $0.code == "PATCH_CREATION_WRITE_FAILED" })
+        XCTAssertNil(result.patchSHA1)
+        XCTAssertNil(result.verification)
+        XCTAssertNil(result.manifest)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: patchPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manifestPath))
+        let patchRoot = root.appendingPathComponent(".pokemonhackstudio/patches")
+        if FileManager.default.fileExists(atPath: patchRoot.path) {
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: patchRoot.path), [])
+        }
         XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
         XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
     }
@@ -971,6 +1020,358 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: nestedPatch), patchData)
     }
 
+    func testPatchExportArtifactLibraryScansExportManifestBackupReadOnly() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let outputData = Data("adc".utf8)
+        let backupData = Data("previous-output".utf8)
+        let patchData = makeBPSPatch(source: baseData, target: outputData)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let output = root.appendingPathComponent(".pokemonhackstudio/patches/clean-base-cleanroom.gba")
+        let backup = root.appendingPathComponent(".pokemonhackstudio/backups/token/patches/clean-base-cleanroom.gba")
+        try write(baseData, to: baseROM)
+        try write(patchData, to: patch)
+        try write(outputData, to: output)
+        try write(backupData, to: backup)
+        try writePatchExportManifest(
+            outputURL: output,
+            patchURL: patch,
+            baseROMURL: baseROM,
+            backupPath: backup.path,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+        let beforeScanFiles = try recursiveRelativeFiles(in: root)
+
+        let library = PatchExportArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertTrue(library.isReadOnly)
+        XCTAssertEqual(library.relativeArtifactRoot, ".pokemonhackstudio/patches")
+        XCTAssertEqual(library.items.count, 1)
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .valid)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.outputChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .matched)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.backupStatus, .available)
+        XCTAssertEqual(item.outputIdentity.sha1, pokemonHackSHA1Hex(outputData))
+        XCTAssertEqual(item.baseROMIdentity?.sha1, pokemonHackSHA1Hex(baseData))
+        XCTAssertEqual(item.patchIdentity?.sha1, pokemonHackSHA1Hex(patchData))
+        XCTAssertEqual(item.backupIdentity?.sha1, pokemonHackSHA1Hex(backupData))
+        XCTAssertTrue(item.backupPostureSummary.contains("available"))
+        XCTAssertTrue(item.verificationSummary.contains("no apply/export was attempted"))
+        XCTAssertTrue(library.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_READ_ONLY" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeScanFiles)
+    }
+
+    func testPatchExportArtifactLibraryReportsManifestProblemsAndOutputDriftWithoutWriting() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let outputData = Data("adc".utf8)
+        let patchData = makeBPSPatch(source: baseData, target: outputData)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let patchRoot = root.appendingPathComponent(".pokemonhackstudio/patches")
+        let looseOutput = patchRoot.appendingPathComponent("loose.gba")
+        let brokenOutput = patchRoot.appendingPathComponent("broken.gba")
+        let mismatchOutput = patchRoot.appendingPathComponent("mismatch.gba")
+        let driftOutput = patchRoot.appendingPathComponent("drift.gba")
+        try write(baseData, to: baseROM)
+        try write(patchData, to: patch)
+        try write(outputData, to: looseOutput)
+        try write(outputData, to: brokenOutput)
+        try write(Data("{not json".utf8), to: URL(fileURLWithPath: brokenOutput.path + ".manifest.json"))
+        try write(outputData, to: mismatchOutput)
+        try writePatchExportManifest(
+            outputURL: mismatchOutput,
+            patchURL: patch,
+            baseROMURL: baseROM,
+            action: "patch-create",
+            outputPathOverride: looseOutput.path,
+            patchFormat: .ups,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+        try write(outputData, to: driftOutput)
+        try writePatchExportManifest(
+            outputURL: driftOutput,
+            patchURL: patch,
+            baseROMURL: baseROM,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+        try write(Data("changed-output".utf8), to: driftOutput)
+        let beforeScanFiles = try recursiveRelativeFiles(in: root)
+
+        let library = PatchExportArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertEqual(library.items.count, 4)
+        let loose = try XCTUnwrap(library.items.first { $0.fileName == "loose.gba" })
+        XCTAssertEqual(loose.manifestStatus, .missing)
+        XCTAssertEqual(loose.status, .warning)
+        let broken = try XCTUnwrap(library.items.first { $0.fileName == "broken.gba" })
+        XCTAssertEqual(broken.manifestStatus, .unreadable)
+        XCTAssertEqual(broken.status, .warning)
+        let mismatch = try XCTUnwrap(library.items.first { $0.fileName == "mismatch.gba" })
+        XCTAssertEqual(mismatch.manifestStatus, .mismatched)
+        XCTAssertEqual(mismatch.status, .warning)
+        XCTAssertTrue(mismatch.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_ACTION_MISMATCH" })
+        XCTAssertTrue(mismatch.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_OUTPUT_PATH_MISMATCH" })
+        XCTAssertTrue(mismatch.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_MANIFEST_FORMAT_UNSUPPORTED" })
+        let drift = try XCTUnwrap(library.items.first { $0.fileName == "drift.gba" })
+        XCTAssertEqual(drift.outputChecksumStatus, .mismatched)
+        XCTAssertEqual(drift.status, .warning)
+        XCTAssertTrue(drift.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_OUTPUT_HASH_MISMATCH" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeScanFiles)
+    }
+
+    func testPatchExportArtifactLibraryDoesNotHashManifestPathsOutsideProjectRoot() throws {
+        let root = try makePatchCreationProjectRoot()
+        let outside = try makeTemporaryRoot()
+        let outputData = Data("adc".utf8)
+        let baseData = Data("abc".utf8)
+        let patchData = makeBPSPatch(source: baseData, target: outputData)
+        let output = root.appendingPathComponent(".pokemonhackstudio/patches/out-of-root.gba")
+        let outsideBaseROM = outside.appendingPathComponent("clean-base.gba")
+        let outsidePatch = outside.appendingPathComponent("cleanroom.bps")
+        let outsideBackup = outside.appendingPathComponent("backup.gba")
+        try write(outputData, to: output)
+        try write(baseData, to: outsideBaseROM)
+        try write(patchData, to: outsidePatch)
+        try write(Data("backup".utf8), to: outsideBackup)
+        try writePatchExportManifest(
+            outputURL: output,
+            patchURL: outsidePatch,
+            baseROMURL: outsideBaseROM,
+            backupPath: outsideBackup.path,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+
+        let library = PatchExportArtifactLibraryScanner.scan(projectPath: root.path)
+
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .warning)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.outputChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .unavailable)
+        XCTAssertEqual(item.patchChecksumStatus, .unavailable)
+        XCTAssertEqual(item.backupStatus, .unavailable)
+        XCTAssertEqual(item.baseROMIdentity?.path, outsideBaseROM.path)
+        XCTAssertEqual(item.baseROMIdentity?.exists, false)
+        XCTAssertNil(item.baseROMIdentity?.sha1)
+        XCTAssertEqual(item.patchIdentity?.path, outsidePatch.path)
+        XCTAssertEqual(item.patchIdentity?.exists, false)
+        XCTAssertNil(item.patchIdentity?.sha1)
+        XCTAssertEqual(item.backupIdentity?.path, outsideBackup.path)
+        XCTAssertEqual(item.backupIdentity?.exists, false)
+        XCTAssertNil(item.backupIdentity?.sha1)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_BASE_ROM_PATH_OUTSIDE_PROJECT" })
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_PATCH_PATH_OUTSIDE_PROJECT" })
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_BACKUP_PATH_OUTSIDE_PROJECT" })
+        XCTAssertEqual(try Data(contentsOf: outsideBaseROM), baseData)
+        XCTAssertEqual(try Data(contentsOf: outsidePatch), patchData)
+    }
+
+    func testPatchExportArtifactLibraryScansOnlyDirectChildRegularGBAExports() throws {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let outputData = Data("adc".utf8)
+        let patchData = makeBPSPatch(source: baseData, target: outputData)
+        let baseROM = root.appendingPathComponent("clean-base.gba")
+        let patch = root.appendingPathComponent("cleanroom.bps")
+        let patchRoot = root.appendingPathComponent(".pokemonhackstudio/patches")
+        let directOutput = patchRoot.appendingPathComponent("direct.gba")
+        let nestedOutput = patchRoot.appendingPathComponent("nested/nested.gba")
+        try write(baseData, to: baseROM)
+        try write(patchData, to: patch)
+        try write(outputData, to: directOutput)
+        try writePatchExportManifest(
+            outputURL: directOutput,
+            patchURL: patch,
+            baseROMURL: baseROM,
+            baseData: baseData,
+            outputData: outputData,
+            patchData: patchData
+        )
+        try write(outputData, to: nestedOutput)
+        try FileManager.default.createDirectory(at: patchRoot.appendingPathComponent("directory.gba"), withIntermediateDirectories: true)
+        try write(patchData, to: patchRoot.appendingPathComponent("direct.bps"))
+        try write(Data(#"{"manifestOnly":true}"#.utf8), to: patchRoot.appendingPathComponent("manifest-only.gba.manifest.json"))
+        let beforeScanFiles = try recursiveRelativeFiles(in: root)
+
+        let library = PatchExportArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertEqual(library.items.map(\.fileName), ["direct.gba"])
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.outputChecksumStatus, .matched)
+        XCTAssertEqual(item.baseROMStatus, .matched)
+        XCTAssertEqual(item.patchChecksumStatus, .matched)
+        XCTAssertEqual(item.status, .valid)
+        XCTAssertFalse(library.items.contains { $0.relativeOutputPath.contains("nested") })
+        XCTAssertFalse(library.items.contains { $0.relativeOutputPath.contains("directory.gba") })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeScanFiles)
+        XCTAssertEqual(try Data(contentsOf: nestedOutput), outputData)
+    }
+
+    func testPatchExportArtifactLibraryMissingRootDoesNotCreateArtifactDirectory() throws {
+        let root = try makePatchCreationProjectRoot()
+
+        let library = PatchExportArtifactLibraryScanner.scan(projectPath: root.path)
+
+        XCTAssertTrue(library.items.isEmpty)
+        XCTAssertTrue(library.isReadOnly)
+        XCTAssertTrue(library.diagnostics.contains { $0.code == "PATCH_EXPORT_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testROMMutationArtifactLibraryScansApplyManifestBackupReadOnly() throws {
+        let fixture = try makeROMMutationArtifactFixture()
+        let artifactRoot = fixture.root.appendingPathComponent(".pokemonhackstudio/rom-mutations")
+        let beforeScanFiles = try recursiveRelativeFiles(under: artifactRoot)
+
+        let library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: fixture.root.path)
+
+        XCTAssertTrue(library.isReadOnly)
+        XCTAssertEqual(library.relativeArtifactRoot, ".pokemonhackstudio/rom-mutations")
+        XCTAssertEqual(library.items.count, 1)
+        XCTAssertTrue(library.blockedActions.contains("Apply binary ROM mutations from library scan"))
+        XCTAssertFalse(library.blockedActions.contains("Apply binary ROM mutations"))
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .valid)
+        XCTAssertEqual(item.manifestStatus, .matched)
+        XCTAssertEqual(item.backupStatus, .matched)
+        XCTAssertEqual(item.operationKind, "replaceBytesInPlace")
+        XCTAssertEqual(item.replacementCount, 1)
+        XCTAssertEqual(item.baseBefore?.sha1, pokemonHackSHA1Hex(fixture.originalData))
+        XCTAssertEqual(item.backupIdentity?.sha1, item.baseBefore?.sha1)
+        XCTAssertEqual(item.confirmation?.method, "dry-run-review-token")
+        XCTAssertEqual(item.confirmation?.hasReviewToken, true)
+        XCTAssertEqual(item.confirmation?.reviewTokenSuffix, String(fixture.reviewToken.suffix(8)))
+        let encoded = String(data: try JSONEncoder().encode(library), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains(fixture.reviewToken))
+        XCTAssertTrue(item.verificationSummary.contains("no ROM, backup, dry-run manifest, source, export, or apply action was attempted"))
+        XCTAssertEqual(try recursiveRelativeFiles(under: artifactRoot), beforeScanFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/test-patched.gba").path))
+    }
+
+    func testROMMutationArtifactLibraryMissingRootDoesNotCreateDirectories() throws {
+        let root = try makeTemporaryRoot()
+
+        let library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: root.path)
+
+        XCTAssertTrue(library.items.isEmpty)
+        XCTAssertTrue(library.isReadOnly)
+        XCTAssertTrue(library.diagnostics.contains { $0.code == "ROM_MUTATION_ARTIFACT_LIBRARY_EMPTY" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testROMMutationArtifactLibraryReportsMissingAndStaleBackupsWithoutWriting() throws {
+        let fixture = try makeROMMutationArtifactFixture()
+        let backupURL = URL(fileURLWithPath: try XCTUnwrap(fixture.apply.backupPath))
+        try write(Data("changed-backup".utf8), to: backupURL)
+        let artifactRoot = fixture.root.appendingPathComponent(".pokemonhackstudio/rom-mutations")
+        let beforeStaleScanFiles = try recursiveRelativeFiles(under: artifactRoot)
+
+        var library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: fixture.root.path)
+
+        var item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .warning)
+        XCTAssertEqual(item.backupStatus, .mismatched)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "ROM_MUTATION_ARTIFACT_LIBRARY_BACKUP_HASH_MISMATCH" })
+        XCTAssertEqual(try recursiveRelativeFiles(under: artifactRoot), beforeStaleScanFiles)
+
+        try FileManager.default.removeItem(at: backupURL)
+        let beforeMissingScanFiles = try recursiveRelativeFiles(under: artifactRoot)
+        library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: fixture.root.path)
+
+        item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.status, .warning)
+        XCTAssertEqual(item.backupStatus, .missing)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "ROM_MUTATION_ARTIFACT_LIBRARY_BACKUP_MISSING" })
+        XCTAssertEqual(try recursiveRelativeFiles(under: artifactRoot), beforeMissingScanFiles)
+    }
+
+    func testROMMutationArtifactLibraryDoesNotHashManifestPathsOutsideWorkspace() throws {
+        let root = try makeTemporaryRoot()
+        let outside = try makeTemporaryRoot()
+        let outsideBackup = outside.appendingPathComponent("outside-original.gba")
+        let outsideDryRun = outside.appendingPathComponent("dry-run.json")
+        let baseData = makeROMMutationTestROMData()
+        var afterData = baseData
+        afterData[0x120] = 0xAA
+        afterData[0x121] = 0xBB
+        try write(baseData, to: outsideBackup)
+        try write(Data("outside dry run".utf8), to: outsideDryRun)
+        let manifest = makeROMMutationApplyManifest(
+            inputPath: outside.appendingPathComponent("test.gba").path,
+            backupPath: outsideBackup.path,
+            baseData: baseData,
+            afterData: afterData,
+            dryRunManifestPath: outsideDryRun.path,
+            reviewToken: "romreplace-secret-token"
+        )
+        let applyManifest = root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/2026-token/apply-manifest.json")
+        try writeManifest(manifest, to: applyManifest)
+
+        let library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: root.path)
+
+        let item = try XCTUnwrap(library.items.first)
+        XCTAssertEqual(item.backupStatus, .unavailable)
+        XCTAssertEqual(item.backupIdentity?.path, outsideBackup.path)
+        XCTAssertEqual(item.backupIdentity?.exists, false)
+        XCTAssertNil(item.backupIdentity?.sha1)
+        XCTAssertTrue(item.diagnostics.contains { $0.code == "ROM_MUTATION_ARTIFACT_LIBRARY_BACKUP_PATH_OUTSIDE_ARTIFACT_ROOT" })
+        XCTAssertEqual(try Data(contentsOf: outsideBackup), baseData)
+        let encoded = String(data: try JSONEncoder().encode(library), encoding: .utf8) ?? ""
+        XCTAssertFalse(encoded.contains("romreplace-secret-token"))
+    }
+
+    func testROMMutationArtifactLibraryScansNestedApplyManifestsAndSkipsNonRegularSymlinkEscapes() throws {
+        let root = try makeTemporaryRoot()
+        let outside = try makeTemporaryRoot()
+        let baseData = makeROMMutationTestROMData()
+        var afterData = baseData
+        afterData[0x120] = 0xAA
+        afterData[0x121] = 0xBB
+        let backup = root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/nested/test-original.gba")
+        try write(baseData, to: backup)
+        let nestedManifest = root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/nested/apply-manifest.json")
+        try writeManifest(
+            makeROMMutationApplyManifest(
+                inputPath: root.appendingPathComponent("test.gba").path,
+                backupPath: backup.path,
+                baseData: baseData,
+                afterData: afterData,
+                dryRunManifestPath: root.appendingPathComponent("dry-run.json").path,
+                reviewToken: "romreplace-nested"
+            ),
+            to: nestedManifest
+        )
+        try write(Data(#"{"dryRun":true}"#.utf8), to: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/nested/dry-run.json"))
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/directory/apply-manifest.json"),
+            withIntermediateDirectories: true
+        )
+        let outsideManifest = outside.appendingPathComponent("apply-manifest.json")
+        try write(Data(#"{"outside":true}"#.utf8), to: outsideManifest)
+        let symlinkManifest = root.appendingPathComponent(".pokemonhackstudio/rom-mutations/test/symlink/apply-manifest.json")
+        try FileManager.default.createDirectory(at: symlinkManifest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: symlinkManifest.path, withDestinationPath: outsideManifest.path)
+
+        let library = ROMMutationArtifactLibraryScanner.scan(workspaceRoot: root.path)
+
+        XCTAssertEqual(library.items.map(\.relativeApplyManifestPath), [".pokemonhackstudio/rom-mutations/test/nested/apply-manifest.json"])
+        XCTAssertTrue(library.diagnostics.contains { $0.code == "ROM_MUTATION_ARTIFACT_LIBRARY_MANIFEST_NOT_REGULAR_FILE" })
+    }
+
     func testPatchDistributionReadinessComposesSelectedPatchLibraryAndManualPlaytestReadinessWithoutWriting() throws {
         let root = try makePatchCreationProjectRoot()
         let baseData = Data("abc".utf8)
@@ -1003,8 +1404,9 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(packet.patchCreationPreview.headerPolicy.shouldRewriteHeader)
         XCTAssertTrue(packet.manualPlaytestReadiness.isRunnable)
         XCTAssertTrue(packet.diagnostics.contains { $0.code == "PATCH_DISTRIBUTION_REVIEW_ONLY" })
-        XCTAssertTrue(packet.blockedActions.contains("Patch file creation"))
-        XCTAssertTrue(packet.blockedActions.contains("Header rewrite"))
+        XCTAssertTrue(packet.blockedActions.contains("Patch file creation from readiness packet"))
+        XCTAssertTrue(packet.blockedActions.contains("Header rewrite from readiness packet"))
+        XCTAssertFalse(packet.blockedActions.contains("Patch file creation"))
         XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
         XCTAssertEqual(try Data(contentsOf: baseROM), baseData)
         XCTAssertEqual(try Data(contentsOf: builtOutput), builtData)
@@ -1491,7 +1893,8 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertTrue(bpsAudit.checksumPolicy.contains("BPS-first policy"))
         XCTAssertTrue(bpsAudit.applyExportState.canApply)
         XCTAssertTrue(bpsAudit.applyExportState.canExport)
-        XCTAssertTrue(bpsAudit.blockedActions.contains("Patched ROM writes"))
+        XCTAssertTrue(bpsAudit.blockedActions.contains("Patched ROM writes from audit report"))
+        XCTAssertFalse(bpsAudit.blockedActions.contains("Patched ROM writes"))
         XCTAssertTrue(bpsAudit.diagnostics.contains { $0.code == "PATCH_APPLY_EXPORT_AUDIT_READ_ONLY" })
         XCTAssertEqual(try recursiveRelativeFiles(in: bps.root), beforeBPSFiles)
         XCTAssertFalse(FileManager.default.fileExists(atPath: bps.root.appendingPathComponent(".pokemonhackstudio").path))
@@ -2038,6 +2441,130 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         return temp.url
     }
 
+    private func makeROMMutationArtifactFixture() throws -> (
+        root: URL,
+        rom: URL,
+        originalData: Data,
+        reviewToken: String,
+        apply: BinaryROMMutationApplyResult
+    ) {
+        let root = try makeTemporaryRoot()
+        let rom = root.appendingPathComponent("test.gba")
+        let originalData = makeROMMutationTestROMData()
+        try write(originalData, to: rom)
+        let manifest = BinaryROMMutationDryRunManifestBuilder.build(
+            path: rom.path,
+            request: BinaryROMMutationDryRunRequest(
+                workspaceRoot: root.path,
+                replacements: [
+                    BinaryROMMutationReplacementRequest(offset: 0x120, length: 2, replacementBytes: [0xAA, 0xBB])
+                ]
+            )
+        )
+        let reviewToken = try XCTUnwrap(manifest.applyReview?.reviewToken)
+        let manifestData = try encodeJSON(manifest)
+        let dryRunManifest = root.appendingPathComponent("dry-run.json")
+        try write(manifestData, to: dryRunManifest)
+        let apply = BinaryROMMutationApplier.apply(
+            path: rom.path,
+            dryRunManifest: manifest,
+            dryRunManifestPath: dryRunManifest.path,
+            dryRunManifestData: manifestData,
+            workspaceRoot: root.path,
+            confirmationToken: reviewToken
+        )
+        XCTAssertEqual(apply.status, .applied)
+        return (root, rom, originalData, reviewToken, apply)
+    }
+
+    private func makeROMMutationTestROMData() -> Data {
+        var bytes = [UInt8](repeating: 0xff, count: 0x240)
+        bytes.replaceSubrange(0x04..<0xA0, with: Array(repeating: 1, count: 0x9C))
+        bytes.replaceSubrange(0xA0..<0xAC, with: Array("POKEMON TEST".utf8))
+        bytes.replaceSubrange(0xAC..<0xB0, with: Array("BPEE".utf8))
+        bytes.replaceSubrange(0xB0..<0xB2, with: Array("01".utf8))
+        bytes[0x100] = 0x80
+        bytes[0x101] = 0x00
+        bytes[0x102] = 0x00
+        bytes[0x103] = 0x08
+        return Data(bytes)
+    }
+
+    private func makeROMMutationApplyManifest(
+        inputPath: String,
+        backupPath: String,
+        baseData: Data,
+        afterData: Data,
+        dryRunManifestPath: String,
+        reviewToken: String
+    ) -> BinaryROMMutationApplyManifest {
+        let baseBefore = BinaryROMMutationBaseIdentity(
+            path: inputPath,
+            data: baseData,
+            graph: BinaryROMGraphBuilder.build(path: inputPath, data: baseData)
+        )
+        let baseAfter = BinaryROMMutationBaseIdentity(
+            path: inputPath,
+            data: afterData,
+            graph: BinaryROMGraphBuilder.build(path: inputPath, data: afterData)
+        )
+        let replacementData = Data([0xAA, 0xBB])
+        return BinaryROMMutationApplyManifest(
+            inputPath: inputPath,
+            backupPath: backupPath,
+            baseBefore: baseBefore,
+            baseAfter: baseAfter,
+            replacements: [
+                BinaryROMMutationAppliedReplacement(
+                    id: "replace:0x120:2",
+                    offset: 0x120,
+                    length: 2,
+                    originalPreviewHex: "FFFF",
+                    originalSpanSHA1: pokemonHackSHA1Hex(Data(baseData[0x120..<0x122])),
+                    replacementPreviewHex: "AABB",
+                    replacementSHA1: pokemonHackSHA1Hex(replacementData)
+                )
+            ],
+            confirmation: BinaryROMMutationApplyConfirmation(
+                method: "dry-run-review-token",
+                reviewToken: reviewToken,
+                dryRunManifestPath: dryRunManifestPath,
+                dryRunManifestSHA1: pokemonHackSHA1Hex(Data("dry-run".utf8))
+            ),
+            diagnostics: []
+        )
+    }
+
+    private func writeManifest(_ manifest: BinaryROMMutationApplyManifest, to url: URL) throws {
+        try write(encodeJSON(manifest), to: url)
+    }
+
+    private func encodeJSON<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(value)
+    }
+
+    private func recursiveRelativeFiles(under root: URL) throws -> [String] {
+        guard FileManager.default.fileExists(atPath: root.path),
+              let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])
+        else {
+            return []
+        }
+
+        var files: [String] = []
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            let path = url.standardizedFileURL.path
+            let rootPath = root.standardizedFileURL.path
+            if path.hasPrefix(rootPath + "/") {
+                files.append(String(path.dropFirst(rootPath.count + 1)))
+            }
+        }
+        return files.sorted()
+    }
+
     private func makePatchCreationProjectRoot() throws -> URL {
         let root = try makeTemporaryRoot()
         try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -2130,6 +2657,48 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         try encoder.encode(rewritten).write(to: url)
+    }
+
+    private func writePatchExportManifest(
+        outputURL: URL,
+        patchURL: URL,
+        baseROMURL: URL,
+        backupPath: String? = nil,
+        action: String = "patch-apply-export",
+        outputPathOverride: String? = nil,
+        patchFormat: PatchFormatID = .bps,
+        baseData: Data,
+        outputData: Data,
+        patchData: Data
+    ) throws {
+        let manifest = PatchApplyExportManifest(
+            schemaVersion: 1,
+            action: action,
+            patchPath: patchURL.path,
+            baseROMPath: baseROMURL.path,
+            outputPath: outputPathOverride ?? outputURL.path,
+            backupPath: backupPath,
+            patchFormat: patchFormat,
+            baseROMSHA1: pokemonHackSHA1Hex(baseData),
+            outputROMSHA1: pokemonHackSHA1Hex(outputData),
+            baseROMCRC32: pokemonHackCRC32Hex(baseData),
+            outputROMCRC32: pokemonHackCRC32Hex(outputData),
+            patchCRC32: pokemonHackCRC32Hex(patchData),
+            checksumPolicy: "test checksum policy",
+            headerPolicy: PatchArtifactHeaderPolicy(
+                mode: "no-header-rewrite",
+                detail: "test no header rewrite",
+                shouldRewriteHeader: false
+            ),
+            diagnostics: []
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try encoder.encode(manifest).write(to: URL(fileURLWithPath: outputURL.path + ".manifest.json"))
     }
 
     private func recursiveRelativeFiles(in root: URL) throws -> [String] {

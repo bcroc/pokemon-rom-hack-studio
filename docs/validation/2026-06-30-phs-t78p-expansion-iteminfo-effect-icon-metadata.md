@@ -20,7 +20,7 @@
 ## Validation
 
 - `swift test --package-path PokemonHackStudio --filter 'PokemonItemCatalogTests|PokemonDataCompatibilityTests|PokemonHackCLITests/testPokemonCompatibilityCommandEmitsPreviewJSON'` passed on 2026-06-30 17:34 America/Vancouver with 24 selected tests and 0 failures.
-- `make validate-synthetic` was rerun on 2026-06-30 17:35 America/Vancouver. `bash -n script/*.sh` and `./script/build_and_run.sh --check-tools` passed, SwiftPM built, then the full suite executed 433 tests with 6 unrelated Gen V NitroFS root failures: 3 in `NDSDataCatalogTests/testPokeBlackCatalogSurfacesGenVNitroFSRootInventoryFacts` and 3 in `PokemonHackCLITests/testNDSDataCatalogCommandEmitsPokeBlackNitroFSRootInventoryJSON`, expecting shallow count `10` and observing `13` plus matching fact assertion failures.
+- Historical blocker: `make validate-synthetic` was rerun on 2026-06-30 17:35 America/Vancouver. `bash -n script/*.sh` and `./script/build_and_run.sh --check-tools` passed, SwiftPM built, then the full suite executed 433 tests with 6 unrelated Gen V NitroFS root failures: 3 in `NDSDataCatalogTests/testPokeBlackCatalogSurfacesGenVNitroFSRootInventoryFacts` and 3 in `PokemonHackCLITests/testNDSDataCatalogCommandEmitsPokeBlackNitroFSRootInventoryJSON`, expecting shallow count `10` and observing `13` plus matching fact assertion failures.
 - `git diff --check` passed. Post-validation `git status --short --branch` showed `## main...origin/main [ahead 1]`.
 
 ## Source-Write Posture

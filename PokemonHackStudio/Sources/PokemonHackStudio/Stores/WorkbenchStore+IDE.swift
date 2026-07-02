@@ -206,6 +206,26 @@ extension WorkbenchStore {
                 availability: selectedBuildReport == nil ? .disabled("Load a build report before copying JSON.") : .enabled
             ),
             WorkbenchCommand(
+                id: "copy:ship-preview-digest-json",
+                title: "Copy Ship Preview Digest JSON",
+                subtitle: "Copy the current read-only ship digest snapshot.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyShipPreviewDigestJSON,
+                availability: selectedShipPreviewDigest == nil ? .disabled("Open or index a project before copying Ship Preview Digest JSON.") : .enabled
+            ),
+            WorkbenchCommand(
+                id: "copy:ship-preview-digest-markdown",
+                title: "Copy Ship Preview Digest Markdown",
+                subtitle: "Copy the current read-only ship digest handoff.",
+                systemImage: "text.page",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyShipPreviewDigestMarkdown,
+                availability: selectedShipPreviewDigest == nil ? .disabled("Open or index a project before copying Ship Preview Digest Markdown.") : .enabled
+            ),
+            WorkbenchCommand(
                 id: "copy:map-render-audit-json",
                 title: "Copy Map Render Audit JSON",
                 subtitle: "Copy the loaded read-only map render audit.",
@@ -214,6 +234,16 @@ extension WorkbenchStore {
                 keyboardHint: nil,
                 action: .copyMapRenderAuditJSON,
                 availability: selectedMapRenderAuditReport == nil ? .disabled("Run Map Render Audit Re-check before copying JSON.") : .enabled
+            ),
+            WorkbenchCommand(
+                id: "copy:nds-semantic-coverage-json",
+                title: "Copy NDS Semantic Coverage JSON",
+                subtitle: "Copy the loaded redacted NDS semantic coverage report.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyNDSSemanticCoverageJSON,
+                availability: canCopyNDSSemanticCoverageJSON ? .enabled : .disabled("Refresh NDS semantic coverage before copying JSON.")
             ),
             WorkbenchCommand(
                 id: "copy:patch-distribution-readiness-json",
@@ -226,6 +256,16 @@ extension WorkbenchStore {
                 availability: canCopyPatchDistributionReadinessJSON ? .enabled : .disabled("Refresh patch distribution readiness before copying JSON.")
             ),
             WorkbenchCommand(
+                id: "copy:patch-apply-export-audit-json",
+                title: "Copy Patch Apply/Export Audit JSON",
+                subtitle: "Copy the loaded read-only patch apply/export audit.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyPatchApplyExportAuditJSON,
+                availability: canCopyPatchApplyExportAuditJSON ? .enabled : .disabled("Refresh Patch Apply/Export Audit before copying JSON.")
+            ),
+            WorkbenchCommand(
                 id: "copy:binary-rom-mutation-apply-audit-json",
                 title: "Copy Binary ROM Apply Audit JSON",
                 subtitle: "Copy the loaded read-only binary apply audit.",
@@ -234,6 +274,26 @@ extension WorkbenchStore {
                 keyboardHint: nil,
                 action: .copyBinaryROMMutationApplyAuditJSON,
                 availability: canCopyBinaryROMMutationApplyAuditJSON ? .enabled : .disabled("Load a binary mutation review before copying audit JSON.")
+            ),
+            WorkbenchCommand(
+                id: "copy:rom-mutation-library-json",
+                title: "Copy ROM Mutation Library JSON",
+                subtitle: "Copy the loaded read-only ROM mutation artifact library.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyROMMutationArtifactLibraryJSON,
+                availability: canCopyROMMutationArtifactLibraryJSON ? .enabled : .disabled("Re-check ROM Mutation Library before copying JSON.")
+            ),
+            WorkbenchCommand(
+                id: "copy:gen-iv-map-review-json",
+                title: "Copy Gen IV Map Review JSON",
+                subtitle: "Copy the selected Gen IV map review packet.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copySelectedNDSMapReviewPacketJSON,
+                availability: selectedNDSMapReviewPacketCopyDisabledReason.map { .disabled($0) } ?? .enabled
             ),
             WorkbenchCommand(
                 id: "copy:resource-readiness-packet-json",
@@ -267,6 +327,20 @@ extension WorkbenchStore {
 
     var currentIDEActivityEvents: [WorkbenchActivityEvent] {
         var events: [WorkbenchActivityEvent] = []
+
+        if let report = selectedBuildReport {
+            let generatedPresent = report.generatedArtifacts.filter(\.exists).count
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "build-report:\(report.id)",
+                    category: .build,
+                    title: "Build report loaded",
+                    detail: "\(report.buildTargets.count) target(s); \(generatedPresent)/\(report.generatedArtifacts.count) generated output(s) present",
+                    status: report.status,
+                    source: report.rows.first?.source
+                )
+            )
+        }
 
         if let result = selectedBuildRunResult {
             events.append(
@@ -318,15 +392,55 @@ extension WorkbenchStore {
             )
         }
 
+        if let catalog = selectedAssetCatalog {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "resource-catalog:\(catalog.id)",
+                    category: .resources,
+                    title: "Resources catalog loaded",
+                    detail: "\(catalog.assetCount) asset(s); \(catalog.diagnostics.count) diagnostic(s)",
+                    status: status(for: catalog.rows.map(\.status)) ?? .valid,
+                    source: catalog.rows.first?.source
+                )
+            )
+        }
+
+        if selectedResourceReadinessPacketCopyDisabledReason == nil,
+           let asset = selectedResourceAsset {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "resource-readiness:\(asset.id)",
+                    category: .resources,
+                    title: "Resource readiness packet",
+                    detail: "\(asset.path) · \(asset.availabilitySummary)",
+                    status: asset.status,
+                    source: asset.source
+                )
+            )
+        }
+
+        if let preview = selectedPatchCreationPreviewReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "patch-creation-preview:\(preview.id)",
+                    category: .patch,
+                    title: "Patch creation preview \(preview.isReady ? "ready" : "blocked")",
+                    detail: preview.absolutePlannedPatchPath,
+                    status: preview.status,
+                    source: preview.rows.first?.source
+                )
+            )
+        }
+
         if let result = selectedPatchCreationResultReport {
             events.append(
                 WorkbenchActivityEvent(
-                    id: "patch-create:\(result.id)",
+                    id: "patch-creation-result:\(result.id)",
                     category: .patch,
                     title: "Patch creation \(result.statusLabel)",
                     detail: result.patchPath ?? result.manifestPath ?? "No patch artifact path",
                     status: result.status,
-                    source: nil
+                    source: result.rows.first?.source
                 )
             )
         }
@@ -339,7 +453,98 @@ extension WorkbenchStore {
                     title: library.title,
                     detail: "\(library.items.count) artifact(s) in \(library.artifactRoot)",
                     status: library.status,
+                    source: library.rows.first?.source
+                )
+            )
+        }
+
+        if let report = selectedPatchDistributionReadinessReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "patch-distribution:\(report.id)",
+                    category: .patch,
+                    title: report.title,
+                    detail: report.detail,
+                    status: report.status,
+                    source: report.rows.first?.source
+                )
+            )
+        }
+
+        if let report = selectedPatchApplyExportAuditReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "patch-apply-export-audit:\(report.id)",
+                    category: .patch,
+                    title: "Patch apply/export audit \(report.statusLabel)",
+                    detail: report.plannedOutputPath,
+                    status: report.status,
+                    source: report.rows.first?.source
+                )
+            )
+        }
+
+        if let report = selectedMapRenderAuditReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "map-render-audit:\(report.id)",
+                    category: .diagnostics,
+                    title: "Map render audit \(report.statusLabel)",
+                    detail: "\(report.auditedMapCount)/\(report.mapCount) maps; \(report.warningCount) warning(s); \(report.failureCount) failure(s)",
+                    status: report.status,
+                    source: report.rows.first?.source
+                )
+            )
+        }
+
+        if let report = selectedNDSSemanticCoverageReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "nds-semantic-coverage:\(report.id)",
+                    category: .diagnostics,
+                    title: "NDS semantic coverage \(report.statusLabel)",
+                    detail: "\(report.eligibleFields) field(s); \(report.blockedRows) write-blocked; \(report.skippedRows) skipped",
+                    status: report.status,
+                    source: report.rows.first?.source
+                )
+            )
+        }
+
+        if let digest = selectedShipPreviewDigest {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "ship-preview-digest:\(digest.id)",
+                    category: .diagnostics,
+                    title: digest.title,
+                    detail: digest.subtitle,
+                    status: digest.status,
                     source: nil
+                )
+            )
+        }
+
+        if let binaryDryRun = selectedBinaryROMMutationDryRunReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "binary-dry-run:\(binaryDryRun.id)",
+                    category: .mutation,
+                    title: binaryDryRun.title,
+                    detail: binaryDryRun.inputPath,
+                    status: binaryDryRun.status,
+                    source: binaryDryRun.rows.first?.source
+                )
+            )
+        }
+
+        if let binaryAudit = selectedBinaryROMMutationApplyAuditReport {
+            events.append(
+                WorkbenchActivityEvent(
+                    id: "binary-apply-audit:\(binaryAudit.id)",
+                    category: .mutation,
+                    title: "Binary apply audit \(binaryAudit.statusLabel)",
+                    detail: binaryAudit.manifestPath ?? binaryAudit.inputPath,
+                    status: binaryAudit.status,
+                    source: binaryAudit.rows.first?.source
                 )
             )
         }
@@ -347,12 +552,12 @@ extension WorkbenchStore {
         if let binaryResult = selectedBinaryROMMutationApplyResultReport {
             events.append(
                 WorkbenchActivityEvent(
-                    id: "binary-apply:\(binaryResult.id)",
+                    id: "binary-apply-result:\(binaryResult.id)",
                     category: .mutation,
                     title: "Binary apply \(binaryResult.statusLabel)",
                     detail: binaryResult.manifestPath ?? binaryResult.inputPath,
                     status: binaryResult.status,
-                    source: nil
+                    source: binaryResult.rows.first?.source
                 )
             )
         }
@@ -493,12 +698,24 @@ extension WorkbenchStore {
             }
         case .copyReportJSON:
             copyBuildPatchPlaytestReportJSONToPasteboard()
+        case .copyShipPreviewDigestJSON:
+            copyShipPreviewDigestJSONToPasteboard()
+        case .copyShipPreviewDigestMarkdown:
+            copyShipPreviewDigestMarkdownToPasteboard()
         case .copyMapRenderAuditJSON:
             copyMapRenderAuditJSONToPasteboard()
+        case .copyNDSSemanticCoverageJSON:
+            copyNDSSemanticCoverageJSONToPasteboard()
         case .copyPatchDistributionReadinessJSON:
             copyPatchDistributionReadinessJSONToPasteboard()
+        case .copyPatchApplyExportAuditJSON:
+            copyPatchApplyExportAuditJSONToPasteboard()
         case .copyBinaryROMMutationApplyAuditJSON:
             copyBinaryROMMutationApplyAuditJSONToPasteboard()
+        case .copyROMMutationArtifactLibraryJSON:
+            copyROMMutationArtifactLibraryJSONToPasteboard()
+        case .copySelectedNDSMapReviewPacketJSON:
+            copySelectedNDSMapReviewPacketJSONToPasteboard()
         case .copySelectedResourceReadinessPacketJSON:
             copySelectedResourceReadinessPacketJSONToPasteboard()
         }

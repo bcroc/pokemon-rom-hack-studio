@@ -181,6 +181,10 @@ enum ShipPreviewDigestArea: String, CaseIterable, Identifiable, Hashable {
     case patchCreation
     case patchLibrary
     case patchDistribution
+    case romMutationLibrary
+    case patchedROMExportLibrary
+    case referenceStatus
+    case ndsSemanticCoverage
     case mapRenderAudit
     case playtest
     case binaryMutationAudit
@@ -196,6 +200,10 @@ enum ShipPreviewDigestArea: String, CaseIterable, Identifiable, Hashable {
         case .patchCreation: "Patch Creation"
         case .patchLibrary: "Patch Library"
         case .patchDistribution: "Patch Distribution"
+        case .romMutationLibrary: "ROM Mutation Library"
+        case .patchedROMExportLibrary: "Patched ROM Export Library"
+        case .referenceStatus: "Reference Status"
+        case .ndsSemanticCoverage: "NDS Semantic Coverage"
         case .mapRenderAudit: "Map Render Audit"
         case .playtest: "Playtest"
         case .binaryMutationAudit: "Binary Mutation Audit"
@@ -209,6 +217,10 @@ enum ShipPreviewDigestArea: String, CaseIterable, Identifiable, Hashable {
         case .patchCreation: "doc.badge.plus"
         case .patchLibrary: "books.vertical"
         case .patchDistribution: "shippingbox"
+        case .romMutationLibrary: "memorychip"
+        case .patchedROMExportLibrary: "externaldrive"
+        case .referenceStatus: "point.3.connected.trianglepath.dotted"
+        case .ndsSemanticCoverage: "chart.bar.doc.horizontal"
         case .mapRenderAudit: "map"
         case .playtest: "gamecontroller"
         case .binaryMutationAudit: "memorychip"
@@ -862,6 +874,15 @@ struct BuildStep: Identifiable {
     let source: SourceLocation
 }
 
+struct ReferenceStatusViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let status: ValidationState
+    let facts: [Fact]
+    let diagnostics: [IndexedDiagnosticRow]
+}
+
 struct BuildWorkflowActionViewState: Identifiable, Equatable {
     let id: String
     let title: String
@@ -903,6 +924,7 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
     case toolchain = "Toolchain Readiness"
     case healthMatrix = "Toolchain Health Matrix"
     case mapRenderAudit = "Map Render Audit"
+    case ndsSemanticCoverage = "NDS Semantic Coverage"
     case patchManifest = "Patch Manifest"
     case playtest = "Playtest Handoff"
     case diagnostics = "Diagnostics"
@@ -923,6 +945,8 @@ enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
             "checklist"
         case .mapRenderAudit:
             "map"
+        case .ndsSemanticCoverage:
+            "chart.bar.doc.horizontal"
         case .patchManifest:
             "doc.badge.gearshape"
         case .playtest:
@@ -983,6 +1007,54 @@ struct MapRenderAuditReportViewState: Identifiable {
     let failureCount: Int
     let rows: [BuildReportRow]
     let diagnostics: [IndexedDiagnosticRow]
+}
+
+enum NDSSemanticCoverageLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(label: String, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "No NDS semantic coverage loaded"
+        case .loading:
+            "Loading NDS semantic coverage"
+        case let .loaded(label, _):
+            "NDS semantic coverage loaded: \(label)"
+        case let .failed(message):
+            "NDS semantic coverage failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .idle, .loading:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .failed:
+            .error
+        }
+    }
+}
+
+struct NDSSemanticCoverageReportViewState: Identifiable {
+    let id: String
+    let projectTitle: String
+    let rootPath: String
+    let status: ValidationState
+    let statusLabel: String
+    let catalogRows: Int
+    let scannedRows: Int
+    let eligibleRows: Int
+    let eligibleFields: Int
+    let blockedRows: Int
+    let skippedRows: Int
+    let domainCount: Int
+    let bucketCount: Int
+    let rows: [BuildReportRow]
 }
 
 struct BuildPatchPlaytestReportViewState: Identifiable {
@@ -1088,6 +1160,99 @@ enum PatchArtifactLibraryLoadStatus: Equatable {
             "\(count) BPS patch artifact\(count == 1 ? "" : "s") found"
         case let .failed(message):
             "Patch library failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
+enum PatchExportArtifactLibraryLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(count: Int, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Patched ROM export library not checked"
+        case .loading:
+            "Checking patched ROM export library"
+        case let .loaded(count, _):
+            "\(count) patched ROM export artifact\(count == 1 ? "" : "s") found"
+        case let .failed(message):
+            "Patched ROM export library failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
+enum ROMMutationArtifactLibraryLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(count: Int, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "ROM mutation library not checked"
+        case .loading:
+            "Checking ROM mutation library"
+        case let .loaded(count, _):
+            "\(count) ROM mutation apply manifest\(count == 1 ? "" : "s") found"
+        case let .failed(message):
+            "ROM mutation library failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
+enum ReferenceStatusLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(label: String, status: ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Reference status not checked"
+        case .loading:
+            "Checking reference status"
+        case let .loaded(label, _):
+            "Reference status loaded: \(label)"
+        case let .failed(message):
+            "Reference status failed: \(message)"
         }
     }
 
@@ -1277,6 +1442,66 @@ struct PatchArtifactLibraryViewState: Identifiable {
     let status: ValidationState
     let artifactRoot: String
     let items: [PatchArtifactLibraryItemViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchExportArtifactLibraryItemViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let outputPath: String
+    let manifestPath: String
+    let manifestStatus: String
+    let outputChecksumStatus: String
+    let baseROMStatus: String
+    let patchChecksumStatus: String
+    let backupStatus: String
+    let verificationSummary: String
+    let canReveal: Bool
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchExportArtifactLibraryViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let artifactRoot: String
+    let items: [PatchExportArtifactLibraryItemViewState]
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct ROMMutationArtifactLibraryItemViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let applyManifestPath: String
+    let manifestStatus: String
+    let baseBeforeStatus: String
+    let baseAfterStatus: String
+    let backupStatus: String
+    let replacementSummary: String
+    let reviewTokenSummary: String
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct ROMMutationArtifactLibraryViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let artifactRoot: String
+    let items: [ROMMutationArtifactLibraryItemViewState]
     let diagnostics: [IndexedDiagnosticRow]
     let rows: [BuildReportRow]
 }
@@ -2837,7 +3062,7 @@ struct NDSDataMapReviewBridgeViewState {
             Fact(label: "Map Review Rows", value: "\(packetRowCount)"),
             Fact(label: "Map Review Related", value: "\(relatedRecordCount)"),
             Fact(label: "Map Review Included", value: "\(includedRecordCount)"),
-            Fact(label: "Map Review Blocked", value: "\(blockedActionCount)"),
+            Fact(label: "Map Review Blocked Actions", value: "\(blockedActionCount)"),
             Fact(label: "Map Review Truncated", value: "\(truncatedRelatedRecordCount)"),
         ]
     }

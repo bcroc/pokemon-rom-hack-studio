@@ -26,6 +26,8 @@ struct ResourceLibraryWorkbenchView: View {
     let onLoadAssetCatalog: () -> Void
     let onLoadResourceEntryDetails: (ResourceLibraryEntryViewState) -> Void
     let onNavigateToAsset: (ResourceAssetRowViewState) -> Void
+    let resourceReadinessPacketCopyDisabledReason: String?
+    let onCopyResourceReadinessPacketJSON: () -> Void
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
@@ -252,6 +254,8 @@ struct ResourceLibraryWorkbenchView: View {
                         ResourceAssetDetailPane(
                             asset: selectedAsset,
                             onNavigate: onNavigateToAsset,
+                            resourceReadinessPacketCopyDisabledReason: resourceReadinessPacketCopyDisabledReason,
+                            onCopyResourceReadinessPacketJSON: onCopyResourceReadinessPacketJSON,
                             ndsDataEditor: ndsDataEditor?.isHiddenByFilters == true ? nil : ndsDataEditor,
                             onUpdateNDSDataDraft: onUpdateNDSDataDraft,
                             onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
@@ -371,6 +375,8 @@ struct ResourceLibraryWorkbenchView: View {
                             ResourceAssetDetailPane(
                                 asset: asset,
                                 onNavigate: onNavigateToAsset,
+                                resourceReadinessPacketCopyDisabledReason: resourceReadinessPacketCopyDisabledReason,
+                                onCopyResourceReadinessPacketJSON: onCopyResourceReadinessPacketJSON,
                                 ndsDataEditor: selectedAssetID == asset.id ? ndsDataEditor : nil,
                                 onUpdateNDSDataDraft: onUpdateNDSDataDraft,
                                 onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
@@ -725,6 +731,8 @@ private struct ResourceLibraryItemRow: View {
 private struct ResourceAssetDetailPane: View {
     let asset: ResourceAssetRowViewState?
     let onNavigate: (ResourceAssetRowViewState) -> Void
+    let resourceReadinessPacketCopyDisabledReason: String?
+    let onCopyResourceReadinessPacketJSON: () -> Void
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
@@ -748,6 +756,12 @@ private struct ResourceAssetDetailPane: View {
                                 .font(.headline)
                                 .lineLimit(2)
                             Spacer(minLength: 8)
+                            if resourceReadinessPacketCopyDisabledReason == nil {
+                                Button("Copy Packet JSON", systemImage: "doc.on.doc") {
+                                    onCopyResourceReadinessPacketJSON()
+                                }
+                                .help("Copy the selected Resources packet JSON")
+                            }
                             StatusPill(state: asset.status)
                         }
 

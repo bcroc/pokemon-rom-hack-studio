@@ -40,6 +40,24 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(items.tableSymbol, "gItems")
         XCTAssertEqual(items.editableCount, 1)
         XCTAssertFalse(items.unsupportedFields.contains("description text rewrites"))
+
+        let digest = try XCTUnwrap(report.candidateDigest)
+        XCTAssertEqual(digest.status, .candidates)
+        XCTAssertTrue(digest.summary.contains("report-only source-backed candidate seam"))
+        XCTAssertEqual(digest.stopReasons, [])
+        XCTAssertEqual(
+            try candidate(.species, path: "src/data/pokemon/species_info.h", tableSymbol: "gSpeciesInfo", in: digest).mutationPlanGate,
+            "Species mutation-plan gate"
+        )
+        XCTAssertEqual(
+            try candidate(.moves, path: "src/data/battle_moves.h", tableSymbol: "gBattleMoves", in: digest).mutationPlanGate,
+            "Move mutation-plan gate"
+        )
+        XCTAssertEqual(
+            try candidate(.items, path: "src/data/items.h", tableSymbol: "gItems", in: digest).mutationPlanGate,
+            "Item mutation-plan gate"
+        )
+        assertNoBlockedGateCandidates(in: digest)
     }
 
     func testClassicFireRedReportMarksPokemonMovesAndItemRowsEditable() throws {
@@ -294,6 +312,8 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "ROM writes",
             "binary writes"
         ])
+        XCTAssertFalse(rubyContestMoves.blockedActions?.contains("contest scalar editing") == true)
+        XCTAssertFalse(rubyContestMoves.blockedActions?.contains("combo array editing") == true)
         let rubyMoveTutor = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/pokemon/tutor_learnsets.h" && $0.tableSymbol == "sTutorLearnsets/gTutorLearnsets" })
         XCTAssertEqual(rubyMoveTutor.status, .editable)
         XCTAssertEqual(rubyMoveTutor.indexedCount, 1)
@@ -337,6 +357,16 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyJSON.contains(#""editableEggMoves""#))
         XCTAssertTrue(rubyJSON.contains(#""sTutorLearnsets\/gTutorLearnsets""#))
         XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
+        let rubyMoveDigest = try XCTUnwrap(rubyMovesReport.candidateDigest)
+        XCTAssertEqual(rubyMoveDigest.status, .candidates)
+        let rubyTMHMCandidate = try candidate(.moves, path: "src/data/pokemon/tmhm_learnsets.h", tableSymbol: "gTMHMLearnsets", in: rubyMoveDigest)
+        XCTAssertEqual(rubyTMHMCandidate.sourceRole, "editableTMHMLearnsets")
+        XCTAssertEqual(rubyTMHMCandidate.readiness, "editable existing gTMHMLearnsets rows")
+        let rubyTutorCandidate = try candidate(.moves, path: "src/data/pokemon/tutor_learnsets.h", tableSymbol: "sTutorLearnsets/gTutorLearnsets", in: rubyMoveDigest)
+        XCTAssertEqual(rubyTutorCandidate.sourceRole, "editableTutorLearnsets")
+        XCTAssertEqual(rubyTutorCandidate.mutationPlanGate, "Move mutation-plan gate")
+        XCTAssertNil(rubyMoveDigest.candidates.first { $0.path == "include/constants/moves.h" })
+        assertNoBlockedGateCandidates(in: rubyMoveDigest)
 
         try FileManager.default.removeItem(at: rubyRoot.appendingPathComponent("include/constants/moves.h"))
         let missingConstantsIndex = projectIndex(root: rubyRoot, profile: .pokeruby)
@@ -382,6 +412,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "ROM/build/export paths",
             "identity edits"
         ])
+        XCTAssertFalse(metadataSource.blockedActions?.contains("effect/icon source field editing") == true)
         XCTAssertTrue(metadataSource.note?.contains("existing simple C-symbol fields") == true)
         let metadataJSON = String(data: try JSONEncoder().encode(metadataSource), encoding: .utf8) ?? ""
         XCTAssertTrue(metadataJSON.contains(#""sourceRole":"editableSourceFields""#))
@@ -407,6 +438,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "binary writes",
             "broad schema rewrites"
         ])
+        XCTAssertFalse(usageSource.blockedActions?.contains("usage scalar editing") == true)
         XCTAssertTrue(usageSource.note?.contains("one complete anchored usage/classification group") == true)
         let behaviorSource = try XCTUnwrap(expansionItemSources.first {
             $0.path == "src/data/items.h"
@@ -426,6 +458,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "binary writes",
             "broad schema rewrites"
         ])
+        XCTAssertFalse(behaviorSource.blockedActions?.contains("behavior/function scalar editing") == true)
         XCTAssertTrue(behaviorSource.note?.contains("inserted as one complete anchored behavior/function group") == true)
         let bagClassificationSource = try XCTUnwrap(expansionItemSources.first {
             $0.path == "src/data/items.h"
@@ -478,6 +511,66 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             tableSymbol: "item icon palette paths"
         )
         XCTAssertTrue(expansionItems.diagnostics.contains { $0.code == "GBA_MODERN_EMERALD_ITEMS_UNSUPPORTED" })
+        let expansionDigest = try XCTUnwrap(expansion.candidateDigest)
+        XCTAssertEqual(expansionDigest.status, .candidates)
+        let behaviorCandidate = try candidate(
+            .items,
+            path: "src/data/items.h",
+            tableSymbol: "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId",
+            in: expansionDigest
+        )
+        XCTAssertEqual(behaviorCandidate.sourceRole, "editableBehaviorScalars")
+        XCTAssertEqual(behaviorCandidate.mutationPlanGate, "Item mutation-plan gate")
+        XCTAssertNil(expansionDigest.candidates.first { $0.path == "src/data/pokemon/all_learnables.json" })
+        assertNoBlockedGateCandidates(in: expansionDigest)
+    }
+
+    func testCandidateDigestReportsNoneForBinaryROMOnlyInputs() throws {
+        let root = try temporaryRoot()
+        let index = projectIndex(root: root, profile: .binaryROM)
+        let sourceIndex = ProjectSourceIndex(
+            root: SourceLocation(path: root.path, exists: true),
+            profile: .binaryROM,
+            adapterID: "test.binaryROM",
+            adapterName: "binaryROM Fixture",
+            records: []
+        )
+
+        let report = try PokemonDataCompatibilityReportBuilder.build(index: index, sourceIndex: sourceIndex)
+
+        let digest = try XCTUnwrap(report.candidateDigest)
+        XCTAssertEqual(digest.status, .none)
+        XCTAssertTrue(digest.candidates.isEmpty)
+        XCTAssertEqual(Set(digest.stopReasons.map(\.kind)), [.romOnly, .noIndexedSourceData])
+        XCTAssertTrue(digest.stopReasons.first { $0.kind == .romOnly }?.paths.contains(root.path) == true)
+        XCTAssertTrue(digest.summary.contains("No report-only source-backed candidate seams"))
+    }
+
+    func testCompatibilityReportDecodesOlderJSONWithoutCandidateDigest() throws {
+        let data = Data(
+            """
+            {
+              "root": { "path": "/tmp/old-project", "exists": true },
+              "profile": "pokeemerald",
+              "adapterID": "test.old",
+              "adapterName": "Old Fixture",
+              "summary": {
+                "entryCount": 0,
+                "editableCount": 0,
+                "readOnlyCount": 0,
+                "indexedCount": 0,
+                "blockedCount": 0
+              },
+              "entries": [],
+              "diagnostics": []
+            }
+            """.utf8
+        )
+
+        let report = try JSONDecoder().decode(PokemonDataCompatibilityReport.self, from: data)
+
+        XCTAssertNil(report.candidateDigest)
+        XCTAssertEqual(report.summary.entryCount, 0)
     }
 
     func testRubyTutorLearnsetsReportEditableForExistingLocalRows() throws {
@@ -1400,6 +1493,41 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             return PokemonDataCompatibilityEntry(surface: surface, status: .blocked, adapterID: "", adapterName: "", profile: .unknown)
         }
         return entry
+    }
+
+    private func candidate(
+        _ surface: PokemonDataCompatibilitySurface,
+        path: String,
+        tableSymbol: String?,
+        in digest: PokemonDataCompatibilityCandidateDigest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> PokemonDataCompatibilityCandidateSeam {
+        try XCTUnwrap(
+            digest.candidates.first { candidate in
+                candidate.surface == surface
+                    && candidate.path == path
+                    && candidate.tableSymbol == tableSymbol
+            },
+            "Missing candidate \(surface.rawValue) \(path) \(tableSymbol ?? "<none>")",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertNoBlockedGateCandidates(
+        in digest: PokemonDataCompatibilityCandidateDigest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for candidate in digest.candidates {
+            XCTAssertFalse(candidate.path == "generated", file: file, line: line)
+            XCTAssertFalse(candidate.path.hasPrefix("generated/"), file: file, line: line)
+            XCTAssertFalse(candidate.path == "src/data/pokemon/all_learnables.json", file: file, line: line)
+            XCTAssertFalse(candidate.path.hasPrefix("references/"), file: file, line: line)
+            XCTAssertFalse(candidate.path.hasPrefix("include/constants/"), file: file, line: line)
+            XCTAssertFalse(candidate.path == "ROM output", file: file, line: line)
+        }
     }
 
     private func assertStaleLearnablesDiagnostic(
