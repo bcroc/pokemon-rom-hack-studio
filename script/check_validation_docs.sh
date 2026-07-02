@@ -17,12 +17,20 @@ root_dir = Path(sys.argv[1])
 validation_dir = root_dir / "docs" / "validation"
 readme_path = validation_dir / "README.md"
 planning_path = root_dir / "docs" / "planning-and-progress.md"
+validate_nds_path = root_dir / "script" / "validate_nds.sh"
+cli_tests_path = root_dir / "PokemonHackStudio" / "Tests" / "PokemonHackCLITests" / "PokemonHackCLITests.swift"
+cli_source_path = root_dir / "PokemonHackStudio" / "Sources" / "pokemonhack-cli" / "PokemonHackCLI.swift"
 
 row_id_pattern = re.compile(r"PHS-T[0-9]+[A-Z]*(?:/[A-Z]+)*", re.IGNORECASE)
 proof_row_pattern = re.compile(
     r"^\|\s*`(?P<row>PHS-T[^`]+)`\s*\|\s*\[(?P<label>[^\]]+)\]\((?P<link>[^)]+)\)\s*\|.*\|\s*$"
 )
 active_done_pattern = re.compile(r"^\|\s*(?P<row>PHS-T[^|\s]+)\s*\|\s*Done\s*\|\s*(?P<title>[^|]+)\|")
+coverage_skip_row_pattern = re.compile(
+    r"^\|\s*`(?P<skip_id>(?:pokemonhack-cli|PokemonHackCLITests)/[^`]+)`\s*\|"
+)
+cli_command_metadata_pattern = re.compile(r'CLICommandMetadata\(\s*name:\s*"(?P<name>[^"]+)"')
+swift_test_pattern = re.compile(r"(?m)^\s*func\s+(?P<name>test\w+)\s*\(")
 
 errors = []
 
@@ -87,6 +95,126 @@ def resolve_validation_link(link):
     if "://" in link_without_fragment or link_without_fragment.startswith("/"):
         return None
     return (validation_dir / link_without_fragment).resolve(strict=False)
+
+
+def extract_validate_nds_filters(text):
+    match = re.search(r"nds_test_filters=\(\s*(?P<body>.*?)\n\)", text, re.DOTALL)
+    if match is None:
+        errors.append("missing nds_test_filters array in script/validate_nds.sh")
+        return []
+    return re.findall(r'"([^"]+)"', match.group("body"))
+
+
+def extract_cli_reference_smoke_commands(text):
+    return set(re.findall(r"pokemonhack-cli\s+([a-z0-9-]+)", text))
+
+
+def extract_cli_commands(text):
+    return [match.group("name") for match in cli_command_metadata_pattern.finditer(text)]
+
+
+def extract_swift_tests(text):
+    matches = list(swift_test_pattern.finditer(text))
+    tests = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        tests.append((match.group("name"), text[match.start():end]))
+    return tests
+
+
+def filter_covers_test(filters, test_class, test_name):
+    return test_class in filters or f"{test_class}/{test_name}" in filters
+
+
+def is_semantic_or_row_operation_cli_test(test_name):
+    if test_name.startswith("testNDSDataSemantic"):
+        return True
+    return (
+        "RowOperation" in test_name
+        or "TextLineOperation" in test_name
+        or "ItemCSVRowOperation" in test_name
+        or "EncounterJSONRowOperation" in test_name
+    )
+
+
+def extract_nds_coverage_skips(readme_text):
+    skip_section = section(readme_text, "## NDS Validate Coverage Skips")
+    skip_ids = set()
+    for line in skip_section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if stripped in {"| Skip ID | Reason |", "| --- | --- |"}:
+            continue
+        match = coverage_skip_row_pattern.match(stripped)
+        if match is None:
+            errors.append(f"malformed NDS validate coverage skip row: {stripped}")
+            continue
+        skip_id = match.group("skip_id")
+        if skip_id in skip_ids:
+            errors.append(f"duplicate NDS validate coverage skip row: {skip_id}")
+        skip_ids.add(skip_id)
+    return skip_ids
+
+
+def check_nds_validate_coverage(readme_text):
+    validate_nds_text = read_text(validate_nds_path)
+    cli_tests_text = read_text(cli_tests_path)
+    cli_source_text = read_text(cli_source_path)
+    if not validate_nds_text or not cli_tests_text or not cli_source_text:
+        return
+
+    filters = set(extract_validate_nds_filters(validate_nds_text))
+    reference_smoke_commands = extract_cli_reference_smoke_commands(validate_nds_text)
+    cli_tests = extract_swift_tests(cli_tests_text)
+    covered_cli_test_bodies = [
+        body
+        for test_name, body in cli_tests
+        if filter_covers_test(filters, "PokemonHackCLITests", test_name)
+    ]
+    guarded_tests = {
+        f"PokemonHackCLITests/{test_name}"
+        for test_name, _ in cli_tests
+        if is_semantic_or_row_operation_cli_test(test_name)
+    }
+    skip_ids = extract_nds_coverage_skips(readme_text)
+
+    guarded_commands = {
+        command
+        for command in extract_cli_commands(cli_source_text)
+        if command.startswith("nds-") or command == "narc-inspect"
+    }
+    guarded_command_ids = {f"pokemonhack-cli/{command}" for command in guarded_commands}
+    known_skip_ids = guarded_command_ids | guarded_tests
+    for skip_id in sorted(skip_ids - known_skip_ids):
+        errors.append(f"NDS validate coverage skip {skip_id} does not match a guarded command or test")
+
+    for command in sorted(guarded_commands):
+        command_id = f"pokemonhack-cli/{command}"
+        if command_id in skip_ids:
+            continue
+        if command in reference_smoke_commands:
+            continue
+        command_literal = f'"{command}"'
+        if any(command_literal in body for body in covered_cli_test_bodies):
+            continue
+        errors.append(
+            f"NDS CLI command {command_id} is not covered by script/validate_nds.sh "
+            "and is missing from NDS Validate Coverage Skips"
+        )
+
+    for test_name, _ in cli_tests:
+        if not is_semantic_or_row_operation_cli_test(test_name):
+            continue
+        test_id = f"PokemonHackCLITests/{test_name}"
+        if filter_covers_test(filters, "PokemonHackCLITests", test_name):
+            continue
+        if test_id in skip_ids:
+            continue
+        errors.append(
+            f"{test_id} is not listed in script/validate_nds.sh and is missing from "
+            "NDS Validate Coverage Skips"
+        )
 
 
 readme_text = read_text(readme_path)
@@ -158,11 +286,13 @@ for row_id in sorted(done_rows):
         docs = ", ".join(docs_by_row[row_id])
         errors.append(f"completed board row {row_id} has validation doc(s) but is missing from proof index: {docs}")
 
+check_nds_validate_coverage(readme_text)
+
 if errors:
     print("Validation docs check failed:", file=sys.stderr)
     for error in errors:
         print(f"- {error}", file=sys.stderr)
     sys.exit(1)
 
-print("Validation docs proof index check passed.")
+print("Validation docs proof index and NDS coverage checks passed.")
 PY

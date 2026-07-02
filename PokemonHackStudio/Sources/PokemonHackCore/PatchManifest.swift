@@ -518,6 +518,11 @@ public enum PatchApplyExportStatus: String, Codable, Equatable {
     case blocked
 }
 
+public enum PatchApplyExportAuditStatus: String, Codable, Equatable {
+    case ready
+    case blocked
+}
+
 public struct PatchApplyExportManifest: Codable, Equatable {
     public let schemaVersion: Int
     public let action: String
@@ -595,6 +600,73 @@ public struct PatchApplyExportResult: Codable, Equatable {
         self.outputROMSHA1 = outputROMSHA1
         self.diagnostics = diagnostics
         self.manifest = manifest
+    }
+}
+
+public struct PatchApplyExportAuditReport: Codable, Equatable {
+    public let schemaVersion: Int
+    public let isReadOnly: Bool
+    public let status: PatchApplyExportAuditStatus
+    public let projectRoot: String?
+    public let patchPath: String?
+    public let patch: PatchValidationReport
+    public let selectedBaseROM: PatchSelectedBaseROM?
+    public let compatibilityStatus: PatchManifestCompatibilityStatus
+    public let patchFormat: PatchFormatID
+    public let plannedOutputPath: String
+    public let plannedManifestPath: String
+    public let overwriteRequested: Bool
+    public let outputExists: Bool
+    public let backupWillBeCreated: Bool
+    public let backupPathPattern: String?
+    public let headerPolicy: PatchArtifactHeaderPolicy
+    public let checksumPolicy: String
+    public let applyExportState: PatchApplyExportState
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        schemaVersion: Int,
+        isReadOnly: Bool,
+        status: PatchApplyExportAuditStatus,
+        projectRoot: String?,
+        patchPath: String?,
+        patch: PatchValidationReport,
+        selectedBaseROM: PatchSelectedBaseROM?,
+        compatibilityStatus: PatchManifestCompatibilityStatus,
+        patchFormat: PatchFormatID,
+        plannedOutputPath: String,
+        plannedManifestPath: String,
+        overwriteRequested: Bool,
+        outputExists: Bool,
+        backupWillBeCreated: Bool,
+        backupPathPattern: String?,
+        headerPolicy: PatchArtifactHeaderPolicy,
+        checksumPolicy: String,
+        applyExportState: PatchApplyExportState,
+        blockedActions: [String],
+        diagnostics: [Diagnostic]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.isReadOnly = isReadOnly
+        self.status = status
+        self.projectRoot = projectRoot
+        self.patchPath = patchPath
+        self.patch = patch
+        self.selectedBaseROM = selectedBaseROM
+        self.compatibilityStatus = compatibilityStatus
+        self.patchFormat = patchFormat
+        self.plannedOutputPath = plannedOutputPath
+        self.plannedManifestPath = plannedManifestPath
+        self.overwriteRequested = overwriteRequested
+        self.outputExists = outputExists
+        self.backupWillBeCreated = backupWillBeCreated
+        self.backupPathPattern = backupPathPattern
+        self.headerPolicy = headerPolicy
+        self.checksumPolicy = checksumPolicy
+        self.applyExportState = applyExportState
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
     }
 }
 
@@ -1914,6 +1986,114 @@ public enum PatchManifestBuilder {
         )
     }
 
+    public static func applyExportAudit(
+        patchPath: String,
+        projectPath: String? = nil,
+        baseROMPath: String,
+        overwrite: Bool = false,
+        fileManager: FileManager = .default,
+        toolResolver: ToolAvailabilityResolver = ToolAvailabilityResolverFactory.pathEnvironment()
+    ) throws -> PatchApplyExportAuditReport {
+        let report = try build(
+            patchPath: patchPath,
+            projectPath: projectPath,
+            baseROMPath: baseROMPath,
+            fileManager: fileManager,
+            toolResolver: toolResolver
+        )
+        return applyExportAudit(
+            report: report,
+            patchPath: patchPath,
+            overwrite: overwrite,
+            fileManager: fileManager
+        )
+    }
+
+    static func applyExportAudit(
+        report: PatchManifestReport,
+        patchPath: String,
+        overwrite: Bool = false,
+        fileManager: FileManager = .default
+    ) -> PatchApplyExportAuditReport {
+        let resolvedPatchPath = report.patch.path ?? patchPath
+        let outputURL = URL(fileURLWithPath: report.artifactPlan.absoluteOutputPath).standardizedFileURL
+        let outputExists = fileManager.fileExists(atPath: outputURL.path)
+        let artifactRoot = patchArtifactRoot(projectRoot: report.projectRoot, patchPath: resolvedPatchPath)
+        let manifestRelativePath = report.artifactPlan.outputPath.appending(".manifest.json")
+        let manifestURL = artifactRoot.appendingPathComponent(manifestRelativePath).standardizedFileURL
+        let backupRelativePath = outputExists && overwrite
+            ? uniqueBackupRelativePathForExistingOutput(
+                outputFileName: outputURL.lastPathComponent,
+                root: artifactRoot,
+                fileManager: fileManager
+            )
+            : nil
+
+        var diagnostics = report.diagnostics
+        diagnostics.append(
+            Diagnostic(
+                severity: .info,
+                code: "PATCH_APPLY_EXPORT_AUDIT_READ_ONLY",
+                message: "Patch apply/export audit is read-only; it does not apply patches, write patched ROMs, create backups or manifests, run builds or playtests, mutate source, change overwrite policy, widen patch formats, or rewrite headers."
+            )
+        )
+        diagnostics.append(contentsOf: applyExportBlockers(report))
+
+        if outputExists, !overwrite {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "PATCH_EXPORT_OUTPUT_EXISTS",
+                    message: "Patched ROM output already exists at \(outputURL.path); the existing patch-apply-export writer would block because overwrite was not requested."
+                )
+            )
+        }
+
+        diagnostics.append(contentsOf: patchApplyExportSafetyDiagnostics(
+            root: artifactRoot,
+            outputRelativePath: report.artifactPlan.outputPath,
+            manifestRelativePath: manifestRelativePath,
+            backupRelativePath: backupRelativePath,
+            fileManager: fileManager
+        ))
+
+        let blockingDiagnostics = diagnostics.filter { $0.severity == .error }
+        let status: PatchApplyExportAuditStatus = blockingDiagnostics.isEmpty ? .ready : .blocked
+        let backupWillBeCreated = status == .ready && outputExists && overwrite
+        let stateReasons: [String] = status == .ready
+            ? [
+                "Patch apply/export preflight is ready; the writer will still recheck compatibility, overwrite, path safety, patch application, and manifest commit before writing.",
+            ]
+            : blockingDiagnostics.map(\.message)
+
+        return PatchApplyExportAuditReport(
+            schemaVersion: 1,
+            isReadOnly: true,
+            status: status,
+            projectRoot: report.projectRoot,
+            patchPath: report.patch.path,
+            patch: report.patch,
+            selectedBaseROM: report.selectedBaseROM,
+            compatibilityStatus: report.compatibilityStatus,
+            patchFormat: report.artifactPlan.patchFormat,
+            plannedOutputPath: outputURL.path,
+            plannedManifestPath: manifestURL.path,
+            overwriteRequested: overwrite,
+            outputExists: outputExists,
+            backupWillBeCreated: backupWillBeCreated,
+            backupPathPattern: backupWillBeCreated ? ".pokemonhackstudio/backups/<timestamp-token>/patches/\(outputURL.lastPathComponent)" : nil,
+            headerPolicy: report.artifactPlan.headerPolicy,
+            checksumPolicy: checksumPolicy(for: report.artifactPlan.patchFormat),
+            applyExportState: PatchApplyExportState(
+                canApply: status == .ready,
+                canExport: status == .ready,
+                reasons: stateReasons
+            ),
+            blockedActions: patchApplyExportAuditBlockedActions,
+            diagnostics: diagnostics
+        )
+    }
+
     static func applyExport(
         patchPath: String,
         projectPath: String? = nil,
@@ -2368,6 +2548,19 @@ public enum PatchManifestBuilder {
         }
         return Array(plans.prefix(64))
     }
+
+    private static let patchApplyExportAuditBlockedActions = [
+        "Patch apply/export writer",
+        "Patched ROM writes",
+        "Backup creation",
+        "Manifest writes",
+        "Patch creation",
+        "Build execution",
+        "Playtest launch or capture",
+        "Source mutation",
+        "Header rewrite",
+        "Patch format widening"
+    ]
 
     private static func applyExportBlockers(_ report: PatchManifestReport) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []

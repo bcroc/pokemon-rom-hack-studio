@@ -215,6 +215,36 @@ extension WorkbenchStore {
                 action: .copyMapRenderAuditJSON,
                 availability: selectedMapRenderAuditReport == nil ? .disabled("Run Map Render Audit Re-check before copying JSON.") : .enabled
             ),
+            WorkbenchCommand(
+                id: "copy:patch-distribution-readiness-json",
+                title: "Copy Patch Distribution Readiness JSON",
+                subtitle: "Copy the loaded copy-only patch distribution packet.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyPatchDistributionReadinessJSON,
+                availability: canCopyPatchDistributionReadinessJSON ? .enabled : .disabled("Refresh patch distribution readiness before copying JSON.")
+            ),
+            WorkbenchCommand(
+                id: "copy:binary-rom-mutation-apply-audit-json",
+                title: "Copy Binary ROM Apply Audit JSON",
+                subtitle: "Copy the loaded read-only binary apply audit.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copyBinaryROMMutationApplyAuditJSON,
+                availability: canCopyBinaryROMMutationApplyAuditJSON ? .enabled : .disabled("Load a binary mutation review before copying audit JSON.")
+            ),
+            WorkbenchCommand(
+                id: "copy:resource-readiness-packet-json",
+                title: "Copy Resource Readiness Packet JSON",
+                subtitle: "Copy the selected Resources packet or NDS readiness row.",
+                systemImage: "doc.on.doc",
+                scope: "Copy",
+                keyboardHint: nil,
+                action: .copySelectedResourceReadinessPacketJSON,
+                availability: selectedResourceReadinessPacketCopyDisabledReason.map { .disabled($0) } ?? .enabled
+            ),
         ]
 
         commands.append(contentsOf: validationTierCommandRows.map { row in
@@ -465,6 +495,12 @@ extension WorkbenchStore {
             copyBuildPatchPlaytestReportJSONToPasteboard()
         case .copyMapRenderAuditJSON:
             copyMapRenderAuditJSONToPasteboard()
+        case .copyPatchDistributionReadinessJSON:
+            copyPatchDistributionReadinessJSONToPasteboard()
+        case .copyBinaryROMMutationApplyAuditJSON:
+            copyBinaryROMMutationApplyAuditJSONToPasteboard()
+        case .copySelectedResourceReadinessPacketJSON:
+            copySelectedResourceReadinessPacketJSONToPasteboard()
         }
         if command.action != .openCommandPalette {
             hideCommandPalette()

@@ -3876,7 +3876,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
                 Diagnostic(
                     severity: .error,
                     code: "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED",
-                    message: "Only local Platinum direct-child encounters:res/field/encounters/*.json rows and HeartGold/SoulSilver encounters:files/fielddata/encountdata/**/*.json source-tree object-array rows support encounter JSON row operations; scalar arrays, missing or empty arrays, nested row values, mismatched or duplicate row keys, C anchors, non-JSON rows, nested array-key paths, Diamond/Pearl rows, containers, generated/reference rows, ROM rebuild/export/playtest, broad schema reshaping, and binary writes remain blocked.",
+                    message: "Only local Platinum direct-child encounters:res/field/encounters/*.json rows, HeartGold/SoulSilver encounters:files/fielddata/encountdata/**/*.json rows, and Diamond/Pearl encounters:files/fielddata/encountdata/**/*.json source-tree object-array rows support encounter JSON row operations; scalar arrays, missing or empty arrays, nested row values, mismatched or duplicate row keys, C anchors, non-JSON rows, nested array-key paths, containers, generated/reference rows, ROM rebuild/export/playtest, broad schema reshaping, and binary writes remain blocked.",
                     span: record.sourceSpan
                 )
             )
@@ -3979,7 +3979,7 @@ public enum NDSDataEncounterJSONRowOperationPlanner {
             guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
             let remainder = lower.dropFirst(prefix.count)
             return !remainder.isEmpty && !remainder.contains("/")
-        case .pokeheartgold:
+        case .pokeheartgold, .pokediamond:
             let prefix = "files/fielddata/encountdata/"
             guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
             let remainder = lower.dropFirst(prefix.count)

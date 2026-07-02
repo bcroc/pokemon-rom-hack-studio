@@ -264,6 +264,30 @@ final class WorkbenchIDEFoundationTests: XCTestCase {
 
         let buildRun = try XCTUnwrap(store.workbenchCommands.first { $0.id == "build:run" })
         XCTAssertTrue(buildRun.availability.isGuarded)
+
+        let patchDistribution = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:patch-distribution-readiness-json" })
+        XCTAssertEqual(patchDistribution.scope, "Copy")
+        XCTAssertEqual(patchDistribution.action, .copyPatchDistributionReadinessJSON)
+        XCTAssertFalse(patchDistribution.availability.isEnabled)
+        XCTAssertEqual(patchDistribution.availability.disabledReason, "Refresh patch distribution readiness before copying JSON.")
+
+        let binaryAudit = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:binary-rom-mutation-apply-audit-json" })
+        XCTAssertEqual(binaryAudit.scope, "Copy")
+        XCTAssertEqual(binaryAudit.action, .copyBinaryROMMutationApplyAuditJSON)
+        XCTAssertFalse(binaryAudit.availability.isEnabled)
+        XCTAssertEqual(binaryAudit.availability.disabledReason, "Load a binary mutation review before copying audit JSON.")
+
+        let resourceReadiness = try XCTUnwrap(store.workbenchCommands.first { $0.id == "copy:resource-readiness-packet-json" })
+        XCTAssertEqual(resourceReadiness.scope, "Copy")
+        XCTAssertEqual(resourceReadiness.action, .copySelectedResourceReadinessPacketJSON)
+        XCTAssertFalse(resourceReadiness.availability.isEnabled)
+        XCTAssertEqual(resourceReadiness.availability.disabledReason, "Load the Resources asset catalog before copying readiness packet JSON.")
+
+        NSPasteboard.general.clearContents()
+        let recentCommands = store.recentCommandIDs
+        store.executeCommand(patchDistribution)
+        XCTAssertNil(NSPasteboard.general.string(forType: .string))
+        XCTAssertEqual(store.recentCommandIDs, recentCommands)
     }
 
     @MainActor

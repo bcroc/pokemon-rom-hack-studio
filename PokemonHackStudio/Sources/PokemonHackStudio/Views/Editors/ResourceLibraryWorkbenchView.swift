@@ -35,6 +35,9 @@ struct ResourceLibraryWorkbenchView: View {
     let onPreviewNDSDataMutationPlan: () -> Void
     let onApplyNDSDataMutationPlan: () -> Void
     let onDiscardNDSDataEdits: () -> Void
+    let onFocusNDSMapReviewTarget: (NDSDataMapReviewBridgeTargetViewState) -> Void
+    let onCopyNDSMapReviewPacketJSON: () -> Void
+    let onCopyNDSMapReviewPacketMarkdown: () -> Void
 
     var body: some View {
         if library != nil || assetCatalog != nil || gameCubeEntry != nil {
@@ -257,7 +260,10 @@ struct ResourceLibraryWorkbenchView: View {
                             onClearNDSDataRowOperations: onClearNDSDataRowOperations,
                             onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
                             onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
-                            onDiscardNDSDataEdits: onDiscardNDSDataEdits
+                            onDiscardNDSDataEdits: onDiscardNDSDataEdits,
+                            onFocusNDSMapReviewTarget: onFocusNDSMapReviewTarget,
+                            onCopyNDSMapReviewPacketJSON: onCopyNDSMapReviewPacketJSON,
+                            onCopyNDSMapReviewPacketMarkdown: onCopyNDSMapReviewPacketMarkdown
                         )
 
                         assetRowsView
@@ -302,7 +308,10 @@ struct ResourceLibraryWorkbenchView: View {
                 onClearRowOperations: onClearNDSDataRowOperations,
                 onPreview: onPreviewNDSDataMutationPlan,
                 onApply: onApplyNDSDataMutationPlan,
-                onDiscard: onDiscardNDSDataEdits
+                onDiscard: onDiscardNDSDataEdits,
+                onFocusMapReviewTarget: onFocusNDSMapReviewTarget,
+                onCopyMapReviewJSON: onCopyNDSMapReviewPacketJSON,
+                onCopyMapReviewMarkdown: onCopyNDSMapReviewPacketMarkdown
             )
         }
         .padding(14)
@@ -370,7 +379,10 @@ struct ResourceLibraryWorkbenchView: View {
                                 onClearNDSDataRowOperations: onClearNDSDataRowOperations,
                                 onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
                                 onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
-                                onDiscardNDSDataEdits: onDiscardNDSDataEdits
+                                onDiscardNDSDataEdits: onDiscardNDSDataEdits,
+                                onFocusNDSMapReviewTarget: onFocusNDSMapReviewTarget,
+                                onCopyNDSMapReviewPacketJSON: onCopyNDSMapReviewPacketJSON,
+                                onCopyNDSMapReviewPacketMarkdown: onCopyNDSMapReviewPacketMarkdown
                             )
                             .frame(maxWidth: .infinity, minHeight: 220)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -722,6 +734,9 @@ private struct ResourceAssetDetailPane: View {
     let onPreviewNDSDataMutationPlan: () -> Void
     let onApplyNDSDataMutationPlan: () -> Void
     let onDiscardNDSDataEdits: () -> Void
+    let onFocusNDSMapReviewTarget: (NDSDataMapReviewBridgeTargetViewState) -> Void
+    let onCopyNDSMapReviewPacketJSON: () -> Void
+    let onCopyNDSMapReviewPacketMarkdown: () -> Void
 
     var body: some View {
         ScrollView {
@@ -765,7 +780,10 @@ private struct ResourceAssetDetailPane: View {
                             onClearRowOperations: onClearNDSDataRowOperations,
                             onPreview: onPreviewNDSDataMutationPlan,
                             onApply: onApplyNDSDataMutationPlan,
-                            onDiscard: onDiscardNDSDataEdits
+                            onDiscard: onDiscardNDSDataEdits,
+                            onFocusMapReviewTarget: onFocusNDSMapReviewTarget,
+                            onCopyMapReviewJSON: onCopyNDSMapReviewPacketJSON,
+                            onCopyMapReviewMarkdown: onCopyNDSMapReviewPacketMarkdown
                         )
                     }
 
@@ -824,6 +842,9 @@ private struct NDSDataRecordEditor: View {
     let onPreview: () -> Void
     let onApply: () -> Void
     let onDiscard: () -> Void
+    let onFocusMapReviewTarget: (NDSDataMapReviewBridgeTargetViewState) -> Void
+    let onCopyMapReviewJSON: () -> Void
+    let onCopyMapReviewMarkdown: () -> Void
 
     @State private var rowOperationKind: NDSDataResourceRowOperationKind = .insert
     @State private var rowOperationIndex = ""
@@ -911,6 +932,10 @@ private struct NDSDataRecordEditor: View {
                         }
                     }
 
+                    if let mapReviewBridge = editor.mapReviewBridge {
+                        mapReviewBridgeControls(mapReviewBridge)
+                    }
+
                     if !editor.semanticFields.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Semantic Fields")
@@ -962,6 +987,110 @@ private struct NDSDataRecordEditor: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func mapReviewBridgeControls(_ bridge: NDSDataMapReviewBridgeViewState) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Gen IV Map Review")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ResourceTag(text: bridge.component)
+                ResourceTag(text: bridge.posture)
+                ResourceTag(text: bridge.readinessStatus)
+                Spacer(minLength: 8)
+                Button("Copy JSON", systemImage: "doc.on.doc") {
+                    onCopyMapReviewJSON()
+                }
+                .help("Copy the selected map review packet as JSON")
+                Button("Copy Markdown", systemImage: "text.quote") {
+                    onCopyMapReviewMarkdown()
+                }
+                .help("Copy the selected map review handoff as Markdown")
+            }
+
+            FactGrid(facts: bridge.packetFacts + bridge.catalogSummary.facts)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], alignment: .leading, spacing: 8) {
+                ForEach(bridge.rows) { row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.label)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text(row.value)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if let detail = row.detail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+            if !bridge.targets.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Related Rows")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(bridge.targets) { target in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: target.canJump ? "arrow.right.circle" : "nosign")
+                                .foregroundStyle(target.canJump ? Color.accentColor : Color.secondary)
+                                .frame(width: 16)
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(target.label)
+                                        .font(.caption.weight(.semibold))
+                                    ResourceTag(text: target.domain)
+                                    ResourceTag(text: target.readinessStatus)
+                                }
+                                Text(target.recordID)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(target.relativePath)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Jump", systemImage: "arrow.turn.down.right") {
+                                onFocusMapReviewTarget(target)
+                            }
+                            .disabled(!target.canJump)
+                            .help(target.canJump ? "Jump to this Resources row" : "No matching Resources row is loaded for this packet record")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+
+            if !bridge.blockedActions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Blocked Actions")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(bridge.blockedActions, id: \.self) { action in
+                        Label(action, systemImage: "lock")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func rowOperationControls(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> some View {

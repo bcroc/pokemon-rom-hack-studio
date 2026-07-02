@@ -47,6 +47,28 @@ private struct PersistedWorkbenchRecentTarget: Codable {
     let systemImage: String
 }
 
+private struct NDSDataMapReviewPacketExportPayload: Codable {
+    let projectTitle: String?
+    let rootPath: String
+    let profile: String
+    let family: String
+    let recordID: String
+    let relativePath: String
+    let packet: PokemonHackCore.NDSDataMapReviewPacket
+    let catalogSummary: NDSDataMapReviewPacketCatalogSummaryPayload
+}
+
+private struct NDSDataMapReviewPacketCatalogSummaryPayload: Codable {
+    let totalPacketCount: Int
+    let componentCounts: [NDSDataMapReviewPacketCountPayload]
+    let readinessCounts: [NDSDataMapReviewPacketCountPayload]
+}
+
+private struct NDSDataMapReviewPacketCountPayload: Codable {
+    let name: String
+    let count: Int
+}
+
 private struct SourceGraphLoadPayload: Codable {
     let index: PokemonHackCore.ProjectIndex
     let scriptOutline: PokemonHackCore.ProjectScriptOutline?
@@ -97,11 +119,37 @@ private struct BuildPatchPlaytestReportExportPayload: Codable {
     let patchCreationResult: PokemonHackCore.PatchCreationResult?
     let patchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
     let patchDistributionReadiness: PokemonHackCore.PatchDistributionReadinessPacket?
+    let patchApplyExportAudit: PokemonHackCore.PatchApplyExportAuditReport?
     let binaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     let binaryROMMutationApplyAudit: PokemonHackCore.BinaryROMMutationApplyAuditReport?
     let binaryROMMutationApplyResult: PokemonHackCore.BinaryROMMutationApplyResult?
     let mapRenderAudit: PokemonHackCore.MapRenderAuditReport?
     let playtest: PlaytestReportExportPayload?
+}
+
+private struct ShipPreviewDigestExportPayload: Codable {
+    let title: String
+    let subtitle: String
+    let status: String
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let rows: [ShipPreviewDigestRowExportPayload]
+}
+
+private struct ShipPreviewDigestRowExportPayload: Codable {
+    let id: String
+    let area: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: String
+    let sourcePath: String
+    let sourceSymbol: String
+    let sourceLine: Int
+    let targetTab: String
+    let targetRowID: String?
+    let tags: [String]
 }
 
 private struct BuildReportRowExportPayload: Codable {
@@ -138,6 +186,84 @@ private struct PlaytestArtifactExportPayload: Codable {
     let kind: String
     let path: String
     let detail: String
+}
+
+private struct ResourceReadinessPacketExportPayload: Codable {
+    let asset: ResourceReadinessAssetExportPayload
+    let ndsReadiness: ResourceReadinessNDSExportPayload?
+}
+
+private struct ResourceReadinessAssetExportPayload: Codable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let path: String
+    let category: String
+    let kind: String
+    let role: String
+    let status: String
+    let availability: String
+    let availabilitySummary: String
+    let sizeSummary: String
+    let checksumSummary: String
+    let source: ResourceReadinessSourceExportPayload
+    let tags: [String]
+    let facts: [ResourceReadinessFactExportPayload]
+    let diagnostics: [ResourceReadinessDiagnosticExportPayload]
+    let targetModule: String?
+    let targetID: String?
+}
+
+private struct ResourceReadinessNDSExportPayload: Codable {
+    let recordID: String
+    let canEdit: Bool
+    let isDirty: Bool
+    let isHiddenByFilters: Bool
+    let sourceByteCount: Int
+    let draftByteCount: Int
+    let lensSummary: String
+    let canPreview: Bool
+    let canApply: Bool
+    let canDiscard: Bool
+    let blockedReason: String?
+    let applyBlockedReason: String?
+    let rawSource: ResourceReadinessFacetExportPayload
+    let semanticSource: ResourceReadinessFacetExportPayload
+    let draft: ResourceReadinessFacetExportPayload
+    let mutationPlan: ResourceReadinessFacetExportPayload
+    let blockers: [ResourceReadinessBlockerExportPayload]
+}
+
+private struct ResourceReadinessFacetExportPayload: Codable {
+    let title: String
+    let value: String
+    let detail: String
+    let status: String
+}
+
+private struct ResourceReadinessBlockerExportPayload: Codable {
+    let code: String
+    let title: String
+    let message: String
+    let status: String
+}
+
+private struct ResourceReadinessFactExportPayload: Codable {
+    let label: String
+    let value: String
+}
+
+private struct ResourceReadinessDiagnosticExportPayload: Codable {
+    let title: String
+    let message: String
+    let severity: String
+    let source: ResourceReadinessSourceExportPayload
+}
+
+private struct ResourceReadinessSourceExportPayload: Codable {
+    let path: String
+    let symbol: String
+    let line: Int
 }
 
 enum WorkbenchToolbarMutationTarget: String, Equatable {
@@ -384,6 +510,8 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedPatchDistributionReadinessPatchPath: String = ""
     @Published private(set) var patchDistributionReadinessLoadStatus: PatchDistributionReadinessLoadStatus = .idle
     @Published private(set) var selectedPatchDistributionReadinessReport: PatchDistributionReadinessReportViewState?
+    @Published private(set) var patchApplyExportAuditLoadStatus: PatchApplyExportAuditLoadStatus = .idle
+    @Published private(set) var selectedPatchApplyExportAuditReport: PatchApplyExportAuditReportViewState?
     @Published private(set) var binaryROMMutationDryRunLoadStatus: BinaryROMMutationDryRunLoadStatus = .idle
     @Published private(set) var selectedBinaryROMMutationDryRunReport: BinaryROMMutationDryRunReportViewState?
     @Published private(set) var selectedBinaryROMMutationApplyAuditReport: BinaryROMMutationApplyAuditReportViewState?
@@ -443,6 +571,7 @@ final class WorkbenchStore: ObservableObject {
     private var rawPatchCreationPreviewReport: PokemonHackCore.PatchCreationPreviewReport?
     private var rawPatchArtifactLibrary: PokemonHackCore.PatchArtifactLibrary?
     private var rawPatchDistributionReadinessPacket: PokemonHackCore.PatchDistributionReadinessPacket?
+    private var rawPatchApplyExportAuditReport: PokemonHackCore.PatchApplyExportAuditReport?
     private var rawBinaryROMMutationDryRunManifest: PokemonHackCore.BinaryROMMutationDryRunManifest?
     private var rawMapRenderAuditReport: PokemonHackCore.MapRenderAuditReport?
     private var rawGraphicsImportPackagePlan: PokemonHackCore.GraphicsImportPackagePlan?
@@ -1455,6 +1584,38 @@ final class WorkbenchStore: ObservableObject {
         ValidationTier.allCases.map(ValidationTierCommandRow.init(tier:))
     }
 
+    var selectedShipPreviewDigest: ShipPreviewDigestViewState? {
+        guard let selectedIndexedProject else { return nil }
+        let rows = shipPreviewDigestRows(
+            project: selectedIndexedProject,
+            report: selectedBuildReport
+        )
+        let status = Self.validationStatus(for: rows.map(\.status))
+        let title = "Ship Preview Digest"
+        let subtitle = "\(rows.count) cached readiness surfaces; copy-only snapshot"
+        let export = Self.shipPreviewDigestExportPayload(
+            title: title,
+            subtitle: subtitle,
+            status: status,
+            project: selectedIndexedProject,
+            rows: rows
+        )
+        let jsonPayload = Self.shipPreviewDigestJSONPayload(from: export)
+        let markdownPayload = Self.shipPreviewDigestMarkdownPayload(from: export)
+        return ShipPreviewDigestViewState(
+            id: "ship-preview-digest:\(selectedIndexedProject.id)",
+            title: title,
+            subtitle: subtitle,
+            status: status,
+            projectTitle: selectedIndexedProject.title,
+            rootPath: selectedIndexedProject.rootPath,
+            profile: selectedIndexedProject.profile,
+            rows: rows,
+            jsonPayload: jsonPayload,
+            markdownPayload: markdownPayload
+        )
+    }
+
     var fixtureBuildWorkflowActions: [BuildWorkflowActionViewState] {
         Self.buildWorkflowActions(canRunBuild: false, isBuildRunning: false, canLaunchPlaytest: false, canApplyExportPatch: false, includePatchActions: false)
             .map { action in
@@ -1900,6 +2061,10 @@ final class WorkbenchStore: ObservableObject {
         return filter(buildRows: selectedBuildReport.rows)
     }
 
+    var filteredGenVResourcesToBuildBridgeRows: [BuildReportRow] {
+        filter(buildRows: genVResourcesToBuildBridgeRows)
+    }
+
     var filteredPatchManifestRows: [BuildReportRow] {
         guard let selectedPatchManifestReport else { return [] }
         return filter(buildRows: selectedPatchManifestReport.rows)
@@ -1938,6 +2103,11 @@ final class WorkbenchStore: ObservableObject {
         return filter(buildRows: selectedPatchDistributionReadinessReport.rows)
     }
 
+    var filteredPatchApplyExportAuditRows: [BuildReportRow] {
+        guard let selectedPatchApplyExportAuditReport else { return [] }
+        return filter(buildRows: selectedPatchApplyExportAuditReport.rows)
+    }
+
     var filteredBinaryROMMutationDryRunRows: [BuildReportRow] {
         guard let selectedBinaryROMMutationDryRunReport else { return [] }
         return filter(buildRows: selectedBinaryROMMutationDryRunReport.rows)
@@ -1956,6 +2126,159 @@ final class WorkbenchStore: ObservableObject {
     var filteredMapRenderAuditRows: [BuildReportRow] {
         guard let selectedMapRenderAuditReport else { return [] }
         return filter(buildRows: selectedMapRenderAuditReport.rows)
+    }
+
+    private func shipPreviewDigestRows(
+        project: IndexedProjectSummary,
+        report: BuildPatchPlaytestReportViewState?
+    ) -> [ShipPreviewDigestRow] {
+        let rootSource = SourceLocation(path: project.rootPath, symbol: "ship-preview", line: 1)
+        let validationRows = validationTierCommandRows
+        let buildRows = report?.rows ?? []
+        let buildStates = (report?.buildTargets.map(\.status) ?? [])
+            + (report?.generatedArtifacts.map(\.status) ?? [])
+        let buildStatus = buildStates.isEmpty ? ValidationState.warning : Self.validationStatus(for: buildStates)
+        let generatedCount = report?.generatedArtifacts.count ?? 0
+        let generatedPresent = report?.generatedArtifacts.filter(\.exists).count ?? 0
+        let buildTargetCount = report?.buildTargets.count ?? 0
+        let buildTargetRow = buildRows.first { $0.section == .buildTargets || $0.section == .generatedArtifacts }
+        let patchCreationRow = selectedPatchCreationResultReport?.rows.first
+            ?? selectedPatchCreationPreviewReport?.rows.first
+        let libraryRows = (selectedPatchArtifactLibraryItem?.rows ?? selectedPatchArtifactLibrary?.rows) ?? []
+        let binaryRows = selectedBinaryROMMutationApplyAuditReport?.rows
+            ?? selectedBinaryROMMutationDryRunReport?.rows
+            ?? []
+        let playtestRow = buildRows.first { $0.section == .playtest }
+
+        return [
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:validation",
+                area: .validation,
+                title: "Validation commands",
+                subtitle: "\(validationRows.count) copy-only command\(validationRows.count == 1 ? "" : "s")",
+                detail: "Commands are available for manual repository-root execution only; the app does not run validation from this digest.",
+                status: .valid,
+                source: rootSource,
+                targetTab: .build,
+                targetRowID: nil,
+                tags: validationRows.map(\.command)
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:build-outputs",
+                area: .buildOutputs,
+                title: "Build output readiness",
+                subtitle: "\(buildTargetCount) target\(buildTargetCount == 1 ? "" : "s"); \(generatedPresent)/\(generatedCount) generated output\(generatedCount == 1 ? "" : "s") present",
+                detail: selectedBuildRunResult.map { "Latest in-memory build result: \($0.statusLabel). \($0.outputDetail)" }
+                    ?? "No build is run by this digest; it reflects the selected project's cached build-output validation rows.",
+                status: buildStatus,
+                source: buildTargetRow?.source ?? rootSource,
+                targetTab: .build,
+                targetRowID: buildTargetRow?.id,
+                tags: [project.rootPath, "\(buildTargetCount)", "\(generatedPresent)", "\(generatedCount)"]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:patch-creation",
+                area: .patchCreation,
+                title: "Patch creation state",
+                subtitle: selectedPatchCreationResultReport?.statusLabel
+                    ?? selectedPatchCreationPreviewReport?.subtitle
+                    ?? patchCreationPreviewLoadStatus.label,
+                detail: selectedPatchCreationResultReport.map {
+                    "Latest patch creation result: \($0.statusLabel); patch \($0.patchPath ?? "unavailable"); manifest \($0.manifestPath ?? "unavailable")."
+                }
+                    ?? selectedPatchCreationPreviewReport?.detail
+                    ?? "No patch creation preview/result is loaded; the digest does not preview or create patches.",
+                status: selectedPatchCreationResultReport?.status
+                    ?? selectedPatchCreationPreviewReport?.status
+                    ?? .warning,
+                source: patchCreationRow?.source ?? rootSource,
+                targetTab: .patch,
+                targetRowID: patchCreationRow?.id,
+                tags: ["patch-creation", patchCreationPreviewLoadStatus.label]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:patch-library",
+                area: .patchLibrary,
+                title: "Patch Library state",
+                subtitle: selectedPatchArtifactLibrary?.subtitle ?? patchArtifactLibraryLoadStatus.label,
+                detail: selectedPatchArtifactLibrary?.detail
+                    ?? "No Patch Library scan is loaded; the digest does not scan, reveal, create directories, apply patches, or export ROMs.",
+                status: selectedPatchArtifactLibrary?.status ?? .warning,
+                source: libraryRows.first?.source ?? rootSource,
+                targetTab: .patch,
+                targetRowID: libraryRows.first?.id,
+                tags: ["patch-library", patchArtifactLibraryLoadStatus.label]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:patch-distribution",
+                area: .patchDistribution,
+                title: "Patch distribution readiness",
+                subtitle: selectedPatchDistributionReadinessReport?.subtitle ?? patchDistributionReadinessLoadStatus.label,
+                detail: selectedPatchDistributionReadinessReport?.detail
+                    ?? "No distribution packet is loaded; the digest does not refresh readiness, select patches, create files, or widen patch formats.",
+                status: selectedPatchDistributionReadinessReport?.status ?? .warning,
+                source: selectedPatchDistributionReadinessReport?.rows.first?.source ?? rootSource,
+                targetTab: .patch,
+                targetRowID: selectedPatchDistributionReadinessReport?.rows.first?.id,
+                tags: ["patch-distribution", selectedPatchDistributionReadinessPatchPath]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:map-render-audit",
+                area: .mapRenderAudit,
+                title: "Map render audit state",
+                subtitle: selectedMapRenderAuditReport.map { "\($0.statusLabel); \($0.auditedMapCount)/\($0.mapCount) maps" }
+                    ?? mapRenderAuditLoadStatus.label,
+                detail: selectedMapRenderAuditReport.map {
+                    "\($0.auditedMapCount)/\($0.mapCount) maps audited; \($0.warningCount) warnings; \($0.failureCount) failures."
+                } ?? "No map render audit is loaded; the digest does not re-check maps or write screenshots/artifacts.",
+                status: selectedMapRenderAuditReport?.status ?? .warning,
+                source: selectedMapRenderAuditReport?.rows.first?.source ?? rootSource,
+                targetTab: .build,
+                targetRowID: selectedMapRenderAuditReport?.rows.first?.id,
+                tags: ["map-render-audit", mapRenderAuditLoadStatus.label]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:playtest",
+                area: .playtest,
+                title: "Playtest handoff",
+                subtitle: report.map { "\($0.playtest.status.rawValue); \($0.playtest.emulator)" } ?? "No build report loaded",
+                detail: selectedPlaytestCaptureResult.map { "Latest capture: \($0.statusLabel). \($0.detail)" }
+                    ?? selectedPlaytestLaunchResult.map { "Latest launch: \($0.statusLabel). \($0.detail)" }
+                    ?? report?.playtest.detail
+                    ?? "No playtest handoff is loaded; the digest does not launch emulators or capture artifacts.",
+                status: selectedPlaytestCaptureResult?.status
+                    ?? selectedPlaytestLaunchResult?.status
+                    ?? report?.playtest.status
+                    ?? .warning,
+                source: selectedPlaytestCaptureResult?.source
+                    ?? selectedPlaytestLaunchResult?.source
+                    ?? report?.playtest.source
+                    ?? rootSource,
+                targetTab: .playtest,
+                targetRowID: playtestRow?.id,
+                tags: [report?.playtest.emulator ?? "", report?.playtest.romPath ?? ""]
+            ),
+            ShipPreviewDigestRow(
+                id: "ship-preview-digest:binary-mutation-audit",
+                area: .binaryMutationAudit,
+                title: "Binary mutation audit",
+                subtitle: selectedBinaryROMMutationApplyAuditReport?.statusLabel
+                    ?? selectedBinaryROMMutationDryRunReport?.subtitle
+                    ?? binaryROMMutationDryRunLoadStatus.label,
+                detail: selectedBinaryROMMutationApplyAuditReport.map {
+                    "Current apply audit: \($0.statusLabel); destination pattern \($0.destinationRootPattern)."
+                } ?? selectedBinaryROMMutationDryRunReport.map {
+                    "Dry-run manifest: \($0.sourceTreeStatus); apply review \($0.applyReviewIsReviewable ? "reviewable" : "not reviewable")."
+                } ?? "No binary ROM dry-run or apply audit is loaded; the digest does not read new manifests, apply bytes, or write mutation artifacts.",
+                status: selectedBinaryROMMutationApplyAuditReport?.status
+                    ?? selectedBinaryROMMutationDryRunReport?.status
+                    ?? .warning,
+                source: binaryRows.first?.source ?? rootSource,
+                targetTab: .patch,
+                targetRowID: binaryRows.first?.id,
+                tags: ["binary-mutation", binaryROMMutationDryRunLoadStatus.label]
+            ),
+        ]
     }
 
     var canApplySelectedBinaryROMMutationReview: Bool {
@@ -2095,6 +2418,75 @@ final class WorkbenchStore: ObservableObject {
         return rows
     }
 
+    var genVResourcesToBuildBridgeRows: [BuildReportRow] {
+        guard selectedBuildReport?.isNDS == true else { return [] }
+        guard selectedIndexedProject?.profile == Self.genVBridgeProfile || selectedAssetCatalog?.profile == Self.genVBridgeProfile else { return [] }
+        guard let selectedResourceAssetID else { return [] }
+        guard let selectedIndexedProject else { return [] }
+        guard let selectedAssetCatalog else {
+            return [
+                genVResourcesToBuildBridgeFallbackRow(
+                    id: "resources-catalog-missing",
+                    title: "Gen V Resources catalog",
+                    subtitle: "not loaded",
+                    detail: "Resources catalog rows are not loaded yet; the bridge cannot resolve selected Gen V Resources context.",
+                    sourcePath: selectedIndexedProject.rootPath
+                ),
+            ]
+        }
+        guard let asset = selectedAssetCatalog.index.rowsByID[selectedResourceAssetID] else {
+            return [
+                genVResourcesToBuildBridgeFallbackRow(
+                    id: "selected-resource-missing",
+                    title: "Selected Gen V resource",
+                    subtitle: "selection unavailable",
+                    detail: "Selected Resources row \(selectedResourceAssetID) is not present in the loaded catalog; no build, playtest, export, or write action is enabled.",
+                    sourcePath: selectedIndexedProject.rootPath
+                ),
+            ]
+        }
+        guard Self.resourceAssetIsGenVPreviewRow(asset) else { return [] }
+
+        var rows: [BuildReportRow] = [
+            genVResourcesToBuildSelectedResourceRow(asset),
+        ]
+
+        let readinessRows = selectedBuildReport?.healthMatrix.rows
+            .filter { $0.id.hasPrefix(Self.genVManualBuildReadinessRowPrefix) } ?? []
+        if readinessRows.isEmpty {
+            rows.append(
+                genVResourcesToBuildBridgeFallbackRow(
+                    id: "manual-readiness-missing",
+                    title: "Gen V Manual Build Readiness",
+                    subtitle: "rows unavailable",
+                    detail: "No existing manual build readiness rows are available to bridge; build, Docker, playtest, generated-output write, ROM export, mutation apply, and binary write actions remain disabled.",
+                    sourcePath: selectedIndexedProject.rootPath
+                )
+            )
+        } else {
+            rows.append(genVResourcesToBuildManualReadinessRow(readinessRows, rootPath: selectedIndexedProject.rootPath))
+        }
+
+        if let packet = selectedAssetCatalog.index.rowsByID["resources:\(Self.genVGeneratedOutputFreshnessPacketPath)"]
+            ?? selectedAssetCatalog.index.rowsByID[Self.genVGeneratedOutputFreshnessPacketPath]
+            ?? selectedAssetCatalog.rows.first(where: { $0.path == Self.genVGeneratedOutputFreshnessPacketPath })
+        {
+            rows.append(genVResourcesToBuildFreshnessPacketRow(packet))
+        } else {
+            rows.append(
+                genVResourcesToBuildBridgeFallbackRow(
+                    id: "freshness-packet-missing",
+                    title: "Generated-output freshness packet",
+                    subtitle: "row unavailable",
+                    detail: "The existing gen-v/generated-output-freshness-packet Resources row is not available; generated-output writes, build/playtest execution, ROM export, mutation apply, and binary writes remain disabled.",
+                    sourcePath: selectedIndexedProject.rootPath
+                )
+            )
+        }
+
+        return rows
+    }
+
     private static func resourceWorkflowSamplePaths(
         from rows: [ResourceAssetRowViewState],
         limit: Int = 3
@@ -2114,6 +2506,111 @@ final class WorkbenchStore: ObservableObject {
         case .all, .editableSource, .previewOnly, .related, .generatedReference:
             .valid
         }
+    }
+
+    private static let genVBridgeProfile = "pokeblack"
+    private static let genVGeneratedOutputFreshnessPacketPath = "gen-v/generated-output-freshness-packet"
+    private static let genVManualBuildReadinessRowPrefix = "health:gen-v-build-readiness:"
+
+    private func genVResourcesToBuildSelectedResourceRow(_ asset: ResourceAssetRowViewState) -> BuildReportRow {
+        let facet = primaryResourceWorkflowFacet(for: asset)
+        let sourceRole = Self.factValue("Gen V Source Role", in: asset.facts) ?? asset.role
+        let readiness = Self.factValue("Gen V Readiness", in: asset.facts) ?? asset.availabilitySummary
+        let blocked = Self.factValue("Gen V Blocked Actions", in: asset.facts) ?? "build, playtest, export, mutation apply, generated-output write, binary write"
+        return BuildReportRow(
+            id: "gen-v-resources-build-bridge:selected-resource",
+            section: .healthMatrix,
+            title: "Selected Gen V resource",
+            subtitle: "\(facet.title) - \(sourceRole)",
+            detail: "\(asset.path) is bridged to manual build readiness and generated-output freshness context. Readiness: \(readiness). Blocked actions: \(blocked).",
+            status: asset.status,
+            source: asset.source,
+            tags: ["gen-v-resources-build-bridge", "selected-resource", asset.path, facet.rawValue, sourceRole],
+            actions: [
+                BuildReportRowAction(
+                    id: "gen-v-resources-build-bridge:selected-resource:copy-path",
+                    kind: .copyPath,
+                    title: "Copy selected Resources path",
+                    detail: "Copy the selected Gen V Resources path for manual review.",
+                    command: nil,
+                    payload: asset.path
+                ),
+            ]
+        )
+    }
+
+    private func genVResourcesToBuildManualReadinessRow(
+        _ readinessRows: [BuildReportRow],
+        rootPath: String
+    ) -> BuildReportRow {
+        let status = Self.validationStatus(for: readinessRows.map(\.status))
+        let sampleTitles = readinessRows.prefix(4).map(\.title).joined(separator: ", ")
+        let actions = Array(readinessRows.flatMap(\.actions).prefix(8))
+        return BuildReportRow(
+            id: "gen-v-resources-build-bridge:manual-readiness",
+            section: .healthMatrix,
+            title: "Gen V Manual Build Readiness bridge",
+            subtitle: "\(readinessRows.count) copy-only readiness row\(readinessRows.count == 1 ? "" : "s")",
+            detail: "Existing Build/Patch/Playtest readiness rows are available for \(sampleTitles). These rows copy commands, paths, or rerun guidance only; no NDS build, Docker execution, playtest, export, mutation apply, or write path is enabled.",
+            status: status,
+            source: readinessRows.first?.source ?? SourceLocation(path: rootPath, symbol: "gen-v-manual-build-readiness", line: 1),
+            tags: ["gen-v-resources-build-bridge", "manual-readiness"] + readinessRows.map(\.id),
+            actions: actions
+        )
+    }
+
+    private func genVResourcesToBuildFreshnessPacketRow(_ packet: ResourceAssetRowViewState) -> BuildReportRow {
+        let targetFreshness = Self.factValue("Gen V Build Target Output Freshness", in: packet.facts) ?? "freshness unavailable"
+        let declaredOutputs = Self.factValue("Gen V Declared Generated Outputs", in: packet.facts) ?? "declared outputs unavailable"
+        return BuildReportRow(
+            id: "gen-v-resources-build-bridge:generated-output-freshness",
+            section: .healthMatrix,
+            title: "Generated-output freshness packet",
+            subtitle: packet.availabilitySummary,
+            detail: "\(packet.path) reports \(targetFreshness). Declared outputs: \(declaredOutputs). This is copied review context only; generated-output writes and build/playtest execution remain disabled.",
+            status: packet.status,
+            source: packet.source,
+            tags: ["gen-v-resources-build-bridge", "generated-output-freshness", packet.path],
+            actions: [
+                BuildReportRowAction(
+                    id: "gen-v-resources-build-bridge:generated-output-freshness:copy-path",
+                    kind: .copyPath,
+                    title: "Copy freshness packet path",
+                    detail: "Copy the generated-output freshness packet Resources path.",
+                    command: nil,
+                    payload: packet.path
+                ),
+            ]
+        )
+    }
+
+    private func genVResourcesToBuildBridgeFallbackRow(
+        id: String,
+        title: String,
+        subtitle: String,
+        detail: String,
+        sourcePath: String
+    ) -> BuildReportRow {
+        BuildReportRow(
+            id: "gen-v-resources-build-bridge:\(id)",
+            section: .healthMatrix,
+            title: title,
+            subtitle: subtitle,
+            detail: detail,
+            status: .warning,
+            source: SourceLocation(path: sourcePath, symbol: id, line: 1),
+            tags: ["gen-v-resources-build-bridge", id]
+        )
+    }
+
+    private static func resourceAssetIsGenVPreviewRow(_ row: ResourceAssetRowViewState) -> Bool {
+        row.path == genVGeneratedOutputFreshnessPacketPath
+            || row.facts.contains { $0.label.hasPrefix("Gen V ") }
+            || row.tags.contains { $0.localizedCaseInsensitiveContains("gen-v") }
+    }
+
+    private static func factValue(_ label: String, in facts: [Fact]) -> String? {
+        facts.first { $0.label == label }?.value
     }
 
     var filteredScriptOutlineSources: [PokemonHackCore.ScriptOutlineSource] {
@@ -2168,6 +2665,31 @@ final class WorkbenchStore: ObservableObject {
         return filteredResourceAssetRows.first ?? selectedAssetCatalog?.rows.first
     }
 
+    var selectedResourceReadinessPacketCopyDisabledReason: String? {
+        guard selectedAssetCatalog != nil else {
+            return "Load the Resources asset catalog before copying readiness packet JSON."
+        }
+        guard let asset = selectedResourceAsset else {
+            return "Select a Resources asset row before copying readiness packet JSON."
+        }
+        guard Self.resourceAssetLooksLikePacket(asset) || ndsDataRecordID(fromAssetID: asset.id) != nil else {
+            return "Select a Resources readiness packet or NDS readiness row before copying JSON."
+        }
+        return nil
+    }
+
+    var canCopyPatchDistributionReadinessJSON: Bool {
+        rawPatchDistributionReadinessPacket != nil
+    }
+
+    var canCopyPatchApplyExportAuditJSON: Bool {
+        rawPatchApplyExportAuditReport != nil
+    }
+
+    var canCopyBinaryROMMutationApplyAuditJSON: Bool {
+        rawBinaryROMMutationApplyAuditReport != nil
+    }
+
     var selectedResourceLibraryEntry: ResourceLibraryEntryViewState? {
         if let selected = filteredResourceLibraryEntries.first(where: { $0.id == selectedResourceLibraryEntryID }) {
             return selected
@@ -2207,6 +2729,7 @@ final class WorkbenchStore: ObservableObject {
                 + filteredPatchCreationResultRows
                 + filteredPatchArtifactLibraryRows
                 + filteredPatchDistributionReadinessRows
+                + filteredPatchApplyExportAuditRows
         case .playtest:
             guard let selectedBuildReport else { return [] }
             return [BuildReportRow(playtest: selectedBuildReport.playtest)]
@@ -2311,7 +2834,13 @@ final class WorkbenchStore: ObservableObject {
             recordID: recordID,
             record: record,
             sourceText: sourceText,
+            semanticFields: semanticSnapshot.fields,
             canEdit: canEdit
+        )
+        let mapReviewBridge = ndsDataMapReviewBridgeViewState(
+            catalog: catalog,
+            record: record,
+            asset: asset
         )
         let lensSummary: String
         if let rowOperations, rowOperations.stagedCount > 0 {
@@ -2344,6 +2873,7 @@ final class WorkbenchStore: ObservableObject {
             text: draftText,
             semanticFields: semanticFields,
             rowOperations: rowOperations,
+            mapReviewBridge: mapReviewBridge,
             readiness: readiness,
             canEdit: canEdit,
             isDirty: isDirty,
@@ -2358,6 +2888,96 @@ final class WorkbenchStore: ObservableObject {
             blockedReason: ndsDataPreviewBlockedReason,
             applyBlockedReason: ndsDataApplyBlockedReason
         )
+    }
+
+    private func ndsDataMapReviewBridgeViewState(
+        catalog: PokemonHackCore.ProjectNDSDataCatalog,
+        record: PokemonHackCore.NDSDataCatalogRecord,
+        asset: ResourceAssetRowViewState
+    ) -> NDSDataMapReviewBridgeViewState? {
+        guard let packet = record.mapReviewPacket else { return nil }
+        let summary = ndsDataMapReviewCatalogSummaryViewState(catalog: catalog)
+        let rows = packet.rows.map {
+            NDSDataMapReviewBridgeRowViewState(
+                id: $0.id,
+                label: $0.label,
+                value: $0.value,
+                detail: $0.detail
+            )
+        }
+        let targets = packet.includedRecords.map { includedRecord in
+            let assetID = resourceAssetID(forNDSDataRecordID: includedRecord.recordID)
+            return NDSDataMapReviewBridgeTargetViewState(
+                id: includedRecord.recordID,
+                recordID: includedRecord.recordID,
+                label: includedRecord.label,
+                domain: includedRecord.domain.rawValue,
+                relativePath: includedRecord.relativePath,
+                sourceRole: includedRecord.sourceRole ?? "unknown",
+                sourceProvenance: includedRecord.sourceProvenance ?? "unknown",
+                readinessStatus: includedRecord.readiness?.status.rawValue ?? "unknown",
+                readinessTitle: includedRecord.readiness?.title ?? "Readiness unavailable",
+                assetID: assetID
+            )
+        }
+        let relatedRecordCount = max(0, packet.includedRecords.count - 1)
+        return NDSDataMapReviewBridgeViewState(
+            projectTitle: selectedIndexedProject?.title ?? asset.title,
+            rootPath: catalog.root.path,
+            profile: catalog.profile.rawValue,
+            family: catalog.family.rawValue,
+            recordID: record.id,
+            relativePath: record.relativePath,
+            posture: packet.posture,
+            component: packet.component,
+            sourceRole: packet.sourceRole,
+            sourceProvenance: packet.sourceProvenance,
+            readinessStatus: packet.readiness?.status.rawValue ?? "unknown",
+            readinessTitle: packet.readiness?.title ?? "Readiness unavailable",
+            readinessDetail: packet.readiness?.detail ?? "No readiness detail was recorded for this packet.",
+            rows: rows,
+            targets: targets,
+            blockedActions: packet.blockedActions,
+            catalogSummary: summary,
+            packetRowCount: packet.rows.count,
+            includedRecordCount: packet.includedRecords.count,
+            relatedRecordCount: relatedRecordCount,
+            blockedActionCount: packet.blockedActions.count,
+            truncatedRelatedRecordCount: packet.truncatedRelatedRecordCount
+        )
+    }
+
+    private func ndsDataMapReviewCatalogSummaryViewState(
+        catalog: PokemonHackCore.ProjectNDSDataCatalog
+    ) -> NDSDataMapReviewCatalogSummaryViewState {
+        let packets = catalog.records.compactMap(\.mapReviewPacket)
+        let componentCounts = Self.sortedCountFacts(
+            labelPrefix: "Map Review Component",
+            counts: Dictionary(grouping: packets, by: \.component).mapValues(\.count)
+        )
+        let readinessCounts = Self.sortedCountFacts(
+            labelPrefix: "Map Review Readiness",
+            counts: Dictionary(grouping: packets) { packet in
+                packet.readiness?.status.rawValue ?? "unknown"
+            }.mapValues(\.count)
+        )
+        return NDSDataMapReviewCatalogSummaryViewState(
+            totalPacketCount: packets.count,
+            componentCounts: componentCounts,
+            readinessCounts: readinessCounts
+        )
+    }
+
+    private static func sortedCountFacts(labelPrefix: String, counts: [String: Int]) -> [Fact] {
+        counts.keys.sorted().map { key in
+            Fact(label: "\(labelPrefix) \(key)", value: "\(counts[key] ?? 0)")
+        }
+    }
+
+    private func resourceAssetID(forNDSDataRecordID recordID: String) -> String? {
+        selectedAssetCatalog?.index.rows.first { row in
+            Self.resourceAssetNDSDataRecordID(from: row.id) == recordID
+        }?.id
     }
 
     private func ndsDataReadinessViewState(
@@ -2694,6 +3314,7 @@ final class WorkbenchStore: ObservableObject {
         recordID: String,
         record: PokemonHackCore.NDSDataCatalogRecord,
         sourceText: String,
+        semanticFields: [PokemonHackCore.NDSDataSemanticField],
         canEdit: Bool
     ) -> NDSDataResourceRowOperationEditorViewState? {
         guard canEdit, let family = ndsDataRowOperationFamily(catalog: catalog, record: record) else {
@@ -2742,11 +3363,7 @@ final class WorkbenchStore: ObservableObject {
 
         case .encounterJSONRows:
             let draft = key.flatMap { ndsDataEncounterJSONRowOperationDraftsByKey[$0] }
-            targetOptions = encounterJSONRowOperationTargetOptions(
-                sourceText: sourceText,
-                recordID: recordID,
-                record: record
-            )
+            targetOptions = encounterJSONRowOperationTargetOptions(fields: semanticFields)
             if let draft,
                !draft.operations.isEmpty,
                !targetOptions.contains(where: { $0.key == draft.arrayKey })
@@ -2837,6 +3454,22 @@ final class WorkbenchStore: ObservableObject {
                lower.hasSuffix(".json"),
                !remainder.isEmpty,
                !remainder.contains("/")
+            {
+                return .encounterJSONRows
+            }
+        }
+
+        if catalog.profile == .pokeheartgold,
+           record.domain == .encounters,
+           record.role == .sourceTree,
+           record.format == .json
+        {
+            let prefix = "files/fielddata/encountdata/"
+            let lower = record.relativePath.lowercased()
+            let remainder = lower.dropFirst(prefix.count)
+            if lower.hasPrefix(prefix),
+               lower.hasSuffix(".json"),
+               !remainder.isEmpty
             {
                 return .encounterJSONRows
             }
@@ -2933,15 +3566,8 @@ final class WorkbenchStore: ObservableObject {
     }
 
     private func encounterJSONRowOperationTargetOptions(
-        sourceText: String,
-        recordID: String,
-        record: PokemonHackCore.NDSDataCatalogRecord
+        fields: [PokemonHackCore.NDSDataSemanticField]
     ) -> [NDSDataResourceRowOperationTargetViewState] {
-        let fields = PokemonHackCore.NDSDataSemanticEditor.fields(
-            sourceText: sourceText,
-            recordID: recordID,
-            record: record
-        )
         var rowIndexesByArrayKey: [String: Set<Int>] = [:]
         for field in fields {
             let components = field.key.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
@@ -3981,6 +4607,24 @@ final class WorkbenchStore: ObservableObject {
         selectedBuildReportRowID = filteredBuildRowsForSelectedTab.first?.id ?? ""
     }
 
+    func focusSelectedGenVResourcesToBuildBridgeAsset() {
+        guard let selectedResourceAssetID else { return }
+        _ = focusResourceAsset(selectedResourceAssetID, search: .preserve)
+    }
+
+    func focusGenVGeneratedOutputFreshnessPacketForBridge() {
+        _ = focusResourceAsset(Self.genVGeneratedOutputFreshnessPacketPath, search: .replace(Self.genVGeneratedOutputFreshnessPacketPath))
+    }
+
+    func focusGenVManualBuildReadinessForBridge() {
+        selectWorkbenchModule(.build, search: .preserve)
+        selectedBuildWorkbenchTab = .build
+        let rowID = selectedBuildReport?.healthMatrix.rows
+            .first { $0.id.hasPrefix(Self.genVManualBuildReadinessRowPrefix) }?
+            .id
+        selectedBuildReportRowID = rowID ?? filteredBuildRowsForSelectedTab.first?.id ?? ""
+    }
+
     func selectModule(_ module: WorkbenchModule, search: WorkbenchSearchBehavior = .restoreModule) {
         selectWorkbenchModule(module, search: search)
     }
@@ -4058,6 +4702,12 @@ final class WorkbenchStore: ObservableObject {
             recordRecentTarget(recentResourceAssetTarget(for: trimmed))
         }
         return true
+    }
+
+    @discardableResult
+    func focusNDSMapReviewTarget(_ target: NDSDataMapReviewBridgeTargetViewState) -> Bool {
+        guard let assetID = target.assetID, target.canJump else { return false }
+        return focusResourceAsset(assetID)
     }
 
     @discardableResult
@@ -4327,6 +4977,15 @@ final class WorkbenchStore: ObservableObject {
         selectedBuildReportRowID = rowID
     }
 
+    func openShipPreviewDigestRow(_ row: ShipPreviewDigestRow) {
+        selectedBuildWorkbenchTab = row.targetTab
+        if let targetRowID = row.targetRowID {
+            selectedBuildReportRowID = targetRowID
+        } else {
+            selectedBuildReportRowID = filteredBuildRowsForSelectedTab.first?.id ?? ""
+        }
+    }
+
     func requestGraphicsReportRowSelection(_ rowID: String) {
         selectedGraphicsReportRowID = rowID
     }
@@ -4355,8 +5014,11 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         rawPatchManifestReport = nil
         selectedPatchManifestReport = nil
+        rawPatchApplyExportAuditReport = nil
+        selectedPatchApplyExportAuditReport = nil
         latestPatchApplyExportResult = nil
         patchManifestLoadStatus = selectedPatchPath.isEmpty ? .idle : .idle
+        patchApplyExportAuditLoadStatus = .idle
     }
 
     func requestPatchArtifactLibraryItemSelection(_ itemID: String?) {
@@ -4423,6 +5085,8 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchDistributionReadinessPatchPath = ""
         rawPatchDistributionReadinessPacket = nil
         selectedPatchDistributionReadinessReport = nil
+        rawPatchApplyExportAuditReport = nil
+        selectedPatchApplyExportAuditReport = nil
         rawBinaryROMMutationDryRunManifest = nil
         selectedBinaryROMMutationDryRunReport = nil
         rawBinaryROMMutationApplyAuditReport = nil
@@ -4434,6 +5098,7 @@ final class WorkbenchStore: ObservableObject {
         patchCreationPreviewLoadStatus = .idle
         patchArtifactLibraryLoadStatus = .idle
         patchDistributionReadinessLoadStatus = .idle
+        patchApplyExportAuditLoadStatus = .idle
         binaryROMMutationDryRunLoadStatus = .idle
     }
 
@@ -4450,8 +5115,11 @@ final class WorkbenchStore: ObservableObject {
         selectedPatchCreationResultReport = nil
         rawPatchDistributionReadinessPacket = nil
         selectedPatchDistributionReadinessReport = nil
+        rawPatchApplyExportAuditReport = nil
+        selectedPatchApplyExportAuditReport = nil
         patchCreationPreviewLoadStatus = selectedBaseROMPath.isEmpty ? .idle : .idle
         patchDistributionReadinessLoadStatus = .idle
+        patchApplyExportAuditLoadStatus = .idle
     }
 
     private func resetGraphicsImportPackagePlanForProjectChange() {
@@ -4510,12 +5178,18 @@ final class WorkbenchStore: ObservableObject {
         guard !selectedPatchPath.isEmpty else {
             rawPatchManifestReport = nil
             selectedPatchManifestReport = nil
+            rawPatchApplyExportAuditReport = nil
+            selectedPatchApplyExportAuditReport = nil
             latestPatchApplyExportResult = nil
             patchManifestLoadStatus = .idle
+            patchApplyExportAuditLoadStatus = .idle
             return
         }
 
         patchManifestLoadStatus = .loading
+        rawPatchApplyExportAuditReport = nil
+        selectedPatchApplyExportAuditReport = nil
+        patchApplyExportAuditLoadStatus = .idle
 
         do {
             let report = try PatchManifestBuilder.build(
@@ -4652,6 +5326,43 @@ final class WorkbenchStore: ObservableObject {
             rawPatchDistributionReadinessPacket = nil
             selectedPatchDistributionReadinessReport = nil
             patchDistributionReadinessLoadStatus = .failed(error.localizedDescription)
+        }
+    }
+
+    func loadSelectedPatchApplyExportAudit() {
+        guard !selectedPatchPath.isEmpty,
+              !selectedBaseROMPath.isEmpty
+        else {
+            rawPatchApplyExportAuditReport = nil
+            selectedPatchApplyExportAuditReport = nil
+            patchApplyExportAuditLoadStatus = .idle
+            return
+        }
+
+        patchApplyExportAuditLoadStatus = .loading
+
+        do {
+            let report = try PatchManifestBuilder.applyExportAudit(
+                patchPath: selectedPatchPath,
+                projectPath: selectedIndexedProject?.rootPath,
+                baseROMPath: selectedBaseROMPath,
+                overwrite: false,
+                fileManager: fileManager,
+                toolResolver: toolResolver
+            )
+            rawPatchApplyExportAuditReport = report
+            selectedPatchApplyExportAuditReport = Self.patchApplyExportAuditReportViewState(
+                from: report,
+                rootPath: selectedIndexedProject?.rootPath ?? workspaceRoot.path
+            )
+            patchApplyExportAuditLoadStatus = .loaded(
+                report.status.rawValue,
+                selectedPatchApplyExportAuditReport?.status ?? .warning
+            )
+        } catch {
+            rawPatchApplyExportAuditReport = nil
+            selectedPatchApplyExportAuditReport = nil
+            patchApplyExportAuditLoadStatus = .failed(error.localizedDescription)
         }
     }
 
@@ -5095,16 +5806,12 @@ final class WorkbenchStore: ObservableObject {
             ndsDataEncounterJSONRowOperationDraftsByKey.removeValue(forKey: key)
 
         case .encounterJSONRows:
-            let sourceText = PokemonHackCore.NDSDataMutationPlanner.sourceText(
+            let semanticSnapshot = PokemonHackCore.NDSDataSemanticEditor.snapshot(
                 catalog: catalog,
                 recordID: recordID,
                 fileManager: fileManager
-            ) ?? ""
-            let targetOptions = encounterJSONRowOperationTargetOptions(
-                sourceText: sourceText,
-                recordID: recordID,
-                record: record
             )
+            let targetOptions = encounterJSONRowOperationTargetOptions(fields: semanticSnapshot.fields)
             let existingDraft = ndsDataEncounterJSONRowOperationDraftsByKey[key]
             let arrayKey: String?
             if let existingDraft, !existingDraft.operations.isEmpty {
@@ -7547,17 +8254,19 @@ final class WorkbenchStore: ObservableObject {
 
     func copyBuildPatchPlaytestReportJSONToPasteboard() {
         let report = selectedBuildReport
+        let exportedBuildRows = (report?.rows ?? []) + genVResourcesToBuildBridgeRows
         let payload = BuildPatchPlaytestReportExportPayload(
             projectTitle: report?.projectTitle,
             rootPath: report?.rootPath,
             profile: report?.profile,
             status: report?.status.rawValue ?? moduleStatus(for: .build).rawValue,
-            buildRows: (report?.rows ?? []).map(Self.exportPayload(from:)),
+            buildRows: exportedBuildRows.map(Self.exportPayload(from:)),
             patchManifest: rawPatchManifestReport,
             patchCreationPreview: rawPatchCreationPreviewReport,
             patchCreationResult: latestPatchCreationResult,
             patchArtifactLibrary: rawPatchArtifactLibrary,
             patchDistributionReadiness: rawPatchDistributionReadinessPacket,
+            patchApplyExportAudit: rawPatchApplyExportAuditReport,
             binaryROMMutationDryRunManifest: rawBinaryROMMutationDryRunManifest,
             binaryROMMutationApplyAudit: rawBinaryROMMutationApplyAuditReport,
             binaryROMMutationApplyResult: latestBinaryROMMutationApplyResult,
@@ -7572,6 +8281,18 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func copyShipPreviewDigestJSONToPasteboard() {
+        guard let digest = selectedShipPreviewDigest else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(digest.jsonPayload, forType: .string)
+    }
+
+    func copyShipPreviewDigestMarkdownToPasteboard() {
+        guard let digest = selectedShipPreviewDigest else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(digest.markdownPayload, forType: .string)
+    }
+
     func copyBuildReportRowActionToPasteboard(_ action: BuildReportRowAction) {
         guard let value = action.copyValue else { return }
         NSPasteboard.general.clearContents()
@@ -7583,11 +8304,37 @@ final class WorkbenchStore: ObservableObject {
         NSPasteboard.general.setString(row.copyValue, forType: .string)
     }
 
+    func copySelectedNDSMapReviewPacketJSONToPasteboard() {
+        guard let payload = selectedNDSMapReviewPacketExportPayload() else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(payload), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copySelectedNDSMapReviewPacketMarkdownToPasteboard() {
+        guard let bridge = selectedNDSDataEditor?.mapReviewBridge else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(markdownHandoff(for: bridge), forType: .string)
+    }
+
     func copyBinaryROMMutationDryRunManifestJSONToPasteboard() {
         guard let rawBinaryROMMutationDryRunManifest else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(rawBinaryROMMutationDryRunManifest), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copyBinaryROMMutationApplyAuditJSONToPasteboard() {
+        guard let rawBinaryROMMutationApplyAuditReport else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawBinaryROMMutationApplyAuditReport), let json = String(data: data, encoding: .utf8) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
@@ -7613,11 +8360,31 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func copyPatchApplyExportAuditJSONToPasteboard() {
+        guard let rawPatchApplyExportAuditReport else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(rawPatchApplyExportAuditReport), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
     func copyMapRenderAuditJSONToPasteboard() {
         guard let rawMapRenderAuditReport else { return }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(rawMapRenderAuditReport), let json = String(data: data, encoding: .utf8) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(json, forType: .string)
+        }
+    }
+
+    func copySelectedResourceReadinessPacketJSONToPasteboard() {
+        guard let payload = selectedResourceReadinessPacketExportPayload() else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(payload), let json = String(data: data, encoding: .utf8) {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
@@ -7631,6 +8398,100 @@ final class WorkbenchStore: ObservableObject {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(json, forType: .string)
         }
+    }
+
+    private func selectedResourceReadinessPacketExportPayload() -> ResourceReadinessPacketExportPayload? {
+        guard selectedResourceReadinessPacketCopyDisabledReason == nil,
+              let asset = selectedResourceAsset
+        else {
+            return nil
+        }
+        let ndsEditor = ndsDataRecordID(fromAssetID: asset.id) == nil ? nil : selectedNDSDataEditor
+        return ResourceReadinessPacketExportPayload(
+            asset: Self.exportPayload(from: asset),
+            ndsReadiness: ndsEditor.map(Self.exportPayload(from:))
+        )
+    }
+
+    private func selectedNDSMapReviewPacketExportPayload() -> NDSDataMapReviewPacketExportPayload? {
+        guard
+            let catalog = selectedNDSDataCatalog,
+            let recordID = selectedNDSDataRecordID,
+            let record = catalog.records.first(where: { $0.id == recordID }),
+            let packet = record.mapReviewPacket
+        else {
+            return nil
+        }
+        let summary = ndsDataMapReviewCatalogSummaryViewState(catalog: catalog)
+        return NDSDataMapReviewPacketExportPayload(
+            projectTitle: selectedIndexedProject?.title,
+            rootPath: catalog.root.path,
+            profile: catalog.profile.rawValue,
+            family: catalog.family.rawValue,
+            recordID: record.id,
+            relativePath: record.relativePath,
+            packet: packet,
+            catalogSummary: NDSDataMapReviewPacketCatalogSummaryPayload(
+                totalPacketCount: summary.totalPacketCount,
+                componentCounts: Self.countPayloads(from: summary.componentCounts, prefix: "Map Review Component "),
+                readinessCounts: Self.countPayloads(from: summary.readinessCounts, prefix: "Map Review Readiness ")
+            )
+        )
+    }
+
+    private static func countPayloads(from facts: [Fact], prefix: String) -> [NDSDataMapReviewPacketCountPayload] {
+        facts.map { fact in
+            NDSDataMapReviewPacketCountPayload(
+                name: fact.label.replacingOccurrences(of: prefix, with: ""),
+                count: Int(fact.value) ?? 0
+            )
+        }
+    }
+
+    private func markdownHandoff(for bridge: NDSDataMapReviewBridgeViewState) -> String {
+        var lines: [String] = [
+            "# Gen IV Map Review Handoff",
+            "",
+            "- Project: \(bridge.projectTitle)",
+            "- Root: \(bridge.rootPath)",
+            "- Profile: \(bridge.profile)",
+            "- Family: \(bridge.family)",
+            "- Record: \(bridge.recordID)",
+            "- Path: \(bridge.relativePath)",
+            "- Posture: \(bridge.posture)",
+            "- Component: \(bridge.component)",
+            "- Source Role: \(bridge.sourceRole)",
+            "- Source Provenance: \(bridge.sourceProvenance)",
+            "- Readiness: \(bridge.readinessStatus) - \(bridge.readinessTitle)",
+            "",
+            "## Packet Rows",
+        ]
+        for row in bridge.rows {
+            if let detail = row.detail, !detail.isEmpty {
+                lines.append("- \(row.label): \(row.value) - \(detail)")
+            } else {
+                lines.append("- \(row.label): \(row.value)")
+            }
+        }
+        lines.append("")
+        lines.append("## Related Jump Targets")
+        for target in bridge.targets {
+            let jumpState = target.canJump ? "available" : "unavailable"
+            lines.append("- \(target.label): \(target.recordID) (\(target.relativePath)) - \(target.readinessStatus), jump \(jumpState)")
+        }
+        lines.append("")
+        lines.append("## Blocked Actions")
+        if bridge.blockedActions.isEmpty {
+            lines.append("- None recorded")
+        } else {
+            lines.append(contentsOf: bridge.blockedActions.map { "- \($0)" })
+        }
+        lines.append("")
+        lines.append("## Catalog Counts")
+        for fact in bridge.catalogSummary.facts {
+            lines.append("- \(fact.label): \(fact.value)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func launchSelectedPlaytest(
@@ -9030,6 +9891,31 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func resourceAssetLooksLikePacket(_ row: ResourceAssetRowViewState) -> Bool {
+        let factBlob = row.facts
+            .map { "\($0.label) \($0.value)" }
+            .joined(separator: " ")
+        let blob = [
+            row.title,
+            row.subtitle,
+            row.path,
+            row.category,
+            row.kind,
+            row.role,
+            row.availability,
+            row.availabilitySummary,
+            row.tags.joined(separator: " "),
+            factBlob,
+        ]
+            .joined(separator: " ")
+            .lowercased()
+
+        return blob.contains("readiness packet")
+            || blob.contains("review packet")
+            || blob.contains("freshness packet")
+            || blob.contains("metadatapacket")
+    }
+
     private static func resourceEntryViewState(
         from entry: PokemonHackCore.GenIIIResourceEntry
     ) -> ResourceLibraryEntryViewState {
@@ -10360,6 +11246,193 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func patchApplyExportAuditReportViewState(
+        from report: PokemonHackCore.PatchApplyExportAuditReport,
+        rootPath: String
+    ) -> PatchApplyExportAuditReportViewState {
+        let diagnostics = report.diagnostics.map { diagnostic(from: $0, rootPath: rootPath) }
+        let status: ValidationState = report.status == .ready ? .valid : .error
+        let patchPath = report.patchPath ?? report.patch.path ?? rootPath
+        let patchTitle = URL(fileURLWithPath: patchPath).lastPathComponent
+        let patchFormat = report.patchFormat.rawValue.uppercased()
+        let patchSize = patchCreationByteSummary(report.patch.sizeBytes)
+        let patchSummary = report.patch.summary.map { summary in
+            [
+                summary.sourceSize.map { "source \($0) bytes" },
+                summary.targetSize.map { "target \($0) bytes" },
+                summary.hasEmbeddedChecksums ? "embedded checksums" : "no embedded checksums",
+            ]
+                .compactMap { $0 }
+                .joined(separator: "; ")
+        } ?? "patch summary unavailable"
+        let selectedBase = report.selectedBaseROM
+        let basePath = selectedBase?.absolutePath ?? "No base ROM selected"
+        let baseStatus: ValidationState
+        if let selectedBase {
+            baseStatus = selectedBase.exists && selectedBase.sha1 != nil && report.compatibilityStatus == .compatible ? .valid : .error
+        } else {
+            baseStatus = .error
+        }
+        let baseSubtitle = selectedBase.map { "\(patchCreationByteSummary($0.sizeBytes)); \(patchCreationSHA1Summary($0.sha1))" } ?? "missing"
+        let baseDetail = selectedBase.map { selected in
+            let match = selected.matchedCandidateRelativePath.map { " Matches manifest candidate \($0)." } ?? " No manifest candidate match."
+            return "Selected base ROM \(selected.absolutePath).\(match)"
+        } ?? "Select a readable base ROM before invoking the writer."
+        let outputStatus: ValidationState = report.outputExists && !report.overwriteRequested ? .error : .valid
+        let backupDetail = [
+            "Overwrite requested: \(report.overwriteRequested ? "yes" : "no").",
+            "Output exists: \(report.outputExists ? "yes" : "no").",
+            "Backup will be created: \(report.backupWillBeCreated ? "yes" : "no").",
+            "Backup pattern: \(report.backupPathPattern ?? "none").",
+        ].joined(separator: " ")
+        let formatSupported = report.patchFormat == .bps || report.patchFormat == .ips
+        let applyStateDetail = [
+            "Can apply: \(report.applyExportState.canApply ? "yes" : "no").",
+            "Can export: \(report.applyExportState.canExport ? "yes" : "no").",
+            report.applyExportState.reasons.joined(separator: " "),
+        ].joined(separator: " ")
+
+        let rows: [BuildReportRow] = [
+            BuildReportRow(
+                id: "patch-apply-export-audit:summary",
+                section: .patchManifest,
+                title: "Patch Apply/Export Audit",
+                subtitle: report.status.rawValue,
+                detail: "Read-only apply/export audit for the selected patch and base ROM; no patched ROM, backup, manifest, build, playtest, source write, or header rewrite is performed.",
+                status: status,
+                source: SourceLocation(path: patchPath, symbol: "patch-apply-export-audit", line: 1),
+                tags: [report.status.rawValue, "read-only", patchPath, basePath]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:selected-patch",
+                section: .patchManifest,
+                title: "Selected patch",
+                subtitle: "\(patchFormat) · \(report.patch.isValid ? "valid" : "invalid")",
+                detail: "\(patchTitle.isEmpty ? patchPath : patchTitle); \(patchSize); \(patchSummary).",
+                status: report.patch.isValid ? .valid : .error,
+                source: SourceLocation(path: patchPath, symbol: patchFormat, line: 1),
+                tags: [patchPath, patchFormat, "\(report.patch.exists)"]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:selected-base-rom",
+                section: .patchManifest,
+                title: "Selected base ROM",
+                subtitle: baseSubtitle,
+                detail: baseDetail,
+                status: baseStatus,
+                source: SourceLocation(path: basePath, symbol: "base-rom", line: 1),
+                tags: [basePath, selectedBase?.sha1 ?? "", selectedBase?.matchedCandidateRelativePath ?? ""]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:planned-output",
+                section: .patchManifest,
+                title: "Planned output path",
+                subtitle: report.outputExists ? "exists" : "available",
+                detail: report.plannedOutputPath,
+                status: outputStatus,
+                source: SourceLocation(path: report.plannedOutputPath, symbol: "planned-output", line: 1),
+                tags: [report.plannedOutputPath, "\(report.outputExists)", "\(report.overwriteRequested)"]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:planned-manifest",
+                section: .patchManifest,
+                title: "Planned manifest path",
+                subtitle: "writer-owned",
+                detail: report.plannedManifestPath,
+                status: .valid,
+                source: SourceLocation(path: report.plannedManifestPath, symbol: "planned-manifest", line: 1),
+                tags: [report.plannedManifestPath]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:overwrite-backup",
+                section: .patchManifest,
+                title: "Overwrite and backup posture",
+                subtitle: report.backupWillBeCreated ? "backup planned by writer" : "no backup planned",
+                detail: backupDetail,
+                status: outputStatus,
+                source: SourceLocation(path: report.plannedOutputPath, symbol: "overwrite-backup", line: 1),
+                tags: [
+                    "\(report.overwriteRequested)",
+                    "\(report.outputExists)",
+                    "\(report.backupWillBeCreated)",
+                    report.backupPathPattern ?? "",
+                ]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:header-policy",
+                section: .patchManifest,
+                title: "Header policy",
+                subtitle: report.headerPolicy.mode,
+                detail: report.headerPolicy.detail,
+                status: report.headerPolicy.shouldRewriteHeader ? .error : .valid,
+                source: SourceLocation(path: basePath, symbol: "header-policy", line: 1),
+                tags: [report.headerPolicy.mode, "\(report.headerPolicy.shouldRewriteHeader)"]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:checksum-policy",
+                section: .patchManifest,
+                title: "Checksum policy",
+                subtitle: report.checksumPolicy,
+                detail: "Audit reports the policy only; patched ROM checksums are produced only if the writer later exports.",
+                status: .valid,
+                source: SourceLocation(path: patchPath, symbol: "checksum-policy", line: 1),
+                tags: [report.checksumPolicy]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:compatibility",
+                section: .patchManifest,
+                title: "Manifest compatibility",
+                subtitle: compatibilityLabel(for: report.compatibilityStatus),
+                detail: "Compatibility status \(report.compatibilityStatus.rawValue) from the existing patch manifest builder.",
+                status: report.compatibilityStatus == .compatible ? .valid : .error,
+                source: SourceLocation(path: basePath, symbol: "manifest-compatibility", line: 1),
+                tags: [report.compatibilityStatus.rawValue]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:format",
+                section: .patchManifest,
+                title: "Supported patch format",
+                subtitle: patchFormat,
+                detail: formatSupported ? "Existing writer supports BPS and IPS only." : "Existing writer will block this patch format.",
+                status: formatSupported ? .valid : .error,
+                source: SourceLocation(path: patchPath, symbol: "patch-format", line: 1),
+                tags: [report.patchFormat.rawValue]
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:apply-export-state",
+                section: .patchManifest,
+                title: "Apply/export state",
+                subtitle: report.applyExportState.canExport ? "writer preflight ready" : "writer preflight blocked",
+                detail: applyStateDetail,
+                status: status,
+                source: SourceLocation(path: report.plannedOutputPath, symbol: "apply-export-state", line: 1),
+                tags: report.applyExportState.reasons
+            ),
+            BuildReportRow(
+                id: "patch-apply-export-audit:blocked-actions",
+                section: .patchManifest,
+                title: "Blocked actions",
+                subtitle: "\(report.blockedActions.count) action\(report.blockedActions.count == 1 ? "" : "s") not performed by audit",
+                detail: report.blockedActions.joined(separator: "; "),
+                status: .valid,
+                source: SourceLocation(path: patchPath, symbol: "blocked-actions", line: 1),
+                tags: report.blockedActions
+            ),
+        ] + diagnostics.map(BuildReportRow.init(diagnostic:))
+
+        return PatchApplyExportAuditReportViewState(
+            id: "patch-apply-export-audit:\(patchPath):\(report.status.rawValue)",
+            title: "Patch Apply/Export Audit",
+            subtitle: report.status.rawValue,
+            detail: "Read-only audit for \(patchTitle.isEmpty ? patchPath : patchTitle).",
+            status: status,
+            statusLabel: report.status.rawValue,
+            plannedOutputPath: report.plannedOutputPath,
+            diagnostics: diagnostics,
+            rows: rows
+        )
+    }
+
     private static func patchArtifactLibraryItemViewState(
         from item: PokemonHackCore.PatchArtifactLibraryItem,
         rootPath: String
@@ -10781,64 +11854,161 @@ final class WorkbenchStore: ObservableObject {
                 relativePathPattern: artifact.relativePathPattern
             )
         }
+        let backupArtifact = artifactReviews.first { $0.id == PokemonHackCore.BinaryROMMutationApplyArtifactKind.originalROMBackup.rawValue }
+        let applyManifestArtifact = artifactReviews.first { $0.id == PokemonHackCore.BinaryROMMutationApplyArtifactKind.applyManifest.rawValue }
+        let driftSummary = binaryROMMutationDriftSummary(for: report, diagnostics: diagnostics)
+        let applyStatus = binaryROMMutationIrreversibleApplyStatus(from: report, artifacts: artifactReviews)
 
         var rows: [BuildReportRow] = [
             BuildReportRow(
-                id: "binary-rom-mutation-audit:summary",
+                id: "binary-rom-mutation-audit:status",
                 section: .patchManifest,
-                title: "Apply audit",
+                title: "Audit status",
                 subtitle: report.status.rawValue,
                 detail: report.status == .ready
-                    ? "Current ROM, source-tree, review-token, and artifact containment checks are ready for explicit reviewed apply."
-                    : "Current ROM, source-tree, review-token, or artifact containment checks block apply before any write.",
+                    ? "Current ROM, manifest, review token, drift, and artifact containment checks are ready for explicit reviewed apply."
+                    : "Current ROM, manifest, review token, drift, or artifact containment checks block apply before any write.",
                 status: status,
                 source: SourceLocation(path: report.inputPath, symbol: "binary-rom-apply-audit", line: 1),
-                tags: [report.status.rawValue, report.inputPath, report.destinationRootPattern]
-            ),
-            BuildReportRow(
-                id: "binary-rom-mutation-audit:manifest",
-                section: .patchManifest,
-                title: "Review manifest identity",
-                subtitle: report.dryRunManifestSHA1.map { "sha1 \($0.prefix(8))" } ?? "manifest unavailable",
-                detail: "Manifest: \(report.dryRunManifestPath ?? "not loaded"); review token stale: \(report.isReviewTokenStale).",
-                status: report.isReviewTokenStale ? .error : .valid,
-                source: SourceLocation(path: report.dryRunManifestPath ?? report.inputPath, symbol: "review-manifest", line: 1),
                 tags: [
+                    report.status.rawValue,
+                    report.inputPath,
                     report.dryRunManifestPath ?? "",
                     report.dryRunManifestSHA1 ?? "",
+                ],
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-status",
+                        title: "Copy audit status",
+                        detail: "Copy status, input ROM, manifest path, and manifest SHA1.",
+                        payload: [
+                            "status=\(report.status.rawValue)",
+                            "inputPath=\(report.inputPath)",
+                            "dryRunManifestPath=\(report.dryRunManifestPath ?? "not loaded")",
+                            "dryRunManifestSHA1=\(report.dryRunManifestSHA1 ?? "unavailable")",
+                        ].joined(separator: "\n")
+                    ),
+                ]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:review-token",
+                section: .patchManifest,
+                title: "Review token state",
+                subtitle: report.isReviewTokenStale ? "stale" : (report.reviewToken == nil ? "missing" : "current"),
+                detail: "Loaded token: \(report.reviewToken ?? "missing"); expected token: \(report.expectedReviewToken ?? "unavailable"); confirmation argument: \(report.reviewToken.map { "--confirm \($0)" } ?? "unavailable").",
+                status: report.isReviewTokenStale ? .error : (report.reviewToken == nil ? .warning : .valid),
+                source: SourceLocation(path: report.dryRunManifestPath ?? report.inputPath, symbol: "review-manifest", line: 1),
+                tags: [
                     report.reviewToken ?? "",
                     report.expectedReviewToken ?? "",
                     "\(report.isReviewTokenStale)",
+                ],
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-review-token",
+                        title: "Copy review token state",
+                        detail: "Copy loaded token, expected token, stale flag, and confirmation argument.",
+                        payload: [
+                            "reviewToken=\(report.reviewToken ?? "missing")",
+                            "expectedReviewToken=\(report.expectedReviewToken ?? "unavailable")",
+                            "isReviewTokenStale=\(report.isReviewTokenStale)",
+                            "confirmationArgument=\(report.reviewToken.map { "--confirm \($0)" } ?? "unavailable")",
+                        ].joined(separator: "\n")
+                    ),
                 ]
             ),
             BuildReportRow(
-                id: "binary-rom-mutation-audit:artifact-root",
+                id: "binary-rom-mutation-audit:current-state-drift",
                 section: .patchManifest,
-                title: "Ignored artifact destination",
-                subtitle: report.destinationRootPattern,
-                detail: "Audit checks this ignored destination pattern only; exact timestamped paths are produced by explicit apply.",
-                status: report.status == .ready ? .valid : .warning,
-                source: SourceLocation(path: report.destinationRootPattern, symbol: "artifact-destination-pattern", line: 1),
+                title: "Current-state drift",
+                subtitle: driftSummary.subtitle,
+                detail: driftSummary.detail,
+                status: driftSummary.status,
+                source: SourceLocation(path: report.inputPath, symbol: "current-state-drift", line: 1),
                 tags: [
-                    report.destinationRootPattern,
-                    report.backupPathPattern,
-                    report.applyManifestPathPattern,
+                    driftSummary.sourceTreeFirst,
+                    driftSummary.baseIdentity,
+                    driftSummary.inputPath,
+                    driftSummary.originalBytes,
+                ] + driftSummary.codes,
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-drift",
+                        title: "Copy current-state drift",
+                        detail: "Copy source-tree-first, base/header/hash/size, input-path, and original-byte drift findings.",
+                        payload: [
+                            "sourceTreeFirst=\(driftSummary.sourceTreeFirst)",
+                            "baseHeaderHashSize=\(driftSummary.baseIdentity)",
+                            "inputPath=\(driftSummary.inputPath)",
+                            "originalBytes=\(driftSummary.originalBytes)",
+                            "diagnosticCodes=\(driftSummary.codes.isEmpty ? "none" : driftSummary.codes.joined(separator: ","))",
+                        ].joined(separator: "\n")
+                    ),
+                ]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:ignored-backup-destination",
+                section: .patchManifest,
+                title: "Ignored backup destination",
+                subtitle: backupArtifact?.subtitle ?? "unavailable",
+                detail: backupArtifact?.detail ?? "Original ROM backup destination is unavailable until a reviewable audit report is loaded.",
+                status: backupArtifact?.status ?? .warning,
+                source: SourceLocation(path: backupArtifact?.path ?? backupArtifact?.relativePathPattern ?? report.backupPathPattern, symbol: "original-rom-backup", line: 1),
+                tags: [backupArtifact?.subtitle ?? "", backupArtifact?.path ?? "", backupArtifact?.relativePathPattern ?? report.backupPathPattern],
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-backup-destination",
+                        title: "Copy backup destination",
+                        detail: "Copy ignored original-ROM backup status and path or pattern.",
+                        payload: [
+                            "status=\(backupArtifact?.subtitle ?? "unavailable")",
+                            "path=\(backupArtifact?.path ?? "pending explicit apply")",
+                            "pattern=\(backupArtifact?.relativePathPattern ?? report.backupPathPattern)",
+                        ].joined(separator: "\n")
+                    ),
+                ]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:ignored-apply-manifest-destination",
+                section: .patchManifest,
+                title: "Ignored apply-manifest destination",
+                subtitle: applyManifestArtifact?.subtitle ?? "unavailable",
+                detail: applyManifestArtifact?.detail ?? "Apply manifest destination is unavailable until a reviewable audit report is loaded.",
+                status: applyManifestArtifact?.status ?? .warning,
+                source: SourceLocation(path: applyManifestArtifact?.path ?? applyManifestArtifact?.relativePathPattern ?? report.applyManifestPathPattern, symbol: "apply-manifest", line: 1),
+                tags: [applyManifestArtifact?.subtitle ?? "", applyManifestArtifact?.path ?? "", applyManifestArtifact?.relativePathPattern ?? report.applyManifestPathPattern],
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-apply-manifest-destination",
+                        title: "Copy apply-manifest destination",
+                        detail: "Copy ignored apply-manifest status and path or pattern.",
+                        payload: [
+                            "status=\(applyManifestArtifact?.subtitle ?? "unavailable")",
+                            "path=\(applyManifestArtifact?.path ?? "pending explicit apply")",
+                            "pattern=\(applyManifestArtifact?.relativePathPattern ?? report.applyManifestPathPattern)",
+                        ].joined(separator: "\n")
+                    ),
+                ]
+            ),
+            BuildReportRow(
+                id: "binary-rom-mutation-audit:irreversible-apply-status",
+                section: .patchManifest,
+                title: "Irreversible replace-only apply status",
+                subtitle: applyStatus.subtitle,
+                detail: applyStatus.detail,
+                status: applyStatus.status,
+                source: SourceLocation(path: report.inputPath, symbol: "replace-only-apply-status", line: 1),
+                tags: [applyStatus.subtitle, report.inputPath, report.backupPathPattern, report.applyManifestPathPattern],
+                actions: [
+                    binaryROMMutationCopyAction(
+                        id: "binary-rom-mutation-audit-copy-irreversible-apply-status",
+                        title: "Copy replace-only apply status",
+                        detail: "Copy irreversible apply status and blocked wider binary actions.",
+                        payload: applyStatus.copyPayload
+                    ),
                 ]
             ),
         ]
-
-        rows.append(contentsOf: artifactReviews.map { artifact in
-            BuildReportRow(
-                id: "binary-rom-mutation-audit:artifact:\(artifact.id)",
-                section: .patchManifest,
-                title: artifact.title,
-                subtitle: artifact.subtitle,
-                detail: artifact.detail,
-                status: artifact.status,
-                source: SourceLocation(path: artifact.path ?? artifact.relativePathPattern, symbol: artifact.id, line: 1),
-                tags: [artifact.subtitle, artifact.path ?? "", artifact.relativePathPattern]
-            )
-        })
         rows.append(contentsOf: diagnostics.map(BuildReportRow.init(diagnostic:)))
 
         return BinaryROMMutationApplyAuditReportViewState(
@@ -10858,12 +12028,122 @@ final class WorkbenchStore: ObservableObject {
         )
     }
 
+    private static func binaryROMMutationCopyAction(
+        id: String,
+        title: String,
+        detail: String,
+        payload: String
+    ) -> BuildReportRowAction {
+        BuildReportRowAction(
+            id: id,
+            kind: .copyValue,
+            title: title,
+            detail: detail,
+            command: nil,
+            payload: payload
+        )
+    }
+
+    private static func binaryROMMutationDriftSummary(
+        for report: PokemonHackCore.BinaryROMMutationApplyAuditReport,
+        diagnostics: [IndexedDiagnosticRow]
+    ) -> (
+        subtitle: String,
+        detail: String,
+        status: ValidationState,
+        sourceTreeFirst: String,
+        baseIdentity: String,
+        inputPath: String,
+        originalBytes: String,
+        codes: [String]
+    ) {
+        let codes = diagnostics.map(\.title)
+        let sourceTreeCodes = codes.filter { code in
+            code.contains("SOURCE_TREE_AVAILABLE_REFUSED")
+                || code.contains("SOURCE_TREE_INPUT_REFUSED")
+        }
+        let baseCodes = codes.filter { code in
+            code.contains("BASE_IDENTITY_MISSING")
+                || code.contains("FRESH_BASE_MISSING")
+                || code.contains("BASE_READ_FAILED")
+                || code.contains("BASE_SHA1_MISMATCH")
+                || code.contains("BASE_SHA1_DRIFT")
+                || code.contains("BASE_CRC32_DRIFT")
+                || code.contains("BASE_SIZE_DRIFT")
+                || code.contains("HEADER_DRIFT")
+        }
+        let inputPathCodes = codes.filter { $0.contains("INPUT_PATH_MISMATCH") }
+        let originalByteCodes = codes.filter { $0.contains("ORIGINAL_BYTES") }
+
+        func label(for categoryCodes: [String]) -> String {
+            categoryCodes.isEmpty ? "clear" : categoryCodes.joined(separator: ",")
+        }
+
+        let sourceTree = label(for: sourceTreeCodes)
+        let baseIdentity = label(for: baseCodes)
+        let inputPath = label(for: inputPathCodes)
+        let originalBytes = label(for: originalByteCodes)
+        let driftCodes = Array(Set(sourceTreeCodes + baseCodes + inputPathCodes + originalByteCodes)).sorted()
+        let status: ValidationState = driftCodes.isEmpty ? .valid : .error
+        let subtitle = driftCodes.isEmpty ? "no drift detected" : "\(driftCodes.count) drift finding\(driftCodes.count == 1 ? "" : "s")"
+        let detail = [
+            "Source-tree-first: \(sourceTree).",
+            "Base/header/hash/size: \(baseIdentity).",
+            "Input path: \(inputPath).",
+            "Original bytes: \(originalBytes).",
+            report.status == .ready ? "Audit remains ready." : "Audit is blocked before any write.",
+        ].joined(separator: " ")
+
+        return (
+            subtitle: subtitle,
+            detail: detail,
+            status: status,
+            sourceTreeFirst: sourceTree,
+            baseIdentity: baseIdentity,
+            inputPath: inputPath,
+            originalBytes: originalBytes,
+            codes: driftCodes
+        )
+    }
+
+    private static func binaryROMMutationIrreversibleApplyStatus(
+        from report: PokemonHackCore.BinaryROMMutationApplyAuditReport,
+        artifacts: [BinaryROMMutationApplyArtifactReviewViewState]
+    ) -> (subtitle: String, detail: String, status: ValidationState, copyPayload: String) {
+        let hasWrittenArtifacts = artifacts.contains { $0.subtitle == "written after apply" }
+        let hasBlockedArtifacts = artifacts.contains { $0.subtitle == "blocked before write" }
+        let subtitle: String
+        let status: ValidationState
+        if hasWrittenArtifacts {
+            subtitle = "applied in this session"
+            status = .valid
+        } else if report.status == .blocked || hasBlockedArtifacts {
+            subtitle = "blocked before write"
+            status = .error
+        } else {
+            subtitle = "pending explicit token"
+            status = .valid
+        }
+
+        let blockedActions = "No patched-copy output, ROM export, checksum repair, emulator launch, source mutation, replacement authoring, repoint apply, free-space allocation apply, or app auto-apply is enabled."
+        let detail = "\(subtitle.capitalized). The only writer remains explicit reviewed replace-only in-place apply, which writes the ignored original-ROM backup and apply manifest after token confirmation. \(blockedActions)"
+        let payload = [
+            "status=\(subtitle)",
+            "inputPath=\(report.inputPath)",
+            "backupPathPattern=\(report.backupPathPattern)",
+            "applyManifestPathPattern=\(report.applyManifestPathPattern)",
+            "blockedWiderActions=\(blockedActions)",
+        ].joined(separator: "\n")
+
+        return (subtitle: subtitle, detail: detail, status: status, copyPayload: payload)
+    }
+
     private static func binaryROMMutationArtifactTitle(_ kind: PokemonHackCore.BinaryROMMutationApplyArtifactKind) -> String {
         switch kind {
         case .originalROMBackup:
-            return "Original ROM backup audit"
+            return "Ignored backup destination"
         case .applyManifest:
-            return "Apply manifest audit"
+            return "Ignored apply-manifest destination"
         }
     }
 
@@ -11302,6 +12582,168 @@ final class WorkbenchStore: ObservableObject {
         case .invalidPatch:
             .error
         }
+    }
+
+    private static func exportPayload(
+        from asset: ResourceAssetRowViewState
+    ) -> ResourceReadinessAssetExportPayload {
+        ResourceReadinessAssetExportPayload(
+            id: asset.id,
+            title: asset.title,
+            subtitle: asset.subtitle,
+            path: asset.path,
+            category: asset.category,
+            kind: asset.kind,
+            role: asset.role,
+            status: asset.status.rawValue,
+            availability: asset.availability,
+            availabilitySummary: asset.availabilitySummary,
+            sizeSummary: asset.sizeSummary,
+            checksumSummary: asset.checksumSummary,
+            source: exportPayload(from: asset.source),
+            tags: asset.tags,
+            facts: asset.facts.map(exportPayload(from:)),
+            diagnostics: asset.diagnostics.map(exportPayload(from:)),
+            targetModule: asset.targetModule?.id,
+            targetID: asset.targetID
+        )
+    }
+
+    private static func exportPayload(
+        from editor: NDSDataResourceEditorViewState
+    ) -> ResourceReadinessNDSExportPayload {
+        ResourceReadinessNDSExportPayload(
+            recordID: editor.recordID,
+            canEdit: editor.canEdit,
+            isDirty: editor.isDirty,
+            isHiddenByFilters: editor.isHiddenByFilters,
+            sourceByteCount: editor.sourceByteCount,
+            draftByteCount: editor.draftByteCount,
+            lensSummary: editor.lensSummary,
+            canPreview: editor.canPreview,
+            canApply: editor.canApply,
+            canDiscard: editor.canDiscard,
+            blockedReason: editor.blockedReason,
+            applyBlockedReason: editor.applyBlockedReason,
+            rawSource: exportPayload(from: editor.readiness.rawSource),
+            semanticSource: exportPayload(from: editor.readiness.semanticSource),
+            draft: exportPayload(from: editor.readiness.draft),
+            mutationPlan: exportPayload(from: editor.readiness.mutationPlan),
+            blockers: editor.readiness.blockers.map(exportPayload(from:))
+        )
+    }
+
+    private static func exportPayload(
+        from facet: NDSDataResourceReadinessFacetViewState
+    ) -> ResourceReadinessFacetExportPayload {
+        ResourceReadinessFacetExportPayload(
+            title: facet.title,
+            value: facet.value,
+            detail: facet.detail,
+            status: facet.status.rawValue
+        )
+    }
+
+    private static func exportPayload(
+        from blocker: NDSDataResourceBlockerViewState
+    ) -> ResourceReadinessBlockerExportPayload {
+        ResourceReadinessBlockerExportPayload(
+            code: blocker.code,
+            title: blocker.title,
+            message: blocker.message,
+            status: blocker.status.rawValue
+        )
+    }
+
+    private static func exportPayload(
+        from fact: Fact
+    ) -> ResourceReadinessFactExportPayload {
+        ResourceReadinessFactExportPayload(label: fact.label, value: fact.value)
+    }
+
+    private static func exportPayload(
+        from diagnostic: IndexedDiagnosticRow
+    ) -> ResourceReadinessDiagnosticExportPayload {
+        ResourceReadinessDiagnosticExportPayload(
+            title: diagnostic.title,
+            message: diagnostic.message,
+            severity: diagnostic.severity.rawValue,
+            source: exportPayload(from: diagnostic.source)
+        )
+    }
+
+    private static func exportPayload(
+        from source: SourceLocation
+    ) -> ResourceReadinessSourceExportPayload {
+        ResourceReadinessSourceExportPayload(
+            path: source.path,
+            symbol: source.symbol,
+            line: source.line
+        )
+    }
+
+    private static func shipPreviewDigestExportPayload(
+        title: String,
+        subtitle: String,
+        status: ValidationState,
+        project: IndexedProjectSummary,
+        rows: [ShipPreviewDigestRow]
+    ) -> ShipPreviewDigestExportPayload {
+        ShipPreviewDigestExportPayload(
+            title: title,
+            subtitle: subtitle,
+            status: status.rawValue,
+            projectTitle: project.title,
+            rootPath: project.rootPath,
+            profile: project.profile,
+            rows: rows.map {
+                ShipPreviewDigestRowExportPayload(
+                    id: $0.id,
+                    area: $0.area.rawValue,
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    detail: $0.detail,
+                    status: $0.status.rawValue,
+                    sourcePath: $0.source.path,
+                    sourceSymbol: $0.source.symbol,
+                    sourceLine: $0.source.line,
+                    targetTab: $0.targetTab.rawValue,
+                    targetRowID: $0.targetRowID,
+                    tags: $0.tags
+                )
+            }
+        )
+    }
+
+    private static func shipPreviewDigestJSONPayload(
+        from payload: ShipPreviewDigestExportPayload
+    ) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return json
+    }
+
+    private static func shipPreviewDigestMarkdownPayload(
+        from payload: ShipPreviewDigestExportPayload
+    ) -> String {
+        var lines: [String] = [
+            "# \(payload.title)",
+            "",
+            "- Project: \(payload.projectTitle)",
+            "- Root: \(payload.rootPath)",
+            "- Profile: \(payload.profile)",
+            "- Status: \(payload.status)",
+            "",
+        ]
+        for row in payload.rows {
+            lines.append("- \(row.title) [\(row.status)]: \(row.subtitle) - \(row.detail)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func exportPayload(

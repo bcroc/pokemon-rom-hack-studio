@@ -1464,6 +1464,184 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/patches/wrong-cleanroom.gba").path))
     }
 
+    func testPatchApplyExportAuditReportsReadyForCompatibleBPSAndIPSWithoutWritingArtifacts() throws {
+        let bps = try makePatchApplyExportAuditFixture(patchExtension: "bps")
+        let beforeBPSFiles = try recursiveRelativeFiles(in: bps.root)
+
+        let bpsAudit = try PatchManifestBuilder.applyExportAudit(
+            patchPath: bps.patch.path,
+            projectPath: bps.root.path,
+            baseROMPath: bps.baseROM.path
+        )
+
+        XCTAssertEqual(bpsAudit.schemaVersion, 1)
+        XCTAssertTrue(bpsAudit.isReadOnly)
+        XCTAssertEqual(bpsAudit.status, .ready)
+        XCTAssertEqual(bpsAudit.projectRoot, bps.root.path)
+        XCTAssertEqual(bpsAudit.patchFormat, .bps)
+        XCTAssertEqual(bpsAudit.compatibilityStatus, .compatible)
+        XCTAssertEqual(bpsAudit.selectedBaseROM?.matchedCandidateRelativePath, "rom.sha1")
+        XCTAssertTrue(bpsAudit.plannedOutputPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba"))
+        XCTAssertTrue(bpsAudit.plannedManifestPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba.manifest.json"))
+        XCTAssertFalse(bpsAudit.overwriteRequested)
+        XCTAssertFalse(bpsAudit.outputExists)
+        XCTAssertFalse(bpsAudit.backupWillBeCreated)
+        XCTAssertNil(bpsAudit.backupPathPattern)
+        XCTAssertEqual(bpsAudit.headerPolicy.shouldRewriteHeader, false)
+        XCTAssertTrue(bpsAudit.checksumPolicy.contains("BPS-first policy"))
+        XCTAssertTrue(bpsAudit.applyExportState.canApply)
+        XCTAssertTrue(bpsAudit.applyExportState.canExport)
+        XCTAssertTrue(bpsAudit.blockedActions.contains("Patched ROM writes"))
+        XCTAssertTrue(bpsAudit.diagnostics.contains { $0.code == "PATCH_APPLY_EXPORT_AUDIT_READ_ONLY" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: bps.root), beforeBPSFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bps.root.appendingPathComponent(".pokemonhackstudio").path))
+
+        let ips = try makePatchApplyExportAuditFixture(patchExtension: "ips")
+        let beforeIPSFiles = try recursiveRelativeFiles(in: ips.root)
+
+        let ipsAudit = try PatchManifestBuilder.applyExportAudit(
+            patchPath: ips.patch.path,
+            projectPath: ips.root.path,
+            baseROMPath: ips.baseROM.path
+        )
+
+        XCTAssertEqual(ipsAudit.status, .ready)
+        XCTAssertEqual(ipsAudit.patchFormat, .ips)
+        XCTAssertTrue(ipsAudit.checksumPolicy.contains("IPS compatibility policy"))
+        XCTAssertTrue(ipsAudit.applyExportState.canExport)
+        XCTAssertEqual(try recursiveRelativeFiles(in: ips.root), beforeIPSFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ips.root.appendingPathComponent(".pokemonhackstudio").path))
+    }
+
+    func testPatchApplyExportAuditReportsOverwriteBackupPostureWithoutCreatingBackup() throws {
+        let fixture = try makePatchApplyExportAuditFixture(patchExtension: "bps")
+        let outputURL = fixture.root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        try write(Data("existing-output".utf8), to: outputURL)
+        let beforeFiles = try recursiveRelativeFiles(in: fixture.root)
+
+        let blocked = try PatchManifestBuilder.applyExportAudit(
+            patchPath: fixture.patch.path,
+            projectPath: fixture.root.path,
+            baseROMPath: fixture.baseROM.path
+        )
+
+        XCTAssertEqual(blocked.status, .blocked)
+        XCTAssertTrue(blocked.outputExists)
+        XCTAssertFalse(blocked.overwriteRequested)
+        XCTAssertFalse(blocked.backupWillBeCreated)
+        XCTAssertNil(blocked.backupPathPattern)
+        XCTAssertFalse(blocked.applyExportState.canExport)
+        XCTAssertTrue(blocked.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_EXISTS" })
+        XCTAssertEqual(try Data(contentsOf: outputURL), Data("existing-output".utf8))
+
+        let overwrite = try PatchManifestBuilder.applyExportAudit(
+            patchPath: fixture.patch.path,
+            projectPath: fixture.root.path,
+            baseROMPath: fixture.baseROM.path,
+            overwrite: true
+        )
+
+        XCTAssertEqual(overwrite.status, .ready)
+        XCTAssertTrue(overwrite.outputExists)
+        XCTAssertTrue(overwrite.overwriteRequested)
+        XCTAssertTrue(overwrite.backupWillBeCreated)
+        XCTAssertEqual(overwrite.backupPathPattern, ".pokemonhackstudio/backups/<timestamp-token>/patches/pokeemerald-cleanroom.gba")
+        XCTAssertTrue(overwrite.applyExportState.canExport)
+        XCTAssertEqual(try recursiveRelativeFiles(in: fixture.root), beforeFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".pokemonhackstudio/backups").path))
+    }
+
+    func testPatchApplyExportAuditBlocksMismatchUnsupportedHeaderPolicyAndUnsafePaths() throws {
+        let mismatch = try makePatchApplyExportAuditFixture(patchExtension: "bps")
+        let wrongBaseROM = mismatch.root.appendingPathComponent("wrong.gba")
+        try write(Data("wrong".utf8), to: wrongBaseROM)
+        let beforeMismatchFiles = try recursiveRelativeFiles(in: mismatch.root)
+
+        let mismatchAudit = try PatchManifestBuilder.applyExportAudit(
+            patchPath: mismatch.patch.path,
+            projectPath: mismatch.root.path,
+            baseROMPath: wrongBaseROM.path
+        )
+
+        XCTAssertEqual(mismatchAudit.status, .blocked)
+        XCTAssertEqual(mismatchAudit.compatibilityStatus, .baseROMMismatch)
+        XCTAssertTrue(mismatchAudit.diagnostics.contains { $0.code == "PATCH_EXPORT_BASE_ROM_NOT_COMPATIBLE" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: mismatch.root), beforeMismatchFiles)
+
+        let unsupported = try makePatchApplyExportAuditFixture(patchExtension: "ups")
+        let unsupportedAudit = try PatchManifestBuilder.applyExportAudit(
+            patchPath: unsupported.patch.path,
+            projectPath: unsupported.root.path,
+            baseROMPath: unsupported.baseROM.path
+        )
+
+        XCTAssertEqual(unsupportedAudit.status, .blocked)
+        XCTAssertEqual(unsupportedAudit.patchFormat, .ups)
+        XCTAssertTrue(unsupportedAudit.diagnostics.contains { $0.code == "PATCH_EXPORT_FORMAT_UNSUPPORTED" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unsupported.root.appendingPathComponent(".pokemonhackstudio").path))
+
+        let header = try makePatchApplyExportAuditFixture(patchExtension: "bps")
+        let report = try PatchManifestBuilder.build(
+            patchPath: header.patch.path,
+            projectPath: header.root.path,
+            baseROMPath: header.baseROM.path
+        )
+        let rewriteHeaderPolicy = PatchArtifactHeaderPolicy(
+            mode: "rewrite-header",
+            detail: "Synthetic test policy that must stay blocked.",
+            shouldRewriteHeader: true
+        )
+        let originalPlan = report.artifactPlan
+        let rewrittenPlan = PatchArtifactPlan(
+            isPreviewOnly: originalPlan.isPreviewOnly,
+            selectedBaseROMPath: originalPlan.selectedBaseROMPath,
+            patchFormat: originalPlan.patchFormat,
+            outputPath: originalPlan.outputPath,
+            absoluteOutputPath: originalPlan.absoluteOutputPath,
+            checksumExpectations: originalPlan.checksumExpectations,
+            headerPolicy: rewriteHeaderPolicy,
+            expectedPatchedROMName: originalPlan.expectedPatchedROMName,
+            mgbaLaunchPreview: originalPlan.mgbaLaunchPreview,
+            binaryDiffPreview: originalPlan.binaryDiffPreview,
+            diagnostics: originalPlan.diagnostics
+        )
+        let rewrittenReport = PatchManifestReport(
+            patch: report.patch,
+            projectRoot: report.projectRoot,
+            baseROMCandidates: report.baseROMCandidates,
+            selectedBaseROM: report.selectedBaseROM,
+            compatibilityStatus: report.compatibilityStatus,
+            artifactPlan: rewrittenPlan,
+            dryRunPlans: report.dryRunPlans,
+            diagnostics: report.diagnostics
+        )
+        let headerAudit = PatchManifestBuilder.applyExportAudit(
+            report: rewrittenReport,
+            patchPath: header.patch.path
+        )
+
+        XCTAssertEqual(headerAudit.status, .blocked)
+        XCTAssertTrue(headerAudit.headerPolicy.shouldRewriteHeader)
+        XCTAssertTrue(headerAudit.diagnostics.contains { $0.code == "PATCH_EXPORT_HEADER_REWRITE_BLOCKED" })
+
+        let unsafe = try makePatchApplyExportAuditFixture(patchExtension: "bps")
+        let outside = try makeTemporaryRoot()
+        try FileManager.default.createSymbolicLink(
+            at: unsafe.root.appendingPathComponent(".pokemonhackstudio"),
+            withDestinationURL: outside
+        )
+
+        let unsafeAudit = try PatchManifestBuilder.applyExportAudit(
+            patchPath: unsafe.patch.path,
+            projectPath: unsafe.root.path,
+            baseROMPath: unsafe.baseROM.path
+        )
+
+        XCTAssertEqual(unsafeAudit.status, .blocked)
+        XCTAssertTrue(unsafeAudit.diagnostics.contains { $0.code == "PATCH_EXPORT_OUTPUT_PATH_SYMLINK_OUTSIDE_ROOT" })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("patches/pokeemerald-cleanroom.gba").path))
+    }
+
     func testPatchManifestReportsSelectedBaseROMMismatch() throws {
         let root = try makeTemporaryRoot()
         try write("POKEMON EMER\nBPEE\n", to: root.appendingPathComponent("Makefile"))
@@ -1868,6 +2046,36 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
         return root
+    }
+
+    private func makePatchApplyExportAuditFixture(
+        patchExtension: String
+    ) throws -> (root: URL, baseROM: URL, patch: URL, baseData: Data, targetData: Data) {
+        let root = try makePatchCreationProjectRoot()
+        let baseData = Data("abc".utf8)
+        let targetData = Data("abd".utf8)
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let patch = root.appendingPathComponent("cleanroom.\(patchExtension)")
+        try write(baseData, to: baseROM)
+        try write("\(pokemonHackSHA1Hex(baseData))  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+
+        switch patchExtension {
+        case "bps":
+            try write(makeBPSPatch(source: baseData, target: targetData), to: patch)
+        case "ips":
+            try write(
+                Data("PATCH".utf8)
+                    + Data([0x00, 0x00, 0x01, 0x00, 0x01, 0x64])
+                    + Data("EOF".utf8),
+                to: patch
+            )
+        case "ups":
+            try write(Data("UPS1".utf8) + Data([0x85, 0x86]), to: patch)
+        default:
+            try write(Data("APS1".utf8), to: patch)
+        }
+
+        return (root, baseROM, patch, baseData, targetData)
     }
 
     private func makeGenVManualBuildReadinessRoot() throws -> URL {

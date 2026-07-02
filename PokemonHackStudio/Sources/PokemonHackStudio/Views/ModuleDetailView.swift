@@ -91,7 +91,12 @@ struct ModuleDetailView: View {
                 onClearNDSDataRowOperations: store.clearSelectedNDSDataRowOperations,
                 onPreviewNDSDataMutationPlan: store.previewSelectedNDSDataMutationPlan,
                 onApplyNDSDataMutationPlan: store.applySelectedNDSDataMutationPlan,
-                onDiscardNDSDataEdits: store.discardNDSDataEdits
+                onDiscardNDSDataEdits: store.discardNDSDataEdits,
+                onFocusNDSMapReviewTarget: { target in
+                    _ = store.focusNDSMapReviewTarget(target)
+                },
+                onCopyNDSMapReviewPacketJSON: store.copySelectedNDSMapReviewPacketJSONToPasteboard,
+                onCopyNDSMapReviewPacketMarkdown: store.copySelectedNDSMapReviewPacketMarkdownToPasteboard
             )
             .onAppear {
                 store.loadSelectedROMInspectorIfNeeded()

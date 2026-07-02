@@ -50,6 +50,7 @@ This directory records validation tiers and closeout proof outside the main plan
 | `PHS-T112V` | [Gen V Source Data Domain Inventory Facts](2026-07-01-phs-t112v-genv-source-data-domain-inventory-facts.md) | Focused catalog/CLI JSON, app Resources selection, `make validate-nds`, and `git diff --check` passed for preview-only Gen V Pokemon/move/item/trainer source-data domain facts after row-ID collision with existing `PHS-T112U`. |
 | `PHS-T112U` | [Gen V Related-Row Readiness](2026-07-01-phs-t112u-genv-related-row-readiness.md) | Focused catalog/CLI proof and `make validate-nds` passed for preview-only Gen V encounter/fielddata/message related-row readiness facts. |
 | `PHS-T112T` | [Gen V Message Metadata Facts](2026-07-01-phs-t112t-genv-message-metadata-facts.md) | Focused catalog/CLI proof and `make validate-nds` passed for preview-only Gen V `files/msgdata/**` byte, line-count, numeric-bank-hint, and `noDecodedPreview` facts. |
+| `PHS-T98AW` | [HGSS Resources Encounter JSON Row Operations](2026-07-02-phs-t98aw-hgss-resources-encounter-json-row-operations.md) | Focused HGSS Core/CLI regression and app-hosted Resources proof passed for HeartGold/SoulSilver encounter JSON object-array controls over the existing planner/apply gate. |
 | `PHS-T98AT` | [Resources Encounter JSON Row Operations](2026-07-01-phs-t98at-resources-encounter-json-row-operations.md) | Focused core/CLI regression and app-hosted Resources proof passed for Platinum encounter JSON object-array row-operation controls over the existing planner/apply gate. |
 | `PHS-T98AS` | [HGSS Encounter JSON Row Operations](2026-07-01-phs-t98as-hgss-encounter-json-row-operations.md) | Focused core/CLI proof, `make validate-nds`, and `git diff --check` passed for recursive HeartGold/SoulSilver encounter JSON object-row operations through the existing NDS mutation gate. |
 | `PHS-T98AR` | [Platinum Encounter JSON Row Operations](2026-07-01-phs-t98ar-platinum-encounter-json-row-operations.md) | Focused core/CLI proof, semantic Platinum encounter regression, `make validate-nds`, and `git diff --check` passed for direct-child Platinum encounter JSON object-row operations through the existing NDS mutation gate. |
@@ -76,6 +77,12 @@ This directory records validation tiers and closeout proof outside the main plan
 | `PHS-T57P` | [Ruby/Sapphire Move Description Text Editing](2026-06-29-phs-t57p-ruby-move-descriptions.md) | Focused SwiftPM rerun passed on 2026-06-29 19:11:06 America/Vancouver; 2 selected tests, 0 failures. |
 | `PHS-T57G` | [Cry/Audio Compatibility Reporting](2026-06-29-phs-t57g-cry-audio-compatibility.md) | Focused compatibility/CLI proof passed for preview-only cry/audio candidate source facts and missing-source blockers while conversion, generated audio writes, playback, ROM export, binary mutation, and source apply stayed disabled. |
 
+## Scout Proof Notes
+
+| Topic | Proof | Outcome |
+| --- | --- | --- |
+| Compatibility scout stop refresh | [Compatibility Scout Stop Refresh](2026-07-02-compatibility-scout-stop-refresh.md) | Docs-only refresh confirmed broken Ruby/Sapphire, Expansion, and Modern Emerald reference aliases, binaryROM-only local Ruby/Sapphire surfaces, and no source-backed table, asset, or missing-field seam to justify implementation. |
+
 ## Tiers
 
 | Tier | Command | Purpose | Skips And Blockers |
@@ -86,6 +93,22 @@ This directory records validation tiers and closeout proof outside the main plan
 | Central NDS References | `make validate-nds-strict` | NDS catalog, semantic, and CLI proof with required central clean-room references. | Fails when central reference roots are unavailable. |
 | App GUI Smoke | `make validate-gui-smoke` | App-hosted smoke via `script/build_and_run.sh test`. | Requires local Xcode/macOS app test environment. |
 | Release Candidate | `make validate-release-candidate` | Combined scripts, core, NDS, app-hosted, and app verify ladder before packaging. | Local fixture/reference availability remains tier-specific. |
+
+## NDS Validate Coverage Skips
+
+These entries are intentional gaps checked by `script/check_validation_docs.sh`; remove a row when the command or test is promoted into `make validate-nds`.
+
+| Skip ID | Reason |
+| --- | --- |
+| `pokemonhack-cli/nds-inspect` | Inspection-only CLI path currently covered outside the NDS source-tree semantic smoke tier. |
+| `pokemonhack-cli/nds-files` | Inspection-only CLI path currently covered outside the NDS source-tree semantic smoke tier. |
+| `pokemonhack-cli/narc-inspect` | Container inspection CLI path currently covered outside the NDS source-tree semantic smoke tier. |
+| `pokemonhack-cli/nds-data-edit-plan` | Raw draft edit command is intentionally outside the semantic and row-operation smoke until promoted by a focused row. |
+| `pokemonhack-cli/nds-data-edit-apply` | Raw draft edit command is intentionally outside the semantic and row-operation smoke until promoted by a focused row. |
+| `PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyJSONFields` | Legacy broad multi-family semantic CLI regression remains outside the focused `make validate-nds` filter list. |
+| `PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyDiamondPearlPersonalJSONFields` | Diamond/Pearl personal JSON semantic regression has not been promoted into the focused NDS smoke tier yet. |
+| `PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyDiamondPearlTrainerJSONFields` | Diamond/Pearl trainer JSON semantic regression has not been promoted into the focused NDS smoke tier yet. |
+| `PokemonHackCLITests/testNDSDataSemanticCommandsPlanAndApplyDiamondPearlItemMappingCScalars` | Diamond/Pearl item mapping C-anchor regression has not been promoted into the focused NDS smoke tier yet. |
 
 ## Policy
 

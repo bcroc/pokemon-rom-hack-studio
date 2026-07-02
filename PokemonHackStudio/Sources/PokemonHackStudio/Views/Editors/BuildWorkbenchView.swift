@@ -24,6 +24,9 @@ struct BuildWorkbenchView: View {
         VStack(alignment: .leading, spacing: 18) {
             header(project: project, report: report)
             metrics(report: report)
+            if let digest = store.selectedShipPreviewDigest {
+                shipPreviewDigestSection(digest)
+            }
 
             HStack(spacing: 12) {
                 Picker("Report", selection: $store.selectedBuildWorkbenchTab) {
@@ -82,6 +85,43 @@ struct BuildWorkbenchView: View {
         }
     }
 
+    private func shipPreviewDigestSection(_ digest: ShipPreviewDigestViewState) -> some View {
+        EditorSection(title: "Ship Preview Digest") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            StatusPill(state: digest.status)
+                            Text(digest.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("Read-only snapshot from loaded app state. It does not re-check, build, patch, playtest, export, or apply binary mutations.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyShipPreviewDigestJSONToPasteboard()
+                    }
+                    Button("Copy Markdown", systemImage: "text.page") {
+                        store.copyShipPreviewDigestMarkdownToPasteboard()
+                    }
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 10)], spacing: 10) {
+                    ForEach(digest.rows) { row in
+                        ShipPreviewDigestRowView(row: row) {
+                            store.openShipPreviewDigestRow(row)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func metrics(report: BuildPatchPlaytestReportViewState) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
             MetricCard(title: "Build Readiness", value: "\(report.buildTargets.count)", detail: "Preview commands")
@@ -109,6 +149,10 @@ struct BuildWorkbenchView: View {
 
             if report.isNDS {
                 ndsToolchainOverview(report: report)
+                let bridgeRows = store.filteredGenVResourcesToBuildBridgeRows
+                if !bridgeRows.isEmpty {
+                    genVResourcesToBuildBridgeSection(rows: bridgeRows)
+                }
             }
 
             mapRenderAuditSection(report: store.selectedMapRenderAuditReport, rows: store.filteredMapRenderAuditRows)
@@ -212,6 +256,11 @@ struct BuildWorkbenchView: View {
                 if let result = store.selectedBuildRunResult {
                     BuildRunResultView(result: result)
                 }
+            }
+        }
+        .onAppear {
+            if report.isNDS {
+                store.loadSelectedAssetCatalogIfNeeded()
             }
         }
     }
@@ -343,6 +392,7 @@ struct BuildWorkbenchView: View {
             )
             patchArtifactLibrarySection(rows: store.filteredPatchArtifactLibraryRows)
             patchDistributionReadinessSection(rows: store.filteredPatchDistributionReadinessRows)
+            patchApplyExportAuditSection(rows: store.filteredPatchApplyExportAuditRows)
             binaryROMMutationDryRunSection(
                 rows: store.filteredBinaryROMMutationDryRunRows,
                 auditRows: store.filteredBinaryROMMutationApplyAuditRows,
@@ -450,6 +500,20 @@ struct BuildWorkbenchView: View {
                         store.loadSelectedBinaryROMMutationDryRunManifestFromJSON()
                     }
                     .disabled(store.selectedBinaryROMMutationDryRunManifestPath.isEmpty)
+                    Button("Copy Audit JSON", systemImage: "doc.on.doc") {
+                        store.copyBinaryROMMutationApplyAuditJSONToPasteboard()
+                    }
+                    .disabled(store.selectedBinaryROMMutationApplyAuditReport == nil)
+                }
+
+                if !auditRows.isEmpty {
+                    Divider()
+                    ForEach(auditRows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -485,16 +549,6 @@ struct BuildWorkbenchView: View {
                     }
 
                     ForEach(rows.filter { $0.section == .diagnostics }) { row in
-                        BuildReportRowView(
-                            row: row,
-                            copyAction: store.copyBuildReportRowActionToPasteboard
-                        )
-                    }
-                }
-
-                if !auditRows.isEmpty {
-                    Divider()
-                    ForEach(auditRows) { row in
                         BuildReportRowView(
                             row: row,
                             copyAction: store.copyBuildReportRowActionToPasteboard
@@ -625,6 +679,43 @@ struct BuildWorkbenchView: View {
                         "No Readiness Packet",
                         systemImage: "shippingbox",
                         description: Text("Select a base ROM and explicit BPS artifact, then refresh.")
+                    )
+                } else {
+                    ForEach(rows) { row in
+                        BuildReportRowView(
+                            row: row,
+                            copyAction: store.copyBuildReportRowActionToPasteboard
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func patchApplyExportAuditSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Patch Apply/Export Audit") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    StatusPill(state: store.patchApplyExportAuditLoadStatus.validationState)
+                    Text(store.patchApplyExportAuditLoadStatus.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        store.loadSelectedPatchApplyExportAudit()
+                    }
+                    .disabled(store.selectedPatchPath.isEmpty || store.selectedBaseROMPath.isEmpty)
+                    Button("Copy JSON", systemImage: "doc.on.doc") {
+                        store.copyPatchApplyExportAuditJSONToPasteboard()
+                    }
+                    .disabled(store.selectedPatchApplyExportAuditReport == nil)
+                }
+
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No Apply/Export Audit",
+                        systemImage: "doc.text.magnifyingglass",
+                        description: Text("Select a patch and base ROM, then refresh.")
                     )
                 } else {
                     ForEach(rows) { row in
@@ -920,6 +1011,32 @@ struct BuildWorkbenchView: View {
         }
     }
 
+    private func genVResourcesToBuildBridgeSection(rows: [BuildReportRow]) -> some View {
+        EditorSection(title: "Gen V Resources-To-Build Bridge") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Button("Selected Resource", systemImage: "arrow.right.circle") {
+                        store.focusSelectedGenVResourcesToBuildBridgeAsset()
+                    }
+                    Button("Freshness Packet", systemImage: "doc.text.magnifyingglass") {
+                        store.focusGenVGeneratedOutputFreshnessPacketForBridge()
+                    }
+                    Button("Build Readiness", systemImage: "hammer") {
+                        store.focusGenVManualBuildReadinessForBridge()
+                    }
+                    Spacer()
+                }
+
+                ForEach(rows) { row in
+                    BuildReportRowView(
+                        row: row,
+                        copyAction: store.copyBuildReportRowActionToPasteboard
+                    )
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func workflowButton(_ action: BuildWorkflowActionViewState) -> some View {
         if action.id == "open-playtest" {
@@ -1069,6 +1186,43 @@ struct BuildWorkbenchView: View {
                 }
             }
         }
+    }
+}
+
+private struct ShipPreviewDigestRowView: View {
+    let row: ShipPreviewDigestRow
+    let open: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: row.area.systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(row.title)
+                    .font(.headline)
+                Text(row.subtitle)
+                    .foregroundStyle(.secondary)
+                Text(row.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                SourceLocationView(source: row.source)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 8) {
+                StatusPill(state: row.status)
+                Button("Open", systemImage: "arrow.right.circle") {
+                    open()
+                }
+                .help("Open \(row.area.title) in \(row.targetTab.title)")
+            }
+        }
+        .padding(12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

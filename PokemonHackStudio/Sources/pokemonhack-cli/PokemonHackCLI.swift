@@ -399,6 +399,8 @@ struct PokemonHackCLI {
             return try patchCreatePreview(arguments: Array(arguments.dropFirst()))
         case "patch-create":
             return try patchCreate(arguments: Array(arguments.dropFirst()))
+        case "patch-apply-export-audit":
+            return try patchApplyExportAudit(arguments: Array(arguments.dropFirst()))
         case "patch-apply-export":
             return try patchApplyExport(arguments: Array(arguments.dropFirst()))
         case "rom-diff-preview":
@@ -424,6 +426,9 @@ struct PokemonHackCLI {
         guard let command = arguments.first else { return 0 }
         switch command {
         case "patch-apply-export", "patch-create", "rom-mutation-audit", "rom-mutation-apply":
+            guard let object = jsonObject(output) else { return 0 }
+            return object["status"] as? String == "blocked" ? 1 : 0
+        case "patch-apply-export-audit":
             guard let object = jsonObject(output) else { return 0 }
             return object["status"] as? String == "blocked" ? 1 : 0
         case "map-render-audit":
@@ -1536,6 +1541,59 @@ struct PokemonHackCLI {
         )
     }
 
+    private static func patchApplyExportAudit(arguments: [String]) throws -> String {
+        guard arguments.last == "--json" else {
+            throw CLIError.usage
+        }
+
+        var positionals: [String] = []
+        var baseROMPath: String?
+        var overwrite = false
+        var index = 0
+        let payload = Array(arguments.dropLast())
+        while index < payload.count {
+            let argument = payload[index]
+            if argument == "--base-rom" {
+                let nextIndex = index + 1
+                guard nextIndex < payload.count else {
+                    throw CLIError.usage
+                }
+                baseROMPath = payload[nextIndex]
+                index += 2
+            } else if argument == "--overwrite" {
+                overwrite = true
+                index += 1
+            } else {
+                positionals.append(argument)
+                index += 1
+            }
+        }
+
+        guard let baseROMPath else {
+            throw CLIError.usage
+        }
+        if positionals.count == 1, let patch = positionals.first {
+            return try encode(
+                PatchManifestBuilder.applyExportAudit(
+                    patchPath: patch,
+                    baseROMPath: baseROMPath,
+                    overwrite: overwrite
+                )
+            )
+        }
+        guard positionals.count == 2, let project = positionals.first, let patch = positionals.dropFirst().first else {
+            throw CLIError.usage
+        }
+        return try encode(
+            PatchManifestBuilder.applyExportAudit(
+                patchPath: patch,
+                projectPath: project,
+                baseROMPath: baseROMPath,
+                overwrite: overwrite
+            )
+        )
+    }
+
     private static func patchApplyExport(arguments: [String]) throws -> String {
         guard arguments.last == "--json" else {
             throw CLIError.usage
@@ -1749,6 +1807,7 @@ struct PokemonHackCLI {
         CLICommandMetadata(name: "patch-artifact-plan", usage: "patch-artifact-plan <patch> --base-rom <path> --json | patch-artifact-plan <project> <patch> --base-rom <path> --json", summary: "Preview patch output artifacts without writing them."),
         CLICommandMetadata(name: "patch-create-preview", usage: "patch-create-preview <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Preview BPS patch creation metadata from a selected base ROM to an existing built output without writing patch files."),
         CLICommandMetadata(name: "patch-create", usage: "patch-create <project> --base-rom <path> [--target <build-target-id>] --json", summary: "Explicitly create an ignored BPS patch and manifest from a selected base ROM to an existing built output."),
+        CLICommandMetadata(name: "patch-apply-export-audit", usage: "patch-apply-export-audit <patch> --base-rom <path> [--overwrite] --json | patch-apply-export-audit <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Audit selected patch apply/export readiness without applying patches or writing ROM, backup, or manifest artifacts."),
         CLICommandMetadata(name: "patch-apply-export", usage: "patch-apply-export <patch> --base-rom <path> [--overwrite] --json | patch-apply-export <project> <patch> --base-rom <path> [--overwrite] --json", summary: "Explicitly apply a supported patch and export an ignored ROM artifact with checksum and manifest proof."),
         CLICommandMetadata(name: "rom-diff-preview", usage: "rom-diff-preview <patch> --base-rom <rom> --json", summary: "Preview binary patch diff spans."),
         CLICommandMetadata(name: "rom-mutation-manifest", usage: "rom-mutation-manifest <rom-or-source-path> [--workspace-root <path>] [--expect-sha1 <sha1>] [--replace <offset:length:hex>] [--repoint <pointer-offset:new-target-offset>] [--allocate <byte-count[:alignment]>] --json", summary: "Emit a dry-run-only future binary ROM mutation manifest with canApply=false."),

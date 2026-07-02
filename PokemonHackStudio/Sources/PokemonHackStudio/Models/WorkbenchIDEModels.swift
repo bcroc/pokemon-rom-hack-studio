@@ -183,6 +183,9 @@ enum WorkbenchCommandAction: Hashable {
     case copyValidationCommand(String)
     case copyReportJSON
     case copyMapRenderAuditJSON
+    case copyPatchDistributionReadinessJSON
+    case copyBinaryROMMutationApplyAuditJSON
+    case copySelectedResourceReadinessPacketJSON
 }
 
 struct WorkbenchCommandAvailability: Equatable {

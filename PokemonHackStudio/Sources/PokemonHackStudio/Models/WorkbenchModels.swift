@@ -175,6 +175,47 @@ enum BuildWorkbenchTab: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum ShipPreviewDigestArea: String, CaseIterable, Identifiable, Hashable {
+    case validation
+    case buildOutputs
+    case patchCreation
+    case patchLibrary
+    case patchDistribution
+    case mapRenderAudit
+    case playtest
+    case binaryMutationAudit
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .validation: "Validation"
+        case .buildOutputs: "Build Outputs"
+        case .patchCreation: "Patch Creation"
+        case .patchLibrary: "Patch Library"
+        case .patchDistribution: "Patch Distribution"
+        case .mapRenderAudit: "Map Render Audit"
+        case .playtest: "Playtest"
+        case .binaryMutationAudit: "Binary Mutation Audit"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .validation: "checklist"
+        case .buildOutputs: "archivebox"
+        case .patchCreation: "doc.badge.plus"
+        case .patchLibrary: "books.vertical"
+        case .patchDistribution: "shippingbox"
+        case .mapRenderAudit: "map"
+        case .playtest: "gamecontroller"
+        case .binaryMutationAudit: "memorychip"
+        }
+    }
+}
+
 enum ResourceLibraryMode: String, CaseIterable, Identifiable, Hashable {
     case assets
     case entries
@@ -830,6 +871,32 @@ struct BuildWorkflowActionViewState: Identifiable, Equatable {
     let disabledReason: String?
 }
 
+struct ShipPreviewDigestRow: Identifiable {
+    let id: String
+    let area: ShipPreviewDigestArea
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let source: SourceLocation
+    let targetTab: BuildWorkbenchTab
+    let targetRowID: String?
+    let tags: [String]
+}
+
+struct ShipPreviewDigestViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let status: ValidationState
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let rows: [ShipPreviewDigestRow]
+    let jsonPayload: String
+    let markdownPayload: String
+}
+
 enum BuildReportSection: String, CaseIterable, Identifiable, Hashable {
     case buildTargets = "Build Targets"
     case generatedArtifacts = "Generated Artifacts"
@@ -1067,6 +1134,37 @@ enum PatchDistributionReadinessLoadStatus: Equatable {
     }
 }
 
+enum PatchApplyExportAuditLoadStatus: Equatable {
+    case idle
+    case loading
+    case loaded(String, ValidationState)
+    case failed(String)
+
+    var label: String {
+        switch self {
+        case .idle:
+            "Patch apply/export audit not checked"
+        case .loading:
+            "Checking patch apply/export audit"
+        case let .loaded(label, _):
+            "Patch apply/export audit loaded: \(label)"
+        case let .failed(message):
+            "Patch apply/export audit failed: \(message)"
+        }
+    }
+
+    var validationState: ValidationState {
+        switch self {
+        case .failed:
+            .warning
+        case let .loaded(_, status):
+            status
+        case .idle, .loading:
+            .valid
+        }
+    }
+}
+
 enum BinaryROMMutationDryRunLoadStatus: Equatable {
     case idle
     case loading
@@ -1191,6 +1289,18 @@ struct PatchDistributionReadinessReportViewState: Identifiable {
     let status: ValidationState
     let statusLabel: String
     let selectedPatchPath: String?
+    let diagnostics: [IndexedDiagnosticRow]
+    let rows: [BuildReportRow]
+}
+
+struct PatchApplyExportAuditReportViewState: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let detail: String
+    let status: ValidationState
+    let statusLabel: String
+    let plannedOutputPath: String
     let diagnostics: [IndexedDiagnosticRow]
     let rows: [BuildReportRow]
 }
@@ -1639,6 +1749,7 @@ struct BuildReportRowAction: Identifiable {
     enum Kind: String, Equatable {
         case copyCommand = "Copy Command"
         case copyPath = "Copy Path"
+        case copyValue = "Copy Value"
         case rerunGuidance = "Rerun Guidance"
     }
 
@@ -2679,6 +2790,7 @@ struct NDSDataResourceEditorViewState {
     let text: String
     let semanticFields: [NDSDataSemanticFieldViewState]
     let rowOperations: NDSDataResourceRowOperationEditorViewState?
+    let mapReviewBridge: NDSDataMapReviewBridgeViewState?
     let readiness: NDSDataResourceReadinessViewState
     let canEdit: Bool
     let isDirty: Bool
@@ -2692,6 +2804,84 @@ struct NDSDataResourceEditorViewState {
     let canDiscard: Bool
     let blockedReason: String?
     let applyBlockedReason: String?
+}
+
+struct NDSDataMapReviewBridgeViewState {
+    let projectTitle: String
+    let rootPath: String
+    let profile: String
+    let family: String
+    let recordID: String
+    let relativePath: String
+    let posture: String
+    let component: String
+    let sourceRole: String
+    let sourceProvenance: String
+    let readinessStatus: String
+    let readinessTitle: String
+    let readinessDetail: String
+    let rows: [NDSDataMapReviewBridgeRowViewState]
+    let targets: [NDSDataMapReviewBridgeTargetViewState]
+    let blockedActions: [String]
+    let catalogSummary: NDSDataMapReviewCatalogSummaryViewState
+    let packetRowCount: Int
+    let includedRecordCount: Int
+    let relatedRecordCount: Int
+    let blockedActionCount: Int
+    let truncatedRelatedRecordCount: Int
+
+    var packetFacts: [Fact] {
+        [
+            Fact(label: "Map Review Component", value: component),
+            Fact(label: "Map Review Posture", value: posture),
+            Fact(label: "Map Review Rows", value: "\(packetRowCount)"),
+            Fact(label: "Map Review Related", value: "\(relatedRecordCount)"),
+            Fact(label: "Map Review Included", value: "\(includedRecordCount)"),
+            Fact(label: "Map Review Blocked", value: "\(blockedActionCount)"),
+            Fact(label: "Map Review Truncated", value: "\(truncatedRelatedRecordCount)"),
+        ]
+    }
+
+    var inspectorFacts: [Fact] {
+        packetFacts + [
+            Fact(label: "Map Review Readiness", value: readinessStatus),
+            Fact(label: "Map Review Source Role", value: sourceRole),
+        ] + catalogSummary.facts
+    }
+}
+
+struct NDSDataMapReviewBridgeRowViewState: Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let detail: String?
+}
+
+struct NDSDataMapReviewBridgeTargetViewState: Identifiable {
+    let id: String
+    let recordID: String
+    let label: String
+    let domain: String
+    let relativePath: String
+    let sourceRole: String
+    let sourceProvenance: String
+    let readinessStatus: String
+    let readinessTitle: String
+    let assetID: String?
+
+    var canJump: Bool {
+        assetID != nil
+    }
+}
+
+struct NDSDataMapReviewCatalogSummaryViewState {
+    let totalPacketCount: Int
+    let componentCounts: [Fact]
+    let readinessCounts: [Fact]
+
+    var facts: [Fact] {
+        [Fact(label: "Map Review Packets", value: "\(totalPacketCount)")] + componentCounts + readinessCounts
+    }
 }
 
 struct NDSDataResourceReadinessViewState {

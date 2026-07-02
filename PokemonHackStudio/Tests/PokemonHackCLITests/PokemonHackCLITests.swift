@@ -103,6 +103,14 @@ final class PokemonHackCLITests: XCTestCase {
             0
         )
         XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["patch-apply-export-audit"], output: #"{"status":"blocked"}"#),
+            1
+        )
+        XCTAssertEqual(
+            PokemonHackCLI.exitCode(arguments: ["patch-apply-export-audit"], output: #"{"status":"ready"}"#),
+            0
+        )
+        XCTAssertEqual(
             PokemonHackCLI.exitCode(arguments: ["patch-distribution-readiness"], output: #"{"status":"blocked"}"#),
             0
         )
@@ -1040,6 +1048,70 @@ final class PokemonHackCLITests: XCTestCase {
         XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba.manifest.json"))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: outputPath)), patchedData)
         XCTAssertTrue(FileManager.default.fileExists(atPath: manifestPath))
+    }
+
+    func testPatchApplyExportAuditCommandEmitsReadOnlyJSONWithoutWritingArtifacts() throws {
+        let root = try makeEmeraldProject()
+        let patch = root.appendingPathComponent("cleanroom.ips")
+        let baseROM = root.appendingPathComponent("pokeemerald.gba")
+        let baseData = Data("abc".utf8)
+        try write("a9993e364706816aba3e25717850c26c9cd0d89d  pokeemerald.gba\n", to: root.appendingPathComponent("rom.sha1"))
+        try baseData.write(to: baseROM)
+        try (Data("PATCH".utf8) + Data([0x00, 0x00, 0x01, 0x00, 0x01, 0x64]) + Data("EOF".utf8)).write(to: patch)
+        let beforeFiles = try recursiveRelativeFiles(in: root)
+
+        let readyOutput = try PokemonHackCLI.run(arguments: ["patch-apply-export-audit", root.path, patch.path, "--base-rom", baseROM.path, "--json"])
+        let result = try decodeJSON(readyOutput)
+
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-apply-export-audit"], output: readyOutput), 0)
+        XCTAssertEqual(result["schemaVersion"] as? Int, 1)
+        XCTAssertEqual(result["isReadOnly"] as? Bool, true)
+        XCTAssertEqual(result["status"] as? String, "ready")
+        XCTAssertEqual(result["patchFormat"] as? String, "ips")
+        XCTAssertEqual(result["compatibilityStatus"] as? String, "compatible")
+        XCTAssertEqual(result["overwriteRequested"] as? Bool, false)
+        XCTAssertEqual(result["outputExists"] as? Bool, false)
+        XCTAssertEqual(result["backupWillBeCreated"] as? Bool, false)
+        XCTAssertNil(result["backupPathPattern"])
+        let outputPath = try XCTUnwrap(result["plannedOutputPath"] as? String)
+        let manifestPath = try XCTUnwrap(result["plannedManifestPath"] as? String)
+        XCTAssertTrue(outputPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba"))
+        XCTAssertTrue(manifestPath.hasSuffix(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba.manifest.json"))
+        let headerPolicy = try XCTUnwrap(result["headerPolicy"] as? [String: Any])
+        XCTAssertEqual(headerPolicy["shouldRewriteHeader"] as? Bool, false)
+        let applyExportState = try XCTUnwrap(result["applyExportState"] as? [String: Any])
+        XCTAssertEqual(applyExportState["canExport"] as? Bool, true)
+        let blockedActions = try XCTUnwrap(result["blockedActions"] as? [String])
+        XCTAssertTrue(blockedActions.contains("Patched ROM writes"))
+        let diagnostics = try XCTUnwrap(result["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(diagnostics.contains { $0["code"] as? String == "PATCH_APPLY_EXPORT_AUDIT_READ_ONLY" })
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio").path))
+
+        let existingOutputURL = root.appendingPathComponent(".pokemonhackstudio/patches/pokeemerald-cleanroom.gba")
+        try write(Data("existing-output".utf8), to: existingOutputURL)
+        let beforeBlockedFiles = try recursiveRelativeFiles(in: root)
+        let blockedOutput = try PokemonHackCLI.run(arguments: ["patch-apply-export-audit", root.path, patch.path, "--base-rom", baseROM.path, "--json"])
+        let blocked = try decodeJSON(blockedOutput)
+
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-apply-export-audit"], output: blockedOutput), 1)
+        XCTAssertEqual(blocked["status"] as? String, "blocked")
+        XCTAssertEqual(blocked["outputExists"] as? Bool, true)
+        XCTAssertEqual(blocked["backupWillBeCreated"] as? Bool, false)
+        let blockedDiagnostics = try XCTUnwrap(blocked["diagnostics"] as? [[String: Any]])
+        XCTAssertTrue(blockedDiagnostics.contains { $0["code"] as? String == "PATCH_EXPORT_OUTPUT_EXISTS" })
+
+        let overwriteOutput = try PokemonHackCLI.run(arguments: ["patch-apply-export-audit", root.path, patch.path, "--base-rom", baseROM.path, "--overwrite", "--json"])
+        let overwrite = try decodeJSON(overwriteOutput)
+
+        XCTAssertEqual(PokemonHackCLI.exitCode(arguments: ["patch-apply-export-audit"], output: overwriteOutput), 0)
+        XCTAssertEqual(overwrite["status"] as? String, "ready")
+        XCTAssertEqual(overwrite["overwriteRequested"] as? Bool, true)
+        XCTAssertEqual(overwrite["backupWillBeCreated"] as? Bool, true)
+        XCTAssertEqual(overwrite["backupPathPattern"] as? String, ".pokemonhackstudio/backups/<timestamp-token>/patches/pokeemerald-cleanroom.gba")
+        XCTAssertEqual(try recursiveRelativeFiles(in: root), beforeBlockedFiles)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".pokemonhackstudio/backups").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manifestPath))
     }
 
     func testRomDiffPreviewCommandEmitsStandaloneReadonlyPreview() throws {
@@ -4088,12 +4160,130 @@ final class PokemonHackCLITests: XCTestCase {
 
         let diamondRoot = try makeTestDiamondDecompRoot()
         let diamondPath = "files/fielddata/encountdata/sinnoh/route201.json"
-        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n", to: diamondRoot.appendingPathComponent(diamondPath))
+        let diamondRecordID = "encounters:\(diamondPath)"
+        try write(
+            "{\"rate\":20,\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true},{\"species\":\"STARLY\",\"rate\":20,\"enabled\":false}],\"swarms\":[\"DODUO\",\"NIDORAN_F\"],\"metadata\":{\"map\":\"ROUTE_201\"}}\n",
+            to: diamondRoot.appendingPathComponent(diamondPath)
+        )
+        try write("{\"slots\":[]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/empty.json"))
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30},{\"species\":\"STARLY\"}]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/mismatch.json"))
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"species\":\"STARLY\",\"rate\":30,\"enabled\":true}]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/duplicate.json"))
+        try write("rate=15\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/route202.txt"))
+        try write("ignored\n", to: diamondRoot.appendingPathComponent("files/arc/encdata_ex/encounter_slots/.knarcignore"))
+
+        let diamondRedactedPlan = try PokemonHackCLI.run(arguments: [
+            "nds-data-encounter-json-rows-plan",
+            diamondRoot.path,
+            diamondRecordID,
+            "--array",
+            "slots",
+            "--insert",
+            "1",
+            "{\"species\":\"SECRET\",\"rate\":99,\"enabled\":true}",
+            "--json"
+        ])
+        XCTAssertFalse(diamondRedactedPlan.contains("SECRET"))
+        XCTAssertFalse(diamondRedactedPlan.contains("\"rate\":99"))
+        XCTAssertFalse(diamondRedactedPlan.contains("textPreview"))
+
         let diamondPlan = try decodeJSON(
             PokemonHackCLI.run(arguments: [
                 "nds-data-encounter-json-rows-plan",
                 diamondRoot.path,
-                "encounters:\(diamondPath)",
+                diamondRecordID,
+                "--array",
+                "slots",
+                "--insert",
+                "1",
+                "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}",
+                "--delete",
+                "0",
+                "--reorder",
+                "1",
+                "0",
+                "--json"
+            ])
+        )
+        XCTAssertEqual(diamondPlan["recordID"] as? String, diamondRecordID)
+        XCTAssertEqual(diamondPlan["arrayKey"] as? String, "slots")
+        XCTAssertEqual(diamondPlan["beforeRowCount"] as? Int, 2)
+        XCTAssertEqual(diamondPlan["afterRowCount"] as? Int, 2)
+        XCTAssertEqual(diamondPlan["changeCount"] as? Int, 1)
+        let diamondChanges = try XCTUnwrap(diamondPlan["changes"] as? [[String: Any]])
+        XCTAssertEqual(diamondChanges.count, 1)
+        XCTAssertEqual(diamondChanges.first?["path"] as? String, diamondPath)
+        XCTAssertNil(diamondChanges.first?["textPreview"])
+
+        let diamondApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-apply",
+                diamondRoot.path,
+                diamondRecordID,
+                "--array",
+                "slots",
+                "--insert",
+                "1",
+                "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}",
+                "--delete",
+                "0",
+                "--reorder",
+                "1",
+                "0",
+                "--json"
+            ])
+        )
+        let diamondAppliedChanges = try XCTUnwrap(diamondApply["appliedChanges"] as? [[String: Any]])
+        XCTAssertEqual(diamondAppliedChanges.count, 1)
+        XCTAssertNotNil(diamondAppliedChanges.first?["backupPath"])
+        let diamondUpdated = try String(contentsOf: diamondRoot.appendingPathComponent(diamondPath), encoding: .utf8)
+        XCTAssertTrue(diamondUpdated.contains("\"slots\":[{\"species\":\"STARLY\",\"rate\":20,\"enabled\":false},{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}]"))
+        XCTAssertTrue(diamondUpdated.contains("\"swarms\":[\"DODUO\",\"NIDORAN_F\"]"))
+
+        let diamondBlockedPlans: [(String, String, [String], String)] = [
+            (diamondRecordID, "swarms", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED"),
+            (diamondRecordID, "missing_slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING"),
+            ("encounters:files/fielddata/encountdata/empty.json", "slots", ["--insert", "0", "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}"], "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED"),
+            (diamondRecordID, "slots", ["--insert", "0", "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true,\"metadata\":{\"time\":\"morning\"}}"], "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/mismatch.json", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_SHAPE_MISMATCH"),
+            ("encounters:files/fielddata/encountdata/duplicate.json", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE"),
+            (diamondRecordID, "metadata.slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_PATH_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/route202.txt", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED"),
+            ("encounters:arm9/src/encounter.c", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED"),
+            ("encounters:files/arc/encdata_ex/encounter_slots", "slots", ["--delete", "0"], "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED")
+        ]
+        for (recordID, arrayKey, operationArguments, expectedCode) in diamondBlockedPlans {
+            let blocked = try decodeJSON(
+                PokemonHackCLI.run(arguments: [
+                    "nds-data-encounter-json-rows-plan",
+                    diamondRoot.path,
+                    recordID,
+                    "--array",
+                    arrayKey
+                ] + operationArguments + ["--json"])
+            )
+            XCTAssertEqual(try XCTUnwrap(blocked["changes"] as? [[String: Any]]).count, 0, recordID)
+            let diagnostics = try XCTUnwrap(blocked["diagnostics"] as? [[String: Any]])
+            XCTAssertTrue(
+                diagnostics.contains { $0["code"] as? String == expectedCode },
+                "\(recordID) expected \(expectedCode): \(diagnostics)"
+            )
+        }
+
+        let diamondReferenceRoot = try makeTemporaryDirectory().appendingPathComponent("references/pokediamond")
+        try FileManager.default.createDirectory(at: diamondReferenceRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: diamondReferenceRoot.appendingPathComponent("arm7"), withIntermediateDirectories: true)
+        try write("GAME_VERSION ?= DIAMOND\nGAME_CODE := ADA\n", to: diamondReferenceRoot.appendingPathComponent("config.mk"))
+        try write("ROM := $(BUILD_DIR)/$(TARGET).nds\n", to: diamondReferenceRoot.appendingPathComponent("Makefile"))
+        try write("HostRoot files/\n", to: diamondReferenceRoot.appendingPathComponent("rom.rsf"))
+        try write("filesystem: $(HOSTFS_FILES)\n", to: diamondReferenceRoot.appendingPathComponent("filesystem.mk"))
+        try write("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  build/diamond.us/pokediamond.us.nds\n", to: diamondReferenceRoot.appendingPathComponent("pokediamond.us.sha1"))
+        try write("void Encounter_Load(void) {}\n", to: diamondReferenceRoot.appendingPathComponent("arm9/src/encounter.c"))
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n", to: diamondReferenceRoot.appendingPathComponent(diamondPath))
+        let diamondReferenceApply = try decodeJSON(
+            PokemonHackCLI.run(arguments: [
+                "nds-data-encounter-json-rows-apply",
+                diamondReferenceRoot.path,
+                diamondRecordID,
                 "--array",
                 "slots",
                 "--delete",
@@ -4101,8 +4291,8 @@ final class PokemonHackCLITests: XCTestCase {
                 "--json"
             ])
         )
-        XCTAssertEqual(try XCTUnwrap(diamondPlan["changes"] as? [[String: Any]]).count, 0)
-        XCTAssertTrue(try XCTUnwrap(diamondPlan["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertEqual(try XCTUnwrap(diamondReferenceApply["appliedChanges"] as? [[String: Any]]).count, 0)
+        XCTAssertTrue(try XCTUnwrap(diamondReferenceApply["diagnostics"] as? [[String: Any]]).contains { $0["code"] as? String == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
 
         let platinumRoot = try makeTestNDSDecompRoot()
         try write("SPECIES_ABRA\n", to: platinumRoot.appendingPathComponent("generated/species.txt"))

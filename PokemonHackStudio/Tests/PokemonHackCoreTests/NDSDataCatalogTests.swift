@@ -4101,20 +4101,106 @@ final class NDSDataCatalogTests: XCTestCase {
         let diamondRoot = try makeRoot(name: "pokediamond", configure: makeDiamondFixture)
         let diamondPath = "files/fielddata/encountdata/sinnoh/route201.json"
         try write(
-            "{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n",
+            "{\"rate\":20,\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true},{\"species\":\"STARLY\",\"rate\":20,\"enabled\":false}],\"swarms\":[\"DODUO\",\"NIDORAN_F\"],\"metadata\":{\"map\":\"ROUTE_201\"}}\n",
             to: diamondRoot.appendingPathComponent(diamondPath)
         )
+        try write("{\"slots\":[]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/empty.json"))
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30},{\"species\":\"STARLY\"}]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/mismatch.json"))
+        try write("{\"slots\":[{\"species\":\"BIDOOF\",\"species\":\"STARLY\",\"rate\":30,\"enabled\":true}]}\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/duplicate.json"))
+        try write("rate=15\n", to: diamondRoot.appendingPathComponent("files/fielddata/encountdata/route202.txt"))
+        try write("ignored\n", to: diamondRoot.appendingPathComponent("files/arc/encdata_ex/encounter_slots/.knarcignore"))
         let diamondCatalog = try NDSDataCatalogBuilder.build(path: diamondRoot.path)
         let diamondPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
             catalog: diamondCatalog,
             draft: NDSDataEncounterJSONRowOperationDraft(
                 recordID: "encounters:\(diamondPath)",
                 arrayKey: "slots",
+                operations: [
+                    .insert(index: 1, rowText: "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}"),
+                    .delete(index: 0),
+                    .reorder(fromIndex: 1, toIndex: 0)
+                ]
+            )
+        )
+        XCTAssertEqual(diamondPlan.beforeRowCount, 2)
+        XCTAssertEqual(diamondPlan.afterRowCount, 2)
+        XCTAssertTrue(diamondPlan.diagnostics.allSatisfy { $0.severity != .error }, diamondPlan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(diamondPlan.editPlan.changes.count, 1)
+        XCTAssertEqual(diamondPlan.editPlan.changes.first?.path, diamondPath)
+        XCTAssertTrue(diamondPlan.editPlan.validateApplyability().isApplyable)
+
+        let diamondResult = try NDSDataMutationApplier.apply(plan: diamondPlan.editPlan)
+        XCTAssertEqual(diamondResult.appliedChanges.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: diamondResult.appliedChanges[0].backupPath))
+        let diamondUpdated = try String(contentsOf: diamondRoot.appendingPathComponent(diamondPath), encoding: .utf8)
+        XCTAssertTrue(diamondUpdated.contains("\"slots\":[{\"species\":\"STARLY\",\"rate\":20,\"enabled\":false},{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}]"))
+        XCTAssertTrue(diamondUpdated.contains("\"swarms\":[\"DODUO\",\"NIDORAN_F\"]"))
+        XCTAssertTrue(diamondUpdated.contains("\"metadata\":{\"map\":\"ROUTE_201\"}"))
+
+        let diamondUpdatedCatalog = try NDSDataCatalogBuilder.build(path: diamondRoot.path)
+        let diamondBlockedPlans: [(String, String, NDSDataEncounterJSONRowOperation, String)] = [
+            ("encounters:\(diamondPath)", "swarms", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED"),
+            ("encounters:\(diamondPath)", "missing_slots", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING"),
+            ("encounters:files/fielddata/encountdata/empty.json", "slots", .insert(index: 0, rowText: "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true}"), "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED"),
+            ("encounters:\(diamondPath)", "slots", .insert(index: 0, rowText: "{\"species\":\"SHINX\",\"rate\":25,\"enabled\":true,\"metadata\":{\"time\":\"morning\"}}"), "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED"),
+            ("encounters:files/fielddata/encountdata/mismatch.json", "slots", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_SHAPE_MISMATCH"),
+            ("encounters:files/fielddata/encountdata/duplicate.json", "slots", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE"),
+            ("encounters:files/fielddata/encountdata/route202.txt", "slots", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED"),
+            ("encounters:arm9/src/encounter.c", "slots", .delete(index: 0), "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED")
+        ]
+        for (recordID, arrayKey, operation, expectedCode) in diamondBlockedPlans {
+            let blockedPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+                catalog: diamondUpdatedCatalog,
+                draft: NDSDataEncounterJSONRowOperationDraft(
+                    recordID: recordID,
+                    arrayKey: arrayKey,
+                    operations: [operation]
+                )
+            )
+            XCTAssertTrue(blockedPlan.diagnostics.contains { $0.code == expectedCode }, "\(recordID) expected \(expectedCode)")
+            XCTAssertTrue(blockedPlan.editPlan.changes.isEmpty)
+        }
+
+        let diamondNestedArrayPathPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: diamondUpdatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(diamondPath)",
+                arrayKey: "metadata.slots",
                 operations: [.delete(index: 0)]
             )
         )
-        XCTAssertTrue(diamondPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
-        XCTAssertTrue(diamondPlan.editPlan.changes.isEmpty)
+        XCTAssertTrue(diamondNestedArrayPathPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_PATH_BLOCKED" })
+        XCTAssertTrue(diamondNestedArrayPathPlan.editPlan.changes.isEmpty)
+
+        let diamondContainerRecord = try XCTUnwrap(diamondUpdatedCatalog.records.first { $0.relativePath.contains("encdata_ex") && $0.role == .binaryContainer })
+        XCTAssertEqual(diamondContainerRecord.role, .binaryContainer)
+        let diamondContainerPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: diamondUpdatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: diamondContainerRecord.id,
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(diamondContainerPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(diamondContainerPlan.editPlan.changes.isEmpty)
+
+        let diamondReferenceRoot = try makeRoot(name: "references/pokediamond", configure: makeDiamondFixture)
+        try write(
+            "{\"slots\":[{\"species\":\"BIDOOF\",\"rate\":30,\"enabled\":true}]}\n",
+            to: diamondReferenceRoot.appendingPathComponent(diamondPath)
+        )
+        let diamondReferenceCatalog = try NDSDataCatalogBuilder.build(path: diamondReferenceRoot.path)
+        let diamondReferencePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: diamondReferenceCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(diamondPath)",
+                arrayKey: "slots",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(diamondReferencePlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
+        XCTAssertTrue(diamondReferencePlan.editPlan.changes.isEmpty)
     }
 
     func testNDSDataSemanticEditorPlansDiamondPearlPersonalJSONScalars() throws {

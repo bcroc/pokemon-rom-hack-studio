@@ -1077,8 +1077,9 @@ struct WorkbenchSidebarPanel: View {
             switch store.selectedResourceLibraryMode {
             case .assets:
                 if let asset = store.selectedResourceAsset {
+                    let mapReviewFacts = store.selectedNDSDataEditor?.mapReviewBridge?.inspectorFacts ?? []
                     propertyHeader(asset.title, subtitle: asset.path, systemImage: iconName(forResourceCategory: asset.category), status: asset.status)
-                    propertyFacts(asset.facts + [
+                    propertyFacts(asset.facts + mapReviewFacts + [
                         Fact(label: "Category", value: asset.category),
                         Fact(label: "Availability", value: asset.availabilitySummary),
                         Fact(label: "Checksum", value: asset.checksumSummary),
