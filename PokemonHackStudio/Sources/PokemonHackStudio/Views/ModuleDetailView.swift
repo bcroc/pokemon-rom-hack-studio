@@ -86,6 +86,9 @@ struct ModuleDetailView: View {
                 ndsDataEditor: store.selectedNDSDataEditor,
                 onUpdateNDSDataDraft: store.updateSelectedNDSDataDraftText,
                 onUpdateNDSDataSemanticField: store.updateSelectedNDSDataSemanticField,
+                onStageNDSDataRowOperation: store.stageSelectedNDSDataRowOperation,
+                onRemoveLastNDSDataRowOperation: store.removeLastSelectedNDSDataRowOperation,
+                onClearNDSDataRowOperations: store.clearSelectedNDSDataRowOperations,
                 onPreviewNDSDataMutationPlan: store.previewSelectedNDSDataMutationPlan,
                 onApplyNDSDataMutationPlan: store.applySelectedNDSDataMutationPlan,
                 onDiscardNDSDataEdits: store.discardNDSDataEdits
@@ -218,6 +221,13 @@ struct ModuleDetailView: View {
                 },
                 assetImportBlockedReason: { kind in
                     store.selectedSpeciesAssetImportBlockedReason(kind: kind)
+                },
+                cryAudioSources: store.selectedSpeciesCryAudioSources,
+                onImportCryAudioSource: { source, url in
+                    store.importSelectedSpeciesCryAudioSource(target: source, from: url)
+                },
+                cryAudioImportBlockedReason: { source in
+                    store.selectedSpeciesCryAudioImportBlockedReason(source: source)
                 },
                 onNavigateToResourceAsset: store.navigateToResourceAsset
             )

@@ -29,6 +29,9 @@ struct ResourceLibraryWorkbenchView: View {
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
+    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onRemoveLastNDSDataRowOperation: () -> Void
+    let onClearNDSDataRowOperations: () -> Void
     let onPreviewNDSDataMutationPlan: () -> Void
     let onApplyNDSDataMutationPlan: () -> Void
     let onDiscardNDSDataEdits: () -> Void
@@ -249,6 +252,9 @@ struct ResourceLibraryWorkbenchView: View {
                             ndsDataEditor: ndsDataEditor?.isHiddenByFilters == true ? nil : ndsDataEditor,
                             onUpdateNDSDataDraft: onUpdateNDSDataDraft,
                             onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
+                            onStageNDSDataRowOperation: onStageNDSDataRowOperation,
+                            onRemoveLastNDSDataRowOperation: onRemoveLastNDSDataRowOperation,
+                            onClearNDSDataRowOperations: onClearNDSDataRowOperations,
                             onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
                             onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
                             onDiscardNDSDataEdits: onDiscardNDSDataEdits
@@ -291,6 +297,9 @@ struct ResourceLibraryWorkbenchView: View {
                 editor: editor,
                 onUpdateDraft: onUpdateNDSDataDraft,
                 onUpdateSemanticField: onUpdateNDSDataSemanticField,
+                onStageRowOperation: onStageNDSDataRowOperation,
+                onRemoveLastRowOperation: onRemoveLastNDSDataRowOperation,
+                onClearRowOperations: onClearNDSDataRowOperations,
                 onPreview: onPreviewNDSDataMutationPlan,
                 onApply: onApplyNDSDataMutationPlan,
                 onDiscard: onDiscardNDSDataEdits
@@ -356,6 +365,9 @@ struct ResourceLibraryWorkbenchView: View {
                                 ndsDataEditor: selectedAssetID == asset.id ? ndsDataEditor : nil,
                                 onUpdateNDSDataDraft: onUpdateNDSDataDraft,
                                 onUpdateNDSDataSemanticField: onUpdateNDSDataSemanticField,
+                                onStageNDSDataRowOperation: onStageNDSDataRowOperation,
+                                onRemoveLastNDSDataRowOperation: onRemoveLastNDSDataRowOperation,
+                                onClearNDSDataRowOperations: onClearNDSDataRowOperations,
                                 onPreviewNDSDataMutationPlan: onPreviewNDSDataMutationPlan,
                                 onApplyNDSDataMutationPlan: onApplyNDSDataMutationPlan,
                                 onDiscardNDSDataEdits: onDiscardNDSDataEdits
@@ -704,6 +716,9 @@ private struct ResourceAssetDetailPane: View {
     let ndsDataEditor: NDSDataResourceEditorViewState?
     let onUpdateNDSDataDraft: (String) -> Void
     let onUpdateNDSDataSemanticField: (String, String) -> Void
+    let onStageNDSDataRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onRemoveLastNDSDataRowOperation: () -> Void
+    let onClearNDSDataRowOperations: () -> Void
     let onPreviewNDSDataMutationPlan: () -> Void
     let onApplyNDSDataMutationPlan: () -> Void
     let onDiscardNDSDataEdits: () -> Void
@@ -745,6 +760,9 @@ private struct ResourceAssetDetailPane: View {
                             editor: ndsDataEditor,
                             onUpdateDraft: onUpdateNDSDataDraft,
                             onUpdateSemanticField: onUpdateNDSDataSemanticField,
+                            onStageRowOperation: onStageNDSDataRowOperation,
+                            onRemoveLastRowOperation: onRemoveLastNDSDataRowOperation,
+                            onClearRowOperations: onClearNDSDataRowOperations,
                             onPreview: onPreviewNDSDataMutationPlan,
                             onApply: onApplyNDSDataMutationPlan,
                             onDiscard: onDiscardNDSDataEdits
@@ -800,9 +818,18 @@ private struct NDSDataRecordEditor: View {
     let editor: NDSDataResourceEditorViewState?
     let onUpdateDraft: (String) -> Void
     let onUpdateSemanticField: (String, String) -> Void
+    let onStageRowOperation: (NDSDataResourceRowOperationKind, Int?, String, Int?, Int?) -> Void
+    let onRemoveLastRowOperation: () -> Void
+    let onClearRowOperations: () -> Void
     let onPreview: () -> Void
     let onApply: () -> Void
     let onDiscard: () -> Void
+
+    @State private var rowOperationKind: NDSDataResourceRowOperationKind = .insert
+    @State private var rowOperationIndex = ""
+    @State private var rowOperationFromIndex = ""
+    @State private var rowOperationToIndex = ""
+    @State private var rowOperationInsertValue = ""
 
     var body: some View {
         EditorSection(title: "NDS Editing Lens") {
@@ -907,6 +934,10 @@ private struct NDSDataRecordEditor: View {
                         }
                     }
 
+                    if let rowOperations = editor.rowOperations {
+                        rowOperationControls(rowOperations)
+                    }
+
                     TextEditor(text: Binding(
                         get: { editor.text },
                         set: { onUpdateDraft($0) }
@@ -929,6 +960,133 @@ private struct NDSDataRecordEditor: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func rowOperationControls(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(rowOperations.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ResourceTag(text: rowOperations.countSummary)
+                if rowOperations.stagedCount > 0 {
+                    ResourceTag(text: "\(rowOperations.stagedCount) staged")
+                }
+            }
+
+            Picker("Operation", selection: $rowOperationKind) {
+                ForEach(NDSDataResourceRowOperationKind.allCases) { kind in
+                    Label(kind.title, systemImage: kind.systemImage).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], alignment: .leading, spacing: 8) {
+                if rowOperationKind == .reorder {
+                    rowOperationNumberField("From", text: $rowOperationFromIndex)
+                    rowOperationNumberField("To", text: $rowOperationToIndex)
+                } else {
+                    rowOperationNumberField("Index", text: $rowOperationIndex)
+                }
+
+                if rowOperationKind == .insert {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(rowOperations.family.insertValueTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField(rowOperations.family.insertValuePlaceholder, text: $rowOperationInsertValue)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button("Stage", systemImage: rowOperationKind.systemImage) {
+                    onStageRowOperation(
+                        rowOperationKind,
+                        parsedRowOperationIndex,
+                        rowOperationInsertValue,
+                        parsedRowOperationFromIndex,
+                        parsedRowOperationToIndex
+                    )
+                    if rowOperationKind == .insert {
+                        rowOperationInsertValue = ""
+                    }
+                }
+                .disabled(stageRowOperationDisabled(rowOperations))
+                .help("Stage \(rowOperationKind.title.lowercased()) \(rowOperations.title.lowercased())")
+
+                Button("Remove", systemImage: "arrow.uturn.backward") {
+                    onRemoveLastRowOperation()
+                }
+                .disabled(!rowOperations.canRemoveLast)
+                .help("Remove the latest staged row operation")
+
+                Button("Clear", systemImage: "trash") {
+                    onClearRowOperations()
+                }
+                .disabled(!rowOperations.canClear)
+                .help("Clear staged row operations")
+            }
+
+            if !rowOperations.stagedOperations.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(rowOperations.stagedOperations) { operation in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: operation.kind.systemImage)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                            Text(operation.summary)
+                                .font(.caption.weight(.semibold))
+                            if let detail = operation.detail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(7)
+                        .background(.quaternary.opacity(0.22), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+        }
+    }
+
+    private func rowOperationNumberField(_ title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("0", text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+
+    private var parsedRowOperationIndex: Int? {
+        Int(rowOperationIndex.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var parsedRowOperationFromIndex: Int? {
+        Int(rowOperationFromIndex.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var parsedRowOperationToIndex: Int? {
+        Int(rowOperationToIndex.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func stageRowOperationDisabled(_ rowOperations: NDSDataResourceRowOperationEditorViewState) -> Bool {
+        guard rowOperations.canStage else { return true }
+        switch rowOperationKind {
+        case .insert, .delete:
+            return parsedRowOperationIndex == nil
+        case .reorder:
+            return parsedRowOperationFromIndex == nil || parsedRowOperationToIndex == nil
         }
     }
 

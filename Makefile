@@ -33,6 +33,7 @@ validate-release-candidate: scripts-check validate validate-nds test-app verify
 
 scripts-check:
 	bash -n script/*.sh
+	./script/check_validation_docs.sh
 	$(APP_SCRIPT) --check-tools
 
 test-app:

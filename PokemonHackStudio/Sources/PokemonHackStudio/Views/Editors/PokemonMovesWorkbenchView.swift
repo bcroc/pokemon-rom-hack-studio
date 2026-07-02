@@ -541,6 +541,7 @@ struct PokemonMovesWorkbenchView: View {
             if let speciesCatalog {
                 let supportsTMHM = speciesCatalog.constants[.tmhmMoves]?.contains { $0.symbol == move.moveID } == true
                 let supportsTutor = speciesCatalog.constants[.tutorMoves]?.contains { $0.symbol == move.moveID } == true
+                let supportsEgg = speciesCatalog.constants[.moves]?.contains { $0.symbol == move.moveID } == true
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -550,7 +551,8 @@ struct PokemonMovesWorkbenchView: View {
                         Spacer()
                         Text([
                             supportsTMHM ? "TM/HM editable" : "TM/HM unavailable",
-                            supportsTutor ? "Tutor editable" : "Tutor unavailable"
+                            supportsTutor ? "Tutor editable" : "Tutor unavailable",
+                            supportsEgg ? "Egg editable" : "Egg unavailable"
                         ].joined(separator: " / "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -580,6 +582,9 @@ struct PokemonMovesWorkbenchView: View {
                                     Toggle("Tutor", isOn: compatibilityBinding(speciesID: species.speciesID, moveID: move.moveID, bucket: .tutor))
                                         .toggleStyle(.checkbox)
                                         .disabled(!supportsTutor)
+                                    Toggle("Egg", isOn: compatibilityBinding(speciesID: species.speciesID, moveID: move.moveID, bucket: .egg))
+                                        .toggleStyle(.checkbox)
+                                        .disabled(!supportsEgg)
                                 }
                                 .font(.caption)
                             }

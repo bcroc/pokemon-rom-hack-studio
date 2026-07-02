@@ -16,6 +16,9 @@ struct PokemonSpeciesWorkbenchView: View {
     let onFocusSpecies: (String) -> Void
     let onImportAsset: (PokemonHackCore.SpeciesAssetKind, URL) -> Void
     let assetImportBlockedReason: (PokemonHackCore.SpeciesAssetKind) -> String?
+    let cryAudioSources: [PokemonHackCore.GBACryAudioSourceFile]
+    let onImportCryAudioSource: (PokemonHackCore.GBACryAudioSourceFile, URL) -> Void
+    let cryAudioImportBlockedReason: (PokemonHackCore.GBACryAudioSourceFile) -> String?
     let onNavigateToResourceAsset: (String) -> Void
 
     @State private var sourceExpanded = false
@@ -593,21 +596,42 @@ struct PokemonSpeciesWorkbenchView: View {
     }
 
     private func assetsSection(for species: PokemonHackCore.SpeciesDetail) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], alignment: .leading, spacing: 12) {
-            ForEach(species.assets) { asset in
-                SpeciesAssetTile(
-                    asset: asset,
-                    rootPath: rootPath,
-                    draftData: draft?.assetData[asset.kind],
-                    importProvenance: draft?.assetImports[asset.kind],
-                    importBlockedReason: assetImportBlockedReason(asset.kind),
-                    onOpenResource: {
-                        onNavigateToResourceAsset(asset.relativePath)
-                    },
-                    onImport: {
-                        importAsset(kind: asset.kind)
+        VStack(alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 12)], alignment: .leading, spacing: 12) {
+                ForEach(species.assets) { asset in
+                    SpeciesAssetTile(
+                        asset: asset,
+                        rootPath: rootPath,
+                        draftData: draft?.assetData[asset.kind],
+                        importProvenance: draft?.assetImports[asset.kind],
+                        importBlockedReason: assetImportBlockedReason(asset.kind),
+                        onOpenResource: {
+                            onNavigateToResourceAsset(asset.relativePath)
+                        },
+                        onImport: {
+                            importAsset(kind: asset.kind)
+                        }
+                    )
+                }
+            }
+
+            if !cryAudioSources.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Cry Audio Sources")
+                        .font(.subheadline.weight(.semibold))
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], alignment: .leading, spacing: 12) {
+                        ForEach(cryAudioSources, id: \.path) { source in
+                            SpeciesCryAudioSourceTile(
+                                source: source,
+                                replacement: draft?.cryAudioReplacements?[source.path],
+                                importBlockedReason: cryAudioImportBlockedReason(source),
+                                onImport: {
+                                    importCryAudioSource(source)
+                                }
+                            )
+                        }
                     }
-                )
+                }
             }
         }
     }
@@ -1095,6 +1119,21 @@ struct PokemonSpeciesWorkbenchView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             onImportAsset(kind, url)
+        }
+    }
+
+    private func importCryAudioSource(_ source: PokemonHackCore.GBACryAudioSourceFile) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        let targetExtension = URL(fileURLWithPath: source.path).pathExtension
+        if !targetExtension.isEmpty {
+            panel.allowedFileTypes = [targetExtension]
+        }
+        panel.message = "Select a one-for-one replacement for \(source.path)"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            onImportCryAudioSource(source, url)
         }
     }
 
@@ -1596,6 +1635,78 @@ private struct SpeciesAssetTile: View {
         }
         .padding(12)
         .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct SpeciesCryAudioSourceTile: View {
+    let source: PokemonHackCore.GBACryAudioSourceFile
+    let replacement: PokemonHackCore.GBACryAudioReplacementDraft?
+    let importBlockedReason: String?
+    let onImport: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(source.kind)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                StatusPill(state: replacement == nil ? .warning : replacementState)
+            }
+
+            Button("Import...", systemImage: "square.and.arrow.down") {
+                onImport()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(importBlockedReason != nil)
+            .help(importBlockedReason ?? "Import stages a one-for-one cry/audio replacement for mutation review.")
+
+            if let importBlockedReason {
+                Text(importBlockedReason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("\(source.sizeBytes) bytes · SHA1 \(source.sha1)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+
+            if let replacement {
+                Text("Draft staged: \(replacement.replacementSizeBytes) bytes · SHA1 \(replacement.replacementSHA1)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Text("Validation \(replacement.status.rawValue).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(source.path)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.24), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var replacementState: ValidationState {
+        switch replacement?.status {
+        case .ready:
+            return .valid
+        case .blocked:
+            return .error
+        case nil:
+            return .warning
+        }
     }
 }
 

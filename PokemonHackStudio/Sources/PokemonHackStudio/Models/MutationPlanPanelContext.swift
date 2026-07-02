@@ -401,7 +401,7 @@ extension MutationPlanPanelContext {
                 isDirty: editor.isDirty
             ),
             status: status,
-            operationCount: editor.isDirty ? 1 : 0,
+            operationCount: editor.rowOperations?.stagedCount ?? (editor.isDirty ? 1 : 0),
             changes: (plan?.changes ?? []).map { MutationPlanChangeRow(change: $0) },
             appliedChanges: (result?.appliedChanges ?? []).map { MutationPlanAppliedChangeRow(change: $0) },
             diagnostics: diagnostics,

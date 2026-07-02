@@ -20,6 +20,7 @@ public enum NDSDataSourceRole: String, Codable, Equatable, CaseIterable, Sendabl
     case nitroFSManifest
     case binaryContainer
     case metadataUnavailable
+    case metadataPacket
 }
 
 public enum NDSDataSourceFormat: String, Codable, Equatable, Hashable, CaseIterable, Sendable {
@@ -212,6 +213,84 @@ public struct NDSDataReadinessSummary: Codable, Equatable, Sendable {
     }
 }
 
+public struct NDSDataMapReviewRow: Codable, Equatable, Identifiable {
+    public let id: String
+    public let label: String
+    public let value: String
+    public let detail: String?
+
+    public init(id: String, label: String, value: String, detail: String? = nil) {
+        self.id = id
+        self.label = label
+        self.value = value
+        self.detail = detail
+    }
+}
+
+public struct NDSDataMapReviewRecord: Codable, Equatable, Identifiable {
+    public var id: String { recordID }
+
+    public let recordID: String
+    public let label: String
+    public let domain: NDSDataDomain
+    public let relativePath: String
+    public let sourceRole: String?
+    public let sourceProvenance: String?
+    public let readiness: NDSDataReadinessSummary?
+
+    public init(
+        recordID: String,
+        label: String,
+        domain: NDSDataDomain,
+        relativePath: String,
+        sourceRole: String? = nil,
+        sourceProvenance: String? = nil,
+        readiness: NDSDataReadinessSummary? = nil
+    ) {
+        self.recordID = recordID
+        self.label = label
+        self.domain = domain
+        self.relativePath = relativePath
+        self.sourceRole = sourceRole
+        self.sourceProvenance = sourceProvenance
+        self.readiness = readiness
+    }
+}
+
+public struct NDSDataMapReviewPacket: Codable, Equatable {
+    public let posture: String
+    public let component: String
+    public let sourceRole: String
+    public let sourceProvenance: String
+    public let readiness: NDSDataReadinessSummary?
+    public let blockedActions: [String]
+    public let includedRecords: [NDSDataMapReviewRecord]
+    public let truncatedRelatedRecordCount: Int
+    public let rows: [NDSDataMapReviewRow]
+
+    public init(
+        posture: String = "reviewOnly",
+        component: String,
+        sourceRole: String,
+        sourceProvenance: String,
+        readiness: NDSDataReadinessSummary? = nil,
+        blockedActions: [String],
+        includedRecords: [NDSDataMapReviewRecord],
+        truncatedRelatedRecordCount: Int = 0,
+        rows: [NDSDataMapReviewRow]
+    ) {
+        self.posture = posture
+        self.component = component
+        self.sourceRole = sourceRole
+        self.sourceProvenance = sourceProvenance
+        self.readiness = readiness
+        self.blockedActions = blockedActions
+        self.includedRecords = includedRecords
+        self.truncatedRelatedRecordCount = truncatedRelatedRecordCount
+        self.rows = rows
+    }
+}
+
 public enum NDSDataTextBankPreviewStatus: String, Codable, Equatable, CaseIterable {
     case ready
     case blocked
@@ -322,6 +401,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
     public let audioPreview: NDSDataAudioPreview?
     public let relatedRecords: [NDSDataRelatedRecord]
     public let readiness: NDSDataReadinessSummary?
+    public let mapReviewPacket: NDSDataMapReviewPacket?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -344,6 +424,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         audioPreview: NDSDataAudioPreview? = nil,
         relatedRecords: [NDSDataRelatedRecord] = [],
         readiness: NDSDataReadinessSummary? = nil,
+        mapReviewPacket: NDSDataMapReviewPacket? = nil,
         diagnostics: [Diagnostic] = []
     ) {
         self.id = id
@@ -365,6 +446,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         self.audioPreview = audioPreview
         self.relatedRecords = relatedRecords
         self.readiness = readiness
+        self.mapReviewPacket = mapReviewPacket
         self.diagnostics = diagnostics
     }
 
@@ -388,6 +470,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
         audioPreview: NDSDataAudioPreview?? = nil,
         relatedRecords: [NDSDataRelatedRecord]? = nil,
         readiness: NDSDataReadinessSummary?? = nil,
+        mapReviewPacket: NDSDataMapReviewPacket?? = nil,
         diagnostics: [Diagnostic]? = nil
     ) -> NDSDataCatalogRecord {
         NDSDataCatalogRecord(
@@ -410,6 +493,7 @@ public struct NDSDataCatalogRecord: Codable, Equatable, Identifiable {
             audioPreview: audioPreview ?? self.audioPreview,
             relatedRecords: relatedRecords ?? self.relatedRecords,
             readiness: readiness ?? self.readiness,
+            mapReviewPacket: mapReviewPacket ?? self.mapReviewPacket,
             diagnostics: diagnostics ?? self.diagnostics
         )
     }
@@ -568,22 +652,25 @@ public enum NDSDataCatalogBuilder {
             )
         }
 
-        let records = enrichGenVReadiness(
-            records: enrichDiamondPearlCAnchorLoaderOnlyReadiness(
-                records: enrichDiamondPearlMoveCAnchorReadiness(
-                    records: enrichDiamondPearlMapInventory(
-                        records: enrichHeartGoldSoulSilverScriptSequenceInventory(
-                            records: enrichHeartGoldSoulSilverMapInventory(
-                                records: enrichPlatinumMapInventory(
-                                    records: enrichRelationships(
-                                        records: uniqueRecords(
-                                            descriptors.flatMap { descriptor in
-                                                catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
-                                            }
-                                            + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                            + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                            + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
-                                        ).sorted(by: recordSort),
+        let records = enrichGenIVMapReviewPackets(
+            records: enrichGenVReadiness(
+                records: enrichDiamondPearlCAnchorLoaderOnlyReadiness(
+                    records: enrichDiamondPearlMoveCAnchorReadiness(
+                        records: enrichDiamondPearlMapInventory(
+                            records: enrichHeartGoldSoulSilverScriptSequenceInventory(
+                                records: enrichHeartGoldSoulSilverMapInventory(
+                                    records: enrichPlatinumMapInventory(
+                                        records: enrichRelationships(
+                                            records: uniqueRecords(
+                                                descriptors.flatMap { descriptor in
+                                                    catalogRecords(for: descriptor, root: rootURL, fileManager: fileManager)
+                                                }
+                                                + discoveredContainerRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                                + discoveredGenVAudioRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                                + genVUnavailableTitleRecords(for: index.profile, root: rootURL, fileManager: fileManager)
+                                            ).sorted(by: recordSort),
+                                            profile: index.profile
+                                        ),
                                         profile: index.profile
                                     ),
                                     profile: index.profile
@@ -1400,7 +1487,7 @@ public enum NDSDataCatalogBuilder {
     ) -> [NDSDataCatalogRecord] {
         guard profile == .pokeblack else { return records }
         let existingRelativePaths = Set(records.map { $0.relativePath.lowercased() })
-        return records.map { record in
+        let enriched = records.map { record in
             let readiness = genVReadinessSummary(for: record)
             return record.copy(
                 facts: record.facts + genVReadinessFacts(for: record, existingRelativePaths: existingRelativePaths),
@@ -1408,6 +1495,225 @@ public enum NDSDataCatalogBuilder {
                 diagnostics: record.diagnostics + genVReadinessDiagnostics(for: record, readiness: readiness)
             )
         }
+        let packet = genVVariantReadinessPacketRecord(
+            records: enriched,
+            existingRelativePaths: existingRelativePaths
+        )
+        return (enriched + [packet]).sorted(by: recordSort)
+    }
+
+    private static let maxMapReviewRelatedRecords = 8
+
+    private static func enrichGenIVMapReviewPackets(
+        records: [NDSDataCatalogRecord],
+        profile: GameProfile
+    ) -> [NDSDataCatalogRecord] {
+        guard [.pokediamond, .pokeplatinum, .pokeheartgold].contains(profile) else {
+            return records
+        }
+        let recordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        return records.map { record in
+            guard let packet = genIVMapReviewPacket(for: record, recordsByID: recordsByID) else {
+                return record
+            }
+            return record.copy(
+                facts: record.facts + genIVMapReviewFacts(for: packet),
+                mapReviewPacket: .some(packet)
+            )
+        }
+    }
+
+    private static func genIVMapReviewPacket(
+        for record: NDSDataCatalogRecord,
+        recordsByID: [String: NDSDataCatalogRecord]
+    ) -> NDSDataMapReviewPacket? {
+        guard record.domain == .maps,
+              let sourceRole = factValue("Gen IV Source Role", in: record)
+        else {
+            return nil
+        }
+
+        let sourceProvenance = factValue("Gen IV Source Provenance", in: record) ?? "unknown"
+        let relatedRecords = Array(record.relatedRecords.prefix(maxMapReviewRelatedRecords))
+        let truncatedCount = max(0, record.relatedRecords.count - relatedRecords.count)
+        let includedRecords = [mapReviewRecord(from: record, label: "Current row")]
+            + relatedRecords.compactMap { related -> NDSDataMapReviewRecord? in
+                guard let relatedRecord = recordsByID[related.recordID] else { return nil }
+                return mapReviewRecord(from: relatedRecord, label: related.label)
+            }
+        let blockedActions = genIVBlockedActions(for: record)
+        let rows = genIVMapReviewRows(
+            for: record,
+            component: mapReviewComponent(for: sourceRole),
+            sourceRole: sourceRole,
+            sourceProvenance: sourceProvenance,
+            blockedActions: blockedActions,
+            truncatedRelatedRecordCount: truncatedCount
+        )
+
+        return NDSDataMapReviewPacket(
+            component: mapReviewComponent(for: sourceRole),
+            sourceRole: sourceRole,
+            sourceProvenance: sourceProvenance,
+            readiness: record.readiness,
+            blockedActions: blockedActions,
+            includedRecords: includedRecords,
+            truncatedRelatedRecordCount: truncatedCount,
+            rows: rows
+        )
+    }
+
+    private static func mapReviewRecord(from record: NDSDataCatalogRecord, label: String) -> NDSDataMapReviewRecord {
+        NDSDataMapReviewRecord(
+            recordID: record.id,
+            label: label,
+            domain: record.domain,
+            relativePath: record.relativePath,
+            sourceRole: factValue("Gen IV Source Role", in: record),
+            sourceProvenance: factValue("Gen IV Source Provenance", in: record),
+            readiness: record.readiness
+        )
+    }
+
+    private static func genIVMapReviewRows(
+        for record: NDSDataCatalogRecord,
+        component: String,
+        sourceRole: String,
+        sourceProvenance: String,
+        blockedActions: [String],
+        truncatedRelatedRecordCount: Int
+    ) -> [NDSDataMapReviewRow] {
+        var rows = [
+            NDSDataMapReviewRow(
+                id: "posture",
+                label: "Posture",
+                value: "reviewOnly",
+                detail: "Composes existing catalog facts only; no map editor, rebuild, mutation apply, export, or binary write path is enabled."
+            ),
+            NDSDataMapReviewRow(
+                id: "component",
+                label: "Component",
+                value: component
+            ),
+            NDSDataMapReviewRow(
+                id: "source-role",
+                label: "Source Role",
+                value: sourceRole
+            ),
+            NDSDataMapReviewRow(
+                id: "source-provenance",
+                label: "Source Provenance",
+                value: sourceProvenance
+            )
+        ]
+
+        if let genIVReadiness = factValue("Gen IV Readiness", in: record) {
+            rows.append(
+                NDSDataMapReviewRow(
+                    id: "gen-iv-readiness",
+                    label: "Gen IV Readiness",
+                    value: genIVReadiness,
+                    detail: record.readiness.map { "\($0.status.rawValue): \($0.title)" }
+                )
+            )
+        } else if let readiness = record.readiness {
+            rows.append(
+                NDSDataMapReviewRow(
+                    id: "readiness",
+                    label: "Readiness",
+                    value: readiness.status.rawValue,
+                    detail: readiness.title
+                )
+            )
+        }
+
+        rows.append(
+            NDSDataMapReviewRow(
+                id: "related-rows",
+                label: "Related Rows",
+                value: "\(record.relatedRecords.count)",
+                detail: truncatedRelatedRecordCount == 0
+                    ? "Current row plus direct related rows are included."
+                    : "\(truncatedRelatedRecordCount) direct related row(s) omitted from the bounded packet."
+            )
+        )
+
+        if let relatedDomains = factValue("Related Domains", in: record) {
+            rows.append(
+                NDSDataMapReviewRow(
+                    id: "related-domains",
+                    label: "Related Domains",
+                    value: relatedDomains
+                )
+            )
+        }
+
+        rows.append(
+            NDSDataMapReviewRow(
+                id: "blocked-actions",
+                label: "Blocked Actions",
+                value: "\(blockedActions.count)",
+                detail: blockedActions.joined(separator: ", ")
+            )
+        )
+
+        if let actionState = factValue("Gen IV Action State", in: record) {
+            rows.append(
+                NDSDataMapReviewRow(
+                    id: "action-state",
+                    label: "Action State",
+                    value: actionState
+                )
+            )
+        }
+
+        return rows
+    }
+
+    private static func genIVMapReviewFacts(for packet: NDSDataMapReviewPacket) -> [SourceIndexFact] {
+        [
+            SourceIndexFact(label: "Gen IV Map Review Packet", value: packet.posture),
+            SourceIndexFact(label: "Gen IV Map Review Component", value: packet.component),
+            SourceIndexFact(label: "Gen IV Map Review Rows", value: "\(packet.rows.count)"),
+            SourceIndexFact(label: "Gen IV Map Review Related Rows", value: "\(max(0, packet.includedRecords.count - 1))")
+        ]
+    }
+
+    private static func genIVBlockedActions(for record: NDSDataCatalogRecord) -> [String] {
+        if let fact = factValue("Gen IV Blocked Actions", in: record) {
+            return fact
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        return record.readiness?.blockedActions ?? []
+    }
+
+    private static func mapReviewComponent(for sourceRole: String) -> String {
+        let lower = sourceRole.lowercased()
+        if lower.contains("mapheader") || lower.contains("header") {
+            return "mapHeader"
+        }
+        if lower.contains("mapmatrix") {
+            return "matrix"
+        }
+        if lower.contains("maptable") {
+            return "table"
+        }
+        if lower.contains("landdata") {
+            return "land"
+        }
+        if lower.contains("areadata") {
+            return "area"
+        }
+        if lower.contains("mapinventory") {
+            return "mapInventory"
+        }
+        return "map"
+    }
+
+    private static func factValue(_ label: String, in record: NDSDataCatalogRecord) -> String? {
+        record.facts.first { $0.label == label }?.value
     }
 
     private static let platinumMapBlockedActions = [
@@ -2220,6 +2526,179 @@ public enum NDSDataCatalogBuilder {
         return facts
     }
 
+    private static func genVVariantReadinessPacketRecord(
+        records: [NDSDataCatalogRecord],
+        existingRelativePaths: Set<String>
+    ) -> NDSDataCatalogRecord {
+        let relativePath = genVVariantReadinessPacketPath
+        let sourceSpan = SourceSpan(relativePath: relativePath, startLine: 1)
+        let base = NDSDataCatalogRecord(
+            id: "resources:\(relativePath)",
+            domain: .resources,
+            title: "Gen V variant readiness packet",
+            relativePath: relativePath,
+            format: .unknown,
+            role: .metadataPacket,
+            exists: true,
+            sourceSpan: sourceSpan,
+            facts: genVVariantReadinessPacketFacts(records: records),
+            preview: "Preview-only aggregate of existing Gen V catalog facts.",
+            diagnostics: [
+                Diagnostic(
+                    severity: .info,
+                    code: "NDS_GEN_V_VARIANT_READINESS_PACKET_PREVIEW_ONLY",
+                    message: "Gen V variant readiness packet aggregates existing catalog metadata only; no parsing, decoded preview, build, export, mutation apply, or write path is enabled.",
+                    span: sourceSpan
+                )
+            ]
+        )
+        let readiness = genVReadinessSummary(for: base)
+        return base.copy(
+            facts: base.facts + genVReadinessFacts(for: base, existingRelativePaths: existingRelativePaths),
+            readiness: .some(readiness),
+            diagnostics: base.diagnostics + genVReadinessDiagnostics(for: base, readiness: readiness)
+        )
+    }
+
+    private static func genVVariantReadinessPacketFacts(records: [NDSDataCatalogRecord]) -> [SourceIndexFact] {
+        var facts = [
+            SourceIndexFact(label: "Gen V Variant Readiness Packet", value: "previewOnly"),
+            SourceIndexFact(label: "Gen V Variant Readiness Basis", value: "existingCatalogFactsOnly"),
+            SourceIndexFact(label: "Gen V Variant Readiness Posture", value: "previewOnlyNoParserNoWrites"),
+            SourceIndexFact(label: "Gen V Variant Readiness Catalog Rows", value: "\(records.count)")
+        ]
+        facts.append(SourceIndexFact(label: "Gen V Variant Marker States", value: genVVariantMarkerStates(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V SHA1 Text States", value: genVSHA1TextStateSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V SHA1 Valid Digests", value: genVSHA1DigestSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Source Root Summaries", value: genVSourceRootSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Source Data Summary", value: genVSourceDataSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Fielddata Summary", value: genVFielddataSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Message Summary", value: genVMessageSummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Overlay Summary", value: genVOverlaySummary(records: records)))
+        facts.append(SourceIndexFact(label: "Gen V Build Metadata Summary", value: genVBuildMetadataSummary(records: records)))
+        return facts
+    }
+
+    private static func genVVariantMarkerStates(records: [NDSDataCatalogRecord]) -> String {
+        genVTitleCoverageSpecs.map { spec in
+            let states = records
+                .filter { genVFactValue("Gen V Variant ID", in: $0) == spec.id }
+                .compactMap { genVFactValue("Gen V Variant State", in: $0) }
+            let state = states.contains("sourceMarkerPresent") ? "sourceMarkerPresent" : (states.first ?? "missing")
+            return "\(spec.id)=\(state)"
+        }.joined(separator: ", ")
+    }
+
+    private static func genVSHA1TextStateSummary(records: [NDSDataCatalogRecord]) -> String {
+        genVTitleCoverageSpecs.map { spec in
+            let state = records
+                .first { $0.relativePath.lowercased() == "\(spec.id)/rom.sha1" }
+                .flatMap { genVFactValue("Gen V SHA1 Text State", in: $0) } ?? "missing"
+            return "\(spec.id)=\(state)"
+        }.joined(separator: ", ")
+    }
+
+    private static func genVSHA1DigestSummary(records: [NDSDataCatalogRecord]) -> String {
+        let digests = genVTitleCoverageSpecs.compactMap { spec -> String? in
+            guard let record = records.first(where: { $0.relativePath.lowercased() == "\(spec.id)/rom.sha1" }),
+                  let digest = genVFactValue("Gen V SHA1 Text Digest", in: record)
+            else { return nil }
+            return "\(spec.id)=\(digest)"
+        }
+        return digests.isEmpty ? "none" : digests.joined(separator: ", ")
+    }
+
+    private static func genVSourceRootSummary(records: [NDSDataCatalogRecord]) -> String {
+        let rootSpecs = [
+            ("src", "Gen V Source Root"),
+            ("asm", "Gen V Assembly Root"),
+            ("include", "Gen V Header Root")
+        ]
+        return rootSpecs.map { path, prefix in
+            guard let record = records.first(where: { $0.relativePath.lowercased() == path }) else {
+                return "\(path)=missing"
+            }
+            let members = genVFactValue("\(prefix) Members", in: record) ?? "0"
+            let bytes = genVFactValue("\(prefix) Bytes", in: record) ?? "0"
+            return "\(path)=\(members)/\(bytes)"
+        }.joined(separator: ", ")
+    }
+
+    private static func genVSourceDataSummary(records: [NDSDataCatalogRecord]) -> String {
+        let roots = records
+            .filter { genVFactValue("Gen V Source Data Blocked Reason", in: $0) == "domainInventoryPreviewOnly" }
+            .sorted(by: recordSort)
+        let members = records
+            .filter { genVFactValue("Gen V Source Data Blocked Reason", in: $0) == "memberMetadataPreviewOnly" }
+        let coverage = roots.compactMap { genVFactValue("Gen V Source Data Variant Coverage", in: $0) }.first ?? "missing"
+        let sampleRoots = roots.prefix(maxContainerSampleMembers).map(\.relativePath).joined(separator: ", ")
+        return "roots=\(roots.count), members=\(members.count), variantCoverage=\(coverage), sampleRoots=\(sampleRoots.isEmpty ? "none" : sampleRoots)"
+    }
+
+    private static func genVFielddataSummary(records: [NDSDataCatalogRecord]) -> String {
+        let inventoryRoles: Set<String> = [
+            "fielddataInventory",
+            "fielddataMapMatrixInventory",
+            "fielddataMapTableInventory",
+            "fielddataScriptInventory",
+            "fielddataZoneEventInventory"
+        ]
+        let roots = records
+            .filter { record in
+                guard let role = genVFactValue("Gen V Source Role", in: record) else { return false }
+                return inventoryRoles.contains(role)
+            }
+            .sorted(by: recordSort)
+        let sampleRoots = roots.prefix(maxContainerSampleMembers).map(\.relativePath).joined(separator: ", ")
+        return "roots=\(roots.count), sampleRoots=\(sampleRoots.isEmpty ? "none" : sampleRoots)"
+    }
+
+    private static func genVMessageSummary(records: [NDSDataCatalogRecord]) -> String {
+        let root = records.first { $0.relativePath.lowercased() == "files/msgdata" }
+        let candidateCount = root.flatMap { genVFactValue("Gen V Message Candidate Count", in: $0) } ?? "0"
+        let extensions = root.flatMap { genVFactValue("Gen V Message Candidate Extensions", in: $0) } ?? "none"
+        let noDecodedPreviewRows = records.filter { genVFactValue("Gen V Message Decoded Preview", in: $0) == "noDecodedPreview" }.count
+        return "candidates=\(candidateCount), extensions=\(extensions), noDecodedPreviewRows=\(noDecodedPreviewRows)"
+    }
+
+    private static func genVOverlaySummary(records: [NDSDataCatalogRecord]) -> String {
+        let overlay = records.first { $0.relativePath.lowercased() == "overlays" }
+        let disassembly = records.first { $0.relativePath.lowercased() == "ndsdisasm_config" }
+        return [
+            genVMemberByteSummary(record: overlay, prefix: "Gen V Overlay", label: "overlays"),
+            genVMemberByteSummary(record: disassembly, prefix: "Gen V Disassembly Config", label: "ndsdisasm_config")
+        ].joined(separator: ", ")
+    }
+
+    private static func genVBuildMetadataSummary(records: [NDSDataCatalogRecord]) -> String {
+        guard let makefile = records.first(where: { $0.relativePath.lowercased() == "makefile" }) else {
+            return "missing"
+        }
+        return [
+            "Makefile=\(genVFactValue("Gen V Makefile Presence", in: makefile) ?? "missing")",
+            "config.mk=\(genVFactValue("Gen V Config Presence", in: makefile) ?? "missing")",
+            "linker=\(genVFactValue("Gen V Linker Presence", in: makefile) ?? "missing")",
+            "variantHashes=\(genVFactValue("Gen V Variant Hash Presence", in: makefile) ?? "missing")",
+            "main.rsf=\(genVFactValue("Gen V main.rsf Presence", in: makefile) ?? "missing")",
+            "main.lsf=\(genVFactValue("Gen V main.lsf Presence", in: makefile) ?? "missing")"
+        ].joined(separator: "; ")
+    }
+
+    private static func genVMemberByteSummary(
+        record: NDSDataCatalogRecord?,
+        prefix: String,
+        label: String
+    ) -> String {
+        guard let record else { return "\(label)=missing" }
+        let members = genVFactValue("\(prefix) Members", in: record) ?? "0"
+        let bytes = genVFactValue("\(prefix) Bytes", in: record) ?? "0"
+        return "\(label)=\(members)/\(bytes)"
+    }
+
+    private static func genVFactValue(_ label: String, in record: NDSDataCatalogRecord) -> String? {
+        record.facts.first { $0.label == label }?.value
+    }
+
     private static func genVEncounterRecordFacts(for record: NDSDataCatalogRecord) -> [SourceIndexFact] {
         guard record.domain == .encounters,
               record.relativePath.lowercased().hasPrefix("data/encounters/")
@@ -2628,6 +3107,9 @@ public enum NDSDataCatalogBuilder {
             return "titleUnavailable"
         }
         let lower = record.relativePath.lowercased()
+        if lower == genVVariantReadinessPacketPath {
+            return "variantReadinessPacket"
+        }
         if lower.hasPrefix("data/encounters/") {
             return "encounterPreview"
         }
@@ -2757,6 +3239,8 @@ public enum NDSDataCatalogBuilder {
 
     private static func genVSourceRoleDetail(for role: String) -> String {
         switch role {
+        case "variantReadinessPacket":
+            return "The Gen V variant readiness packet aggregates existing catalog facts for orientation only."
         case "encounterPreview":
             return "Encounter data is indexed for preview-only record facts."
         case "dataInventory":
@@ -4182,6 +4666,7 @@ public enum NDSDataCatalogBuilder {
 
     private static let maxDiscoveredContainerRecords = 256
     private static let maxContainerSampleMembers = 8
+    private static let genVVariantReadinessPacketPath = "gen-v/variant-readiness-packet"
     private static let maxMemberFingerprintBytes = 32
     private static let maxMemberMagicBytes = 8
     private static let maxTextBankPreviewBytes = 65536

@@ -62,6 +62,80 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         XCTAssertEqual(decoded, ValidationTierReport(rows: rows))
     }
 
+    func testGenVManualBuildReadinessRowsStayCopyOnly() throws {
+        let root = try makeGenVManualBuildReadinessRoot()
+        let index = makeIndex(
+            root: root,
+            profile: .pokeblack,
+            documents: [
+                SourceDocument(relativePath: "Makefile", kind: .makefile, exists: true),
+                SourceDocument(relativePath: "config.mk", kind: .configuration, exists: true),
+                SourceDocument(relativePath: "src", kind: .cSource, exists: true),
+                SourceDocument(relativePath: "asm", kind: .assembly, exists: true),
+                SourceDocument(relativePath: "include", kind: .cHeader, exists: true)
+            ],
+            generatedOutputs: [
+                SourceDocument(relativePath: "build", kind: .generated, role: .artifact, exists: false),
+                SourceDocument(relativePath: "pokeblack.nds", kind: .generated, role: .artifact, exists: false)
+            ],
+            buildTargets: [
+                BuildTarget(id: "black-rom", name: "Build Pokemon Black ROM", kind: .build, command: ["make"], outputPath: "pokeblack.nds")
+            ]
+        )
+
+        let report = ToolchainHealthMatrixBuilder.build(
+            index: index,
+            toolResolver: availableTools(["make": "/usr/bin/make"])
+        )
+
+        XCTAssertTrue(report.isPreviewOnly)
+        let readinessRows = report.rows.filter { $0.id.hasPrefix("gen-v-build-readiness:") }
+        XCTAssertEqual(
+            Set(readinessRows.map(\.id)),
+            [
+                "gen-v-build-readiness:metadata",
+                "gen-v-build-readiness:source-roots",
+                "gen-v-build-readiness:variant-sha1",
+                "gen-v-build-readiness:generated-output"
+            ]
+        )
+        XCTAssertTrue(readinessRows.allSatisfy { $0.category == .generatedArtifacts })
+        XCTAssertTrue(readinessRows.flatMap(\.actions).allSatisfy(\.isPreviewOnly))
+
+        let metadata = try XCTUnwrap(readinessRows.first { $0.id == "gen-v-build-readiness:metadata" })
+        XCTAssertEqual(metadata.status, .ready)
+        XCTAssertTrue(metadata.detail.contains("Makefile=present"))
+        XCTAssertTrue(metadata.detail.contains("config.mk=present"))
+        XCTAssertTrue(metadata.detail.contains("arm9.ld=present, arm7.ld=present"))
+        XCTAssertTrue(metadata.detail.contains("build execution and generated-output writes remain disabled"))
+        XCTAssertTrue(metadata.actions.contains { $0.kind == .copyCommand && $0.command == "make" })
+
+        let sourceRoots = try XCTUnwrap(readinessRows.first { $0.id == "gen-v-build-readiness:source-roots" })
+        XCTAssertEqual(sourceRoots.status, .ready)
+        XCTAssertTrue(sourceRoots.detail.contains("src=5 members/92 bytes"))
+        XCTAssertTrue(sourceRoots.detail.contains("asm=1 members/5 bytes"))
+        XCTAssertTrue(sourceRoots.detail.contains("include=1 members/16 bytes"))
+        XCTAssertTrue(sourceRoots.detail.contains("C, ASM, and header parsing/editing remain disabled"))
+        XCTAssertEqual(sourceRoots.actions.filter { $0.kind == .copyPath }.count, 3)
+
+        let variants = try XCTUnwrap(readinessRows.first { $0.id == "gen-v-build-readiness:variant-sha1" })
+        XCTAssertEqual(variants.status, .warning)
+        XCTAssertTrue(variants.detail.contains("black.us/rom.sha1=valid:ffffffffffffffffffffffffffffffffffffffff"))
+        XCTAssertTrue(variants.detail.contains("white.us/rom.sha1=missing"))
+        XCTAssertTrue(variants.detail.contains("ROM bytes and variants are not built, patched, or playtested"))
+        XCTAssertTrue(variants.actions.contains { $0.kind == .copyPath && $0.payload == "black.us/rom.sha1" })
+
+        let generated = try XCTUnwrap(readinessRows.first { $0.id == "gen-v-build-readiness:generated-output" })
+        XCTAssertEqual(generated.status, .warning)
+        XCTAssertTrue(generated.detail.contains("build=missing"))
+        XCTAssertTrue(generated.detail.contains("pokeblack.nds=missing"))
+        XCTAssertTrue(generated.detail.contains("black-rom:pokeblack.nds=missing"))
+        XCTAssertTrue(generated.detail.contains("generated-output writes remain disabled"))
+        XCTAssertTrue(generated.actions.contains { $0.kind == .copyCommand && $0.command == "make" })
+        XCTAssertTrue(generated.actions.contains { $0.kind == .copyPath && $0.payload == "pokeblack.nds" })
+        XCTAssertTrue(generated.actions.contains { $0.kind == .rerunGuidance })
+    }
+
     func testBuildReportValidatesOutputChecksumFreshnessAndToolAvailability() throws {
         let root = try makeTemporaryRoot()
         let source = root.appendingPathComponent("src/main.c")
@@ -1583,6 +1657,25 @@ final class BuildPatchPlaytestValidationTests: XCTestCase {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("include"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("graphics"), withIntermediateDirectories: true)
+        return root
+    }
+
+    private func makeGenVManualBuildReadinessRoot() throws -> URL {
+        let root = try makeTemporaryRoot()
+        try write("GAME_VERSION ?= BLACK\nSUPPORTED_ROMS := black.us\n", to: root.appendingPathComponent("config.mk"))
+        try write("ROM := pokeblack.nds\n", to: root.appendingPathComponent("Makefile"))
+        try write("NitroROMSpec\n", to: root.appendingPathComponent("main.rsf"))
+        try write("main linker script\n", to: root.appendingPathComponent("main.lsf"))
+        try write("arm9 linker script\n", to: root.appendingPathComponent("arm9.ld"))
+        try write("arm7 linker script\n", to: root.appendingPathComponent("arm7.ld"))
+        try write("ffffffffffffffffffffffffffffffffffffffff  pokeblack.nds\n", to: root.appendingPathComponent("black.us/rom.sha1"))
+        try write("void Init(void) {}\n", to: root.appendingPathComponent("src/init.c"))
+        try write("pokemon-source-inc\n", to: root.appendingPathComponent("src/data/pokemon/source_pokemon.inc"))
+        try write("moves-source-inc\n", to: root.appendingPathComponent("src/data/moves/source_moves.inc"))
+        try write("items-source-inc\n", to: root.appendingPathComponent("src/data/items/source_items.inc"))
+        try write("trainers-source-inc\n", to: root.appendingPathComponent("src/data/trainers/source_trainers.inc"))
+        try write("arm9\n", to: root.appendingPathComponent("asm/arm9_remaining.s"))
+        try write("#define BLACK 1\n", to: root.appendingPathComponent("include/globals.h"))
         return root
     }
 

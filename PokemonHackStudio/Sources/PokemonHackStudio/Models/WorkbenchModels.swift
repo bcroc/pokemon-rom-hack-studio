@@ -2580,6 +2580,7 @@ struct NDSDataResourceEditorViewState {
     let recordID: String
     let text: String
     let semanticFields: [NDSDataSemanticFieldViewState]
+    let rowOperations: NDSDataResourceRowOperationEditorViewState?
     let readiness: NDSDataResourceReadinessViewState
     let canEdit: Bool
     let isDirty: Bool
@@ -2658,6 +2659,106 @@ struct NDSDataSemanticFieldViewState: Identifiable {
     let label: String
     let value: String
     let valueKind: String
+}
+
+enum NDSDataResourceRowOperationFamily: String, Identifiable {
+    case textLines
+    case itemCSVRows
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .textLines:
+            "Text Lines"
+        case .itemCSVRows:
+            "Item CSV Rows"
+        }
+    }
+
+    var insertValueTitle: String {
+        switch self {
+        case .textLines:
+            "Line"
+        case .itemCSVRows:
+            "CSV Row"
+        }
+    }
+
+    var insertValuePlaceholder: String {
+        switch self {
+        case .textLines:
+            "Text"
+        case .itemCSVRows:
+            "CSV row"
+        }
+    }
+}
+
+enum NDSDataResourceRowOperationKind: String, CaseIterable, Identifiable {
+    case insert
+    case delete
+    case reorder
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .insert:
+            "Insert"
+        case .delete:
+            "Delete"
+        case .reorder:
+            "Reorder"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .insert:
+            "plus"
+        case .delete:
+            "minus"
+        case .reorder:
+            "arrow.up.arrow.down"
+        }
+    }
+}
+
+struct NDSDataResourceRowOperationEditorViewState {
+    let family: NDSDataResourceRowOperationFamily
+    let title: String
+    let stagedOperations: [NDSDataResourceRowOperationViewState]
+    let beforeCount: Int?
+    let afterCount: Int?
+    let canStage: Bool
+    let canRemoveLast: Bool
+    let canClear: Bool
+
+    var stagedCount: Int {
+        stagedOperations.count
+    }
+
+    var countSummary: String {
+        if let beforeCount, let afterCount {
+            return "\(beforeCount) -> \(afterCount)"
+        }
+        if let beforeCount {
+            return "\(beforeCount)"
+        }
+        return "Pending"
+    }
+}
+
+struct NDSDataResourceRowOperationViewState: Identifiable {
+    let id: String
+    let kind: NDSDataResourceRowOperationKind
+    let summary: String
+    let detail: String?
 }
 
 enum MapCatalogLoadStatus: Equatable {

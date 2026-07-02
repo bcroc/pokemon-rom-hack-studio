@@ -310,6 +310,60 @@ final class PokemonItemCatalogTests: XCTestCase {
         XCTAssertEqual(edited.secondaryId, "ITEM_ANTIDOTE")
     }
 
+    func testExpansionItemInfoMissingBehaviorScalarsInsertAsAnchoredGroupBackUpReloadAndBlockDrift() throws {
+        let root = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: root, includeBehaviorScalars: false)
+
+        let catalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let potion = try XCTUnwrap(catalog.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertNil(potion.fieldUseFunc)
+        XCTAssertNil(potion.battleUsage)
+        XCTAssertNil(potion.battleUseFunc)
+        XCTAssertNil(potion.secondaryId)
+
+        var draft = try XCTUnwrap(ItemEditDraft(detail: potion))
+        draft.fieldUseFunc = "ItemUseOutOfBattle_EscapeRope"
+        draft.battleUsage = "EFFECT_ITEM_CURE_POISON"
+        draft.battleUseFunc = "ItemUseInBattle_Medicine"
+        draft.secondaryId = "ITEM_ANTIDOTE"
+
+        let plan = ItemMutationPlanner.plan(catalog: catalog, draft: draft)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.diagnostics.filter { $0.severity == .error }.isEmpty, "\(plan.diagnostics)")
+        XCTAssertTrue(plan.isApplyable)
+        let preview = try XCTUnwrap(plan.changes.first?.textPreview)
+        let effectOffset = try XCTUnwrap(offset(of: ".effect = ITEM_EFFECT_HEAL,", in: preview))
+        let fieldUseOffset = try XCTUnwrap(offset(of: ".fieldUseFunc = ItemUseOutOfBattle_EscapeRope,", in: preview))
+        let battleUsageOffset = try XCTUnwrap(offset(of: ".battleUsage = EFFECT_ITEM_CURE_POISON,", in: preview))
+        let battleUseOffset = try XCTUnwrap(offset(of: ".battleUseFunc = ItemUseInBattle_Medicine,", in: preview))
+        let secondaryOffset = try XCTUnwrap(offset(of: ".secondaryId = ITEM_ANTIDOTE,", in: preview))
+        let iconOffset = try XCTUnwrap(offset(of: ".iconPic = gItemIcon_Potion,", in: preview))
+        XCTAssertLessThan(effectOffset, fieldUseOffset)
+        XCTAssertLessThan(fieldUseOffset, battleUsageOffset)
+        XCTAssertLessThan(battleUsageOffset, battleUseOffset)
+        XCTAssertLessThan(battleUseOffset, secondaryOffset)
+        XCTAssertLessThan(secondaryOffset, iconOffset)
+
+        let sourcePath = root.appendingPathComponent("src/data/items.h")
+        let original = try String(contentsOf: sourcePath, encoding: .utf8)
+        try "\(original)\n// drift\n".write(to: sourcePath, atomically: true, encoding: .utf8)
+        let driftApplyability = plan.validateApplyability()
+        XCTAssertFalse(driftApplyability.isApplyable)
+        XCTAssertTrue(driftApplyability.diagnostics.contains { $0.code == "ITEM_APPLY_ORIGINAL_SIZE_MISMATCH" || $0.code == "ITEM_APPLY_ORIGINAL_HASH_MISMATCH" })
+        try original.write(to: sourcePath, atomically: true, encoding: .utf8)
+
+        let result = try ItemMutationApplier.apply(plan: plan)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+
+        let reloaded = try ProjectItemCatalogBuilder.build(index: projectIndex(root: root, profile: .pokeemeraldExpansion))
+        let edited = try XCTUnwrap(reloaded.items.first { $0.itemID == "ITEM_POTION" })
+        XCTAssertEqual(edited.fieldUseFunc, "ItemUseOutOfBattle_EscapeRope")
+        XCTAssertEqual(edited.battleUsage, "EFFECT_ITEM_CURE_POISON")
+        XCTAssertEqual(edited.battleUseFunc, "ItemUseInBattle_Medicine")
+        XCTAssertEqual(edited.secondaryId, "ITEM_ANTIDOTE")
+    }
+
     func testExpansionItemInfoUsageScalarsRejectNonSimpleValuesRemovalAndMissingFields() throws {
         let root = try temporaryRoot()
         try makeExpansionItemInfoProject(at: root)
@@ -385,7 +439,34 @@ final class PokemonItemCatalogTests: XCTestCase {
         let missingPlan = ItemMutationPlanner.plan(catalog: missingCatalog, draft: missingDraft)
         XCTAssertTrue(missingPlan.changes.isEmpty)
         XCTAssertFalse(missingPlan.isApplyable)
-        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_BEHAVIOR_SCALAR_NOT_EDITABLE" && $0.message.contains("missing-field insertion") })
+        XCTAssertTrue(missingPlan.diagnostics.contains { $0.code == "ITEM_BEHAVIOR_SCALAR_INSERTION_REQUIRED" && $0.message.contains("together") })
+
+        let missingAnchorRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: missingAnchorRoot, includeBehaviorScalars: false, includeIconPicAnchor: false)
+        let missingAnchorCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: missingAnchorRoot, profile: .pokeemeraldExpansion))
+        let missingAnchorPotion = try XCTUnwrap(missingAnchorCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var missingAnchorDraft = try XCTUnwrap(ItemEditDraft(detail: missingAnchorPotion))
+        missingAnchorDraft.fieldUseFunc = "ItemUseOutOfBattle_Medicine"
+        missingAnchorDraft.battleUsage = "EFFECT_ITEM_RESTORE_HP"
+        missingAnchorDraft.battleUseFunc = "NULL"
+        missingAnchorDraft.secondaryId = "0"
+
+        let missingAnchorPlan = ItemMutationPlanner.plan(catalog: missingAnchorCatalog, draft: missingAnchorDraft)
+        XCTAssertTrue(missingAnchorPlan.changes.isEmpty)
+        XCTAssertFalse(missingAnchorPlan.isApplyable)
+        XCTAssertTrue(missingAnchorPlan.diagnostics.contains { $0.code == "ITEM_BEHAVIOR_SCALAR_INSERTION_ANCHOR_MISSING" })
+
+        let nonSimpleCurrentRoot = try temporaryRoot()
+        try makeExpansionItemInfoProject(at: nonSimpleCurrentRoot, fieldUseFuncValue: "GetFieldUseFunc(ITEM_POTION)")
+        let nonSimpleCurrentCatalog = try ProjectItemCatalogBuilder.build(index: projectIndex(root: nonSimpleCurrentRoot, profile: .pokeemeraldExpansion))
+        let nonSimpleCurrentPotion = try XCTUnwrap(nonSimpleCurrentCatalog.items.first { $0.itemID == "ITEM_POTION" })
+        var nonSimpleCurrentDraft = try XCTUnwrap(ItemEditDraft(detail: nonSimpleCurrentPotion))
+        nonSimpleCurrentDraft.fieldUseFunc = "ItemUseOutOfBattle_Medicine"
+
+        let nonSimpleCurrentPlan = ItemMutationPlanner.plan(catalog: nonSimpleCurrentCatalog, draft: nonSimpleCurrentDraft)
+        XCTAssertTrue(nonSimpleCurrentPlan.changes.isEmpty)
+        XCTAssertFalse(nonSimpleCurrentPlan.isApplyable)
+        XCTAssertTrue(nonSimpleCurrentPlan.diagnostics.contains { $0.code == "ITEM_BEHAVIOR_SCALAR_UNSUPPORTED_EXPRESSION" && $0.message.contains("fieldUseFunc") })
     }
 
     func testExpansionItemInfoBagClassificationScalarsPlanApplyBackUpReloadAndBlockDrift() throws {
@@ -718,9 +799,11 @@ final class PokemonItemCatalogTests: XCTestCase {
         """,
         holdEffectValue: String = "HOLD_EFFECT_NONE",
         sortTypeValue: String = "ITEM_TYPE_HEALTH_RECOVERY",
+        fieldUseFuncValue: String = "ItemUseOutOfBattle_Medicine",
         includeUsageScalars: Bool = true,
         includeBehaviorScalars: Bool = true,
-        includeBagClassificationScalars: Bool = true
+        includeBagClassificationScalars: Bool = true,
+        includeIconPicAnchor: Bool = true
     ) throws {
         var source = """
             const struct ItemInfo gItemsInfo[] =
@@ -762,14 +845,18 @@ final class PokemonItemCatalogTests: XCTestCase {
             """
         if includeBehaviorScalars {
             source += """
-                    .fieldUseFunc = ItemUseOutOfBattle_Medicine,
+                    .fieldUseFunc = \(fieldUseFuncValue),
                     .battleUsage = EFFECT_ITEM_RESTORE_HP,
                     .battleUseFunc = NULL,
                     .secondaryId = 0,
             """
         }
-        source += """
+        if includeIconPicAnchor {
+            source += """
                     .iconPic = gItemIcon_Potion,
+            """
+        }
+        source += """
                     .iconPalette = gItemIconPalette_Potion,
                 },
             };
@@ -928,5 +1015,9 @@ final class PokemonItemCatalogTests: XCTestCase {
 
     private func fact(_ label: String, in facts: [SourceIndexFact]) -> String? {
         facts.first { $0.label == label }?.value
+    }
+
+    private func offset(of needle: String, in haystack: String) -> Int? {
+        haystack.range(of: needle).map { haystack.distance(from: haystack.startIndex, to: $0.lowerBound) }
     }
 }

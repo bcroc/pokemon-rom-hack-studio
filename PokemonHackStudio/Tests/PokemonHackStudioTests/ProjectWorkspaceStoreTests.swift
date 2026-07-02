@@ -10,6 +10,28 @@ final class ProjectWorkspaceStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testProjectFileSaveUsesInProjectPersistencePath() throws {
+        let root = try makeUnifiedDataProject()
+        let store = try makeStore(workspaceRoot: root.deletingLastPathComponent())
+        let expectedURL = ProjectWorkspacePersistence.projectFileURL(root: root)
+
+        XCTAssertNil(store.selectedProjectFilePath)
+
+        store.openProject(path: root.path)
+
+        XCTAssertEqual(store.selectedProjectFilePath, expectedURL.path)
+        XCTAssertTrue(store.canSaveProjectWorkspace)
+        XCTAssertTrue(store.saveProjectWorkspace())
+        XCTAssertEqual(store.workspacePersistenceStatus, "Project file saved")
+        XCTAssertNil(store.workspacePersistenceError)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expectedURL.path))
+
+        let saved = try XCTUnwrap(ProjectWorkspacePersistence.loadProject(root: root))
+        XCTAssertEqual(saved.projectRootPath, root.path)
+        XCTAssertEqual(saved.drafts.counts.total, 0)
+    }
+
+    @MainActor
     func testDataDraftsSaveReloadPreviewApplyAndClear() async throws {
         let root = try makeUnifiedDataProject()
         let firstStore = try makeStore(workspaceRoot: root.deletingLastPathComponent())

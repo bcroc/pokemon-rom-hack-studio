@@ -250,7 +250,7 @@ public enum ToolchainHealthMatrixBuilder {
         rows.append(contentsOf: externalToolRows(index: index, root: root, buildReport: buildReport, playtestReport: playtestReport, fileManager: fileManager, toolResolver: toolResolver))
         rows.append(contentsOf: romHeaderRows(index: index, root: root, buildReport: buildReport, fileManager: fileManager))
         rows.append(contentsOf: graphicsConversionRows(index: index, root: root, graphicsReport: graphicsReport, fileManager: fileManager))
-        rows.append(contentsOf: generatedArtifactRows(index: index, buildReport: buildReport, graphicsReport: graphicsReport))
+        rows.append(contentsOf: generatedArtifactRows(index: index, root: root, buildReport: buildReport, graphicsReport: graphicsReport, fileManager: fileManager))
 
         let diagnostics = [
             healthDiagnostic(
@@ -1462,11 +1462,14 @@ public enum ToolchainHealthMatrixBuilder {
 
     private static func generatedArtifactRows(
         index: ProjectIndex,
+        root: URL,
         buildReport: BuildValidationReport,
-        graphicsReport: GraphicsDiagnosticsReport?
+        graphicsReport: GraphicsDiagnosticsReport?,
+        fileManager: FileManager
     ) -> [ToolchainHealthMatrixRow] {
         if index.profile.platform == .nds {
             return ndsGeneratedArtifactRows(index: index, buildReport: buildReport)
+                + genVManualBuildReadinessRows(index: index, root: root, buildReport: buildReport, fileManager: fileManager)
         }
 
         let generatedGroups = buildReport.generatedArtifacts
@@ -1530,6 +1533,341 @@ public enum ToolchainHealthMatrixBuilder {
         }
 
         return rows
+    }
+
+    private static func genVManualBuildReadinessRows(
+        index: ProjectIndex,
+        root: URL,
+        buildReport: BuildValidationReport,
+        fileManager: FileManager
+    ) -> [ToolchainHealthMatrixRow] {
+        guard index.profile == .pokeblack,
+              index.profile.projectKind == .sourceTree
+        else {
+            return []
+        }
+
+        return [
+            genVBuildMetadataReadinessRow(root: root, buildReport: buildReport, fileManager: fileManager),
+            genVSourceRootReadinessRow(root: root, fileManager: fileManager),
+            genVVariantSHA1ReadinessRow(root: root, fileManager: fileManager),
+            genVGeneratedOutputReadinessRow(index: index, buildReport: buildReport)
+        ]
+    }
+
+    private static func genVBuildMetadataReadinessRow(
+        root: URL,
+        buildReport: BuildValidationReport,
+        fileManager: FileManager
+    ) -> ToolchainHealthMatrixRow {
+        let paths = ["Makefile", "config.mk", "arm9.ld", "arm7.ld", "main.rsf", "main.lsf"]
+        let states = paths.map { path in
+            "\(path)=\(genVPathExists(path, root: root, fileManager: fileManager) ? "present" : "missing")"
+        }
+        let missing = paths.filter { !genVPathExists($0, root: root, fileManager: fileManager) }
+        var actions: [ToolchainHealthAction] = []
+        if genVPathExists("Makefile", root: root, fileManager: fileManager) {
+            actions.append(
+                copyPathAction(
+                    id: "copy-gen-v-makefile-path",
+                    title: "Copy Makefile path",
+                    path: "Makefile",
+                    detail: "Copies the Gen V Makefile path for manual inspection; PokemonHackStudio will not run it."
+                )
+            )
+        }
+        actions.append(contentsOf: genVBuildCommandActions(from: buildReport, suffix: "metadata"))
+
+        return ToolchainHealthMatrixRow(
+            id: "gen-v-build-readiness:metadata",
+            category: .generatedArtifacts,
+            title: "Gen V build metadata",
+            subject: "Pokemon Black/White manual build readiness",
+            status: missing.isEmpty ? .ready : .warning,
+            detail: "\(states.joined(separator: ", ")). Copy-only manual readiness facts; build execution and generated-output writes remain disabled.",
+            source: SourceSpan(relativePath: "Makefile", startLine: 1),
+            diagnostics: missing.map { path in
+                healthDiagnostic(
+                    severity: .warning,
+                    code: "GEN_V_BUILD_METADATA_MISSING",
+                    message: "Gen V manual build metadata path \(path) is missing.",
+                    span: SourceSpan(relativePath: path, startLine: 1)
+                )
+            },
+            actions: actions
+        )
+    }
+
+    private static func genVSourceRootReadinessRow(
+        root: URL,
+        fileManager: FileManager
+    ) -> ToolchainHealthMatrixRow {
+        let summaries = ["src", "asm", "include"].map {
+            genVDirectorySummary(path: $0, root: root, fileManager: fileManager)
+        }
+        let missing = summaries.filter { !$0.exists }.map(\.path)
+        let detail = summaries.map { summary in
+            if !summary.exists {
+                return "\(summary.path)=missing"
+            }
+            let samples = summary.samplePaths.isEmpty ? "none" : summary.samplePaths.joined(separator: "|")
+            return "\(summary.path)=\(summary.memberCount) members/\(summary.byteCount) bytes samples \(samples)"
+        }.joined(separator: "; ")
+
+        let copyActions = summaries.filter(\.exists).map { summary in
+            copyPathAction(
+                id: "copy-gen-v-source-root-\(summary.path)",
+                title: "Copy \(summary.path) path",
+                path: summary.path,
+                detail: "Copies the \(summary.path) source-root path for manual inspection; no parser or writer is enabled."
+            )
+        }
+
+        return ToolchainHealthMatrixRow(
+            id: "gen-v-build-readiness:source-roots",
+            category: .generatedArtifacts,
+            title: "Gen V source roots",
+            subject: "src, asm, include",
+            status: missing.isEmpty ? .ready : .warning,
+            detail: "\(detail). Counts are bounded path/size facts only; C, ASM, and header parsing/editing remain disabled.",
+            source: SourceSpan(relativePath: "src", startLine: 1),
+            diagnostics: missing.map { path in
+                healthDiagnostic(
+                    severity: .warning,
+                    code: "GEN_V_SOURCE_ROOT_MISSING",
+                    message: "Gen V source-root path \(path) is missing.",
+                    span: SourceSpan(relativePath: path, startLine: 1)
+                )
+            },
+            actions: copyActions
+        )
+    }
+
+    private static func genVVariantSHA1ReadinessRow(
+        root: URL,
+        fileManager: FileManager
+    ) -> ToolchainHealthMatrixRow {
+        let states = ["black.us/rom.sha1", "white.us/rom.sha1", "black2.us/rom.sha1", "white2.us/rom.sha1"]
+            .map { genVSHA1MarkerState(path: $0, root: root, fileManager: fileManager) }
+        let summaries = states.map(\.summary)
+        let hasMissingOrInvalid = states.contains { state in
+            state.state == "missing" || state.state == "invalid" || state.state == "empty"
+        }
+        let actions = states.filter { $0.state != "missing" }.map { state in
+            copyPathAction(
+                id: "copy-gen-v-sha1-\(state.path.replacingOccurrences(of: "/", with: "-"))",
+                title: "Copy \(state.variantID) SHA1 path",
+                path: state.path,
+                detail: "Copies the variant SHA1 marker path for manual inspection; ROM bytes are not read or compared."
+            )
+        }
+
+        return ToolchainHealthMatrixRow(
+            id: "gen-v-build-readiness:variant-sha1",
+            category: .generatedArtifacts,
+            title: "Gen V variant SHA1 markers",
+            subject: "Black, White, Black 2, White 2",
+            status: hasMissingOrInvalid ? .warning : .ready,
+            detail: "\(summaries.joined(separator: ", ")). SHA1 text is inspected only from marker files; ROM bytes and variants are not built, patched, or playtested.",
+            source: SourceSpan(relativePath: "black.us/rom.sha1", startLine: 1),
+            diagnostics: states.compactMap { state in
+                guard state.state == "invalid" || state.state == "empty" else { return nil }
+                return healthDiagnostic(
+                    severity: .warning,
+                    code: "GEN_V_VARIANT_SHA1_MARKER_INVALID",
+                    message: "Gen V variant SHA1 marker \(state.path) is \(state.state).",
+                    span: SourceSpan(relativePath: state.path, startLine: 1)
+                )
+            },
+            actions: actions
+        )
+    }
+
+    private static func genVGeneratedOutputReadinessRow(
+        index: ProjectIndex,
+        buildReport: BuildValidationReport
+    ) -> ToolchainHealthMatrixRow {
+        let generatedSummaries = buildReport.generatedArtifacts.map { item in
+            "\(item.relativePath)=\(item.exists ? "present" : "missing")"
+        }
+        let generatedMissing = buildReport.generatedArtifacts.filter { !$0.exists }.count
+        let target = buildReport.targets.first { $0.target.id == "black-rom" } ?? buildReport.targets.first
+        let targetSummary: String
+        if let target {
+            if let output = target.output {
+                targetSummary = "\(target.target.id):\(output.relativePath)=\(output.exists ? "present" : "missing")"
+            } else if let outputPath = target.target.outputPath {
+                targetSummary = "\(target.target.id):\(outputPath)=notApplicable"
+            } else {
+                targetSummary = "\(target.target.id)=no-output-path"
+            }
+        } else {
+            targetSummary = "black-rom=missing-target"
+        }
+        let targetOutputMissing = target?.output?.exists == false || target == nil
+        var actions = genVBuildCommandActions(from: buildReport, suffix: "generated-output")
+        if let outputPath = target?.target.outputPath {
+            actions.append(
+                copyPathAction(
+                    id: "copy-gen-v-declared-output-path",
+                    title: "Copy declared output path",
+                    path: outputPath,
+                    detail: "Copies the declared Gen V output path for manual inspection; PokemonHackStudio will not write it."
+                )
+            )
+        }
+        if generatedMissing > 0 || targetOutputMissing {
+            actions.append(
+                rerunGuidanceAction(
+                    id: "rerun-gen-v-manual-build-readiness",
+                    title: "Build externally and rerun",
+                    detail: "Run the copied Gen V build command outside PokemonHackStudio, then rerun health to refresh output facts."
+                )
+            )
+        }
+
+        return ToolchainHealthMatrixRow(
+            id: "gen-v-build-readiness:generated-output",
+            category: .generatedArtifacts,
+            title: "Gen V generated outputs",
+            subject: index.adapterName,
+            status: generatedMissing == 0 && !targetOutputMissing ? .ready : .warning,
+            detail: "Declared outputs \(generatedSummaries.isEmpty ? "none" : generatedSummaries.joined(separator: ", ")); target \(targetSummary). Build command and paths are copy-only manual facts; generated-output writes remain disabled.",
+            source: SourceSpan(relativePath: target?.target.outputPath ?? "pokeblack.nds", startLine: 1),
+            diagnostics: [],
+            actions: actions
+        )
+    }
+
+    private static func genVBuildCommandActions(
+        from buildReport: BuildValidationReport,
+        suffix: String
+    ) -> [ToolchainHealthAction] {
+        guard let target = buildReport.targets.first(where: { $0.target.id == "black-rom" }) ?? buildReport.targets.first,
+              !target.target.command.isEmpty
+        else {
+            return []
+        }
+        return [
+            copyCommandAction(
+                id: "copy-gen-v-build-command-\(suffix)",
+                title: "Copy build command",
+                command: target.target.command.joined(separator: " "),
+                detail: "Copies the declared Gen V build command for manual terminal use; PokemonHackStudio will not run it."
+            )
+        ]
+    }
+
+    private static func genVPathExists(
+        _ path: String,
+        root: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        fileManager.fileExists(atPath: root.appendingPathComponent(path).path)
+    }
+
+    private struct GenVDirectorySummary {
+        let path: String
+        let exists: Bool
+        let memberCount: Int
+        let byteCount: UInt64
+        let samplePaths: [String]
+    }
+
+    private static func genVDirectorySummary(
+        path: String,
+        root: URL,
+        fileManager: FileManager
+    ) -> GenVDirectorySummary {
+        let url = root.appendingPathComponent(path)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return GenVDirectorySummary(path: path, exists: false, memberCount: 0, byteCount: 0, samplePaths: [])
+        }
+
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+        guard let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsPackageDescendants]
+        ) else {
+            return GenVDirectorySummary(path: path, exists: true, memberCount: 0, byteCount: 0, samplePaths: [])
+        }
+
+        var memberPaths: [String] = []
+        var byteCount: UInt64 = 0
+        for case let memberURL as URL in enumerator {
+            let values = try? memberURL.resourceValues(forKeys: keys)
+            guard values?.isRegularFile == true else { continue }
+            memberPaths.append(genVRelativePath(for: memberURL, root: root))
+            byteCount += UInt64(values?.fileSize ?? 0)
+        }
+
+        memberPaths.sort()
+        return GenVDirectorySummary(
+            path: path,
+            exists: true,
+            memberCount: memberPaths.count,
+            byteCount: byteCount,
+            samplePaths: Array(memberPaths.prefix(3))
+        )
+    }
+
+    private struct GenVSHA1MarkerState {
+        let path: String
+        let variantID: String
+        let state: String
+        let digest: String?
+
+        var summary: String {
+            if let digest {
+                return "\(path)=valid:\(digest)"
+            }
+            return "\(path)=\(state)"
+        }
+    }
+
+    private static func genVSHA1MarkerState(
+        path: String,
+        root: URL,
+        fileManager: FileManager
+    ) -> GenVSHA1MarkerState {
+        let url = root.appendingPathComponent(path)
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else {
+            return GenVSHA1MarkerState(path: path, variantID: genVVariantID(from: path), state: "missing", digest: nil)
+        }
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return GenVSHA1MarkerState(path: path, variantID: genVVariantID(from: path), state: "invalid", digest: nil)
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return GenVSHA1MarkerState(path: path, variantID: genVVariantID(from: path), state: "empty", digest: nil)
+        }
+        guard let firstToken = trimmed.split(whereSeparator: { $0.isWhitespace }).first,
+              firstToken.count == 40,
+              firstToken.allSatisfy({ $0.isHexDigit })
+        else {
+            return GenVSHA1MarkerState(path: path, variantID: genVVariantID(from: path), state: "invalid", digest: nil)
+        }
+        return GenVSHA1MarkerState(path: path, variantID: genVVariantID(from: path), state: "valid", digest: firstToken.lowercased())
+    }
+
+    private static func genVVariantID(from checksumPath: String) -> String {
+        checksumPath.split(separator: "/").first.map(String.init) ?? checksumPath
+    }
+
+    private static func genVRelativePath(for url: URL, root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/") else { return path }
+        return String(path.dropFirst(rootPath.count + 1))
     }
 
     private static func ndsGeneratedArtifactRows(

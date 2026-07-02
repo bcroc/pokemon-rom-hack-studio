@@ -964,6 +964,7 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
     public var pokedex: SpeciesPokedexDraft?
     public var assetData: [SpeciesAssetKind: Data]
     public var assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance]
+    public var cryAudioReplacements: [String: GBACryAudioReplacementDraft]?
 
     public init(
         speciesID: String,
@@ -992,7 +993,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         formChanges: [SpeciesFormChangeDraft] = [],
         pokedex: SpeciesPokedexDraft? = nil,
         assetData: [SpeciesAssetKind: Data] = [:],
-        assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance] = [:]
+        assetImports: [SpeciesAssetKind: SpeciesAssetImportProvenance] = [:],
+        cryAudioReplacements: [String: GBACryAudioReplacementDraft]? = nil
     ) {
         self.speciesID = speciesID
         self.baseStats = baseStats
@@ -1021,6 +1023,7 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
         self.pokedex = pokedex
         self.assetData = assetData
         self.assetImports = assetImports
+        self.cryAudioReplacements = cryAudioReplacements
     }
 
     public init?(detail: SpeciesDetail) {
@@ -1062,7 +1065,8 @@ public struct SpeciesEditDraft: Codable, Equatable, Identifiable {
             formChanges: formChanges,
             pokedex: pokedex,
             assetData: [:],
-            assetImports: [:]
+            assetImports: [:],
+            cryAudioReplacements: nil
         )
     }
 }
@@ -2166,6 +2170,7 @@ public enum SpeciesMutationPlanner {
                 )
             )
         }
+        diagnostics.append(contentsOf: cryAudioReplacementDiagnostics(catalog: catalog, species: species, draft: draft, root: root, fileManager: fileManager))
         var changes: [SpeciesEditFileChange] = []
 
         if diagnostics.allSatisfy({ $0.severity != .error }) {
@@ -2342,6 +2347,7 @@ public enum SpeciesMutationPlanner {
             }
 
             changes.append(contentsOf: assetChanges(catalog: catalog, draft: draft, root: root, fileManager: fileManager))
+            changes.append(contentsOf: cryAudioReplacementChanges(draft: draft, root: root))
         }
 
         let plannedChanges = changes.map {
@@ -2673,6 +2679,152 @@ public enum SpeciesMutationPlanner {
         }
     }
 
+    private static func cryAudioReplacementDiagnostics(
+        catalog: ProjectSpeciesCatalog,
+        species: SpeciesDetail,
+        draft: SpeciesEditDraft,
+        root: URL,
+        fileManager: FileManager
+    ) -> [Diagnostic] {
+        let replacements = draft.cryAudioReplacements ?? [:]
+        guard !replacements.isEmpty else { return [] }
+
+        var diagnostics: [Diagnostic] = []
+        if catalog.profile != .pokeruby {
+            diagnostics.append(unsupportedEditDiagnostic(
+                code: "SPECIES_CRY_AUDIO_UNSUPPORTED_PROFILE",
+                message: "\(draft.speciesID) cry/audio replacement is limited to local Ruby/Sapphire source-backed files.",
+                span: species.sourceSpan
+            ))
+        }
+        if pathIsReferenceRoot(root) {
+            diagnostics.append(unsupportedEditDiagnostic(
+                code: "SPECIES_CRY_AUDIO_REFERENCE_ROOT_BLOCKED",
+                message: "\(draft.speciesID) cry/audio replacement cannot write reference roots.",
+                span: species.sourceSpan
+            ))
+        }
+
+        let sourceFiles = GBACryAudioSourceFileScanner.sourceFiles(rootPath: catalog.root.path, fileManager: fileManager)
+        let sourceByPath = Dictionary(uniqueKeysWithValues: sourceFiles.map { ($0.path, $0) })
+        for (key, replacement) in replacements.sorted(by: { $0.key < $1.key }) {
+            let path = replacement.targetPath
+            if key != path {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_REPLACEMENT_KEY_MISMATCH",
+                    "Cry/audio replacement key \(key) must match target path \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+            diagnostics.append(contentsOf: replacement.diagnostics)
+            diagnostics.append(contentsOf: validateCryAudioReplacementPath(path: path, species: species))
+            guard let source = sourceByPath[path] else {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_TARGET_NOT_REPORTED",
+                    "Cry/audio replacement target must be an existing source file reported by compatibility facts: \(path).",
+                    path: path,
+                    species: species
+                ))
+                continue
+            }
+            if source.kind != replacement.sourceKind {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_SOURCE_KIND_CHANGED",
+                    "Cry/audio replacement source kind changed since staging: \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+            if source.sizeBytes != replacement.originalSizeBytes || source.sha1 != replacement.originalSHA1 {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_SOURCE_CHANGED",
+                    "Cry/audio source changed since staging; re-stage replacement for \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+            if replacement.status == .blocked {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_REPLACEMENT_BLOCKED",
+                    "Cry/audio replacement for \(path) is blocked before mutation planning.",
+                    path: path,
+                    species: species
+                ))
+            }
+            if replacement.data.isEmpty {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_REPLACEMENT_DATA_EMPTY",
+                    "Cry/audio replacement data is empty for \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+            if UInt64(replacement.data.count) != replacement.replacementSizeBytes ||
+                pokemonHackSHA1Hex(replacement.data) != replacement.replacementSHA1 {
+                diagnostics.append(cryAudioReplacementDiagnostic(
+                    .error,
+                    "SPECIES_CRY_AUDIO_REPLACEMENT_IDENTITY_CHANGED",
+                    "Cry/audio replacement bytes changed after staging for \(path).",
+                    path: path,
+                    species: species
+                ))
+            }
+        }
+        return diagnostics
+    }
+
+    private static func validateCryAudioReplacementPath(path: String, species: SpeciesDetail) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        let lowercased = path.lowercased()
+        let url = URL(fileURLWithPath: path)
+        if path.contains("..") || path.hasPrefix("/") {
+            diagnostics.append(cryAudioReplacementDiagnostic(.error, "SPECIES_CRY_AUDIO_PATH_UNSAFE", "Cry/audio replacement path must stay inside the project source tree.", path: path, species: species))
+        }
+        if lowercased.contains("/build/") || lowercased.contains(".pokemonhackstudio") || lowercased.contains("/references/") {
+            diagnostics.append(cryAudioReplacementDiagnostic(.error, "SPECIES_CRY_AUDIO_GENERATED_OR_REFERENCE_BLOCKED", "Cry/audio replacement cannot target generated, backup, or reference paths.", path: path, species: species))
+        }
+        let fileName = url.lastPathComponent.lowercased()
+        let directSoundSource = lowercased.hasPrefix("sound/direct_sound_samples/cries/")
+        let songAssemblySource = lowercased.hasPrefix("sound/songs/")
+            && fileName.hasPrefix("mus_cry")
+            && ["s", "inc"].contains(url.pathExtension.lowercased())
+        if !directSoundSource && !songAssemblySource {
+            diagnostics.append(cryAudioReplacementDiagnostic(.error, "SPECIES_CRY_AUDIO_SOURCE_PATH_UNSUPPORTED", "Cry/audio replacement must target an existing compatibility-reported cry sample or mus_cry assembly source.", path: path, species: species))
+        }
+        return diagnostics
+    }
+
+    private static func cryAudioReplacementDiagnostic(
+        _ severity: DiagnosticSeverity,
+        _ code: String,
+        _ message: String,
+        path: String,
+        species: SpeciesDetail
+    ) -> Diagnostic {
+        Diagnostic(severity: severity, code: code, message: message, span: SourceSpan(relativePath: path, startLine: species.sourceSpan.startLine))
+    }
+
+    private static func pathIsReferenceRoot(_ root: URL) -> Bool {
+        let components = root.standardizedFileURL.pathComponents
+        if components.contains("references") || components.contains("reference-repos") {
+            return true
+        }
+        guard let projectsIndex = components.firstIndex(of: "projects"),
+              components.indices.contains(projectsIndex + 2)
+        else {
+            return false
+        }
+        return components[projectsIndex + 1] == "reference-repos"
+            && components[projectsIndex + 2] == "repos"
+    }
+
     private static func validateAssetPath(kind: SpeciesAssetKind, path: String, species: SpeciesDetail) -> [Diagnostic] {
         var diagnostics: [Diagnostic] = []
         let lowercased = path.lowercased()
@@ -2950,6 +3102,27 @@ public enum SpeciesMutationPlanner {
                 originalSHA1: originalData.map { pokemonHackSHA1Hex($0) },
                 newByteCount: newData.count,
                 newData: newData,
+                textPreview: nil
+            )
+        }
+    }
+
+    private static func cryAudioReplacementChanges(
+        draft: SpeciesEditDraft,
+        root: URL
+    ) -> [SpeciesEditFileChange] {
+        let replacements = draft.cryAudioReplacements ?? [:]
+        return replacements.keys.sorted().compactMap { path in
+            guard let replacement = replacements[path] else { return nil }
+            let url = root.appendingPathComponent(path)
+            guard let originalData = try? Data(contentsOf: url) else { return nil }
+            return SpeciesEditFileChange(
+                path: path,
+                summary: "Replace cry/audio source",
+                originalByteCount: originalData.count,
+                originalSHA1: pokemonHackSHA1Hex(originalData),
+                newByteCount: replacement.data.count,
+                newData: replacement.data,
                 textPreview: nil
             )
         }

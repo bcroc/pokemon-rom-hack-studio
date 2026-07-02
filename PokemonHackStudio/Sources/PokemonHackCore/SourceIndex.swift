@@ -96,6 +96,7 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
     public let newestStaleSourcePath: String?
     public let staleSourcePaths: [String]
     public let disagreements: [PokemonLearnablesCoverageDisagreement]
+    public let regenerationPlan: PokemonLearnablesRegenerationPlan?
 
     public init(
         generatedSpeciesCount: Int,
@@ -108,7 +109,8 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
         staleSourceFileCount: Int,
         newestStaleSourcePath: String? = nil,
         staleSourcePaths: [String] = [],
-        disagreements: [PokemonLearnablesCoverageDisagreement] = []
+        disagreements: [PokemonLearnablesCoverageDisagreement] = [],
+        regenerationPlan: PokemonLearnablesRegenerationPlan? = nil
     ) {
         self.generatedSpeciesCount = generatedSpeciesCount
         self.parsedSourceSpeciesCount = parsedSourceSpeciesCount
@@ -121,6 +123,51 @@ public struct PokemonLearnablesCoverage: Codable, Equatable, Sendable {
         self.newestStaleSourcePath = newestStaleSourcePath
         self.staleSourcePaths = staleSourcePaths
         self.disagreements = disagreements
+        self.regenerationPlan = regenerationPlan
+    }
+}
+
+public struct PokemonLearnablesSourceBucketPaths: Codable, Equatable, Sendable {
+    public let bucket: String
+    public let paths: [String]
+
+    public init(bucket: String, paths: [String]) {
+        self.bucket = bucket
+        self.paths = paths
+    }
+}
+
+public struct PokemonLearnablesRegenerationPlan: Codable, Equatable, Sendable {
+    public let posture: String
+    public let generatedPath: String
+    public let sourceBuckets: [String]
+    public let bucketPaths: [PokemonLearnablesSourceBucketPaths]
+    public let generatedOnlyMoveIDs: [String]
+    public let sourceOnlyMoveIDs: [String]
+    public let reviewItems: [PokemonLearnablesCoverageDisagreement]
+    public let reportCommands: [String]
+    public let reviewGuidance: String
+
+    public init(
+        posture: String,
+        generatedPath: String,
+        sourceBuckets: [String],
+        bucketPaths: [PokemonLearnablesSourceBucketPaths],
+        generatedOnlyMoveIDs: [String],
+        sourceOnlyMoveIDs: [String],
+        reviewItems: [PokemonLearnablesCoverageDisagreement],
+        reportCommands: [String],
+        reviewGuidance: String
+    ) {
+        self.posture = posture
+        self.generatedPath = generatedPath
+        self.sourceBuckets = sourceBuckets
+        self.bucketPaths = bucketPaths
+        self.generatedOnlyMoveIDs = generatedOnlyMoveIDs
+        self.sourceOnlyMoveIDs = sourceOnlyMoveIDs
+        self.reviewItems = reviewItems
+        self.reportCommands = reportCommands
+        self.reviewGuidance = reviewGuidance
     }
 }
 
@@ -662,6 +709,22 @@ struct ExpansionAllLearnablesSpeciesCoverage: Equatable {
 
 enum ExpansionAllLearnablesCoverageBuilder {
     static let generatedPath = "src/data/pokemon/all_learnables.json"
+    private static let regenerationPosture = "copyReportOnly"
+    private static let regenerationBucketPaths = [
+        PokemonLearnablesSourceBucketPaths(bucket: "levelUp", paths: [
+            "src/data/pokemon/level_up_learnsets.h",
+            "src/data/pokemon/level_up_learnsets"
+        ]),
+        PokemonLearnablesSourceBucketPaths(bucket: "tmhm", paths: ["src/data/pokemon/tmhm_learnsets.h"]),
+        PokemonLearnablesSourceBucketPaths(bucket: "tutor", paths: ["src/data/pokemon/tutor_learnsets.h"]),
+        PokemonLearnablesSourceBucketPaths(bucket: "egg", paths: ["src/data/pokemon/egg_moves.h"])
+    ]
+    private static let regenerationReportCommands = [
+        "swift run --package-path PokemonHackStudio pokemonhack-cli pokemon-compatibility <project-root> --json",
+        "swift run --package-path PokemonHackStudio pokemonhack-cli asset-index <project-root> --json"
+    ]
+    private static let regenerationReviewGuidance =
+        "Review generated-only and source-only move IDs with the reported bucket/source spans, then run the project's documented all_learnables generator outside PokemonHackStudio. PokemonHackStudio will not run regeneration or write generated JSON."
 
     static func annotate(
         records: [SourceIndexRecord],
@@ -765,6 +828,7 @@ enum ExpansionAllLearnablesCoverageBuilder {
         let sourceOnlySpeciesCount = parsedSpecies.subtracting(generatedSpecies).count
         let staleSourcePaths = staleSourcePaths(root: root, fileManager: fileManager)
         let mismatchSpeciesCount = generatedOnlySpeciesCount + sourceOnlySpeciesCount + moveMismatchSpeciesCount
+        let regenerationPlan = regenerationPlan(disagreements: disagreements)
         let summary = PokemonLearnablesCoverage(
             generatedSpeciesCount: generatedSpecies.count,
             parsedSourceSpeciesCount: parsedSpecies.count,
@@ -776,7 +840,8 @@ enum ExpansionAllLearnablesCoverageBuilder {
             staleSourceFileCount: staleSourcePaths.count,
             newestStaleSourcePath: staleSourcePaths.first,
             staleSourcePaths: staleSourcePaths,
-            disagreements: disagreements
+            disagreements: disagreements,
+            regenerationPlan: regenerationPlan
         )
 
         return ExpansionAllLearnablesCoverageReport(summary: summary, species: speciesCoverage)
@@ -850,6 +915,28 @@ enum ExpansionAllLearnablesCoverageBuilder {
 
     private static func contributingSourcePaths(for moves: [PokemonLearnablesSourceMove]) -> [String] {
         Array(Set(moves.map { $0.sourceSpan.relativePath })).sorted()
+    }
+
+    private static func regenerationPlan(
+        disagreements: [PokemonLearnablesCoverageDisagreement]
+    ) -> PokemonLearnablesRegenerationPlan? {
+        guard !disagreements.isEmpty else { return nil }
+        let reviewItems = disagreements.sorted { lhs, rhs in
+            lhs.speciesID < rhs.speciesID
+        }
+        let generatedOnlyMoveIDs = Array(Set(reviewItems.flatMap(\.generatedOnlyMoves))).sorted()
+        let sourceOnlyMoveIDs = Array(Set(reviewItems.flatMap { $0.sourceOnlyMoves.map(\.move) })).sorted()
+        return PokemonLearnablesRegenerationPlan(
+            posture: regenerationPosture,
+            generatedPath: generatedPath,
+            sourceBuckets: regenerationBucketPaths.map(\.bucket),
+            bucketPaths: regenerationBucketPaths,
+            generatedOnlyMoveIDs: generatedOnlyMoveIDs,
+            sourceOnlyMoveIDs: sourceOnlyMoveIDs,
+            reviewItems: reviewItems,
+            reportCommands: regenerationReportCommands,
+            reviewGuidance: regenerationReviewGuidance
+        )
     }
 
     private static func staleSourcePaths(
@@ -942,6 +1029,19 @@ enum ExpansionAllLearnablesCoverageBuilder {
         facts.append(SourceIndexFact(label: "Stale Source Files", value: "\(summary.staleSourceFileCount)"))
         if let newestStaleSourcePath = summary.newestStaleSourcePath {
             facts.append(SourceIndexFact(label: "Newest Stale Source", value: newestStaleSourcePath))
+        }
+        if let regenerationPlan = summary.regenerationPlan {
+            facts.append(SourceIndexFact(label: "Regeneration Posture", value: "copy/report-only; no generated JSON writes or command execution"))
+            facts.append(SourceIndexFact(label: "Regeneration Source Buckets", value: regenerationPlan.sourceBuckets.joined(separator: ", ")))
+            facts.append(SourceIndexFact(label: "Regeneration Source Paths", value: regenerationPlan.bucketPaths.flatMap(\.paths).joined(separator: "; ")))
+            if !regenerationPlan.sourceOnlyMoveIDs.isEmpty {
+                facts.append(SourceIndexFact(label: "Regeneration Source-only Move IDs", value: regenerationPlan.sourceOnlyMoveIDs.joined(separator: ", ")))
+            }
+            if !regenerationPlan.generatedOnlyMoveIDs.isEmpty {
+                facts.append(SourceIndexFact(label: "Regeneration Generated-only Move IDs", value: regenerationPlan.generatedOnlyMoveIDs.joined(separator: ", ")))
+            }
+            facts.append(SourceIndexFact(label: "Regeneration Report Commands", value: regenerationPlan.reportCommands.joined(separator: "; ")))
+            facts.append(SourceIndexFact(label: "Regeneration Guidance", value: regenerationPlan.reviewGuidance))
         }
         return facts
     }

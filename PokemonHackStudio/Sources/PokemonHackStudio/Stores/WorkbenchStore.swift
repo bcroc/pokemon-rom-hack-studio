@@ -363,6 +363,8 @@ final class WorkbenchStore: ObservableObject {
     @Published private var itemDraftsByKey: [String: PokemonHackCore.ItemEditDraft] = [:]
     @Published private var graphicsDraftsByKey: [String: PokemonHackCore.GraphicsEditDraft] = [:]
     @Published private var ndsDataDraftsByKey: [String: PokemonHackCore.NDSDataEditDraft] = [:]
+    @Published private var ndsDataTextLineOperationDraftsByKey: [String: PokemonHackCore.NDSDataTextLineOperationDraft] = [:]
+    @Published private var ndsDataItemCSVRowOperationDraftsByKey: [String: PokemonHackCore.NDSDataItemCSVRowOperationDraft] = [:]
     @Published private var playtestLaunchResultsByID: [String: PlaytestLaunchResultViewState] = [:]
     @Published private var playtestCaptureResultsByID: [String: PlaytestCaptureResultViewState] = [:]
     @Published private var buildRunResultsByID: [String: BuildRunResultViewState] = [:]
@@ -982,6 +984,21 @@ final class WorkbenchStore: ObservableObject {
         return PokemonHackCore.SpeciesEditDraft(detail: detail)
     }
 
+    var selectedSpeciesCryAudioSources: [PokemonHackCore.GBACryAudioSourceFile] {
+        guard
+            let selectedIndexedProject,
+            selectedSpeciesCatalog?.profile == .pokeruby,
+            !Self.pathIsBundledAssetRoot(selectedIndexedProject.rootPath),
+            !Self.pathIsReferenceRoot(selectedIndexedProject.rootPath)
+        else {
+            return []
+        }
+        return PokemonHackCore.GBACryAudioSourceFileScanner.sourceFiles(
+            rootPath: selectedIndexedProject.rootPath,
+            fileManager: fileManager
+        )
+    }
+
     var selectedSpeciesIsDirty: Bool {
         guard
             let selectedIndexedProject,
@@ -1262,7 +1279,8 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var canLaunchSelectedPlaytest: Bool {
-        selectedBuildReport?.playtest.isRunnable == true
+        guard selectedBuildReport?.isNDS != true else { return false }
+        return selectedBuildReport?.playtest.isRunnable == true
     }
 
     var selectedRunnableBuildTargets: [BuildTargetValidationViewState] {
@@ -1457,11 +1475,21 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var currentDraftSummary: DirtyDraftSummary {
-        DirtyDraftSummary(counts: currentDraftCounts)
+        let counts = currentDraftCounts
+        let ndsDataCount = counts.ndsData + currentNDSDataRowOperationDraftCount()
+        return DirtyDraftSummary(rows: [
+            DirtyDraftSummary.Row(id: "maps", singularTitle: "Map", title: "Maps", count: counts.maps),
+            DirtyDraftSummary.Row(id: "pokemon", singularTitle: "Pokemon", title: "Pokemon", count: counts.species),
+            DirtyDraftSummary.Row(id: "trainers", singularTitle: "Trainer", title: "Trainers", count: counts.trainers),
+            DirtyDraftSummary.Row(id: "moves", singularTitle: "Move", title: "Moves", count: counts.moves),
+            DirtyDraftSummary.Row(id: "items", singularTitle: "Item", title: "Items", count: counts.items),
+            DirtyDraftSummary.Row(id: "graphics", singularTitle: "Graphics draft", title: "Graphics", count: counts.graphics),
+            DirtyDraftSummary.Row(id: "nds-data", singularTitle: "NDS data draft", title: "NDS data", count: ndsDataCount),
+        ])
     }
 
     var currentDraftCount: Int {
-        currentDraftCounts.total
+        currentDraftSummary.total
     }
 
     var savedDraftCount: Int {
@@ -1477,6 +1505,15 @@ final class WorkbenchStore: ObservableObject {
 
     var canSaveProjectWorkspace: Bool {
         selectedIndexedProject != nil
+    }
+
+    var selectedProjectFilePath: String? {
+        selectedProjectFileURL?.path
+    }
+
+    private var selectedProjectFileURL: URL? {
+        guard let selectedIndexedProject else { return nil }
+        return ProjectWorkspacePersistence.projectFileURL(root: URL(fileURLWithPath: selectedIndexedProject.rootPath))
     }
 
     var currentModuleEditorSession: ModuleEditorSession {
@@ -2152,9 +2189,19 @@ final class WorkbenchStore: ObservableObject {
                 )
             }
             : []
+        let rowOperations = ndsDataRowOperationEditorViewState(
+            catalog: catalog,
+            recordID: recordID,
+            record: record,
+            canEdit: canEdit
+        )
         let lensSummary: String
-        if !semanticFields.isEmpty {
+        if let rowOperations, rowOperations.stagedCount > 0 {
+            lensSummary = "\(rowOperations.stagedCount) \(rowOperations.title.lowercased()) operation(s) staged; preview still uses the existing NDS mutation-plan gate."
+        } else if !semanticFields.isEmpty {
             lensSummary = "\(semanticFields.count) semantic field(s) available; raw UTF-8 source remains the apply target."
+        } else if rowOperations != nil {
+            lensSummary = "\(rowOperations?.title ?? "Row") operations are available; preview still uses the existing NDS mutation-plan gate."
         } else if canEdit {
             lensSummary = "Raw UTF-8 source editing is available for this NDS data row."
         } else {
@@ -2169,6 +2216,7 @@ final class WorkbenchStore: ObservableObject {
             isHiddenByFilters: isHiddenByFilters,
             canPreview: canPreviewSelectedNDSDataMutationPlan,
             canApply: canApplySelectedNDSDataMutationPlan,
+            rowOperationCount: rowOperations?.stagedCount ?? 0,
             sourceByteCount: sourceText.data(using: .utf8)?.count ?? 0,
             draftByteCount: draftText.data(using: .utf8)?.count ?? 0
         )
@@ -2177,6 +2225,7 @@ final class WorkbenchStore: ObservableObject {
             recordID: recordID,
             text: draftText,
             semanticFields: semanticFields,
+            rowOperations: rowOperations,
             readiness: readiness,
             canEdit: canEdit,
             isDirty: isDirty,
@@ -2202,6 +2251,7 @@ final class WorkbenchStore: ObservableObject {
         isHiddenByFilters: Bool,
         canPreview: Bool,
         canApply: Bool,
+        rowOperationCount: Int,
         sourceByteCount: Int,
         draftByteCount: Int
     ) -> NDSDataResourceReadinessViewState {
@@ -2278,7 +2328,9 @@ final class WorkbenchStore: ObservableObject {
                 id: "draft",
                 title: "Draft",
                 value: "Dirty draft",
-                detail: "Draft text differs from the current source text.",
+                detail: rowOperationCount > 0
+                    ? "\(rowOperationCount) NDS row operation(s) are staged."
+                    : "Draft text differs from the current source text.",
                 status: .warning
             )
         } else if canEdit {
@@ -2396,7 +2448,34 @@ final class WorkbenchStore: ObservableObject {
         return diagnostics.allSatisfy { $0.severity != .error }
     }
 
+    private var selectedNDSDataRowOperationCount: Int {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return 0 }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        if let draft = ndsDataTextLineOperationDraftsByKey[key] {
+            return draft.operations.count
+        }
+        if let draft = ndsDataItemCSVRowOperationDraftsByKey[key] {
+            return draft.operations.count
+        }
+        return 0
+    }
+
+    private func selectedNDSDataRowOperationPlan() -> PokemonHackCore.NDSDataEditPlan? {
+        guard let selectedIndexedProject, let catalog = selectedNDSDataCatalog, let recordID = selectedNDSDataRecordID else { return nil }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        if let draft = ndsDataTextLineOperationDraftsByKey[key], !draft.operations.isEmpty {
+            return PokemonHackCore.NDSDataTextLineOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager).editPlan
+        }
+        if let draft = ndsDataItemCSVRowOperationDraftsByKey[key], !draft.operations.isEmpty {
+            return PokemonHackCore.NDSDataItemCSVRowOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager).editPlan
+        }
+        return nil
+    }
+
     var selectedNDSDataIsDirty: Bool {
+        if selectedNDSDataRowOperationCount > 0 {
+            return true
+        }
         guard
             let selectedIndexedProject,
             let recordID = selectedNDSDataRecordID,
@@ -2410,7 +2489,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var canPreviewSelectedNDSDataMutationPlan: Bool {
-        selectedNDSDataIsDirty && selectedNDSDataDraft != nil
+        selectedNDSDataRowOperationCount > 0 || (selectedNDSDataIsDirty && selectedNDSDataDraft != nil)
     }
 
     var canApplySelectedNDSDataMutationPlan: Bool {
@@ -2418,7 +2497,7 @@ final class WorkbenchStore: ObservableObject {
     }
 
     var canDiscardNDSDataEdits: Bool {
-        selectedNDSDataIsDirty || latestNDSDataEditPlan != nil || latestNDSDataApplyResult != nil
+        selectedNDSDataIsDirty || selectedNDSDataRowOperationCount > 0 || latestNDSDataEditPlan != nil || latestNDSDataApplyResult != nil
     }
 
     var ndsDataPreviewBlockedReason: String? {
@@ -2427,6 +2506,9 @@ final class WorkbenchStore: ObservableObject {
         let diagnostics = PokemonHackCore.NDSDataMutationPlanner.editabilityDiagnostics(catalog: catalog, recordID: recordID, fileManager: fileManager)
         if let diagnostic = diagnostics.first(where: { $0.severity == .error }) {
             return diagnostic.message
+        }
+        if selectedNDSDataRowOperationCount > 0 {
+            return nil
         }
         guard selectedNDSDataDraft != nil else { return "This NDS data row is not editable as UTF-8 source text." }
         guard selectedNDSDataIsDirty else { return "Change NDS data text before previewing a mutation plan." }
@@ -2479,6 +2561,158 @@ final class WorkbenchStore: ObservableObject {
                 label: $0.label,
                 value: $0.value,
                 valueKind: $0.valueKind.rawValue
+            )
+        }
+    }
+
+    private func ndsDataRowOperationEditorViewState(
+        catalog: PokemonHackCore.ProjectNDSDataCatalog,
+        recordID: String,
+        record: PokemonHackCore.NDSDataCatalogRecord,
+        canEdit: Bool
+    ) -> NDSDataResourceRowOperationEditorViewState? {
+        guard canEdit, let family = ndsDataRowOperationFamily(catalog: catalog, record: record) else {
+            return nil
+        }
+        let key = selectedIndexedProject.map { ndsDataDraftKey(projectID: $0.id, recordID: recordID) }
+        let stagedOperations: [NDSDataResourceRowOperationViewState]
+        let beforeCount: Int?
+        let afterCount: Int?
+
+        switch family {
+        case .textLines:
+            let draft = key.flatMap { ndsDataTextLineOperationDraftsByKey[$0] }
+            stagedOperations = (draft?.operations ?? []).enumerated().map { index, operation in
+                textLineOperationViewState(operation, index: index)
+            }
+            if let draft, !draft.operations.isEmpty {
+                let plan = PokemonHackCore.NDSDataTextLineOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+                beforeCount = plan.beforeLineCount
+                afterCount = plan.afterLineCount
+            } else {
+                beforeCount = nil
+                afterCount = nil
+            }
+
+        case .itemCSVRows:
+            let draft = key.flatMap { ndsDataItemCSVRowOperationDraftsByKey[$0] }
+            stagedOperations = (draft?.operations ?? []).enumerated().map { index, operation in
+                itemCSVRowOperationViewState(operation, index: index)
+            }
+            if let draft, !draft.operations.isEmpty {
+                let plan = PokemonHackCore.NDSDataItemCSVRowOperationPlanner.plan(catalog: catalog, draft: draft, fileManager: fileManager)
+                beforeCount = plan.beforeRowCount
+                afterCount = plan.afterRowCount
+            } else {
+                beforeCount = nil
+                afterCount = nil
+            }
+        }
+
+        return NDSDataResourceRowOperationEditorViewState(
+            family: family,
+            title: family.title,
+            stagedOperations: stagedOperations,
+            beforeCount: beforeCount,
+            afterCount: afterCount,
+            canStage: true,
+            canRemoveLast: !stagedOperations.isEmpty,
+            canClear: !stagedOperations.isEmpty
+        )
+    }
+
+    private func ndsDataRowOperationFamily(
+        catalog: PokemonHackCore.ProjectNDSDataCatalog,
+        record: PokemonHackCore.NDSDataCatalogRecord
+    ) -> NDSDataResourceRowOperationFamily? {
+        if catalog.profile == .pokeplatinum,
+           record.domain == .text,
+           record.role == .sourceTree,
+           record.format == .text
+        {
+            let lower = record.relativePath.lowercased()
+            if lower.hasPrefix("res/text/"),
+               lower.hasSuffix(".txt"),
+               !lower.dropFirst("res/text/".count).isEmpty
+            {
+                return .textLines
+            }
+        }
+
+        if catalog.profile == .pokeheartgold,
+           record.domain == .items,
+           record.role == .sourceTree,
+           record.format == .csv
+        {
+            let prefix = "files/itemtool/itemdata/"
+            let lower = record.relativePath.lowercased()
+            let remainder = lower.dropFirst(prefix.count)
+            if lower.hasPrefix(prefix),
+               lower.hasSuffix(".csv"),
+               !remainder.isEmpty,
+               !remainder.contains("/")
+            {
+                return .itemCSVRows
+            }
+        }
+
+        return nil
+    }
+
+    private func textLineOperationViewState(
+        _ operation: PokemonHackCore.NDSDataTextLineOperation,
+        index: Int
+    ) -> NDSDataResourceRowOperationViewState {
+        switch operation.kind {
+        case .insert:
+            return NDSDataResourceRowOperationViewState(
+                id: "text-line-operation-\(index)",
+                kind: .insert,
+                summary: "Insert at \(operation.index ?? 0)",
+                detail: operation.text
+            )
+        case .delete:
+            return NDSDataResourceRowOperationViewState(
+                id: "text-line-operation-\(index)",
+                kind: .delete,
+                summary: "Delete \(operation.index ?? 0)",
+                detail: nil
+            )
+        case .reorder:
+            return NDSDataResourceRowOperationViewState(
+                id: "text-line-operation-\(index)",
+                kind: .reorder,
+                summary: "Move \(operation.fromIndex ?? 0) to \(operation.toIndex ?? 0)",
+                detail: nil
+            )
+        }
+    }
+
+    private func itemCSVRowOperationViewState(
+        _ operation: PokemonHackCore.NDSDataItemCSVRowOperation,
+        index: Int
+    ) -> NDSDataResourceRowOperationViewState {
+        switch operation.kind {
+        case .insert:
+            return NDSDataResourceRowOperationViewState(
+                id: "item-csv-row-operation-\(index)",
+                kind: .insert,
+                summary: "Insert at \(operation.index ?? 0)",
+                detail: operation.rowText
+            )
+        case .delete:
+            return NDSDataResourceRowOperationViewState(
+                id: "item-csv-row-operation-\(index)",
+                kind: .delete,
+                summary: "Delete \(operation.index ?? 0)",
+                detail: nil
+            )
+        case .reorder:
+            return NDSDataResourceRowOperationViewState(
+                id: "item-csv-row-operation-\(index)",
+                kind: .reorder,
+                summary: "Move \(operation.fromIndex ?? 0) to \(operation.toIndex ?? 0)",
+                detail: nil
             )
         }
     }
@@ -2891,10 +3125,31 @@ final class WorkbenchStore: ObservableObject {
     private var selectedNDSDataDraftRecordIDs: Set<String> {
         guard let selectedIndexedProject else { return [] }
         let prefix = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: "")
-        return Set(ndsDataDraftsByKey.keys.compactMap { key in
+        var recordIDs = Set<String>(ndsDataDraftsByKey.keys.compactMap { key in
             guard key.hasPrefix(prefix) else { return nil }
             return String(key.dropFirst(prefix.count))
         })
+        recordIDs.formUnion(ndsDataTextLineOperationDraftsByKey.keys.compactMap { key in
+            guard key.hasPrefix(prefix) else { return nil }
+            return String(key.dropFirst(prefix.count))
+        })
+        recordIDs.formUnion(ndsDataItemCSVRowOperationDraftsByKey.keys.compactMap { key in
+            guard key.hasPrefix(prefix) else { return nil }
+            return String(key.dropFirst(prefix.count))
+        })
+        return recordIDs
+    }
+
+    private func currentNDSDataRowOperationDraftCount(projectID: String? = nil) -> Int {
+        guard let projectID = projectID ?? selectedIndexedProject?.id else { return 0 }
+        let prefix = ndsDataDraftKey(projectID: projectID, recordID: "")
+        let textLineCount = ndsDataTextLineOperationDraftsByKey.filter { key, draft in
+            key.hasPrefix(prefix) && !draft.operations.isEmpty
+        }.count
+        let itemCSVCount = ndsDataItemCSVRowOperationDraftsByKey.filter { key, draft in
+            key.hasPrefix(prefix) && !draft.operations.isEmpty
+        }.count
+        return textLineCount + itemCSVCount
     }
 
     private static func resourceAssetNDSDataRecordID(from assetID: String) -> String? {
@@ -3126,6 +3381,8 @@ final class WorkbenchStore: ObservableObject {
         itemDraftsByKey = itemDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "item")) }
         graphicsDraftsByKey = graphicsDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "graphics")) }
         ndsDataDraftsByKey = ndsDataDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
+        ndsDataTextLineOperationDraftsByKey = ndsDataTextLineOperationDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
+        ndsDataItemCSVRowOperationDraftsByKey = ndsDataItemCSVRowOperationDraftsByKey.filter { !$0.key.hasPrefix(draftKeyPrefix(projectID: projectID, kind: "nds-data")) }
         resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
     }
@@ -4404,9 +4661,115 @@ final class WorkbenchStore: ObservableObject {
         }
     }
 
+    func stageSelectedNDSDataRowOperation(
+        kind: NDSDataResourceRowOperationKind,
+        index: Int? = nil,
+        insertValue: String = "",
+        fromIndex: Int? = nil,
+        toIndex: Int? = nil
+    ) {
+        guard
+            let selectedIndexedProject,
+            let catalog = selectedNDSDataCatalog,
+            let recordID = selectedNDSDataRecordID,
+            let record = catalog.records.first(where: { $0.id == recordID }),
+            selectedNDSDataCanEditSourceText,
+            let family = ndsDataRowOperationFamily(catalog: catalog, record: record)
+        else {
+            return
+        }
+
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+
+        switch family {
+        case .textLines:
+            let operation: PokemonHackCore.NDSDataTextLineOperation?
+            switch kind {
+            case .insert:
+                operation = index.map { .insert(index: $0, text: insertValue) }
+            case .delete:
+                operation = index.map { .delete(index: $0) }
+            case .reorder:
+                if let fromIndex, let toIndex {
+                    operation = .reorder(fromIndex: fromIndex, toIndex: toIndex)
+                } else {
+                    operation = nil
+                }
+            }
+            guard let operation else { return }
+            ndsDataDraftsByKey.removeValue(forKey: key)
+            var operations = ndsDataTextLineOperationDraftsByKey[key]?.operations ?? []
+            operations.append(operation)
+            ndsDataTextLineOperationDraftsByKey[key] = PokemonHackCore.NDSDataTextLineOperationDraft(recordID: recordID, operations: operations)
+            ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+
+        case .itemCSVRows:
+            let operation: PokemonHackCore.NDSDataItemCSVRowOperation?
+            switch kind {
+            case .insert:
+                operation = index.map { .insert(index: $0, rowText: insertValue) }
+            case .delete:
+                operation = index.map { .delete(index: $0) }
+            case .reorder:
+                if let fromIndex, let toIndex {
+                    operation = .reorder(fromIndex: fromIndex, toIndex: toIndex)
+                } else {
+                    operation = nil
+                }
+            }
+            guard let operation else { return }
+            ndsDataDraftsByKey.removeValue(forKey: key)
+            var operations = ndsDataItemCSVRowOperationDraftsByKey[key]?.operations ?? []
+            operations.append(operation)
+            ndsDataItemCSVRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataItemCSVRowOperationDraft(recordID: recordID, operations: operations)
+            ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+        }
+
+        resourceAssetRowsCache = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+    }
+
+    func removeLastSelectedNDSDataRowOperation() {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        if let draft = ndsDataTextLineOperationDraftsByKey[key] {
+            var operations = draft.operations
+            _ = operations.popLast()
+            if operations.isEmpty {
+                ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+            } else {
+                ndsDataTextLineOperationDraftsByKey[key] = PokemonHackCore.NDSDataTextLineOperationDraft(recordID: recordID, operations: operations)
+            }
+        } else if let draft = ndsDataItemCSVRowOperationDraftsByKey[key] {
+            var operations = draft.operations
+            _ = operations.popLast()
+            if operations.isEmpty {
+                ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+            } else {
+                ndsDataItemCSVRowOperationDraftsByKey[key] = PokemonHackCore.NDSDataItemCSVRowOperationDraft(recordID: recordID, operations: operations)
+            }
+        }
+        resourceAssetRowsCache = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+    }
+
+    func clearSelectedNDSDataRowOperations() {
+        guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return }
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
+        resourceAssetRowsCache = nil
+        latestNDSDataEditPlan = nil
+        latestNDSDataApplyResult = nil
+    }
+
     func updateSelectedNDSDataDraftText(_ text: String) {
         guard let selectedIndexedProject, let recordID = selectedNDSDataRecordID else { return }
         let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
         guard selectedNDSDataCanEditSourceText else {
             ndsDataDraftsByKey.removeValue(forKey: key)
             resourceAssetRowsCache = nil
@@ -4453,7 +4816,10 @@ final class WorkbenchStore: ObservableObject {
             latestNDSDataApplyResult = nil
             return
         }
-        ndsDataDraftsByKey.removeValue(forKey: ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID))
+        let key = ndsDataDraftKey(projectID: selectedIndexedProject.id, recordID: recordID)
+        ndsDataDraftsByKey.removeValue(forKey: key)
+        ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+        ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
         resourceAssetRowsCache = nil
         latestNDSDataEditPlan = nil
         latestNDSDataApplyResult = nil
@@ -4461,6 +4827,12 @@ final class WorkbenchStore: ObservableObject {
     }
 
     func previewSelectedNDSDataMutationPlan() {
+        if let rowOperationPlan = selectedNDSDataRowOperationPlan() {
+            latestNDSDataEditPlan = rowOperationPlan
+            latestNDSDataApplyResult = nil
+            return
+        }
+
         guard let catalog = selectedNDSDataCatalog, let draft = selectedNDSDataDraft else {
             latestNDSDataEditPlan = nil
             latestNDSDataApplyResult = nil
@@ -4484,9 +4856,10 @@ final class WorkbenchStore: ObservableObject {
             latestNDSDataApplyResult = result
             guard !result.appliedChanges.isEmpty else { return }
             if !projectIDBeforeApply.isEmpty {
-                ndsDataDraftsByKey.removeValue(
-                    forKey: ndsDataDraftKey(projectID: projectIDBeforeApply, recordID: recordIDBeforeApply)
-                )
+                let key = ndsDataDraftKey(projectID: projectIDBeforeApply, recordID: recordIDBeforeApply)
+                ndsDataDraftsByKey.removeValue(forKey: key)
+                ndsDataTextLineOperationDraftsByKey.removeValue(forKey: key)
+                ndsDataItemCSVRowOperationDraftsByKey.removeValue(forKey: key)
                 resourceAssetRowsCache = nil
             }
             ndsDataCatalogsByID.removeValue(forKey: projectIDBeforeApply)
@@ -4760,6 +5133,8 @@ final class WorkbenchStore: ObservableObject {
         removeDrafts(from: &itemDraftsByKey, withPrefix: itemPrefix)
         removeDrafts(from: &graphicsDraftsByKey, withPrefix: graphicsPrefix)
         removeDrafts(from: &ndsDataDraftsByKey, withPrefix: ndsDataPrefix)
+        removeDrafts(from: &ndsDataTextLineOperationDraftsByKey, withPrefix: ndsDataPrefix)
+        removeDrafts(from: &ndsDataItemCSVRowOperationDraftsByKey, withPrefix: ndsDataPrefix)
         resourceAssetRowsCache = nil
         savedMapDraftsByProjectID.removeValue(forKey: projectID)
         if selectedProjectID == projectID {
@@ -5447,6 +5822,38 @@ final class WorkbenchStore: ObservableObject {
         return nil
     }
 
+    func selectedSpeciesCryAudioImportBlockedReason(source: PokemonHackCore.GBACryAudioSourceFile) -> String? {
+        guard let selectedIndexedProject else {
+            return "Open an editable source project before importing cry/audio sources."
+        }
+        guard !Self.pathIsBundledAssetRoot(selectedIndexedProject.rootPath) else {
+            return "Bundled fallback projects are read-only; open the local source tree to import cry/audio sources."
+        }
+        guard !Self.pathIsReferenceRoot(selectedIndexedProject.rootPath) else {
+            return "Reference projects are read-only; open a local Ruby/Sapphire source tree to import cry/audio sources."
+        }
+        guard selectedSpeciesCatalog?.profile == .pokeruby else {
+            return "Cry/audio replacement is limited to Ruby/Sapphire source-backed files."
+        }
+        guard selectedSpeciesDetail != nil else {
+            return "Select a Pokemon before importing cry/audio sources."
+        }
+        guard selectedSpeciesDraft != nil else {
+            return "The selected Pokemon is read-only for this project profile."
+        }
+        guard selectedSpeciesCryAudioSources.contains(where: { $0.path == source.path && $0.kind == source.kind }) else {
+            return "Cry/audio replacement requires an existing source file reported by compatibility facts."
+        }
+        let lowercased = source.path.lowercased()
+        if source.path.contains("..") || source.path.hasPrefix("/") {
+            return "Cry/audio source path is unsafe."
+        }
+        if lowercased.contains("/build/") || lowercased.contains(".pokemonhackstudio") || lowercased.contains("/references/") {
+            return "Cry/audio imports cannot target generated, backup, or reference paths."
+        }
+        return nil
+    }
+
     @discardableResult
     func importSelectedSpeciesAsset(
         kind: PokemonHackCore.SpeciesAssetKind,
@@ -5470,6 +5877,30 @@ final class WorkbenchStore: ObservableObject {
         return provenance
     }
 
+    @discardableResult
+    func importSelectedSpeciesCryAudioSource(
+        target source: PokemonHackCore.GBACryAudioSourceFile,
+        from sourceURL: URL
+    ) -> PokemonHackCore.GBACryAudioReplacementDraft? {
+        guard selectedSpeciesCryAudioImportBlockedReason(source: source) == nil,
+              var draft = selectedSpeciesDraft,
+              let data = try? Data(contentsOf: sourceURL)
+        else {
+            return nil
+        }
+
+        let replacement = PokemonHackCore.GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: sourceURL.path,
+            data: data
+        )
+        var replacements = draft.cryAudioReplacements ?? [:]
+        replacements[source.path] = replacement
+        draft.cryAudioReplacements = replacements
+        updateSelectedSpeciesDraft(draft)
+        return replacement
+    }
+
     func speciesCompatibilityValue(
         speciesID: String,
         moveID: String,
@@ -5483,6 +5914,8 @@ final class WorkbenchStore: ObservableObject {
                 return draft.tmhmMoves.contains(moveID)
             case .tutor:
                 return draft.tutorMoves.contains(moveID)
+            case .egg:
+                return draft.eggMoves.contains(moveID)
             default:
                 return false
             }
@@ -5493,6 +5926,8 @@ final class WorkbenchStore: ObservableObject {
             return detail.learnsets.tmhm.contains { $0.move == moveID }
         case .tutor:
             return detail.learnsets.tutor.contains { $0.move == moveID }
+        case .egg:
+            return detail.learnsets.egg.contains { $0.move == moveID }
         default:
             return false
         }
@@ -5516,6 +5951,8 @@ final class WorkbenchStore: ObservableObject {
             setMove(moveID, isEnabled: isEnabled, in: &draft.tmhmMoves)
         case .tutor:
             setMove(moveID, isEnabled: isEnabled, in: &draft.tutorMoves)
+        case .egg:
+            setMovePreservingOrder(moveID, isEnabled: isEnabled, in: &draft.eggMoves)
         default:
             return
         }
@@ -5538,6 +5975,16 @@ final class WorkbenchStore: ObservableObject {
             if !moves.contains(moveID) {
                 moves.append(moveID)
                 moves.sort()
+            }
+        } else {
+            moves.removeAll { $0 == moveID }
+        }
+    }
+
+    private func setMovePreservingOrder(_ moveID: String, isEnabled: Bool, in moves: inout [String]) {
+        if isEnabled {
+            if !moves.contains(moveID) {
+                moves.append(moveID)
             }
         } else {
             moves.removeAll { $0 == moveID }
@@ -6170,7 +6617,7 @@ final class WorkbenchStore: ObservableObject {
         do {
             try ProjectWorkspacePersistence.saveProject(workspace, root: URL(fileURLWithPath: project.rootPath), fileManager: fileManager)
             latestSavedWorkspace = workspace
-            workspacePersistenceStatus = "Project saved"
+            workspacePersistenceStatus = "Project file saved"
             workspacePersistenceError = nil
             workspaceAutosavePending = false
             return true
@@ -6614,6 +7061,19 @@ final class WorkbenchStore: ObservableObject {
     func revealSelectedProjectInFinder() {
         guard let selectedIndexedProject else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: selectedIndexedProject.rootPath)])
+    }
+
+    func revealSelectedProjectFileInFinder() {
+        guard let selectedProjectFileURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([selectedProjectFileURL])
+    }
+
+    @discardableResult
+    func copySelectedProjectFilePathToPasteboard() -> Bool {
+        guard let selectedProjectFilePath else { return false }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(selectedProjectFilePath, forType: .string)
+        return true
     }
 
     func openPlaytestArtifact(_ artifact: PlaytestArtifactViewState) {
@@ -8445,6 +8905,12 @@ final class WorkbenchStore: ObservableObject {
     private static func ndsHealthGroups(from rows: [BuildReportRow]) -> [NDSToolchainHealthGroupViewState] {
         let groups: [(id: String, title: String, detail: String, matches: (BuildReportRow) -> Bool)] = [
             (
+                "gen-v-manual-build-readiness",
+                "Gen V Manual Build Readiness",
+                "Makefile, config, linker, variant SHA1, source-root, and generated-output facts for manual review.",
+                { row in row.id.contains("gen-v-build-readiness") }
+            ),
+            (
                 "build-sdks",
                 "Build SDKs",
                 "devkitPro, devkitARM, BlocksDS, build-system, and compiler prerequisites.",
@@ -8509,7 +8975,10 @@ final class WorkbenchStore: ObservableObject {
                 "declared-outputs",
                 "Declared Outputs",
                 "Declared NDS generated outputs and checksum artifacts.",
-                { row in row.healthCategory == .generatedArtifacts }
+                { row in
+                    row.healthCategory == .generatedArtifacts
+                        && !row.id.contains("gen-v-build-readiness")
+                }
             ),
         ]
 

@@ -309,6 +309,22 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "ROM writes",
             "binary writes"
         ])
+        let rubyMoveEgg = try XCTUnwrap(rubyMoveSources.first { $0.path == "src/data/pokemon/egg_moves.h" && $0.tableSymbol == "gEggMoves" })
+        XCTAssertEqual(rubyMoveEgg.status, .editable)
+        XCTAssertEqual(rubyMoveEgg.indexedCount, 1)
+        XCTAssertEqual(rubyMoveEgg.sourceRole, "editableEggMoves")
+        XCTAssertEqual(rubyMoveEgg.readiness, "editable existing gEggMoves rows")
+        XCTAssertEqual(rubyMoveEgg.blockedActions, [
+            "move constant creation",
+            "move identity changes",
+            "missing egg-move species row insertion",
+            "family reshaping",
+            "row insertion/removal/reorder",
+            "generated writes",
+            "reference writes",
+            "ROM writes",
+            "binary writes"
+        ])
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "generated" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "references/pokeruby/src/data/battle_moves.c" && $0.status == .blocked })
         XCTAssertTrue(rubyMoveSources.contains { $0.path == "ROM output" && $0.status == .blocked })
@@ -318,6 +334,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(rubyJSON.contains(#""editableContestScalarsAndComboMoves""#))
         XCTAssertTrue(rubyJSON.contains(#""readOnlyMoveConstants""#))
         XCTAssertTrue(rubyJSON.contains(#""editableTutorLearnsets""#))
+        XCTAssertTrue(rubyJSON.contains(#""editableEggMoves""#))
         XCTAssertTrue(rubyJSON.contains(#""sTutorLearnsets\/gTutorLearnsets""#))
         XCTAssertTrue(rubyJSON.contains(#""references\/pokeruby\/src\/data\/pokemon\/level_up_learnsets.h""#))
 
@@ -398,10 +415,10 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(behaviorSource.status, .editable)
         XCTAssertEqual(behaviorSource.indexedCount, 1)
         XCTAssertEqual(behaviorSource.sourceRole, "editableBehaviorScalars")
-        XCTAssertEqual(behaviorSource.readiness, "editable existing behavior/function scalar fields")
+        XCTAssertEqual(behaviorSource.readiness, "editable existing behavior/function scalar fields; complete missing group insertion is anchor-gated")
         XCTAssertEqual(behaviorSource.blockedActions, [
             "constants-file edits/creation",
-            "missing-field insertion",
+            "partial missing-field insertion/removal",
             "row insertion/removal/reorder",
             "generated outputs",
             "reference writes",
@@ -409,7 +426,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "binary writes",
             "broad schema rewrites"
         ])
-        XCTAssertTrue(behaviorSource.note?.contains("existing simple local source fields") == true)
+        XCTAssertTrue(behaviorSource.note?.contains("inserted as one complete anchored behavior/function group") == true)
         let bagClassificationSource = try XCTUnwrap(expansionItemSources.first {
             $0.path == "src/data/items.h"
                 && $0.tableSymbol == "gItemsInfo .importance/.registrability/.sortType/.exitsBagOnUse"
@@ -1111,6 +1128,38 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             levelUp.sourceTables?.first { $0.path == "src/data/pokemon/all_learnables.json" }?.learnablesCoverage
         )
         XCTAssertEqual(allLearnablesCoverage.staleSourcePaths, [levelUpPath])
+        let regenerationPlan = try XCTUnwrap(allLearnablesCoverage.regenerationPlan)
+        XCTAssertEqual(regenerationPlan.posture, "copyReportOnly")
+        XCTAssertEqual(regenerationPlan.generatedPath, "src/data/pokemon/all_learnables.json")
+        XCTAssertEqual(regenerationPlan.sourceBuckets, ["levelUp", "tmhm", "tutor", "egg"])
+        XCTAssertEqual(regenerationPlan.bucketPaths.map(\.bucket), ["levelUp", "tmhm", "tutor", "egg"])
+        XCTAssertEqual(regenerationPlan.bucketPaths.flatMap(\.paths), [
+            "src/data/pokemon/level_up_learnsets.h",
+            "src/data/pokemon/level_up_learnsets",
+            "src/data/pokemon/tmhm_learnsets.h",
+            "src/data/pokemon/tutor_learnsets.h",
+            "src/data/pokemon/egg_moves.h"
+        ])
+        XCTAssertEqual(regenerationPlan.generatedOnlyMoveIDs, ["MOVE_QUICK_ATTACK", "MOVE_SPLASH"])
+        XCTAssertEqual(regenerationPlan.sourceOnlyMoveIDs, ["MOVE_POUND", "MOVE_SWORD_DANCE"])
+        XCTAssertEqual(regenerationPlan.reviewItems.map(\.speciesID), [
+            "SPECIES_GROVYLE",
+            "SPECIES_TREECKO",
+            "SPECIES_TREECKO_GENERATED"
+        ])
+        let treeckoReviewItem = try XCTUnwrap(regenerationPlan.reviewItems.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(treeckoReviewItem.status, .moveMismatch)
+        XCTAssertEqual(treeckoReviewItem.generatedOnlyMoves, ["MOVE_QUICK_ATTACK"])
+        XCTAssertEqual(treeckoReviewItem.sourceOnlyMoves.map(\.move), ["MOVE_SWORD_DANCE"])
+        XCTAssertEqual(treeckoReviewItem.sourceOnlyMoves.first?.bucket, "tutor")
+        XCTAssertEqual(treeckoReviewItem.sourceOnlyMoves.first?.sourceSpan.relativePath, "src/data/pokemon/tutor_learnsets.h")
+        XCTAssertEqual(treeckoReviewItem.sourceOnlyMoves.first?.sourceSpan.startLine, 3)
+        XCTAssertEqual(regenerationPlan.reportCommands, [
+            "swift run --package-path PokemonHackStudio pokemonhack-cli pokemon-compatibility <project-root> --json",
+            "swift run --package-path PokemonHackStudio pokemonhack-cli asset-index <project-root> --json"
+        ])
+        XCTAssertTrue(regenerationPlan.reviewGuidance.contains("outside PokemonHackStudio"))
+        XCTAssertTrue(regenerationPlan.reviewGuidance.contains("will not run regeneration"))
         XCTAssertEqual(allLearnablesCoverage.disagreements.map(\.speciesID), [
             "SPECIES_GROVYLE",
             "SPECIES_TREECKO",
@@ -1160,6 +1209,13 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Move-set Mismatches" }?.value, "1")
         XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Stale Source Files" }?.value, "1")
         XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Newest Stale Source" }?.value, levelUpPath)
+        XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Regeneration Posture" }?.value, "copy/report-only; no generated JSON writes or command execution")
+        XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Regeneration Source Buckets" }?.value, "levelUp, tmhm, tutor, egg")
+        XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Regeneration Source Paths" }?.value, "src/data/pokemon/level_up_learnsets.h; src/data/pokemon/level_up_learnsets; src/data/pokemon/tmhm_learnsets.h; src/data/pokemon/tutor_learnsets.h; src/data/pokemon/egg_moves.h")
+        XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Regeneration Source-only Move IDs" }?.value, "MOVE_POUND, MOVE_SWORD_DANCE")
+        XCTAssertEqual(allLearnablesRecord.facts.first { $0.label == "Regeneration Generated-only Move IDs" }?.value, "MOVE_QUICK_ATTACK, MOVE_SPLASH")
+        XCTAssertTrue(allLearnablesRecord.facts.first { $0.label == "Regeneration Report Commands" }?.value.contains("pokemon-compatibility <project-root> --json") == true)
+        XCTAssertTrue(allLearnablesRecord.facts.first { $0.label == "Regeneration Guidance" }?.value.contains("will not run regeneration") == true)
     }
 
     func testAssetAndCryReadOnlyEntriesPointToLiveCompatibilityRow() throws {
@@ -1182,6 +1238,7 @@ final class PokemonDataCompatibilityTests: XCTestCase {
             "sound/songs/mus_cry*.s",
             "sound/songs/mus_cry*.inc"
         ])
+        XCTAssertEqual(plan.replacementGate?.status, .blocked)
         XCTAssertEqual(plan.blockedReasons, [
             "No existing local files matched sound/direct_sound_samples/cries/*.",
             "No existing local files matched sound/songs/mus_cry*.s or sound/songs/mus_cry*.inc."
@@ -1233,6 +1290,11 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(plan.replacementConstraints.contains("Replacement is future-only and must target an existing local source file reported in sourceFiles."))
         XCTAssertTrue(plan.replacementConstraints.contains("Replacement must be one-for-one with the same project-relative path and source kind."))
         XCTAssertTrue(plan.replacementConstraints.contains("Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, and source mutation apply are disabled."))
+        XCTAssertEqual(plan.replacementGate?.status, .readOnly)
+        XCTAssertEqual(plan.replacementGate?.targetPaths, [
+            "sound/direct_sound_samples/cries/treecko.aif",
+            "sound/songs/mus_cry_treecko.s"
+        ])
         XCTAssertEqual(plan.blockedReasons, [])
         XCTAssertTrue(plan.plannedChanges.contains("Keep generated audio artifacts and ROM output unchanged."))
         XCTAssertTrue(plan.blockedActions.contains("Audio conversion"))
@@ -1242,6 +1304,45 @@ final class PokemonDataCompatibilityTests: XCTestCase {
         XCTAssertTrue(plan.blockedActions.contains("Binary mutation"))
         XCTAssertTrue(plan.blockedActions.contains("Source mutation apply"))
         XCTAssertTrue(cries.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY" })
+    }
+
+    func testRubySapphireCryAudioCompatibilityReportsEditableReplacementGate() throws {
+        let root = try temporaryRoot()
+        try write(Data([0x01, 0x02, 0x03, 0x04]), to: root.appendingPathComponent("sound/direct_sound_samples/cries/treecko.aif"))
+        try write("cry song\n", to: root.appendingPathComponent("sound/songs/mus_cry_treecko.s"))
+
+        let report = try PokemonDataCompatibilityReportBuilder.build(
+            index: projectIndex(root: root, profile: .pokeruby),
+            sourceIndex: sourceIndex(profile: .pokeruby, itemPath: "src/data/items_en.h")
+        )
+
+        let cries = entry(.cries, in: report)
+        XCTAssertEqual(cries.status, .editable)
+        XCTAssertEqual(cries.indexedCount, 2)
+        XCTAssertEqual(cries.editableCount, 2)
+        XCTAssertEqual(cries.readOnlyCount, 0)
+        XCTAssertNil(cries.recommendedFutureRow)
+        XCTAssertNil(cries.blockedReason)
+        XCTAssertFalse(cries.unsupportedFields.contains("source mutation apply"))
+        XCTAssertTrue(cries.unsupportedFields.contains("audio conversion"))
+        XCTAssertTrue(cries.unsupportedFields.contains("generated audio output writes"))
+        XCTAssertTrue(cries.unsupportedFields.contains("reference writes"))
+
+        let plan = try XCTUnwrap(cries.cryAudioPlan)
+        XCTAssertEqual(plan.status, .previewOnly)
+        XCTAssertEqual(plan.replacementGate?.status, .editable)
+        XCTAssertEqual(plan.replacementGate?.targetPaths, [
+            "sound/direct_sound_samples/cries/treecko.aif",
+            "sound/songs/mus_cry_treecko.s"
+        ])
+        XCTAssertTrue(plan.replacementConstraints.contains("Replacement must target an existing local Ruby/Sapphire source file reported in sourceFiles."))
+        XCTAssertTrue(plan.replacementConstraints.contains("Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, source generation, reference writes, and broad audio schema rewrites are disabled."))
+        XCTAssertTrue(plan.blockedActions.contains("Audio conversion"))
+        XCTAssertTrue(plan.blockedActions.contains("Generated audio output writes"))
+        XCTAssertTrue(plan.blockedActions.contains("Source generation"))
+        XCTAssertTrue(plan.blockedActions.contains("Reference writes"))
+        XCTAssertFalse(plan.blockedActions.contains("Source mutation apply"))
+        XCTAssertTrue(cries.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_REPLACEMENT_GATE_EDITABLE" })
     }
 
     func testFormsCompatibilityReportsEditableLocalRowsWhileBlockingAdjacentWorkflows() throws {

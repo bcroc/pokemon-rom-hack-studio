@@ -70,6 +70,11 @@ public enum GBACryAudioMutationPlanStatus: String, Codable, Equatable, CaseItera
     case blocked
 }
 
+public enum GBACryAudioReplacementStatus: String, Codable, Equatable, CaseIterable {
+    case ready
+    case blocked
+}
+
 public struct GBACryAudioSourceFile: Codable, Equatable {
     public let path: String
     public let kind: String
@@ -84,6 +89,233 @@ public struct GBACryAudioSourceFile: Codable, Equatable {
     }
 }
 
+public struct GBACryAudioReplacementGate: Codable, Equatable {
+    public let status: PokemonDataCompatibilityStatus
+    public let summary: String
+    public let targetPaths: [String]
+    public let blockedActions: [String]
+    public let diagnostics: [Diagnostic]
+
+    public init(
+        status: PokemonDataCompatibilityStatus,
+        summary: String,
+        targetPaths: [String],
+        blockedActions: [String],
+        diagnostics: [Diagnostic]
+    ) {
+        self.status = status
+        self.summary = summary
+        self.targetPaths = targetPaths
+        self.blockedActions = blockedActions
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct GBACryAudioReplacementDraft: Codable, Equatable, Identifiable {
+    public var id: String { targetPath }
+
+    public let targetPath: String
+    public let sourceKind: String
+    public let originalSizeBytes: UInt64
+    public let originalSHA1: String
+    public let replacementSourcePath: String
+    public let replacementSizeBytes: UInt64
+    public let replacementSHA1: String
+    public let status: GBACryAudioReplacementStatus
+    public let diagnostics: [Diagnostic]
+    public let blockedActions: [String]
+    public let data: Data
+
+    public init(
+        targetPath: String,
+        sourceKind: String,
+        originalSizeBytes: UInt64,
+        originalSHA1: String,
+        replacementSourcePath: String,
+        replacementSizeBytes: UInt64,
+        replacementSHA1: String,
+        status: GBACryAudioReplacementStatus,
+        diagnostics: [Diagnostic],
+        blockedActions: [String],
+        data: Data
+    ) {
+        self.targetPath = targetPath
+        self.sourceKind = sourceKind
+        self.originalSizeBytes = originalSizeBytes
+        self.originalSHA1 = originalSHA1
+        self.replacementSourcePath = replacementSourcePath
+        self.replacementSizeBytes = replacementSizeBytes
+        self.replacementSHA1 = replacementSHA1
+        self.status = status
+        self.diagnostics = diagnostics
+        self.blockedActions = blockedActions
+        self.data = data
+    }
+}
+
+public enum GBACryAudioSourceFileScanner {
+    public static let candidateSourcePaths = [
+        "sound/direct_sound_samples/cries/*",
+        "sound/songs/mus_cry*.s",
+        "sound/songs/mus_cry*.inc"
+    ]
+
+    public static func sourceFiles(rootPath: String, fileManager: FileManager = .default) -> [GBACryAudioSourceFile] {
+        let root = URL(fileURLWithPath: rootPath).standardizedFileURL
+        var files: [GBACryAudioSourceFile] = []
+        appendCryFiles(
+            under: root.appendingPathComponent("sound/direct_sound_samples/cries"),
+            root: root,
+            kind: "directSoundCrySample",
+            fileManager: fileManager,
+            into: &files
+        )
+        appendCrySongFiles(
+            under: root.appendingPathComponent("sound/songs"),
+            root: root,
+            fileManager: fileManager,
+            into: &files
+        )
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private static func appendCryFiles(
+        under directory: URL,
+        root: URL,
+        kind: String,
+        fileManager: FileManager,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let url = enumerator?.nextObject() as? URL {
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]),
+                  values.isDirectory != true
+            else {
+                continue
+            }
+            appendCrySourceFile(url: url, root: root, kind: kind, sizeBytes: values.fileSize, into: &files)
+        }
+    }
+
+    private static func appendCrySongFiles(
+        under directory: URL,
+        root: URL,
+        fileManager: FileManager,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for url in urls {
+            let name = url.lastPathComponent.lowercased()
+            guard name.hasPrefix("mus_cry"), ["s", "inc"].contains(url.pathExtension.lowercased()) else { continue }
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+            appendCrySourceFile(url: url, root: root, kind: "crySongAssembly", sizeBytes: values?.fileSize, into: &files)
+        }
+    }
+
+    private static func appendCrySourceFile(
+        url: URL,
+        root: URL,
+        kind: String,
+        sizeBytes: Int?,
+        into files: inout [GBACryAudioSourceFile]
+    ) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        files.append(
+            GBACryAudioSourceFile(
+                path: relativePath(for: url, root: root),
+                kind: kind,
+                sizeBytes: UInt64(sizeBytes ?? data.count),
+                sha1: pokemonHackSHA1Hex(data)
+            )
+        )
+    }
+
+    private static func relativePath(for url: URL, root: URL) -> String {
+        let standardizedRoot = root.standardizedFileURL.path
+        let standardizedPath = url.standardizedFileURL.path
+        guard standardizedPath.hasPrefix(standardizedRoot + "/") else { return url.lastPathComponent }
+        return String(standardizedPath.dropFirst(standardizedRoot.count + 1))
+    }
+}
+
+public enum GBACryAudioReplacementValidator {
+    public static let blockedActions = [
+        "Audio conversion",
+        "Generated audio output writes",
+        "Source generation",
+        "Missing source creation",
+        "Playback",
+        "ROM export",
+        "Binary mutation",
+        "Reference writes",
+        "Broad audio schema rewrites"
+    ]
+
+    public static func replacementDraft(
+        target: GBACryAudioSourceFile,
+        replacementSourcePath: String,
+        data: Data
+    ) -> GBACryAudioReplacementDraft {
+        var diagnostics: [Diagnostic] = []
+        let span = SourceSpan(relativePath: target.path, startLine: 1)
+        if data.isEmpty {
+            diagnostics.append(Diagnostic(
+                severity: .error,
+                code: "GBA_CRY_AUDIO_REPLACEMENT_EMPTY",
+                message: "Cry/audio replacement data is empty for \(target.path).",
+                span: span
+            ))
+        }
+
+        let targetExtension = URL(fileURLWithPath: target.path).pathExtension.lowercased()
+        let replacementExtension = URL(fileURLWithPath: replacementSourcePath).pathExtension.lowercased()
+        if targetExtension != replacementExtension {
+            diagnostics.append(Diagnostic(
+                severity: .error,
+                code: "GBA_CRY_AUDIO_REPLACEMENT_KIND_MISMATCH",
+                message: "Cry/audio replacement for \(target.path) must use the same .\(targetExtension) source kind.",
+                span: span
+            ))
+        }
+
+        if !["directSoundCrySample", "crySongAssembly"].contains(target.kind) {
+            diagnostics.append(Diagnostic(
+                severity: .error,
+                code: "GBA_CRY_AUDIO_REPLACEMENT_KIND_UNSUPPORTED",
+                message: "Cry/audio replacement kind is not supported for \(target.path): \(target.kind).",
+                span: span
+            ))
+        }
+
+        let status: GBACryAudioReplacementStatus = diagnostics.contains { $0.severity == .error } ? .blocked : .ready
+        return GBACryAudioReplacementDraft(
+            targetPath: target.path,
+            sourceKind: target.kind,
+            originalSizeBytes: target.sizeBytes,
+            originalSHA1: target.sha1,
+            replacementSourcePath: URL(fileURLWithPath: replacementSourcePath).standardizedFileURL.path,
+            replacementSizeBytes: UInt64(data.count),
+            replacementSHA1: pokemonHackSHA1Hex(data),
+            status: status,
+            diagnostics: diagnostics,
+            blockedActions: blockedActions,
+            data: data
+        )
+    }
+}
+
 public struct GBACryAudioMutationPlan: Codable, Equatable {
     public let status: GBACryAudioMutationPlanStatus
     public let summary: String
@@ -93,6 +325,7 @@ public struct GBACryAudioMutationPlan: Codable, Equatable {
     public let blockedReasons: [String]
     public let plannedChanges: [String]
     public let blockedActions: [String]
+    public let replacementGate: GBACryAudioReplacementGate?
     public let diagnostics: [Diagnostic]
 
     public init(
@@ -104,6 +337,7 @@ public struct GBACryAudioMutationPlan: Codable, Equatable {
         blockedReasons: [String],
         plannedChanges: [String],
         blockedActions: [String],
+        replacementGate: GBACryAudioReplacementGate? = nil,
         diagnostics: [Diagnostic]
     ) {
         self.status = status
@@ -114,6 +348,7 @@ public struct GBACryAudioMutationPlan: Codable, Equatable {
         self.blockedReasons = blockedReasons
         self.plannedChanges = plannedChanges
         self.blockedActions = blockedActions
+        self.replacementGate = replacementGate
         self.diagnostics = diagnostics
     }
 }
@@ -331,6 +566,8 @@ public enum PokemonDataCompatibilityReportBuilder {
                 rubyTMHMEditableCount: rubyTMHMEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 rubyTutorIndexedCount: rubyTutorIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 rubyTutorEditableCount: rubyTutorEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                rubyEggIndexedCount: rubyEggIndexedCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
+                rubyEggEditableCount: rubyEggEditableCount(profile: index.profile, speciesCatalog: speciesCatalog, sourceIndex: sourceIndex),
                 moveConstantsReadiness: rubyMoveConstantsReadiness
             )
         )
@@ -606,13 +843,28 @@ public enum PokemonDataCompatibilityReportBuilder {
         let descriptor = descriptor(for: .cries, profile: index.profile)
         let plan = cryAudioPlan(index: index, fileManager: fileManager)
         let count = plan.sourceFiles.count
+        let editable = index.profile == .pokeruby && count > 0 ? count : 0
+        var unsupportedFields = [
+            "audio conversion",
+            "generated audio output writes",
+            "source generation",
+            "missing-source creation",
+            "ROM cry table rewrites",
+            "playback",
+            "binary mutation",
+            "reference writes",
+            "broad audio schema rewrites"
+        ]
+        if editable == 0 {
+            unsupportedFields.append("source mutation apply")
+        }
         return entry(
             surface: .cries,
             index: index,
             descriptor: descriptor,
             indexedCount: count,
-            editableCount: 0,
-            unsupportedFields: ["audio conversion", "generated audio output writes", "ROM cry table rewrites", "playback", "binary mutation", "source mutation apply"],
+            editableCount: editable,
+            unsupportedFields: unsupportedFields,
             blockedReason: count == 0 ? plan.blockedReasons.joined(separator: " ") : nil,
             recommendedFutureRow: nil,
             diagnostics: plan.diagnostics,
@@ -940,13 +1192,13 @@ public enum PokemonDataCompatibilityReportBuilder {
                 path: "src/data/items.h",
                 tableSymbol: "gItemsInfo .fieldUseFunc/.battleUsage/.battleUseFunc/.secondaryId",
                 indexedCount: behaviorScalarFactCount,
-                status: behaviorScalarFactCount > 0 ? .editable : .blocked,
-                note: "Expansion ItemInfo behavior/function scalars are editable only as existing simple local source fields through the item mutation-plan gate.",
+                status: behaviorScalarFactCount > 0 || editableCount > 0 ? .editable : .blocked,
+                note: "Expansion ItemInfo behavior/function scalars are editable as existing simple local source fields, or inserted as one complete anchored behavior/function group, through the item mutation-plan gate.",
                 sourceRole: "editableBehaviorScalars",
-                readiness: behaviorScalarFactCount > 0 ? "editable existing behavior/function scalar fields" : "no existing behavior/function scalar fields indexed",
+                readiness: behaviorScalarFactCount > 0 ? "editable existing behavior/function scalar fields; complete missing group insertion is anchor-gated" : "complete missing behavior/function scalar group can be inserted when .effect and .iconPic anchors exist",
                 blockedActions: [
                     "constants-file edits/creation",
-                    "missing-field insertion",
+                    "partial missing-field insertion/removal",
                     "row insertion/removal/reorder",
                     "generated outputs",
                     "reference writes",
@@ -1042,6 +1294,8 @@ public enum PokemonDataCompatibilityReportBuilder {
         rubyTMHMEditableCount: Int,
         rubyTutorIndexedCount: Int,
         rubyTutorEditableCount: Int,
+        rubyEggIndexedCount: Int,
+        rubyEggEditableCount: Int,
         moveConstantsReadiness: MoveConstantsReadiness?
     ) -> [PokemonDataCompatibilitySourceTable]? {
         let sourceStatus: PokemonDataCompatibilityStatus
@@ -1080,6 +1334,14 @@ public enum PokemonDataCompatibilityReportBuilder {
                 tutorStatus = .readOnly
             } else {
                 tutorStatus = .blocked
+            }
+            let eggStatus: PokemonDataCompatibilityStatus
+            if rubyEggEditableCount > 0 {
+                eggStatus = .editable
+            } else if rubyEggIndexedCount > 0 {
+                eggStatus = .readOnly
+            } else {
+                eggStatus = .blocked
             }
             let contestMoveNote: String
             if contestScalarsEditableCount > 0 && contestComboMovesEditableCount > 0 {
@@ -1216,6 +1478,26 @@ public enum PokemonDataCompatibilityReportBuilder {
                     ]
                 ),
                 PokemonDataCompatibilitySourceTable(
+                    path: "src/data/pokemon/egg_moves.h",
+                    tableSymbol: "gEggMoves",
+                    indexedCount: rubyEggIndexedCount,
+                    status: eggStatus,
+                    note: "Existing local Ruby/Sapphire egg-move rows are editable from move-centric compatibility drafts through the species mutation-plan gate.",
+                    sourceRole: "editableEggMoves",
+                    readiness: rubyEggEditableCount > 0 ? "editable existing gEggMoves rows" : "no editable existing gEggMoves rows indexed",
+                    blockedActions: [
+                        "move constant creation",
+                        "move identity changes",
+                        "missing egg-move species row insertion",
+                        "family reshaping",
+                        "row insertion/removal/reorder",
+                        "generated writes",
+                        "reference writes",
+                        "ROM writes",
+                        "binary writes"
+                    ]
+                ),
+                PokemonDataCompatibilitySourceTable(
                     path: "generated",
                     tableSymbol: nil,
                     indexedCount: 0,
@@ -1329,11 +1611,30 @@ public enum PokemonDataCompatibilityReportBuilder {
                 note: "TM/HM compatibility edits remain blocked from move row plans."
             ),
             PokemonDataCompatibilitySourceTable(
-                path: "src/data/pokemon/tutor_learnsets.h",
-                tableSymbol: "gTutorLearnsets",
+                path: "src/data/pokemon/egg_moves.h",
+                tableSymbol: "gEggMoves",
                 indexedCount: 0,
                 status: .blocked,
-                note: "Tutor compatibility edits remain blocked from move row plans."
+                note: "Egg compatibility edits remain blocked from move row plans."
+            ),
+            PokemonDataCompatibilitySourceTable(
+                path: "src/data/pokemon/tutor_learnsets.h",
+                tableSymbol: "gTutorLearnsets",
+                indexedCount: rubyTutorIndexedCount,
+                status: rubyTutorEditableCount > 0 ? .editable : (rubyTutorIndexedCount > 0 ? .readOnly : .blocked),
+                note: "Existing local Expansion tutor rows are editable from move-centric compatibility drafts through the species mutation-plan gate.",
+                sourceRole: "editableTutorLearnsets",
+                readiness: rubyTutorEditableCount > 0 ? "editable existing gTutorLearnsets rows" : "no editable existing gTutorLearnsets rows indexed",
+                blockedActions: [
+                    "tutor constant creation",
+                    "missing tutor row insertion",
+                    "row insertion/removal/reorder",
+                    "generated all_learnables.json writes",
+                    "generated outputs",
+                    "reference writes",
+                    "ROM/build/export paths",
+                    "binary writes"
+                ]
             ),
             PokemonDataCompatibilitySourceTable(
                 path: "generated",
@@ -1875,7 +2176,7 @@ public enum PokemonDataCompatibilityReportBuilder {
         speciesCatalog: ProjectSpeciesCatalog?,
         sourceIndex: ProjectSourceIndex
     ) -> Int {
-        guard profile == .pokeruby else { return 0 }
+        guard profile == .pokeruby || profile == .pokeemeraldExpansion else { return 0 }
         return speciesCatalog?.species.filter { $0.learnsets.tutorSourceSpan?.relativePath == "src/data/pokemon/tutor_learnsets.h" }.count
             ?? learnsetRecordCount(in: sourceIndex, matching: ["tutor"])
     }
@@ -2239,20 +2540,20 @@ public enum PokemonDataCompatibilityReportBuilder {
     }
 
     private static func cryAudioPlan(index: ProjectIndex, fileManager: FileManager) -> GBACryAudioMutationPlan {
-        let root = URL(fileURLWithPath: index.root.path).standardizedFileURL
-        let sourceFiles = cryAudioSourceFiles(root: root, fileManager: fileManager)
-        let candidateSourcePaths = [
-            "sound/direct_sound_samples/cries/*",
-            "sound/songs/mus_cry*.s",
-            "sound/songs/mus_cry*.inc"
-        ]
+        let sourceFiles = GBACryAudioSourceFileScanner.sourceFiles(rootPath: index.root.path, fileManager: fileManager)
+        let candidateSourcePaths = GBACryAudioSourceFileScanner.candidateSourcePaths
+        let isRubySapphire = index.profile == .pokeruby
         let replacementConstraints = [
-            "Replacement is future-only and must target an existing local source file reported in sourceFiles.",
+            isRubySapphire
+                ? "Replacement must target an existing local Ruby/Sapphire source file reported in sourceFiles."
+                : "Replacement is future-only and must target an existing local source file reported in sourceFiles.",
             "Replacement must be one-for-one with the same project-relative path and source kind.",
             "Missing cry source insertion and directory creation are disabled.",
-            "Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, and source mutation apply are disabled."
+            isRubySapphire
+                ? "Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, source generation, reference writes, and broad audio schema rewrites are disabled."
+                : "Generated audio outputs, build artifacts, ROM targets, binary mutation, playback, and source mutation apply are disabled."
         ]
-        let blockedActions = [
+        let blockedActions = isRubySapphire ? GBACryAudioReplacementValidator.blockedActions : [
             "Audio conversion",
             "Generated audio output writes",
             "Playback",
@@ -2260,6 +2561,17 @@ public enum PokemonDataCompatibilityReportBuilder {
             "Binary mutation",
             "Source mutation apply"
         ]
+        let replacementGate = GBACryAudioReplacementGate(
+            status: sourceFiles.isEmpty ? .blocked : (isRubySapphire ? .editable : .readOnly),
+            summary: sourceFiles.isEmpty
+                ? "No existing local GBA cry/audio source files are available for replacement review."
+                : (isRubySapphire
+                    ? "Existing local Ruby/Sapphire cry/audio source files may be replaced one-for-one through the Pokemon mutation-plan review gate."
+                    : "Existing GBA cry/audio source files are reported for preview only; replacement apply is not enabled for this profile."),
+            targetPaths: sourceFiles.map(\.path),
+            blockedActions: blockedActions,
+            diagnostics: []
+        )
         if sourceFiles.isEmpty {
             let blockedReasons = [
                 "No existing local files matched sound/direct_sound_samples/cries/*.",
@@ -2274,6 +2586,7 @@ public enum PokemonDataCompatibilityReportBuilder {
                 blockedReasons: blockedReasons,
                 plannedChanges: [],
                 blockedActions: blockedActions,
+                replacementGate: replacementGate,
                 diagnostics: [
                     Diagnostic(
                         severity: .warning,
@@ -2286,24 +2599,39 @@ public enum PokemonDataCompatibilityReportBuilder {
         }
 
         let previewCount = sourceFiles.count == 1 ? "1 source file" : "\(sourceFiles.count) source files"
+        let summary = isRubySapphire
+            ? "Detected \(previewCount) for source-backed Ruby/Sapphire GBA cry/audio review. One-for-one source replacement can be staged through a Pokemon mutation plan; conversion, generated outputs, playback, ROM export, binary mutation, reference writes, and broad audio schema rewrites remain disabled."
+            : "Detected \(previewCount) for source-backed GBA cry/audio review. Replacement, conversion, generated outputs, playback, ROM export, binary mutation, and source mutation apply remain disabled."
+        let plannedChanges = isRubySapphire
+            ? [
+                "Review existing cry source provenance, size, and SHA1 before staging a replacement.",
+                "Stage only one-for-one source-file replacement through a Pokemon mutation plan.",
+                "Keep generated audio artifacts and ROM output unchanged."
+            ]
+            : [
+                "Review existing cry source provenance, size, and SHA1 before any future edit.",
+                "Stage only one-for-one source-file replacement after a dedicated cry import row defines validation.",
+                "Keep generated audio artifacts and ROM output unchanged."
+            ]
+        let diagnosticCode = isRubySapphire ? "GBA_CRY_AUDIO_REPLACEMENT_GATE_EDITABLE" : "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY"
+        let diagnosticMessage = isRubySapphire
+            ? "Detected explicit local Ruby/Sapphire GBA cry/audio source files; one-for-one replacement may be reviewed through the Pokemon mutation-plan gate without conversion, generated audio, or ROM output."
+            : "Detected explicit local GBA cry/audio source files; this row reports diagnostics and a preview-only mutation plan without writing source, generated audio, or ROM output."
         return GBACryAudioMutationPlan(
             status: .previewOnly,
-            summary: "Detected \(previewCount) for source-backed GBA cry/audio review. Replacement, conversion, generated outputs, playback, ROM export, binary mutation, and source mutation apply remain disabled.",
+            summary: summary,
             candidateSourcePaths: candidateSourcePaths,
             sourceFiles: sourceFiles,
             replacementConstraints: replacementConstraints,
             blockedReasons: [],
-            plannedChanges: [
-                "Review existing cry source provenance, size, and SHA1 before any future edit.",
-                "Stage only one-for-one source-file replacement after a dedicated cry import row defines validation.",
-                "Keep generated audio artifacts and ROM output unchanged."
-            ],
+            plannedChanges: plannedChanges,
             blockedActions: blockedActions,
+            replacementGate: replacementGate,
             diagnostics: [
                 Diagnostic(
                     severity: .info,
-                    code: "GBA_CRY_AUDIO_PLAN_PREVIEW_ONLY",
-                    message: "Detected explicit local GBA cry/audio source files; this row reports diagnostics and a preview-only mutation plan without writing source, generated audio, or ROM output.",
+                    code: diagnosticCode,
+                    message: diagnosticMessage,
                     span: SourceSpan(relativePath: sourceFiles[0].path, startLine: 1)
                 )
             ]
@@ -2699,7 +3027,7 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
             "tutor constant creation",
             "missing tutor row insertion"
         ])
-    } else if !supportsClassicSpeciesMutationEditing(profile) {
+    } else if profile != .pokeemeraldExpansion && !supportsClassicSpeciesMutationEditing(profile) {
         fields.append("TM/HM/tutor compatibility edits")
     }
     if profile == .pokeruby {
@@ -2714,6 +3042,11 @@ private func movesUnsupportedFields(profile: GameProfile) -> [String] {
         fields.append(contentsOf: [
             "non-source-backed move description rewrites",
             "gMovesInfo non-simple flags expressions",
+            "TM/HM compatibility edits from move row plans",
+            "egg compatibility edits from move row plans",
+            "tutor constant creation",
+            "missing tutor row insertion",
+            "generated all_learnables.json writes",
             "generated move output writes",
             "reference-only move source writes",
             "Modern Emerald move writers",

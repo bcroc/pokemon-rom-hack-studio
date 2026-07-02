@@ -806,38 +806,51 @@ public enum ItemMutationPlanner {
         diagnostics: inout [Diagnostic]
     ) {
         guard descriptor.supportsBehaviorScalarEditing else { return }
-        let functionFields = [
-            ("fieldUseFunc", item.fieldUseFunc, draft.fieldUseFunc),
-            ("battleUseFunc", item.battleUseFunc, draft.battleUseFunc)
-        ]
-        for (label, current, draftValue) in functionFields where current != draftValue {
-            appendBehaviorScalarDiagnostic(
-                label: label,
-                current: current,
-                draftValue: draftValue,
-                item: item,
-                isValid: isSimpleItemSymbol
-            ) {
-                "\(label) must be a single C identifier or NULL."
-            } diagnostics: { diagnostic in
-                diagnostics.append(diagnostic)
+        let fields = [
+            BehaviorScalarField(label: "fieldUseFunc", current: item.fieldUseFunc, draftValue: draft.fieldUseFunc, isValid: isSimpleItemSymbol) {
+                "fieldUseFunc must be a single C identifier or NULL."
+            },
+            BehaviorScalarField(label: "battleUsage", current: item.battleUsage, draftValue: draft.battleUsage, isValid: isSimpleItemSymbolOrIntegerLiteral) {
+                "battleUsage must be a single C identifier or integer literal."
+            },
+            BehaviorScalarField(label: "battleUseFunc", current: item.battleUseFunc, draftValue: draft.battleUseFunc, isValid: isSimpleItemSymbol) {
+                "battleUseFunc must be a single C identifier or NULL."
+            },
+            BehaviorScalarField(label: "secondaryId", current: item.secondaryId, draftValue: draft.secondaryId, isValid: isSimpleItemSymbolOrIntegerLiteral) {
+                "secondaryId must be a single C identifier or integer literal."
             }
+        ]
+        let editedMissingFields = fields.filter { $0.current == nil && $0.current != $0.draftValue }
+        if !editedMissingFields.isEmpty {
+            let missingFields = fields.filter { $0.current == nil }
+            guard missingFields.count == fields.count else {
+                for field in editedMissingFields {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_NOT_EDITABLE", message: "\(field.label) edits require an existing local Expansion gItemsInfo field; partial missing-field insertion is blocked.", span: item.sourceSpan))
+                }
+                return
+            }
+            for field in fields {
+                guard let draftValue = field.draftValue, !draftValue.isEmpty else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_INSERTION_REQUIRED", message: "Behavior/function scalar insertion requires fieldUseFunc, battleUsage, battleUseFunc, and secondaryId values together.", span: item.sourceSpan))
+                    continue
+                }
+                guard field.isValid(draftValue) else {
+                    diagnostics.append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_INVALID", message: field.invalidMessage(), span: item.sourceSpan))
+                    continue
+                }
+            }
+            return
         }
 
-        let scalarFields = [
-            ("battleUsage", item.battleUsage, draft.battleUsage),
-            ("secondaryId", item.secondaryId, draft.secondaryId)
-        ]
-        for (label, current, draftValue) in scalarFields where current != draftValue {
+        for field in fields where field.current != field.draftValue {
             appendBehaviorScalarDiagnostic(
-                label: label,
-                current: current,
-                draftValue: draftValue,
+                label: field.label,
+                current: field.current,
+                draftValue: field.draftValue,
                 item: item,
-                isValid: isSimpleItemSymbolOrIntegerLiteral
-            ) {
-                "\(label) must be a single C identifier or integer literal."
-            } diagnostics: { diagnostic in
+                isValid: field.isValid,
+                invalidMessage: field.invalidMessage
+            ) { diagnostic in
                 diagnostics.append(diagnostic)
             }
         }
@@ -854,6 +867,10 @@ public enum ItemMutationPlanner {
     ) {
         guard current != nil else {
             append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_NOT_EDITABLE", message: "\(label) edits require an existing local Expansion gItemsInfo field; missing-field insertion is blocked.", span: item.sourceSpan))
+            return
+        }
+        guard let current, isValid(current) else {
+            append(Diagnostic(severity: .error, code: "ITEM_BEHAVIOR_SCALAR_UNSUPPORTED_EXPRESSION", message: "\(label) currently uses a non-simple Expansion gItemsInfo expression that cannot be round-tripped safely.", span: item.sourceSpan))
             return
         }
         guard let draftValue, !draftValue.isEmpty else {
@@ -1252,6 +1269,14 @@ private struct ItemDescriptionText {
     let usesStatic: Bool
 }
 
+private struct BehaviorScalarField {
+    let label: String
+    let current: String?
+    let draftValue: String?
+    let isValid: (String) -> Bool
+    let invalidMessage: () -> String
+}
+
 private struct ItemFieldChange {
     let key: String
     let replacement: String
@@ -1264,6 +1289,13 @@ private struct ItemFieldRange {
 }
 
 private enum ItemFieldPatcher {
+    private static let behaviorScalarInsertionKeys = [
+        "fieldUseFunc",
+        "battleUsage",
+        "battleUseFunc",
+        "secondaryId"
+    ]
+
     static func patch(
         entryBody: String,
         changes: [ItemFieldChange],
@@ -1272,17 +1304,22 @@ private enum ItemFieldPatcher {
     ) -> String? {
         let ranges = Dictionary(uniqueKeysWithValues: fieldRanges(in: entryBody).map { ($0.key, $0) })
         var characters = Array(entryBody)
-        var replacements: [(range: ItemFieldRange, value: String)] = []
+        var edits: [(start: Int, end: Int, value: String)] = []
+        var missingBehaviorChanges: [ItemFieldChange] = []
         for change in changes {
             guard let range = ranges[change.key] else {
-                diagnostics.append(
-                    Diagnostic(
-                        severity: .error,
-                        code: "ITEM_FIELD_MISSING",
-                        message: "Cannot edit \(change.key) because the existing item entry does not contain that top-level field.",
-                        span: span
+                if behaviorScalarInsertionKeys.contains(change.key) {
+                    missingBehaviorChanges.append(change)
+                } else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "ITEM_FIELD_MISSING",
+                            message: "Cannot edit \(change.key) because the existing item entry does not contain that top-level field.",
+                            span: span
+                        )
                     )
-                )
+                }
                 continue
             }
             guard !change.replacement.isEmpty else {
@@ -1296,13 +1333,118 @@ private enum ItemFieldPatcher {
                 )
                 continue
             }
-            replacements.append((range, change.replacement))
+            edits.append((range.start, range.end, change.replacement))
+        }
+        if !missingBehaviorChanges.isEmpty {
+            appendBehaviorScalarInsertionEdit(
+                changes: missingBehaviorChanges,
+                ranges: ranges,
+                characters: characters,
+                diagnostics: &diagnostics,
+                span: span,
+                edits: &edits
+            )
         }
         guard diagnostics.allSatisfy({ $0.severity != .error }) else { return nil }
-        for replacement in replacements.sorted(by: { $0.range.start > $1.range.start }) {
-            characters.replaceSubrange(replacement.range.start..<replacement.range.end, with: Array(replacement.value))
+        for edit in edits.sorted(by: { $0.start > $1.start }) {
+            characters.replaceSubrange(edit.start..<edit.end, with: Array(edit.value))
         }
         return String(characters)
+    }
+
+    private static func appendBehaviorScalarInsertionEdit(
+        changes: [ItemFieldChange],
+        ranges: [String: ItemFieldRange],
+        characters: [Character],
+        diagnostics: inout [Diagnostic],
+        span: SourceSpan,
+        edits: inout [(start: Int, end: Int, value: String)]
+    ) {
+        let changeKeys = Set(changes.map(\.key))
+        guard changeKeys == Set(behaviorScalarInsertionKeys),
+              behaviorScalarInsertionKeys.allSatisfy({ ranges[$0] == nil })
+        else {
+            for change in changes {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "ITEM_FIELD_MISSING",
+                        message: "Cannot edit \(change.key) because the existing item entry does not contain that top-level field.",
+                        span: span
+                    )
+                )
+            }
+            return
+        }
+        guard ranges["effect"] != nil,
+              ranges["iconPic"] != nil,
+              let insertionPoint = insertionPointAfterField(for: "effect", ranges: ranges, characters: characters)
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "ITEM_BEHAVIOR_SCALAR_INSERTION_ANCHOR_MISSING",
+                    message: "Behavior/function scalar insertion requires existing top-level .effect and .iconPic anchors.",
+                    span: span
+                )
+            )
+            return
+        }
+        let values = Dictionary(uniqueKeysWithValues: changes.map { ($0.key, $0.replacement) })
+        guard behaviorScalarInsertionKeys.allSatisfy({ values[$0]?.isEmpty == false }) else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "ITEM_BEHAVIOR_SCALAR_INSERTION_REQUIRED",
+                    message: "Behavior/function scalar insertion requires fieldUseFunc, battleUsage, battleUseFunc, and secondaryId values together.",
+                    span: span
+                )
+            )
+            return
+        }
+        let indentation = lineIndentation(containing: ranges["effect"]?.start, characters: characters)
+        var inserted = behaviorScalarInsertionKeys
+            .map { "\(indentation).\($0) = \(values[$0]!)," }
+            .joined(separator: "\n") + "\n"
+        if insertionPoint.requiresLeadingNewline {
+            inserted = "\n" + inserted
+        }
+        edits.append((insertionPoint.index, insertionPoint.index, inserted))
+    }
+
+    private static func insertionPointAfterField(
+        for key: String,
+        ranges: [String: ItemFieldRange],
+        characters: [Character]
+    ) -> (index: Int, requiresLeadingNewline: Bool)? {
+        guard let range = ranges[key] else { return nil }
+        var index = range.end
+        while index < characters.count, characters[index].isWhitespace, characters[index] != "\n" {
+            index += 1
+        }
+        guard index < characters.count, characters[index] == "," else { return nil }
+        index += 1
+        var cursor = index
+        while cursor < characters.count, characters[cursor].isWhitespace, characters[cursor] != "\n" {
+            cursor += 1
+        }
+        if cursor < characters.count, characters[cursor] == "\n" {
+            return (cursor + 1, false)
+        }
+        return (index, true)
+    }
+
+    private static func lineIndentation(containing index: Int?, characters: [Character]) -> String {
+        guard let index else { return "" }
+        var lineStart = index
+        while lineStart > 0, characters[lineStart - 1] != "\n" {
+            lineStart -= 1
+        }
+        var cursor = lineStart
+        while cursor < characters.count, characters[cursor].isWhitespace, characters[cursor] != "\n" {
+            cursor += 1
+        }
+        return String(characters[lineStart..<cursor])
     }
 
     private static func fieldRanges(in text: String) -> [ItemFieldRange] {

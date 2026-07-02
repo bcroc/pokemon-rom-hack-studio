@@ -2025,6 +2025,156 @@ final class PokemonSpeciesCatalogTests: XCTestCase {
         XCTAssertFalse(missingSourcePlan.isApplyable)
     }
 
+    func testRubySapphireCryAudioReplacementStagesCompatibilityReportedSourceWithBackup() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let targetPath = "sound/direct_sound_samples/cries/treecko.aif"
+        let originalData = Data([0x01, 0x02, 0x03, 0x04])
+        let replacementData = Data([0x10, 0x20, 0x30])
+        try write(originalData, to: root.appendingPathComponent(targetPath))
+        let catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var draft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let source = try XCTUnwrap(GBACryAudioSourceFileScanner.sourceFiles(rootPath: root.path).first { $0.path == targetPath })
+        let replacement = GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: root.appendingPathComponent("incoming/treecko.aif").path,
+            data: replacementData
+        )
+        draft.cryAudioReplacements = [source.path: replacement]
+
+        let plan = SpeciesMutationPlanner.plan(catalog: catalog, draft: draft)
+
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertEqual(replacement.status, .ready)
+        XCTAssertEqual(plan.changes.map(\.path), [targetPath])
+        let change = try XCTUnwrap(plan.changes.first)
+        XCTAssertEqual(change.summary, "Replace cry/audio source")
+        XCTAssertEqual(change.originalByteCount, originalData.count)
+        XCTAssertEqual(change.originalSHA1, pokemonHackSHA1Hex(originalData))
+        XCTAssertEqual(change.newByteCount, replacementData.count)
+        XCTAssertEqual(change.newData, replacementData)
+
+        let result = try SpeciesMutationApplier.apply(plan: plan)
+
+        XCTAssertEqual(result.appliedChanges.map(\.path), [targetPath])
+        let applied = try XCTUnwrap(result.appliedChanges.first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: applied.backupPath))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: applied.backupPath)), originalData)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(targetPath)), replacementData)
+    }
+
+    func testRubySapphireCryAudioReplacementBlocksMissingWrongKindEmptyAndDriftedSources() throws {
+        let temp = try SpeciesCatalogTemporaryDirectory()
+        let root = temp.url
+        try makeRubyProject(at: root)
+        let targetPath = "sound/direct_sound_samples/cries/treecko.aif"
+        try write(Data([0x01, 0x02, 0x03]), to: root.appendingPathComponent(targetPath))
+        var catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        var treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var source = try XCTUnwrap(GBACryAudioSourceFileScanner.sourceFiles(rootPath: root.path).first { $0.path == targetPath })
+
+        var wrongKindDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let wrongKindReplacement = GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: root.appendingPathComponent("incoming/treecko.wav").path,
+            data: Data([0x04])
+        )
+        wrongKindDraft.cryAudioReplacements = [source.path: wrongKindReplacement]
+        let wrongKindPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: wrongKindDraft)
+        XCTAssertEqual(wrongKindReplacement.status, .blocked)
+        XCTAssertTrue(wrongKindPlan.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_REPLACEMENT_KIND_MISMATCH" })
+        XCTAssertTrue(wrongKindPlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_REPLACEMENT_BLOCKED" })
+        XCTAssertFalse(wrongKindPlan.isApplyable)
+
+        var emptyDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let emptyReplacement = GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: root.appendingPathComponent("incoming/treecko.aif").path,
+            data: Data()
+        )
+        emptyDraft.cryAudioReplacements = [source.path: emptyReplacement]
+        let emptyPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: emptyDraft)
+        XCTAssertEqual(emptyReplacement.status, .blocked)
+        XCTAssertTrue(emptyPlan.diagnostics.contains { $0.code == "GBA_CRY_AUDIO_REPLACEMENT_EMPTY" })
+        XCTAssertTrue(emptyPlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_REPLACEMENT_DATA_EMPTY" })
+        XCTAssertFalse(emptyPlan.isApplyable)
+
+        var missingTargetDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let missingTargetReplacement = GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: root.appendingPathComponent("incoming/treecko.aif").path,
+            data: Data([0x05])
+        )
+        missingTargetDraft.cryAudioReplacements = [source.path: missingTargetReplacement]
+        try FileManager.default.removeItem(at: root.appendingPathComponent(targetPath))
+        let missingTargetPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: missingTargetDraft)
+        XCTAssertTrue(missingTargetPlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_TARGET_NOT_REPORTED" })
+        XCTAssertFalse(missingTargetPlan.isApplyable)
+
+        try write(Data([0x01, 0x02, 0x03]), to: root.appendingPathComponent(targetPath))
+        catalog = try ProjectSpeciesCatalogBuilder.build(path: root.path)
+        treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        source = try XCTUnwrap(GBACryAudioSourceFileScanner.sourceFiles(rootPath: root.path).first { $0.path == targetPath })
+        var driftDraft = try XCTUnwrap(SpeciesEditDraft(detail: treecko))
+        let driftReplacement = GBACryAudioReplacementValidator.replacementDraft(
+            target: source,
+            replacementSourcePath: root.appendingPathComponent("incoming/treecko.aif").path,
+            data: Data([0x06])
+        )
+        driftDraft.cryAudioReplacements = [source.path: driftReplacement]
+        try write(Data([0x09, 0x09, 0x09]), to: root.appendingPathComponent(targetPath))
+        let driftPlan = SpeciesMutationPlanner.plan(catalog: catalog, draft: driftDraft)
+        XCTAssertTrue(driftPlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_SOURCE_CHANGED" })
+        XCTAssertFalse(driftPlan.isApplyable)
+    }
+
+    func testCryAudioReplacementBlocksNonRubyAndReferenceRoots() throws {
+        let emeraldTemp = try SpeciesCatalogTemporaryDirectory()
+        let emeraldRoot = emeraldTemp.url
+        try makeEmeraldProject(at: emeraldRoot)
+        let targetPath = "sound/direct_sound_samples/cries/treecko.aif"
+        try write(Data([0x01, 0x02, 0x03]), to: emeraldRoot.appendingPathComponent(targetPath))
+        let emeraldCatalog = try ProjectSpeciesCatalogBuilder.build(path: emeraldRoot.path)
+        let emeraldTreecko = try XCTUnwrap(emeraldCatalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var emeraldDraft = try XCTUnwrap(SpeciesEditDraft(detail: emeraldTreecko))
+        let emeraldSource = try XCTUnwrap(GBACryAudioSourceFileScanner.sourceFiles(rootPath: emeraldRoot.path).first { $0.path == targetPath })
+        emeraldDraft.cryAudioReplacements = [
+            emeraldSource.path: GBACryAudioReplacementValidator.replacementDraft(
+                target: emeraldSource,
+                replacementSourcePath: emeraldRoot.appendingPathComponent("incoming/treecko.aif").path,
+                data: Data([0x04])
+            )
+        ]
+
+        let emeraldPlan = SpeciesMutationPlanner.plan(catalog: emeraldCatalog, draft: emeraldDraft)
+
+        XCTAssertTrue(emeraldPlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(emeraldPlan.isApplyable)
+
+        let referenceTemp = try SpeciesCatalogTemporaryDirectory()
+        let referenceRoot = referenceTemp.url.appendingPathComponent("references/pokeruby")
+        try makeRubyProject(at: referenceRoot)
+        try write(Data([0x01, 0x02, 0x03]), to: referenceRoot.appendingPathComponent(targetPath))
+        let referenceCatalog = try ProjectSpeciesCatalogBuilder.build(path: referenceRoot.path)
+        let referenceTreecko = try XCTUnwrap(referenceCatalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        var referenceDraft = try XCTUnwrap(SpeciesEditDraft(detail: referenceTreecko))
+        let referenceSource = try XCTUnwrap(GBACryAudioSourceFileScanner.sourceFiles(rootPath: referenceRoot.path).first { $0.path == targetPath })
+        referenceDraft.cryAudioReplacements = [
+            referenceSource.path: GBACryAudioReplacementValidator.replacementDraft(
+                target: referenceSource,
+                replacementSourcePath: referenceRoot.appendingPathComponent("incoming/treecko.aif").path,
+                data: Data([0x04])
+            )
+        ]
+
+        let referencePlan = SpeciesMutationPlanner.plan(catalog: referenceCatalog, draft: referenceDraft)
+
+        XCTAssertTrue(referencePlan.diagnostics.contains { $0.code == "SPECIES_CRY_AUDIO_REFERENCE_ROOT_BLOCKED" })
+        XCTAssertFalse(referencePlan.isApplyable)
+    }
+
     func testSpeciesMutationPlannerStagesFireRedAssetChanges() throws {
         let temp = try SpeciesCatalogTemporaryDirectory()
         let root = temp.url

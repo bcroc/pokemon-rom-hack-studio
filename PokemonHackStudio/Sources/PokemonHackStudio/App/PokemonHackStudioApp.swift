@@ -18,24 +18,36 @@ struct PokemonHackStudioApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
-                Button("Save Project") {
+                Button("Save Project File") {
                     store.saveProjectWorkspace()
                 }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!store.canSaveProjectWorkspace)
 
-                Button("Save Drafts") {
+                Button("Copy Project File Path") {
+                    store.copySelectedProjectFilePathToPasteboard()
+                }
+                .disabled(store.selectedProjectFilePath == nil)
+
+                Button("Reveal Project File in Finder") {
+                    store.revealSelectedProjectFileInFinder()
+                }
+                .disabled(store.selectedProjectFilePath == nil)
+
+                Divider()
+
+                Button("Save Draft Recovery File") {
                     store.saveDraftsNow()
                 }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(!store.canSaveProjectWorkspace)
 
-                Button("Reload Saved Drafts") {
+                Button("Reload Latest Saved State") {
                     store.loadSavedWorkspaceForSelectedProject()
                 }
                 .disabled(!store.canSaveProjectWorkspace)
 
-                Button("Discard Saved Drafts") {
+                Button("Discard Draft Recovery") {
                     store.discardSavedDrafts()
                 }
                 .disabled(!store.canSaveProjectWorkspace || (store.savedDraftCount == 0 && store.currentDraftCount == 0))

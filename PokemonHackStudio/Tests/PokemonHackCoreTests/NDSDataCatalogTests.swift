@@ -82,9 +82,26 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Gen IV Readiness", in: routeMap), "inventoryOnly")
         XCTAssertEqual(routeMap.readiness?.status, .ready)
         XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "maps:res/field/matrices/route201.json" && $0.label == "Matrix" })
+        XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "maps:res/field/events/route201.json" && $0.label == "Map resource" })
         XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "scripts:res/field/scripts/route201.s" && $0.label == "Script resource" })
         XCTAssertTrue(routeMap.relatedRecords.contains { $0.recordID == "text:res/text/route201.txt" && $0.label == "Text bank" })
         XCTAssertTrue(routeMap.facts.contains { $0.label == "Related Rows" && $0.value == "4" })
+        let routeMapPacket = try XCTUnwrap(routeMap.mapReviewPacket)
+        XCTAssertEqual(routeMapPacket.posture, "reviewOnly")
+        XCTAssertEqual(routeMapPacket.component, "map")
+        XCTAssertEqual(routeMapPacket.sourceRole, "platinumMapMember")
+        XCTAssertEqual(routeMapPacket.sourceProvenance, "platinum:res/field/maps")
+        XCTAssertEqual(routeMapPacket.readiness?.status, .ready)
+        XCTAssertEqual(routeMapPacket.includedRecords.count, 5)
+        XCTAssertEqual(routeMapPacket.truncatedRelatedRecordCount, 0)
+        XCTAssertTrue(routeMapPacket.includedRecords.contains { $0.recordID == "maps:res/field/matrices/route201.json" && $0.label == "Matrix" })
+        XCTAssertTrue(routeMapPacket.includedRecords.contains { $0.recordID == "maps:res/field/events/route201.json" && $0.label == "Map resource" })
+        XCTAssertTrue(routeMapPacket.includedRecords.contains { $0.recordID == "scripts:res/field/scripts/route201.s" && $0.label == "Script resource" })
+        XCTAssertTrue(routeMapPacket.includedRecords.contains { $0.recordID == "text:res/text/route201.txt" && $0.label == "Text bank" })
+        XCTAssertTrue(routeMapPacket.rows.contains { $0.id == "blocked-actions" && $0.detail?.contains("mutation apply") == true })
+        XCTAssertEqual(factValue("Gen IV Map Review Packet", in: routeMap), "reviewOnly")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: routeMap), "map")
+        XCTAssertEqual(factValue("Gen IV Map Review Related Rows", in: routeMap), "4")
         XCTAssertTrue(routeMap.diagnostics.contains { $0.code == "NDS_DATA_PLATINUM_MAP_WRITE_BLOCKED" })
         XCTAssertTrue(routeMap.diagnostics.contains { $0.code == "NDS_DATA_READINESS_PREVIEW_ONLY" })
         let mapBinarySnapshot = NDSDataSemanticEditor.snapshot(catalog: catalog, recordID: "maps:res/field/maps/route201/map.bin")
@@ -157,6 +174,19 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Related Domains", in: matrixRoot), "maps")
         XCTAssertTrue(matrixRoot.relatedRecords.contains { $0.recordID == "maps:files/fielddata/maptable" && $0.label == "Map header" })
         XCTAssertTrue(matrixRoot.relatedRecords.contains { $0.recordID == "maps:src/data/map_headers.h" && $0.label == "Map header" })
+        let matrixRootPacket = try XCTUnwrap(matrixRoot.mapReviewPacket)
+        XCTAssertEqual(matrixRootPacket.posture, "reviewOnly")
+        XCTAssertEqual(matrixRootPacket.component, "matrix")
+        XCTAssertEqual(matrixRootPacket.sourceRole, "hgssMapMatrixInventory")
+        XCTAssertEqual(matrixRootPacket.sourceProvenance, "heartGoldSoulSilver:files/fielddata/mapmatrix")
+        XCTAssertEqual(matrixRootPacket.includedRecords.count, 3)
+        XCTAssertEqual(matrixRootPacket.truncatedRelatedRecordCount, 0)
+        XCTAssertTrue(matrixRootPacket.includedRecords.contains { $0.recordID == "maps:files/fielddata/maptable" })
+        XCTAssertTrue(matrixRootPacket.includedRecords.contains { $0.recordID == "maps:src/data/map_headers.h" })
+        XCTAssertTrue(matrixRootPacket.rows.contains { $0.id == "blocked-actions" && $0.detail?.contains("ROM export") == true })
+        XCTAssertEqual(factValue("Gen IV Map Review Packet", in: matrixRoot), "reviewOnly")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: matrixRoot), "matrix")
+        XCTAssertEqual(factValue("Gen IV Map Review Related Rows", in: matrixRoot), "2")
 
         let tableRoot = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/maptable" })
         XCTAssertEqual(tableRoot.domain, .maps)
@@ -170,6 +200,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(tableRoot.relatedRecords.contains { $0.recordID == "maps:files/fielddata/mapmatrix" && $0.label == "Matrix" })
         XCTAssertTrue(tableRoot.relatedRecords.contains { $0.recordID == "maps:src/data/map_headers.h" && $0.label == "Map header" })
         XCTAssertFalse(tableRoot.facts.contains { $0.label == "Migration Status" })
+        let tableRootPacket = try XCTUnwrap(tableRoot.mapReviewPacket)
+        XCTAssertEqual(tableRootPacket.component, "table")
+        XCTAssertEqual(tableRootPacket.sourceRole, "hgssMapTableInventory")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: tableRoot), "table")
 
         let mapHeader = try XCTUnwrap(catalog.records.first { $0.relativePath == "src/data/map_headers.h" && $0.domain == .maps && $0.format == .cHeader })
         XCTAssertEqual(factValue("Gen IV Source Role", in: mapHeader), "hgssMapHeaderInventory")
@@ -185,6 +219,13 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(factValue("Gen IV Blocked Actions", in: mapHeader)?.contains("binary write") == true)
         XCTAssertTrue(mapHeader.diagnostics.contains { $0.code == "NDS_DATA_HGSS_MAP_HEADER_SEMANTIC_SCALARS" })
         XCTAssertTrue(mapHeader.diagnostics.contains { $0.code == "NDS_DATA_HGSS_MAP_HEADER_WRITE_LIMITED" })
+        let mapHeaderPacket = try XCTUnwrap(mapHeader.mapReviewPacket)
+        XCTAssertEqual(mapHeaderPacket.component, "mapHeader")
+        XCTAssertEqual(mapHeaderPacket.sourceRole, "hgssMapHeaderInventory")
+        XCTAssertTrue(mapHeaderPacket.blockedActions.contains("binary write"))
+        XCTAssertTrue(mapHeaderPacket.includedRecords.contains { $0.recordID == "maps:files/fielddata/mapmatrix" })
+        XCTAssertTrue(mapHeaderPacket.includedRecords.contains { $0.recordID == "maps:files/fielddata/maptable" })
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: mapHeader), "mapHeader")
         XCTAssertTrue(catalog.records.contains { $0.relativePath == "files/fielddata/eventdata/zone_event/zone_001.json" && $0.domain == .scripts })
         let scriptSequenceRoot = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/script/scr_seq" })
         XCTAssertEqual(scriptSequenceRoot.domain, .scripts)
@@ -281,6 +322,15 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertTrue(factValue("Gen IV Action State", in: mapHeader)?.contains("semantic mutation-plan gate") == true)
         XCTAssertTrue(mapHeader.diagnostics.contains { $0.code == "NDS_DATA_DP_MAP_HEADER_SEMANTIC_SCALARS" })
         XCTAssertTrue(mapHeader.diagnostics.contains { $0.code == "NDS_DATA_DP_MAP_HEADER_WRITE_LIMITED" })
+        let mapHeaderPacket = try XCTUnwrap(mapHeader.mapReviewPacket)
+        XCTAssertEqual(mapHeaderPacket.posture, "reviewOnly")
+        XCTAssertEqual(mapHeaderPacket.component, "mapHeader")
+        XCTAssertEqual(mapHeaderPacket.sourceRole, "dpMapHeaderCAnchor")
+        XCTAssertEqual(mapHeaderPacket.sourceProvenance, "diamondPearl:arm9/src/map_header.c")
+        XCTAssertTrue(mapHeaderPacket.blockedActions.contains("non-integer C scalar write"))
+        XCTAssertFalse(mapHeaderPacket.blockedActions.contains("raw C-anchor write"))
+        XCTAssertEqual(factValue("Gen IV Map Review Packet", in: mapHeader), "reviewOnly")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: mapHeader), "mapHeader")
 
         let moveCAnchor = try XCTUnwrap(catalog.records.first { $0.relativePath == "arm9/src/waza.c" && $0.domain == .moves })
         XCTAssertEqual(moveCAnchor.format, .cSource)
@@ -340,6 +390,11 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Gen IV Source Provenance", in: matrixRoot), "diamondPearl:files/fielddata/mapmatrix")
         XCTAssertEqual(factValue("Gen IV Readiness", in: matrixRoot), "inventoryOnly")
         XCTAssertNil(factValue("Migration Status", in: matrixRoot))
+        let matrixRootPacket = try XCTUnwrap(matrixRoot.mapReviewPacket)
+        XCTAssertEqual(matrixRootPacket.component, "matrix")
+        XCTAssertEqual(matrixRootPacket.sourceRole, "dpMapMatrixInventory")
+        XCTAssertTrue(matrixRootPacket.blockedActions.contains("raw C-anchor write"))
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: matrixRoot), "matrix")
 
         let matrixMember = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/mapmatrix/matrix.bin" && $0.domain == .maps && $0.format == .binary })
         XCTAssertEqual(factValue("Gen IV Source Role", in: matrixMember), "dpMapMatrixMember")
@@ -350,6 +405,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Gen IV Source Provenance", in: tableRoot), "diamondPearl:files/fielddata/maptable")
         XCTAssertEqual(factValue("Gen IV Readiness", in: tableRoot), "inventoryOnly")
         XCTAssertNil(factValue("Migration Status", in: tableRoot))
+        let tableRootPacket = try XCTUnwrap(tableRoot.mapReviewPacket)
+        XCTAssertEqual(tableRootPacket.component, "table")
+        XCTAssertEqual(tableRootPacket.sourceRole, "dpMapTableInventory")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: tableRoot), "table")
         let tableMember = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/maptable/map.bin" })
         XCTAssertEqual(factValue("Gen IV Source Role", in: tableMember), "dpMapTableMember")
 
@@ -357,6 +416,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Gen IV Source Role", in: landRoot), "dpLandDataInventory")
         XCTAssertEqual(factValue("Gen IV Source Provenance", in: landRoot), "diamondPearl:files/fielddata/land_data")
         XCTAssertNil(factValue("Migration Status", in: landRoot))
+        let landRootPacket = try XCTUnwrap(landRoot.mapReviewPacket)
+        XCTAssertEqual(landRootPacket.component, "land")
+        XCTAssertEqual(landRootPacket.sourceRole, "dpLandDataInventory")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: landRoot), "land")
         let landMember = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/land_data/land_0001.bin" })
         XCTAssertEqual(factValue("Gen IV Source Role", in: landMember), "dpLandDataMember")
 
@@ -364,6 +427,10 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertEqual(factValue("Gen IV Source Role", in: areaRoot), "dpAreaDataInventory")
         XCTAssertEqual(factValue("Gen IV Source Provenance", in: areaRoot), "diamondPearl:files/fielddata/areadata")
         XCTAssertNil(factValue("Migration Status", in: areaRoot))
+        let areaRootPacket = try XCTUnwrap(areaRoot.mapReviewPacket)
+        XCTAssertEqual(areaRootPacket.component, "area")
+        XCTAssertEqual(areaRootPacket.sourceRole, "dpAreaDataInventory")
+        XCTAssertEqual(factValue("Gen IV Map Review Component", in: areaRoot), "area")
         let areaMember = try XCTUnwrap(catalog.records.first { $0.relativePath == "files/fielddata/areadata/area_0001.bin" })
         XCTAssertEqual(factValue("Gen IV Source Role", in: areaMember), "dpAreaDataMember")
 
@@ -828,6 +895,71 @@ final class NDSDataCatalogTests: XCTestCase {
         XCTAssertNil(factValue("Gen V Source Data Variant Coverage", in: dataRoot))
         let white2Unavailable = try XCTUnwrap(catalog.records.first { $0.relativePath.contains("White Version 2") && $0.role == .metadataUnavailable })
         XCTAssertNil(factValue("Gen V Source Data Variant Coverage", in: white2Unavailable))
+    }
+
+    func testPokeBlackCatalogSurfacesGenVVariantReadinessPacket() throws {
+        let root = try makeRoot(name: "pokeblack", configure: makeBlackFixture)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let packet = try XCTUnwrap(catalog.records.first { $0.id == "resources:gen-v/variant-readiness-packet" })
+        XCTAssertEqual(packet.domain, .resources)
+        XCTAssertEqual(packet.relativePath, "gen-v/variant-readiness-packet")
+        XCTAssertEqual(packet.format, .unknown)
+        XCTAssertEqual(packet.role, .metadataPacket)
+        XCTAssertTrue(packet.exists)
+        XCTAssertEqual(packet.readiness?.status, .partial)
+        XCTAssertEqual(factValue("Gen V Source Role", in: packet), "variantReadinessPacket")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Packet", in: packet), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Basis", in: packet), "existingCatalogFactsOnly")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Posture", in: packet), "previewOnlyNoParserNoWrites")
+        XCTAssertEqual(
+            factValue("Gen V Variant Marker States", in: packet),
+            "black.us=sourceMarkerPresent, white.us=sourceMarkerPresent, black2.us=sourceMarkerPresent, white2.us=unavailable"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Text States", in: packet),
+            "black.us=valid, white.us=valid, black2.us=invalid, white2.us=missing"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Valid Digests", in: packet),
+            "black.us=ffffffffffffffffffffffffffffffffffffffff, white.us=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        )
+        XCTAssertEqual(factValue("Gen V Source Root Summaries", in: packet), "src=5/92, asm=1/5, include=1/16")
+        XCTAssertTrue(factValue("Gen V Source Data Summary", in: packet)?.contains("roots=8, members=8, variantCoverage=3/4") == true)
+        XCTAssertTrue(factValue("Gen V Fielddata Summary", in: packet)?.contains("roots=5") == true)
+        XCTAssertEqual(
+            factValue("Gen V Message Summary", in: packet),
+            "candidates=6, extensions=bin, dat, gmm, msg, str, txt, noDecodedPreviewRows=6"
+        )
+        XCTAssertTrue(factValue("Gen V Overlay Summary", in: packet)?.contains("overlays=") == true)
+        XCTAssertTrue(factValue("Gen V Overlay Summary", in: packet)?.contains("ndsdisasm_config=") == true)
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: packet)?.contains("Makefile=present") == true)
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: packet)?.contains("variantHashes=black.us/rom.sha1=present") == true)
+        XCTAssertTrue(factValue("Gen V Blocked Actions", in: packet)?.contains("binary write") == true)
+        XCTAssertNil(packet.textBankPreview)
+        XCTAssertNil(packet.migrationPlan)
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_VARIANT_READINESS_PACKET_PREVIEW_ONLY" })
+        XCTAssertTrue(packet.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+
+        let plan = NDSDataMutationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEditDraft(recordID: packet.id, editedText: "changed\n")
+        )
+        XCTAssertTrue(plan.changes.isEmpty)
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_GEN_V_WRITE_BLOCKED" })
+        XCTAssertTrue(plan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_ROLE_BLOCKED" })
+
+        let resourceIndex = GenIIIResourceRegistry.resourceIndex(path: root.path)
+        let packetItem = try XCTUnwrap(resourceIndex.items.first { $0.category == "NDS Data resources" && $0.path == "gen-v/variant-readiness-packet" })
+        XCTAssertEqual(packetItem.kind, "unknown")
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Source Role" && $0.value == "variantReadinessPacket" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Variant Readiness Packet" && $0.value == "previewOnly" })
+        XCTAssertTrue(packetItem.facts.contains { $0.label == "Gen V Variant Readiness Basis" && $0.value == "existingCatalogFactsOnly" })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Migration Status" })
+        XCTAssertFalse(packetItem.facts.contains { $0.label == "Text Bank Preview" })
     }
 
     func testPokeBlackCatalogSurfacesGenVArchiveGroupInventoryFacts() throws {
@@ -3515,6 +3647,217 @@ final class NDSDataCatalogTests: XCTestCase {
         )
         XCTAssertTrue(bmgPlan.diagnostics.contains { $0.code == "NDS_DATA_ITEM_CSV_ROWS_PATH_BLOCKED" })
         XCTAssertTrue(bmgPlan.editPlan.changes.isEmpty)
+    }
+
+    func testNDSDataEncounterJSONRowOperationPlanner() throws {
+        let root = try makeRoot(name: "pokeplatinum", configure: makePlatinumFixture)
+        let encounterPath = "res/field/encounters/route201.json"
+        try write(
+            """
+            {"land_rate": 30, "land_encounters": [{"level":2,"species":"SPECIES_STARLY"},{"level":3,"species":"SPECIES_BIDOOF"}], "swarms": ["SPECIES_DODUO","SPECIES_DODUO"], "map_category": {"map_type":"field","map_number":12}}
+
+            """,
+            to: root.appendingPathComponent(encounterPath)
+        )
+        try write("{\"land_encounters\":[{\"level\":2,\"species\":\"SPECIES_BIDOOF\"}]}\n", to: root.appendingPathComponent("res/field/encounters/nested/route202.json"))
+        try write("rate=15\n", to: root.appendingPathComponent("res/field/encounters/route203.txt"))
+        try write("[{\"level\":2,\"species\":\"SPECIES_BIDOOF\"}]\n", to: root.appendingPathComponent("res/field/encounters/array.json"))
+        try write("{broken\n", to: root.appendingPathComponent("res/field/encounters/malformed.json"))
+        try write("{\"land_encounters\":[{\"level\":2,\"level\":3,\"species\":\"SPECIES_BIDOOF\"}]}\n", to: root.appendingPathComponent("res/field/encounters/duplicate.json"))
+        let catalog = try NDSDataCatalogBuilder.build(path: root.path)
+
+        let plan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: catalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [
+                    .insert(index: 1, rowText: "{\"level\":4,\"species\":\"SPECIES_SHINX\"}"),
+                    .delete(index: 0),
+                    .reorder(fromIndex: 1, toIndex: 0)
+                ]
+            )
+        )
+
+        XCTAssertEqual(plan.beforeRowCount, 2)
+        XCTAssertEqual(plan.afterRowCount, 2)
+        XCTAssertTrue(plan.diagnostics.allSatisfy { $0.severity != .error }, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.editPlan.changes.count, 1)
+        XCTAssertEqual(plan.editPlan.changes.first?.path, encounterPath)
+        XCTAssertTrue(plan.editPlan.validateApplyability().isApplyable)
+
+        let result = try NDSDataMutationApplier.apply(plan: plan.editPlan)
+        XCTAssertEqual(result.appliedChanges.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.appliedChanges[0].backupPath))
+        let updated = try String(contentsOf: root.appendingPathComponent(encounterPath), encoding: .utf8)
+        XCTAssertTrue(updated.contains("\"land_encounters\": [{\"level\":3,\"species\":\"SPECIES_BIDOOF\"},{\"level\":4,\"species\":\"SPECIES_SHINX\"}]"))
+        XCTAssertTrue(updated.contains("\"swarms\": [\"SPECIES_DODUO\",\"SPECIES_DODUO\"]"))
+        XCTAssertTrue(updated.contains("\"map_category\": {\"map_type\":\"field\",\"map_number\":12}"))
+
+        let updatedCatalog = try NDSDataCatalogBuilder.build(path: root.path)
+        let scalarArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "swarms",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(scalarArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED" })
+        XCTAssertTrue(scalarArrayPlan.editPlan.changes.isEmpty)
+        XCTAssertFalse(scalarArrayPlan.editPlan.validateApplyability().isApplyable)
+
+        let missingArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "missing_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(missingArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING" })
+        XCTAssertTrue(missingArrayPlan.editPlan.changes.isEmpty)
+
+        let nestedInsertPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [.insert(index: 0, rowText: "{\"level\":4,\"species\":\"SPECIES_SHINX\",\"metadata\":{\"time\":\"day\"}}")]
+            )
+        )
+        XCTAssertTrue(nestedInsertPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED" })
+        XCTAssertTrue(nestedInsertPlan.editPlan.changes.isEmpty)
+
+        let badShapePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [.insert(index: 0, rowText: "{\"level\":4}")]
+            )
+        )
+        XCTAssertTrue(badShapePlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_INSERT_ROW_BAD_SHAPE" })
+        XCTAssertTrue(badShapePlan.editPlan.changes.isEmpty)
+
+        let newlinePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [.insert(index: 0, rowText: "{\"level\":4,\n\"species\":\"SPECIES_SHINX\"}")]
+            )
+        )
+        XCTAssertTrue(newlinePlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_NEWLINE_BLOCKED" })
+        XCTAssertTrue(newlinePlan.editPlan.changes.isEmpty)
+
+        let rangePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 7)]
+            )
+        )
+        XCTAssertTrue(rangePlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_INDEX_OUT_OF_RANGE" })
+        XCTAssertTrue(rangePlan.editPlan.changes.isEmpty)
+
+        let malformedPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:res/field/encounters/malformed.json",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(malformedPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_JSON_MALFORMED" })
+        XCTAssertTrue(malformedPlan.editPlan.changes.isEmpty)
+
+        let duplicatePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:res/field/encounters/duplicate.json",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(duplicatePlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE" })
+        XCTAssertTrue(duplicatePlan.editPlan.changes.isEmpty)
+
+        let topLevelArrayPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:res/field/encounters/array.json",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(topLevelArrayPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_REQUIRED" })
+        XCTAssertTrue(topLevelArrayPlan.editPlan.changes.isEmpty)
+
+        let nestedPathPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:res/field/encounters/nested/route202.json",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(nestedPathPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(nestedPathPlan.editPlan.changes.isEmpty)
+
+        let textPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:res/field/encounters/route203.txt",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(textPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(textPlan.editPlan.changes.isEmpty)
+
+        let containerRecord = try XCTUnwrap(updatedCatalog.records.first { $0.relativePath.hasSuffix(".narc") })
+        let containerPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: containerRecord.id,
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(containerPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(containerPlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_CONTAINER_BLOCKED" })
+        XCTAssertTrue(containerPlan.editPlan.changes.isEmpty)
+
+        let generatedPlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: updatedCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "resources:generated/species.txt",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(generatedPlan.diagnostics.contains { $0.code == "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED" })
+        XCTAssertTrue(generatedPlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_ROLE_BLOCKED" })
+        XCTAssertTrue(generatedPlan.editPlan.changes.isEmpty)
+
+        let referenceRoot = try makeRoot(name: "references/pokeplatinum", configure: makePlatinumFixture)
+        try write(
+            "{\"land_encounters\":[{\"level\":2,\"species\":\"SPECIES_BIDOOF\"}]}\n",
+            to: referenceRoot.appendingPathComponent(encounterPath)
+        )
+        let referenceCatalog = try NDSDataCatalogBuilder.build(path: referenceRoot.path)
+        let referencePlan = NDSDataEncounterJSONRowOperationPlanner.plan(
+            catalog: referenceCatalog,
+            draft: NDSDataEncounterJSONRowOperationDraft(
+                recordID: "encounters:\(encounterPath)",
+                arrayKey: "land_encounters",
+                operations: [.delete(index: 0)]
+            )
+        )
+        XCTAssertTrue(referencePlan.diagnostics.contains { $0.code == "NDS_DATA_EDIT_REFERENCE_BLOCKED" })
+        XCTAssertTrue(referencePlan.editPlan.changes.isEmpty)
     }
 
     func testNDSDataSemanticEditorPlansDiamondPearlPersonalJSONScalars() throws {

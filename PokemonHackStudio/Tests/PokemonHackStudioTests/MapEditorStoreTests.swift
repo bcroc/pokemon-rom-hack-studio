@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import PokemonHackCore
 import XCTest
 
@@ -844,6 +845,59 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGenVVariantReadinessPacketStaysPreviewOnlyInResourcesSelection() async throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        try write("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  pokewhite.nds\n", to: root.appendingPathComponent("white.us/rom.sha1"))
+        try write("not-a-sha1\n", to: root.appendingPathComponent("black2.us/rom.sha1"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let packetRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == "gen-v/variant-readiness-packet" })
+        XCTAssertEqual(packetRow.kind, "unknown")
+        XCTAssertEqual(factValue("Gen V Source Role", in: packetRow.facts), "variantReadinessPacket")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Packet", in: packetRow.facts), "previewOnly")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Basis", in: packetRow.facts), "existingCatalogFactsOnly")
+        XCTAssertEqual(factValue("Gen V Variant Readiness Posture", in: packetRow.facts), "previewOnlyNoParserNoWrites")
+        XCTAssertEqual(
+            factValue("Gen V Variant Marker States", in: packetRow.facts),
+            "black.us=sourceMarkerPresent, white.us=sourceMarkerPresent, black2.us=sourceMarkerPresent, white2.us=unavailable"
+        )
+        XCTAssertEqual(
+            factValue("Gen V SHA1 Text States", in: packetRow.facts),
+            "black.us=valid, white.us=valid, black2.us=invalid, white2.us=missing"
+        )
+        XCTAssertEqual(
+            factValue("Gen V Message Summary", in: packetRow.facts),
+            "candidates=6, extensions=bin, dat, gmm, msg, str, txt, noDecodedPreviewRows=6"
+        )
+        XCTAssertTrue(factValue("Gen V Build Metadata Summary", in: packetRow.facts)?.contains("Makefile=present") == true)
+        XCTAssertNil(factValue("Migration Status", in: packetRow.facts))
+        XCTAssertNil(factValue("Text Bank Preview", in: packetRow.facts))
+
+        store.requestResourceAssetSelection(packetRow.id)
+
+        let editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "resources:gen-v/variant-readiness-packet")
+        XCTAssertFalse(editor.canEdit)
+        XCTAssertFalse(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.lensSummary, "This NDS data row stays read-only in the current Resources editing slice.")
+        XCTAssertTrue(editor.blockedReason?.contains("Pokemon Black/White source rows are read-only Gen V readiness metadata") == true)
+
+        store.updateSelectedNDSDataDraftText("changed\n")
+        XCTAssertNil(store.selectedNDSDataDraft)
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("gen-v/variant-readiness-packet").path))
+    }
+
+    @MainActor
     func testGenVNitroArchiveGroupInventoryStaysPreviewOnlyInResourcesSelection() async throws {
         let temp = try MapEditorStoreTemporaryDirectory()
         temporaryDirectories.append(temp)
@@ -1352,6 +1406,72 @@ final class MapEditorStoreTests: XCTestCase {
         let actionRows = store.selectedNDSHealthActionRows
         XCTAssertFalse(actionRows.isEmpty)
         XCTAssertTrue(actionRows.flatMap(\.actions).allSatisfy { $0.copyValue != nil || $0.kind == .rerunGuidance })
+    }
+
+    @MainActor
+    func testPokeBlackManualBuildReadinessRowsStayCopyOnlyInBuildWorkbench() throws {
+        let temp = try MapEditorStoreTemporaryDirectory()
+        temporaryDirectories.append(temp)
+        let root = temp.url.appendingPathComponent("pokeblack")
+        try makeNDSBlackSourceProject(at: root)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+
+        let report = try XCTUnwrap(store.selectedBuildReport)
+        XCTAssertTrue(report.isNDS)
+        XCTAssertTrue(store.selectedRunnableBuildTargets.isEmpty)
+        XCTAssertFalse(store.canRunSelectedDecompBuild)
+        XCTAssertFalse(store.canLaunchSelectedPlaytest)
+        let actionStates = Dictionary(uniqueKeysWithValues: store.buildWorkflowActions(includePatchActions: true).map { ($0.id, $0.isEnabled) })
+        XCTAssertEqual(actionStates["build-rom"], false)
+        XCTAssertEqual(actionStates["open-playtest"], false)
+
+        let genVGroup = try XCTUnwrap(report.healthMatrix.ndsGroups.first { $0.title == "Gen V Manual Build Readiness" })
+        XCTAssertEqual(
+            Set(genVGroup.rows.map(\.id)),
+            [
+                "health:gen-v-build-readiness:metadata",
+                "health:gen-v-build-readiness:source-roots",
+                "health:gen-v-build-readiness:variant-sha1",
+                "health:gen-v-build-readiness:generated-output"
+            ]
+        )
+        XCTAssertTrue(genVGroup.rows.allSatisfy { $0.section == .healthMatrix })
+        XCTAssertTrue(genVGroup.rows.allSatisfy { $0.healthCategory == .generatedArtifacts })
+        XCTAssertTrue(genVGroup.rows.flatMap(\.actions).allSatisfy { $0.copyValue != nil || $0.kind == .rerunGuidance })
+
+        let metadata = try XCTUnwrap(genVGroup.rows.first { $0.id == "health:gen-v-build-readiness:metadata" })
+        XCTAssertEqual(metadata.status, .valid)
+        XCTAssertTrue(metadata.detail.contains("Makefile=present"))
+        XCTAssertTrue(metadata.detail.contains("config.mk=present"))
+        XCTAssertTrue(metadata.detail.contains("arm9.ld=present, arm7.ld=present"))
+        XCTAssertTrue(metadata.actions.contains { $0.kind == .copyCommand && $0.copyValue == "make" })
+
+        let sourceRoots = try XCTUnwrap(genVGroup.rows.first { $0.id == "health:gen-v-build-readiness:source-roots" })
+        XCTAssertEqual(sourceRoots.status, .valid)
+        XCTAssertTrue(sourceRoots.detail.contains("src=5 members/92 bytes"))
+        XCTAssertTrue(sourceRoots.detail.contains("include=1 members/16 bytes"))
+
+        let generatedOutput = try XCTUnwrap(genVGroup.rows.first { $0.id == "health:gen-v-build-readiness:generated-output" })
+        XCTAssertEqual(generatedOutput.status, .warning)
+        XCTAssertTrue(generatedOutput.detail.contains("pokeblack.nds=missing"))
+        XCTAssertTrue(generatedOutput.actions.contains { $0.kind == .copyPath && $0.copyValue == "pokeblack.nds" })
+        XCTAssertTrue(generatedOutput.actions.contains { $0.kind == .rerunGuidance })
+
+        store.copyBuildPatchPlaytestReportJSONToPasteboard()
+        let json = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        let data = try XCTUnwrap(json.data(using: .utf8))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let buildRows = try XCTUnwrap(object?["buildRows"] as? [[String: Any]])
+        let exportedMetadata = try XCTUnwrap(buildRows.first { $0["title"] as? String == "Gen V build metadata" })
+        XCTAssertTrue((exportedMetadata["detail"] as? String)?.contains("Makefile=present") == true)
+        let exportedGenerated = try XCTUnwrap(buildRows.first { $0["title"] as? String == "Gen V generated outputs" })
+        XCTAssertTrue((exportedGenerated["detail"] as? String)?.contains("generated-output writes remain disabled") == true)
+        let exportedActions = try XCTUnwrap(exportedGenerated["actions"] as? [[String: Any]])
+        XCTAssertTrue(exportedActions.contains { $0["kind"] as? String == "Copy Command" && $0["command"] as? String == "make" })
+        XCTAssertTrue(exportedActions.contains { $0["kind"] as? String == "Copy Path" && $0["payload"] as? String == "pokeblack.nds" })
     }
 
     @MainActor
@@ -1936,6 +2056,75 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPlatinumTextLineRowOperationsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSPlatinumSourceProject()
+        let textPath = "res/text/route201.txt"
+        let bmgPath = "res/text/battle.bmg"
+        let originalBMG = try Data(contentsOf: root.appendingPathComponent(bmgPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let textRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == textPath })
+        store.requestResourceAssetSelection(textRow.id)
+
+        var editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "text:\(textPath)")
+        XCTAssertEqual(editor.rowOperations?.family, .textLines)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 0)
+
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 1, insertValue: "discarded raw replacement")
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 1)
+        XCTAssertTrue(store.canPreviewSelectedNDSDataMutationPlan)
+
+        store.updateSelectedNDSDataDraftText("hello raw\nworld\n")
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 0)
+        XCTAssertTrue(store.selectedNDSDataIsDirty)
+        store.discardNDSDataEdits()
+
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 1, insertValue: "middle")
+        store.stageSelectedNDSDataRowOperation(kind: .delete, index: 0)
+        store.stageSelectedNDSDataRowOperation(kind: .reorder, fromIndex: 1, toIndex: 0)
+
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 3)
+        XCTAssertTrue(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+        XCTAssertEqual(editor.readiness.draft.value, "Dirty draft")
+        XCTAssertEqual(editor.readiness.mutationPlan.value, "Preview ready")
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+        let context = try XCTUnwrap(MutationPlanPanelContext.ndsData(
+            plan: store.latestNDSDataEditPlan,
+            result: store.latestNDSDataApplyResult,
+            editor: store.selectedNDSDataEditor
+        ))
+        XCTAssertEqual(context.operationCount, 3)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(textPath), encoding: .utf8),
+            "world\nmiddle\n"
+        )
+
+        let bmgRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == bmgPath })
+        store.requestResourceAssetSelection(bmgRow.id)
+        XCTAssertNil(store.selectedNDSDataEditor?.rowOperations)
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 0, insertValue: "blocked")
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(bmgPath)), originalBMG)
+    }
+
+    @MainActor
     func testPlatinumMoveSemanticFieldEditsFlowThroughResourceEditor() async throws {
         let root = try makeNDSPlatinumSourceProject()
         let movePath = "res/battle/moves/tackle.json"
@@ -2390,6 +2579,92 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertTrue(binaryEditor.semanticFields.isEmpty)
         store.updateSelectedNDSDataSemanticField(key: "rows.0.name", value: "BINARY")
         XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(binaryItemPath)), Data([0x05]))
+    }
+
+    @MainActor
+    func testHeartGoldSoulSilverItemCSVRowOperationsFlowThroughResourceEditor() async throws {
+        let root = try makeNDSHeartGoldSourceProject()
+        let itemCSVPath = "files/itemtool/itemdata/item_data.csv"
+        let nestedCSVPath = "files/itemtool/itemdata/nested/item_data.csv"
+        let binaryItemPath = "files/itemtool/itemdata/item_0000.bin"
+        try write(
+            """
+            id,name,description
+            1,POTION,Basic heal
+            2,ANTIDOTE,Status
+
+            """,
+            to: root.appendingPathComponent(itemCSVPath)
+        )
+        try write("id,name\n1,NESTED\n", to: root.appendingPathComponent(nestedCSVPath))
+        try write(Data([0x05]), to: root.appendingPathComponent(binaryItemPath))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.resources)
+        store.loadSelectedAssetCatalogIfNeeded()
+        let assetCatalog = try await waitForSelectedAssetCatalog(store)
+        let itemCSVRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == itemCSVPath })
+        store.requestResourceAssetSelection(itemCSVRow.id)
+
+        var editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.recordID, "items:\(itemCSVPath)")
+        XCTAssertEqual(editor.rowOperations?.family, .itemCSVRows)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 0)
+
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 1, insertValue: "3,\"SUPER, POTION\",Large heal")
+        store.stageSelectedNDSDataRowOperation(kind: .delete, index: 0)
+        store.stageSelectedNDSDataRowOperation(kind: .reorder, fromIndex: 1, toIndex: 0)
+
+        editor = try XCTUnwrap(store.selectedNDSDataEditor)
+        XCTAssertEqual(editor.rowOperations?.stagedCount, 3)
+        XCTAssertEqual(editor.rowOperations?.countSummary, "2 -> 2")
+        XCTAssertTrue(editor.canPreview)
+        XCTAssertFalse(editor.canApply)
+
+        store.previewSelectedNDSDataMutationPlan()
+        XCTAssertEqual(store.latestNDSDataEditPlan?.changes.count, 1)
+        XCTAssertTrue(store.canApplySelectedNDSDataMutationPlan)
+
+        store.applySelectedNDSDataMutationPlan()
+        XCTAssertFalse(store.selectedNDSDataIsDirty)
+        XCTAssertEqual(store.latestNDSDataApplyResult?.appliedChanges.count, 1)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(itemCSVPath), encoding: .utf8),
+            """
+            id,name,description
+            2,ANTIDOTE,Status
+            3,\"SUPER, POTION\",Large heal
+
+            """
+        )
+
+        store.requestResourceAssetSelection(itemCSVRow.id)
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 0, insertValue: "4,ETHER,Restore")
+        XCTAssertEqual(store.selectedNDSDataEditor?.rowOperations?.stagedCount, 1)
+        store.removeLastSelectedNDSDataRowOperation()
+        XCTAssertEqual(store.selectedNDSDataEditor?.rowOperations?.stagedCount, 0)
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 0, insertValue: "4,ETHER,Restore")
+        store.clearSelectedNDSDataRowOperations()
+        XCTAssertEqual(store.selectedNDSDataEditor?.rowOperations?.stagedCount, 0)
+
+        let nestedRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == nestedCSVPath })
+        store.requestResourceAssetSelection(nestedRow.id)
+        XCTAssertNil(store.selectedNDSDataEditor?.rowOperations)
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 0, insertValue: "2,NESTED2")
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
+        XCTAssertEqual(
+            try String(contentsOf: root.appendingPathComponent(nestedCSVPath), encoding: .utf8),
+            "id,name\n1,NESTED\n"
+        )
+
+        let binaryItemRow = try XCTUnwrap(assetCatalog.rows.first { $0.path == binaryItemPath })
+        store.requestResourceAssetSelection(binaryItemRow.id)
+        XCTAssertNil(store.selectedNDSDataEditor?.rowOperations)
+        store.stageSelectedNDSDataRowOperation(kind: .insert, index: 0, insertValue: "4,BINARY,Blocked")
+        XCTAssertFalse(store.canPreviewSelectedNDSDataMutationPlan)
         XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(binaryItemPath)), Data([0x05]))
     }
 
@@ -3703,6 +3978,57 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(editedDraft.registrability, "ITEM_REGISTER_ALLOWED")
         XCTAssertEqual(editedDraft.sortType, "ITEM_TYPE_FIELD_USE")
         XCTAssertEqual(editedDraft.exitsBagOnUse, "TRUE")
+    }
+
+    @MainActor
+    func testExpansionItemMissingBehaviorScalarsInsertThroughItemsEditor() async throws {
+        let root = try makeExpansionPokemonProject()
+        try writeExpansionItemInfoTable(to: root, includeBehaviorScalars: false)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selectWorkbenchModule(.items, search: .replace("potion"))
+        let catalog = try await waitForSelectedItemCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeemeraldExpansion)
+        store.requestItemSelection("ITEM_POTION")
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+
+        var draft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertNil(draft.fieldUseFunc)
+        XCTAssertNil(draft.battleUsage)
+        XCTAssertNil(draft.battleUseFunc)
+        XCTAssertNil(draft.secondaryId)
+        draft.fieldUseFunc = "ItemUseOutOfBattle_EscapeRope"
+        draft.battleUsage = "EFFECT_ITEM_CURE_POISON"
+        draft.battleUseFunc = "ItemUseInBattle_Medicine"
+        draft.secondaryId = "ITEM_ANTIDOTE"
+        store.updateSelectedItemDraft(draft)
+
+        XCTAssertTrue(store.selectedItemIsDirty)
+        XCTAssertTrue(store.canPreviewSelectedItemMutationPlan)
+        store.previewSelectedItemMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestItemEditPlan)
+        XCTAssertTrue(plan.isApplyable, plan.diagnostics.map(\.code).joined(separator: ","))
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".fieldUseFunc = ItemUseOutOfBattle_EscapeRope,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".battleUsage = EFFECT_ITEM_CURE_POISON,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".battleUseFunc = ItemUseInBattle_Medicine,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains(".secondaryId = ITEM_ANTIDOTE,") == true)
+        XCTAssertTrue(store.canApplySelectedItemMutationPlan)
+
+        store.applySelectedItemMutationPlan()
+
+        XCTAssertEqual(store.latestItemApplyResult?.appliedChanges.map(\.path), ["src/data/items.h"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.latestItemApplyResult?.backupRootPath ?? ""))
+        XCTAssertFalse(store.selectedItemIsDirty)
+        XCTAssertEqual(store.selectedItemID, "ITEM_POTION")
+        let editedDraft = try XCTUnwrap(store.selectedItemDraft)
+        XCTAssertEqual(editedDraft.fieldUseFunc, "ItemUseOutOfBattle_EscapeRope")
+        XCTAssertEqual(editedDraft.battleUsage, "EFFECT_ITEM_CURE_POISON")
+        XCTAssertEqual(editedDraft.battleUseFunc, "ItemUseInBattle_Medicine")
+        XCTAssertEqual(editedDraft.secondaryId, "ITEM_ANTIDOTE")
     }
 
     @MainActor
@@ -5092,6 +5418,52 @@ final class MapEditorStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRubySapphireCryAudioReplacementStagesThroughSpeciesMutationPlan() async throws {
+        let root = try makeRubyPokemonProject()
+        let targetPath = "sound/direct_sound_samples/cries/treecko.aif"
+        let originalData = Data([0x01, 0x02, 0x03])
+        let importedData = Data([0x10, 0x20, 0x30, 0x40])
+        try write(originalData, to: root.appendingPathComponent(targetPath))
+        let importURL = root.appendingPathComponent("incoming/treecko.aif")
+        try write(importedData, to: importURL)
+        let frontImportURL = root.appendingPathComponent("incoming/front.png")
+        try write(testPNGData(width: 64, height: 64, paletteColorCount: 16), to: frontImportURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let store = WorkbenchStore(userDefaults: defaults, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        try await waitForSelectedSpeciesCatalog(store)
+        store.requestSpeciesSelection("SPECIES_TREECKO")
+
+        let source = try XCTUnwrap(store.selectedSpeciesCryAudioSources.first { $0.path == targetPath })
+        XCTAssertNil(store.selectedSpeciesCryAudioImportBlockedReason(source: source))
+        let replacement = try XCTUnwrap(store.importSelectedSpeciesCryAudioSource(target: source, from: importURL))
+
+        XCTAssertEqual(replacement.status, .ready)
+        XCTAssertEqual(replacement.replacementSHA1, pokemonHackSHA1Hex(importedData))
+        XCTAssertEqual(store.selectedSpeciesDraft?.cryAudioReplacements?[targetPath]?.data, importedData)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(targetPath)), originalData)
+        XCTAssertTrue(store.selectedSpeciesAssetImportBlockedReason(kind: .front)?.contains("base_stats.h") == true)
+        XCTAssertNil(store.importSelectedSpeciesAsset(kind: .front, from: frontImportURL))
+        XCTAssertNil(store.selectedSpeciesDraft?.assetData[.front])
+
+        store.previewSelectedSpeciesMutationPlan()
+
+        let plan = try XCTUnwrap(store.latestSpeciesEditPlan)
+        XCTAssertTrue(plan.isApplyable)
+        XCTAssertTrue(plan.changes.contains { $0.path == targetPath })
+
+        store.applySelectedSpeciesMutationPlan()
+
+        let result = try XCTUnwrap(store.latestSpeciesApplyResult)
+        let appliedChange = try XCTUnwrap(result.appliedChanges.first { $0.path == targetPath })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: appliedChange.backupPath))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: appliedChange.backupPath)), originalData)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(targetPath)), importedData)
+    }
+
+    @MainActor
     func testRubySapphireEvolutionDraftPreviewApplyAndReloadsThroughStore() async throws {
         let root = try makeRubyPokemonProject()
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
@@ -5322,6 +5694,60 @@ final class MapEditorStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.learnsets.tutor.map(\.move).sorted(), ["MOVE_FURY_CUTTER", "MOVE_SWORD_DANCE"])
         XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_FURY_CUTTER", bucket: .tutor))
         XCTAssertFalse(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_MEGA_PUNCH", bucket: .tutor))
+    }
+
+    @MainActor
+    func testRubySapphireMoveCompatibilityEggBatchPreviewApplyAndReloadsThroughMovesStore() async throws {
+        let root = try makeRubyPokemonProject()
+        try writeRubyBattleMoveTable(to: root)
+        let eggPath = root.appendingPathComponent("src/data/pokemon/egg_moves.h")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "MapEditorStoreTests.\(UUID().uuidString)"))
+        let settings = WorkbenchUserSettings(defaults: defaults)
+        settings.includeDefaultDebugProjects = false
+        let store = WorkbenchStore(userDefaults: defaults, userSettings: settings, autoLoadProjects: false)
+
+        store.openProject(path: root.path)
+        store.selection = .moves
+        store.loadSelectedSpeciesCatalogIfNeeded()
+        let catalog = try await waitForSelectedSpeciesCatalog(store)
+        XCTAssertEqual(catalog.profile, .pokeruby)
+
+        let treecko = try XCTUnwrap(catalog.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(treecko.learnsets.eggSourceSpan?.relativePath, "src/data/pokemon/egg_moves.h")
+        XCTAssertEqual(treecko.learnsets.egg.map(\.move), ["MOVE_CRUNCH", "MOVE_LEECH_SEED"])
+        XCTAssertFalse(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_POUND", bucket: .egg))
+
+        store.setSpeciesCompatibility(speciesID: "SPECIES_TREECKO", moveID: "MOVE_POUND", bucket: .egg, isEnabled: true)
+
+        XCTAssertEqual(store.dirtySpeciesBatchDrafts.map(\.speciesID), ["SPECIES_TREECKO"])
+        XCTAssertEqual(store.toolbarMutationState.target, .pokemonBatch)
+        XCTAssertTrue(store.toolbarMutationState.canPreview)
+
+        store.previewToolbarMutationTarget()
+
+        let plan = try XCTUnwrap(store.latestSpeciesBatchEditPlans.first)
+        let diagnosticCodes = plan.diagnostics.map(\.code).joined(separator: ",")
+        XCTAssertEqual(store.latestSpeciesBatchEditPlans.count, 1)
+        XCTAssertTrue(plan.isApplyable, diagnosticCodes)
+        XCTAssertEqual(plan.changes.map(\.path), ["src/data/pokemon/egg_moves.h"], diagnosticCodes)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("egg_moves(TREECKO,") == true)
+        XCTAssertTrue(plan.changes.first?.textPreview?.contains("MOVE_POUND") == true)
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_EDIT_UNSUPPORTED_PROFILE" })
+        XCTAssertFalse(plan.diagnostics.contains { $0.code == "SPECIES_EGG_MOVES_SPAN_MISSING" })
+        XCTAssertTrue(store.toolbarMutationState.canApply)
+
+        store.applyToolbarMutationTarget()
+
+        let result = try XCTUnwrap(store.latestSpeciesBatchApplyResult)
+        XCTAssertEqual(result.appliedChanges.map(\.path), ["src/data/pokemon/egg_moves.h"])
+        XCTAssertTrue(result.appliedChanges.allSatisfy { FileManager.default.fileExists(atPath: $0.backupPath) })
+        XCTAssertTrue(store.dirtySpeciesBatchDrafts.isEmpty)
+
+        let source = try String(contentsOf: eggPath, encoding: .utf8)
+        XCTAssertTrue(source.contains("MOVE_CRUNCH,\n              MOVE_LEECH_SEED,\n              MOVE_POUND"))
+        let reloaded = try XCTUnwrap(store.selectedSpeciesCatalog?.species.first { $0.speciesID == "SPECIES_TREECKO" })
+        XCTAssertEqual(reloaded.learnsets.egg.map(\.move), ["MOVE_CRUNCH", "MOVE_LEECH_SEED", "MOVE_POUND"])
+        XCTAssertTrue(store.speciesCompatibilityValue(speciesID: "SPECIES_TREECKO", moveID: "MOVE_POUND", bucket: .egg))
     }
 
     @MainActor
@@ -8342,9 +8768,8 @@ final class MapEditorStoreTests: XCTestCase {
         )
     }
 
-    private func writeExpansionItemInfoTable(to root: URL) throws {
-        try write(
-            """
+    private func writeExpansionItemInfoTable(to root: URL, includeBehaviorScalars: Bool = true) throws {
+        var source = """
             const struct ItemInfo gItemsInfo[] =
             {
                 [ITEM_POTION] =
@@ -8362,18 +8787,23 @@ final class MapEditorStoreTests: XCTestCase {
                     .type = ITEM_USE_PARTY_MENU,
                     .exitsBagOnUse = FALSE,
                     .effect = ITEM_EFFECT_HEAL,
+            """
+        if includeBehaviorScalars {
+            source += """
                     .fieldUseFunc = ItemUseOutOfBattle_Medicine,
                     .battleUsage = EFFECT_ITEM_RESTORE_HP,
                     .battleUseFunc = NULL,
                     .secondaryId = 0,
+            """
+        }
+        source += """
                     .iconPic = gItemIcon_Potion,
                     .iconPalette = gItemIconPalette_Potion,
                 },
             };
 
-            """,
-            to: root.appendingPathComponent("src/data/items.h")
-        )
+            """
+        try write(source, to: root.appendingPathComponent("src/data/items.h"))
     }
 
     private func writeRubyBattleMoveTable(to root: URL) throws {
@@ -8595,6 +9025,12 @@ final class MapEditorStoreTests: XCTestCase {
     private func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func pokemonHackSHA1Hex(_ data: Data) -> String {
+        Insecure.SHA1.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private func writeExecutable(_ text: String, to url: URL) throws {

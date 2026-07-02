@@ -240,6 +240,74 @@ public struct NDSDataItemCSVRowOperationPlan: Codable, Equatable {
     }
 }
 
+public enum NDSDataEncounterJSONRowOperationKind: String, Codable, Equatable {
+    case insert
+    case delete
+    case reorder
+}
+
+public struct NDSDataEncounterJSONRowOperation: Codable, Equatable {
+    public let kind: NDSDataEncounterJSONRowOperationKind
+    public let index: Int?
+    public let rowText: String?
+    public let fromIndex: Int?
+    public let toIndex: Int?
+
+    public init(kind: NDSDataEncounterJSONRowOperationKind, index: Int? = nil, rowText: String? = nil, fromIndex: Int? = nil, toIndex: Int? = nil) {
+        self.kind = kind
+        self.index = index
+        self.rowText = rowText
+        self.fromIndex = fromIndex
+        self.toIndex = toIndex
+    }
+
+    public static func insert(index: Int, rowText: String) -> NDSDataEncounterJSONRowOperation {
+        NDSDataEncounterJSONRowOperation(kind: .insert, index: index, rowText: rowText)
+    }
+
+    public static func delete(index: Int) -> NDSDataEncounterJSONRowOperation {
+        NDSDataEncounterJSONRowOperation(kind: .delete, index: index)
+    }
+
+    public static func reorder(fromIndex: Int, toIndex: Int) -> NDSDataEncounterJSONRowOperation {
+        NDSDataEncounterJSONRowOperation(kind: .reorder, fromIndex: fromIndex, toIndex: toIndex)
+    }
+}
+
+public struct NDSDataEncounterJSONRowOperationDraft: Codable, Equatable {
+    public let recordID: String
+    public let arrayKey: String
+    public let operations: [NDSDataEncounterJSONRowOperation]
+
+    public init(recordID: String, arrayKey: String, operations: [NDSDataEncounterJSONRowOperation]) {
+        self.recordID = recordID
+        self.arrayKey = arrayKey
+        self.operations = operations
+    }
+}
+
+public struct NDSDataEncounterJSONRowOperationPlan: Codable, Equatable {
+    public let draft: NDSDataEncounterJSONRowOperationDraft
+    public let beforeRowCount: Int
+    public let afterRowCount: Int
+    public let diagnostics: [Diagnostic]
+    public let editPlan: NDSDataEditPlan
+
+    public init(
+        draft: NDSDataEncounterJSONRowOperationDraft,
+        beforeRowCount: Int,
+        afterRowCount: Int,
+        diagnostics: [Diagnostic],
+        editPlan: NDSDataEditPlan
+    ) {
+        self.draft = draft
+        self.beforeRowCount = beforeRowCount
+        self.afterRowCount = afterRowCount
+        self.diagnostics = diagnostics
+        self.editPlan = editPlan
+    }
+}
+
 public struct NDSDataEditFileChange: Codable, Equatable, Identifiable {
     public let id: String
     public let path: String
@@ -3746,6 +3814,749 @@ public enum NDSDataItemCSVRowOperationPlanner {
 
     private static func normalizeLineEndings(_ text: String) -> String {
         text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    }
+}
+
+public enum NDSDataEncounterJSONRowOperationPlanner {
+    private struct JSONStringToken {
+        let value: String
+        let end: String.Index
+    }
+
+    private struct ParsedObjectRow {
+        let text: String
+        let keySet: Set<String>
+        let diagnostics: [Diagnostic]
+    }
+
+    private struct ParsedEncounterArray {
+        let valueRange: Range<String.Index>?
+        let rowTexts: [String]
+        let rowKeySet: Set<String>
+        let diagnostics: [Diagnostic]
+    }
+
+    public static func plan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataEncounterJSONRowOperationDraft,
+        fileManager: FileManager = .default
+    ) -> NDSDataEncounterJSONRowOperationPlan {
+        let record = catalog.records.first(where: { $0.id == draft.recordID })
+        let sourceText = NDSDataMutationPlanner.sourceText(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        ) ?? ""
+        var diagnostics = NDSDataMutationPlanner.editabilityDiagnostics(
+            catalog: catalog,
+            recordID: draft.recordID,
+            fileManager: fileManager
+        )
+        let arrayKey = draft.arrayKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if arrayKey.isEmpty {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_REQUIRED",
+                    message: "Platinum encounter JSON row operations require a top-level array key."
+                )
+            )
+        }
+
+        if let record, !isEligiblePlatinumEncounterJSONRecord(record, profile: catalog.profile) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_PATH_BLOCKED",
+                    message: "Only local Platinum source-tree encounters:res/field/encounters/*.json object-array rows support encounter JSON row operations; scalar arrays, nested directories, non-JSON rows, HGSS/DP rows, containers, generated/reference rows, ROM rebuild/export/playtest, nested schema reshaping, broad schemas, and binary writes remain blocked.",
+                    span: record.sourceSpan
+                )
+            )
+        }
+
+        let parsed = diagnostics.contains { $0.severity == .error }
+            ? ParsedEncounterArray(valueRange: nil, rowTexts: [], rowKeySet: [], diagnostics: [])
+            : parseEncounterArray(sourceText: sourceText, arrayKey: arrayKey, record: record)
+        diagnostics.append(contentsOf: parsed.diagnostics)
+        let beforeRowCount = parsed.rowTexts.count
+
+        guard !draft.operations.isEmpty else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_OPERATION_REQUIRED",
+                    message: "At least one encounter JSON row insert, delete, or reorder operation is required."
+                )
+            )
+            let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: sourceText)
+            let editPlan = blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+            return NDSDataEncounterJSONRowOperationPlan(
+                draft: draft,
+                beforeRowCount: beforeRowCount,
+                afterRowCount: beforeRowCount,
+                diagnostics: editPlan.diagnostics,
+                editPlan: editPlan
+            )
+        }
+
+        var editedRows = parsed.rowTexts
+        if diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(
+                contentsOf: applyOperations(
+                    draft.operations,
+                    to: &editedRows,
+                    rowKeySet: parsed.rowKeySet,
+                    record: record
+                )
+            )
+            if editedRows.isEmpty {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED",
+                        message: "Encounter JSON row operations must preserve at least one existing object row so the row shape remains source-backed.",
+                        span: record?.sourceSpan
+                    )
+                )
+            }
+        }
+
+        let hasErrors = diagnostics.contains { $0.severity == .error }
+        let editedText: String
+        if hasErrors {
+            editedText = sourceText
+        } else if let valueRange = parsed.valueRange {
+            editedText = renderSourceReplacingArray(sourceText, arrayRange: valueRange, rowTexts: editedRows)
+        } else {
+            editedText = sourceText
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING",
+                    message: "Encounter JSON array \(arrayKey) could not be located for row operations.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+
+        let editDraft = NDSDataEditDraft(recordID: draft.recordID, editedText: editedText)
+        let finalHasErrors = diagnostics.contains { $0.severity == .error }
+        let editPlan = finalHasErrors
+            ? blockedEditPlan(catalog: catalog, draft: editDraft, diagnostics: diagnostics)
+            : NDSDataMutationPlanner.plan(catalog: catalog, draft: editDraft, fileManager: fileManager)
+        let allDiagnostics = diagnostics + editPlan.diagnostics.filter { editDiagnostic in
+            !diagnostics.contains(editDiagnostic)
+        }
+
+        return NDSDataEncounterJSONRowOperationPlan(
+            draft: draft,
+            beforeRowCount: beforeRowCount,
+            afterRowCount: finalHasErrors ? beforeRowCount : editedRows.count,
+            diagnostics: allDiagnostics,
+            editPlan: editPlan
+        )
+    }
+
+    private static func isEligiblePlatinumEncounterJSONRecord(_ record: NDSDataCatalogRecord, profile: GameProfile) -> Bool {
+        guard profile == .pokeplatinum,
+              record.domain == .encounters,
+              record.role == .sourceTree,
+              record.format == .json
+        else {
+            return false
+        }
+        let prefix = "res/field/encounters/"
+        let lower = record.relativePath.lowercased()
+        guard lower.hasPrefix(prefix), lower.hasSuffix(".json") else { return false }
+        let remainder = lower.dropFirst(prefix.count)
+        return !remainder.isEmpty && !remainder.contains("/")
+    }
+
+    private static func parseEncounterArray(
+        sourceText: String,
+        arrayKey: String,
+        record: NDSDataCatalogRecord?
+    ) -> ParsedEncounterArray {
+        var diagnostics: [Diagnostic] = []
+        let trimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_REQUIRED",
+                    message: "Platinum encounter JSON row operations require a top-level JSON object.",
+                    span: record?.sourceSpan
+                )
+            )
+            return ParsedEncounterArray(valueRange: nil, rowTexts: [], rowKeySet: [], diagnostics: diagnostics)
+        }
+        if let data = sourceText.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) == nil {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_JSON_MALFORMED",
+                    message: "Platinum encounter JSON must parse before row operations are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+            return ParsedEncounterArray(valueRange: nil, rowTexts: [], rowKeySet: [], diagnostics: diagnostics)
+        }
+
+        guard let valueRange = topLevelJSONValueRange(sourceText, key: arrayKey, record: record, diagnostics: &diagnostics) else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_MISSING",
+                    message: "Platinum encounter JSON row operations require an existing top-level array named \(arrayKey).",
+                    span: record?.sourceSpan
+                )
+            )
+            return ParsedEncounterArray(valueRange: nil, rowTexts: [], rowKeySet: [], diagnostics: diagnostics)
+        }
+        guard sourceText[valueRange.lowerBound] == "[",
+              let arrayEnd = matchingEnd(sourceText, start: valueRange.lowerBound, open: "[", close: "]")
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ARRAY_REQUIRED",
+                    message: "Platinum encounter JSON field \(arrayKey) is not an array; nested schema reshaping remains blocked.",
+                    span: span(record: record, line: lineNumber(in: sourceText, before: valueRange.lowerBound))
+                )
+            )
+            return ParsedEncounterArray(valueRange: valueRange, rowTexts: [], rowKeySet: [], diagnostics: diagnostics)
+        }
+
+        var rowTexts: [String] = []
+        var rowKeySet: Set<String>?
+        var cursor = sourceText.index(after: valueRange.lowerBound)
+        let close = sourceText.index(before: arrayEnd)
+        while cursor < close {
+            skipWhitespace(sourceText, index: &cursor)
+            guard cursor < close else { break }
+            if sourceText[cursor] == "," {
+                cursor = sourceText.index(after: cursor)
+                continue
+            }
+            if sourceText[cursor] == "]" {
+                break
+            }
+            guard sourceText[cursor] == "{",
+                  let rowEnd = matchingEnd(sourceText, start: cursor, open: "{", close: "}")
+            else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_OBJECT_ROWS_REQUIRED",
+                        message: "Encounter JSON array \(arrayKey) contains scalar or non-object rows; scalar arrays and nested row shapes remain blocked.",
+                        span: span(record: record, line: lineNumber(in: sourceText, before: cursor))
+                    )
+                )
+                skipJSONValue(sourceText, index: &cursor)
+                continue
+            }
+
+            let rowText = String(sourceText[cursor..<rowEnd])
+            let parsedRow = parseObjectRow(rowText, record: record, rowDescription: "\(arrayKey) row \(rowTexts.count + 1)", line: lineNumber(in: sourceText, before: cursor))
+            diagnostics.append(contentsOf: parsedRow.diagnostics)
+            if let existingKeySet = rowKeySet {
+                if parsedRow.keySet != existingKeySet {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_SHAPE_MISMATCH",
+                            message: "Encounter JSON array \(arrayKey) has object rows with different scalar key sets; row operations require a stable existing row shape.",
+                            span: span(record: record, line: lineNumber(in: sourceText, before: cursor))
+                        )
+                    )
+                }
+            } else {
+                rowKeySet = parsedRow.keySet
+            }
+            rowTexts.append(rowText)
+            cursor = rowEnd
+            skipWhitespace(sourceText, index: &cursor)
+            if cursor < close, sourceText[cursor] == "," {
+                cursor = sourceText.index(after: cursor)
+            }
+        }
+
+        if rowTexts.isEmpty, diagnostics.allSatisfy({ $0.severity != .error }) {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_BLOCKED",
+                    message: "Encounter JSON array \(arrayKey) has no object rows to use as a source-backed row template.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+        if rowKeySet?.isEmpty == true {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_EMPTY_OBJECT_BLOCKED",
+                    message: "Encounter JSON array \(arrayKey) uses empty object rows; template-less row operations remain blocked.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+
+        return ParsedEncounterArray(
+            valueRange: valueRange,
+            rowTexts: rowTexts,
+            rowKeySet: rowKeySet ?? [],
+            diagnostics: diagnostics
+        )
+    }
+
+    private static func applyOperations(
+        _ operations: [NDSDataEncounterJSONRowOperation],
+        to rows: inout [String],
+        rowKeySet: Set<String>,
+        record: NDSDataCatalogRecord?
+    ) -> [Diagnostic] {
+        var diagnostics: [Diagnostic] = []
+        for (operationIndex, operation) in operations.enumerated() {
+            switch operation.kind {
+            case .insert:
+                guard let index = operation.index, let rowText = operation.rowText else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "insert requires an index and JSON row text."))
+                    return diagnostics
+                }
+                guard !rowText.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_ENCOUNTER_JSON_ROWS_NEWLINE_BLOCKED",
+                            message: "Encounter JSON row insert operation \(operationIndex + 1) contains a newline; multiline row inserts remain blocked."
+                        )
+                    )
+                    return diagnostics
+                }
+                guard (0...rows.count).contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "insert index \(index)", rowCount: rows.count, allowsEnd: true))
+                    return diagnostics
+                }
+                let parsedRow = parseObjectRow(rowText, record: record, rowDescription: "insert row", line: nil)
+                diagnostics.append(contentsOf: parsedRow.diagnostics)
+                guard parsedRow.diagnostics.allSatisfy({ $0.severity != .error }) else {
+                    return diagnostics
+                }
+                guard parsedRow.keySet == rowKeySet else {
+                    diagnostics.append(
+                        Diagnostic(
+                            severity: .error,
+                            code: "NDS_DATA_ENCOUNTER_JSON_ROWS_INSERT_ROW_BAD_SHAPE",
+                            message: "Encounter JSON row insert operation \(operationIndex + 1) must use the same scalar key set as the existing rows."
+                        )
+                    )
+                    return diagnostics
+                }
+                rows.insert(rowText.trimmingCharacters(in: .whitespacesAndNewlines), at: index)
+
+            case .delete:
+                guard let index = operation.index else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "delete requires an index."))
+                    return diagnostics
+                }
+                guard rows.indices.contains(index) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "delete index \(index)", rowCount: rows.count, allowsEnd: false))
+                    return diagnostics
+                }
+                rows.remove(at: index)
+
+            case .reorder:
+                guard let fromIndex = operation.fromIndex, let toIndex = operation.toIndex else {
+                    diagnostics.append(invalidOperationDiagnostic(operationIndex: operationIndex, detail: "reorder requires from-index and to-index values."))
+                    return diagnostics
+                }
+                guard rows.indices.contains(fromIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder source index \(fromIndex)", rowCount: rows.count, allowsEnd: false))
+                    return diagnostics
+                }
+                let row = rows.remove(at: fromIndex)
+                guard (0...rows.count).contains(toIndex) else {
+                    diagnostics.append(rangeDiagnostic(operationIndex: operationIndex, indexDescription: "reorder destination index \(toIndex)", rowCount: rows.count, allowsEnd: true))
+                    return diagnostics
+                }
+                rows.insert(row, at: toIndex)
+            }
+        }
+        return diagnostics
+    }
+
+    private static func parseObjectRow(
+        _ rowText: String,
+        record: NDSDataCatalogRecord?,
+        rowDescription: String,
+        line: Int?
+    ) -> ParsedObjectRow {
+        var diagnostics: [Diagnostic] = []
+        let trimmed = rowText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"),
+              trimmed.hasSuffix("}")
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_OBJECT_REQUIRED",
+                    message: "Encounter JSON \(rowDescription) must be a JSON object.",
+                    span: span(record: record, line: line)
+                )
+            )
+            return ParsedObjectRow(text: trimmed, keySet: [], diagnostics: diagnostics)
+        }
+        guard let data = trimmed.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
+        else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_MALFORMED",
+                    message: "Encounter JSON \(rowDescription) must be parseable before row operations are planned.",
+                    span: span(record: record, line: line)
+                )
+            )
+            return ParsedObjectRow(text: trimmed, keySet: [], diagnostics: diagnostics)
+        }
+
+        var keys: [String] = []
+        var seenKeys = Set<String>()
+        var duplicateKeys = Set<String>()
+        var cursor = trimmed.startIndex
+        guard let objectEnd = matchingEnd(trimmed, start: cursor, open: "{", close: "}") else {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_MALFORMED",
+                    message: "Encounter JSON \(rowDescription) must be a complete JSON object.",
+                    span: span(record: record, line: line)
+                )
+            )
+            return ParsedObjectRow(text: trimmed, keySet: [], diagnostics: diagnostics)
+        }
+        cursor = trimmed.index(after: cursor)
+        let close = trimmed.index(before: objectEnd)
+        while cursor < close {
+            skipWhitespaceAndCommas(trimmed, index: &cursor)
+            guard cursor < close else { break }
+            guard trimmed[cursor] == "\"", let keyToken = parseJSONStringToken(trimmed, start: cursor) else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_MALFORMED",
+                        message: "Encounter JSON \(rowDescription) has an invalid object key.",
+                        span: span(record: record, line: line)
+                    )
+                )
+                return ParsedObjectRow(text: trimmed, keySet: Set(keys), diagnostics: diagnostics)
+            }
+            cursor = keyToken.end
+            if !seenKeys.insert(keyToken.value).inserted {
+                duplicateKeys.insert(keyToken.value)
+            }
+            keys.append(keyToken.value)
+            skipWhitespace(trimmed, index: &cursor)
+            guard cursor < close, trimmed[cursor] == ":" else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_MALFORMED",
+                        message: "Encounter JSON \(rowDescription) has an invalid object separator.",
+                        span: span(record: record, line: line)
+                    )
+                )
+                return ParsedObjectRow(text: trimmed, keySet: Set(keys), diagnostics: diagnostics)
+            }
+            cursor = trimmed.index(after: cursor)
+            skipWhitespace(trimmed, index: &cursor)
+            guard cursor < close else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_MALFORMED",
+                        message: "Encounter JSON \(rowDescription) has a missing scalar value.",
+                        span: span(record: record, line: line)
+                    )
+                )
+                return ParsedObjectRow(text: trimmed, keySet: Set(keys), diagnostics: diagnostics)
+            }
+            if trimmed[cursor] == "{" || trimmed[cursor] == "[" {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_NESTED_VALUE_BLOCKED",
+                        message: "Encounter JSON \(rowDescription) contains nested value \(keyToken.value); nested schema reshaping remains blocked.",
+                        span: span(record: record, line: line)
+                    )
+                )
+                skipJSONValue(trimmed, index: &cursor)
+            } else if let scalarEnd = jsonScalarEnd(trimmed, start: cursor) {
+                cursor = scalarEnd
+            } else {
+                diagnostics.append(
+                    Diagnostic(
+                        severity: .error,
+                        code: "NDS_DATA_ENCOUNTER_JSON_ROWS_ROW_VALUE_INVALID",
+                        message: "Encounter JSON \(rowDescription) contains an invalid scalar value for \(keyToken.value).",
+                        span: span(record: record, line: line)
+                    )
+                )
+                return ParsedObjectRow(text: trimmed, keySet: Set(keys), diagnostics: diagnostics)
+            }
+        }
+        for key in duplicateKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_KEY_DUPLICATE",
+                    message: "Encounter JSON \(rowDescription) contains duplicate key \(key); duplicate keys must be resolved before row operations are planned.",
+                    span: span(record: record, line: line)
+                )
+            )
+        }
+        return ParsedObjectRow(text: trimmed, keySet: Set(keys), diagnostics: diagnostics)
+    }
+
+    private static func topLevelJSONValueRange(
+        _ sourceText: String,
+        key targetKey: String,
+        record: NDSDataCatalogRecord?,
+        diagnostics: inout [Diagnostic]
+    ) -> Range<String.Index>? {
+        var index = sourceText.startIndex
+        guard let objectStart = sourceText[index...].firstIndex(of: "{") else { return nil }
+        guard let objectEnd = matchingEnd(sourceText, start: objectStart, open: "{", close: "}") else { return nil }
+        index = sourceText.index(after: objectStart)
+        let close = sourceText.index(before: objectEnd)
+        var seenKeys = Set<String>()
+        var duplicateKeys = Set<String>()
+        var targetRange: Range<String.Index>?
+
+        while index < close {
+            skipWhitespaceAndCommas(sourceText, index: &index)
+            guard index < close else { break }
+            guard sourceText[index] == "\"", let keyToken = parseJSONStringToken(sourceText, start: index) else {
+                skipJSONValue(sourceText, index: &index)
+                continue
+            }
+            index = keyToken.end
+            if !seenKeys.insert(keyToken.value).inserted {
+                duplicateKeys.insert(keyToken.value)
+            }
+            skipWhitespace(sourceText, index: &index)
+            guard index < close, sourceText[index] == ":" else { continue }
+            index = sourceText.index(after: index)
+            skipWhitespace(sourceText, index: &index)
+            let valueStart = index
+            skipJSONValue(sourceText, index: &index)
+            let valueEnd = trimTrailingWhitespace(sourceText, start: valueStart, end: index)
+            if keyToken.value == targetKey, targetRange == nil {
+                targetRange = valueStart..<valueEnd
+            }
+        }
+
+        for key in duplicateKeys.sorted() {
+            diagnostics.append(
+                Diagnostic(
+                    severity: .error,
+                    code: "NDS_DATA_ENCOUNTER_JSON_ROWS_JSON_KEY_DUPLICATE",
+                    message: "Platinum encounter JSON field \(key) appears more than once; duplicate source keys must be resolved before row operations are planned.",
+                    span: record?.sourceSpan
+                )
+            )
+        }
+        return targetRange
+    }
+
+    private static func renderSourceReplacingArray(
+        _ sourceText: String,
+        arrayRange: Range<String.Index>,
+        rowTexts: [String]
+    ) -> String {
+        var editedText = sourceText
+        editedText.replaceSubrange(arrayRange, with: "[\(rowTexts.joined(separator: ","))]")
+        return editedText
+    }
+
+    private static func invalidOperationDiagnostic(operationIndex: Int, detail: String) -> Diagnostic {
+        Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_ENCOUNTER_JSON_ROWS_OPERATION_INVALID",
+            message: "Encounter JSON row operation \(operationIndex + 1) is invalid: \(detail)"
+        )
+    }
+
+    private static func rangeDiagnostic(
+        operationIndex: Int,
+        indexDescription: String,
+        rowCount: Int,
+        allowsEnd: Bool
+    ) -> Diagnostic {
+        let validRange = allowsEnd ? "0...\(rowCount)" : "0..<\(rowCount)"
+        return Diagnostic(
+            severity: .error,
+            code: "NDS_DATA_ENCOUNTER_JSON_ROWS_INDEX_OUT_OF_RANGE",
+            message: "Encounter JSON row operation \(operationIndex + 1) has \(indexDescription), but the valid row range at that step is \(validRange)."
+        )
+    }
+
+    private static func blockedEditPlan(
+        catalog: ProjectNDSDataCatalog,
+        draft: NDSDataEditDraft,
+        diagnostics: [Diagnostic]
+    ) -> NDSDataEditPlan {
+        let mutationPlan = MutationPlan(
+            title: "NDS encounter JSON row operations blocked",
+            summary: "No NDS encounter JSON source files are applyable until operation diagnostics are resolved.",
+            diagnostics: diagnostics,
+            requiresExplicitApply: true
+        )
+        return NDSDataEditPlan(
+            rootPath: catalog.root.path,
+            recordID: draft.recordID,
+            draft: draft,
+            changes: [],
+            diagnostics: diagnostics,
+            mutationPlan: mutationPlan,
+            backupRelativeRoot: ".pokemonhackstudio/backups/encounter-json-row-operations-blocked"
+        )
+    }
+
+    private static func span(record: NDSDataCatalogRecord?, line: Int?) -> SourceSpan? {
+        guard let record else { return nil }
+        guard let line else { return record.sourceSpan }
+        return SourceSpan(relativePath: record.relativePath, startLine: line)
+    }
+
+    private static func skipWhitespace(_ text: String, index: inout String.Index) {
+        while index < text.endIndex, text[index].isWhitespace {
+            index = text.index(after: index)
+        }
+    }
+
+    private static func skipWhitespaceAndCommas(_ text: String, index: inout String.Index) {
+        while index < text.endIndex, text[index].isWhitespace || text[index] == "," {
+            index = text.index(after: index)
+        }
+    }
+
+    private static func skipJSONValue(_ text: String, index: inout String.Index) {
+        guard index < text.endIndex else { return }
+        if text[index] == "\"", let token = parseJSONStringToken(text, start: index) {
+            index = token.end
+            return
+        }
+        if text[index] == "{", let end = matchingEnd(text, start: index, open: "{", close: "}") {
+            index = end
+            return
+        }
+        if text[index] == "[", let end = matchingEnd(text, start: index, open: "[", close: "]") {
+            index = end
+            return
+        }
+        while index < text.endIndex, text[index] != "," && text[index] != "}" && text[index] != "]" {
+            index = text.index(after: index)
+        }
+    }
+
+    private static func jsonScalarEnd(_ text: String, start: String.Index) -> String.Index? {
+        if text[start] == "\"" {
+            return parseJSONStringToken(text, start: start)?.end
+        }
+        var end = start
+        while end < text.endIndex, text[end] != "," && text[end] != "}" && text[end] != "]" {
+            end = text.index(after: end)
+        }
+        let scalarEnd = trimTrailingWhitespace(text, start: start, end: end)
+        guard scalarEnd > start else { return nil }
+        let token = String(text[start..<scalarEnd])
+        guard let data = "[\(token)]".data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) != nil
+        else {
+            return nil
+        }
+        return scalarEnd
+    }
+
+    private static func parseJSONStringToken(_ text: String, start: String.Index) -> JSONStringToken? {
+        guard start < text.endIndex, text[start] == "\"" else { return nil }
+        var index = text.index(after: start)
+        var value = ""
+        var escaped = false
+        while index < text.endIndex {
+            let character = text[index]
+            if escaped {
+                value.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                return JSONStringToken(value: value, end: text.index(after: index))
+            } else {
+                value.append(character)
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    private static func matchingEnd(
+        _ text: String,
+        start: String.Index,
+        open: Character,
+        close: Character
+    ) -> String.Index? {
+        guard start < text.endIndex, text[start] == open else { return nil }
+        var depth = 0
+        var index = start
+        var inString = false
+        var escaped = false
+        while index < text.endIndex {
+            let character = text[index]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+            } else if character == "\"" {
+                inString = true
+            } else if character == open {
+                depth += 1
+            } else if character == close {
+                depth -= 1
+                if depth == 0 {
+                    return text.index(after: index)
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    private static func trimTrailingWhitespace(
+        _ text: String,
+        start: String.Index,
+        end: String.Index
+    ) -> String.Index {
+        var valueEnd = end
+        while valueEnd > start {
+            let previous = text.index(before: valueEnd)
+            if !text[previous].isWhitespace {
+                break
+            }
+            valueEnd = previous
+        }
+        return valueEnd
+    }
+
+    private static func lineNumber(in text: String, before index: String.Index) -> Int {
+        text[..<index].reduce(1) { count, character in character == "\n" ? count + 1 : count }
     }
 }
 
